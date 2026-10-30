@@ -14432,6 +14432,17 @@ export type Database = {
         };
         Returns: number;
       };
+      user_class_capabilities: {
+        Args: never;
+        Returns: {
+          capability: string;
+          class_id: number;
+        }[];
+      };
+      user_class_ids_with_capability: {
+        Args: { p_capability: string };
+        Returns: number[];
+      };
       user_is_in_help_request: {
         Args: { p_help_request_id: number; p_user_id?: string };
         Returns: boolean;
