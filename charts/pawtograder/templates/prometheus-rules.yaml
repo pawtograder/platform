@@ -173,6 +173,33 @@ spec:
               pile up in pg_wal and fill the primary's volume, halting all writes.
               Check the S3 endpoint/credentials, the postgres-exporter, and pg_wal
               usage. Runbook: docs/operations/point-in-time-recovery.md.
+        {{- if and .Values.postgres.walg.baseBackup.enabled .Values.postgres.walg.retention.enabled }}
+        {{- $retCj := include "pawtograder.componentName" (dict "ctx" . "component" "walg-retention") }}
+        # The walg-retention CronJob has not succeeded for 26h (it runs hourly).
+        # Nothing breaks right away: the sidecar still prunes to
+        # baseBackup.keepBackups. But the WAL-G bucket climbs back toward that
+        # count, which is the growth this job exists to cap. The second arm
+        # covers a CronJob that has never succeeded, once it is old enough to
+        # have had the chance. Warning: cost, not recoverability.
+        - alert: PawtograderWALRetentionStale
+          expr: |
+            (time() - max(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="{{ $retCj }}"}) > 26 * 3600)
+            or (
+              absent(kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="{{ $retCj }}"})
+              and on () (time() - max(kube_cronjob_created{namespace="{{ $ns }}", cronjob="{{ $retCj }}"}) > 26 * 3600)
+            )
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder WAL-G retention has not run successfully in 26h"
+            description: >-
+              CronJob {{ $retCj }} in {{ $ns }} has no successful run in the
+              last 26h, so `wal-g delete retain` is not pruning old base backups
+              and WAL and the WAL-G bucket is growing. Check the failed Job's
+              logs (S3 credentials/endpoint), or whether the CronJob is suspended.
+              Runbook: docs/operations/point-in-time-recovery.md.
+        {{- end }}
     {{- end }}
     {{- /* Skip when the standby is intentionally paused (replica.replicas: 0,
          supported by postgres-replica.yaml to keep the PVC/config while stopped):

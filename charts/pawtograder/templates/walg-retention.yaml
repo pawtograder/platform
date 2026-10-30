@@ -1,0 +1,105 @@
+{{- /*
+WAL-G retention: `wal-g delete retain FULL <keepBackups> --confirm` on a
+schedule, in its own pod. Deleting the oldest full backups also deletes every
+WAL segment older than the oldest backup that remains, so this one call caps
+the WAL-G prefix at about keepBackups × (base backup + a day of WAL).
+
+Why a CronJob rather than the base-backup sidecar alone: the sidecar has its
+keep count baked into its command, so changing retention there edits the
+primary's pod template and the StatefulSet restarts Postgres. Pruning needs
+only the object store, not PGDATA, so it lives here, where changing the count
+restarts nothing. The sidecar still prunes to baseBackup.keepBackups after each
+push; when postgres.walg.retention.keepBackups is lower, this job does the
+pruning and the sidecar's own prune finds nothing to delete.
+
+Safe alongside a running backup-push: a backup still uploading has no sentinel
+yet, so `delete retain` does not count it, and its WAL is newer than anything
+the prune removes.
+*/ -}}
+{{- if and .Values.postgres.enabled .Values.postgres.walg.enabled .Values.postgres.walg.baseBackup.enabled .Values.postgres.walg.retention.enabled }}
+{{- $keep := include "pawtograder.walg.retentionKeep" . }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "walg-retention") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "walg-retention") | nindent 4 }}
+spec:
+  schedule: {{ .Values.postgres.walg.retention.schedule | quote }}
+  {{- /* maintenance.active: suspended, the state maintenance.sh `down` leaves
+     this CronJob in (SUSPEND_CRONJOBS). It writes only to the object store, but
+     a maintenance window may be a PITR restore, and nothing should be deleting
+     base backups while one is in progress. */}}
+  {{- if .Values.maintenance.active }}
+  suspend: true
+  {{- end }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.postgres.walg.retention.startingDeadlineSeconds | default 1800 }}
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ .Values.postgres.walg.retention.activeDeadlineSeconds | default 1800 }}
+      template:
+        metadata:
+          labels:
+            {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "walg-retention") | nindent 12 }}
+        spec:
+          # Never, not OnFailure — see backup.yaml: OnFailure deletes the pod
+          # when the limit trips, taking the logs of every attempt with it.
+          restartPolicy: Never
+          serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
+          # The postgres image only for its wal-g binary; nothing here touches
+          # a data directory or a database, so it runs rootless with no volumes.
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: walg-retention
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+              imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  KEEP={{ $keep }}
+                  echo "[walg-retention] $(date -u +%FT%TZ) keeping the newest ${KEEP} full backups"
+                  # wal-g prints one "will be deleted" line per object (thousands
+                  # per pruned day of WAL); count them instead of logging each.
+                  # pipefail carries a wal-g failure through the awk.
+                  # --use-sentinel-time: order by each backup's recorded start
+                  # time, not by the timeline/LSN in its name. After a timeline
+                  # reset (pg_upgrade, or a new cluster on this prefix) name
+                  # order stops matching age, and `retain` would delete newer
+                  # backups while keeping older ones.
+                  wal-g delete retain FULL "${KEEP}" --use-sentinel-time --confirm 2>&1 \
+                    | awk '/will be deleted/ { n++; next } { print } END { print "[walg-retention] objects deleted: " n+0 }'
+                  echo "[walg-retention] retained:"
+                  wal-g backup-list 2>&1
+              env:
+                {{- include "pawtograder.walg.env" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.postgres.walg.retention.resources | nindent 16 }}
+          {{- /* Postgres placement, as the migrations Job does: on a cluster
+               with tainted workers, the global and postgres settings are what
+               let a pod schedule at all. */}}
+          {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}
+          nodeSelector:
+            {{- . | nindent 12 }}
+          {{- end }}
+          {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.postgres)) }}
+          tolerations:
+            {{- . | nindent 12 }}
+          {{- end }}
+{{- end }}

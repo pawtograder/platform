@@ -89,7 +89,7 @@ INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
 STABLE_WRITERS=(functions web rest auth storage realtime)
 
 # Write-capable CronJobs to suspend for the window (component suffixes).
-SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify)
+SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify walg-retention)
 
 # pgmq queue tables reported as informational backlog (durable; not a gate).
 DRAIN_QUEUES=(q_async_calls q_async_calls_low_priority q_gradebook_row_recalculate q_discord_async_calls)
@@ -137,6 +137,49 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"; }
 # kubectl / psql wrappers
 # ----------------------------------------------------------------------------
 k() { kubectl -n "$NAMESPACE" "$@"; }
+
+# Suspending a CronJob does not stop a Job it already started, and a running
+# walg-retention Job is deleting base backups and WAL. A window may be a PITR
+# restore, so it must not still be pruning when the fence reports complete. A
+# prune takes seconds: wait up to RETENTION_WAIT_SECONDS, then delete the Job.
+# Stopping a prune midway is safe: it only removes objects older than the
+# oldest backup it keeps, so a partial run leaves orphaned old objects, never a
+# hole in what is retained.
+RETENTION_WAIT_SECONDS="${RETENTION_WAIT_SECONDS:-120}"
+# Every Job of the CronJob that is not yet terminal. Not `.status.active > 0`:
+# between a failed pod and its retry (backoffLimit 1) a Job has no active pod
+# but will still start another prune. Only a Complete or Failed condition ends it.
+inflight_retention_jobs() {
+  local json
+  json="$(k get jobs -o json)" || return 1
+  jq -r --arg cj "${RELEASE}-walg-retention" '
+    .items[]
+    | select(any(.metadata.ownerReferences[]?; .kind == "CronJob" and .name == $cj))
+    | select(any(.status.conditions[]?; (.type == "Complete" or .type == "Failed") and .status == "True") | not)
+    | .metadata.name' <<<"$json"
+}
+stop_inflight_retention() {
+  # present: an API or RBAC error dies instead of reading as "no CronJob".
+  present cronjob "${RELEASE}-walg-retention" || return 0
+  local jobs waited=0
+  jobs="$(inflight_retention_jobs)" || die "could not list Jobs to check for an in-flight walg-retention prune; the fence is NOT complete. Retry."
+  [ -n "$jobs" ] || return 0
+  if $DRY_RUN; then
+    log "[dry-run] would wait up to ${RETENTION_WAIT_SECONDS}s for walg-retention Job(s) ${jobs//$'\n'/ }, then delete them"
+    return 0
+  fi
+  log "walg-retention prune in flight (${jobs//$'\n'/ }); waiting up to ${RETENTION_WAIT_SECONDS}s"
+  while [ -n "$jobs" ] && [ "$waited" -lt "$RETENTION_WAIT_SECONDS" ]; do
+    sleep 5; waited=$((waited + 5))
+    jobs="$(inflight_retention_jobs)" || die "could not list Jobs while waiting on walg-retention; the fence is NOT complete. Retry."
+  done
+  if [ -n "$jobs" ]; then
+    warn "walg-retention still running after ${RETENTION_WAIT_SECONDS}s; deleting ${jobs//$'\n'/ }"
+    local j
+    for j in $jobs; do run k delete job "$j" --wait=true --cascade=foreground; done
+  fi
+  ok "no walg-retention prune in flight"
+}
 
 # Read-only SQL (tuples-only). Runs even under --dry-run (no side effects).
 psql_ro() {
@@ -533,6 +576,7 @@ cmd_down() {
     fi
   done
   ok "CronJobs suspended"
+  stop_inflight_retention
 
   # 4. AUTHORITATIVE GATE: block until every fenced writer/channel/functions
   #    deployment has 0 running pods. Zero writer pods — NOT an empty queue — is
@@ -909,6 +953,13 @@ cmd_recheck() {
   done < <(jq -r '.data.cronjobs_suspend // ""' "$tmp/state.json")
   if [ ${#live[@]} -gt 0 ]; then
     die "write CronJob(s) not suspended inside the window: ${live[*]}. NOT safe to bounce; suspend them (kubectl patch cronjob <name> --type=merge -p '{\"spec\":{\"suspend\":true}}') and recheck."
+  fi
+  # A `down` that died while waiting on a prune leaves the Job running, and
+  # nothing above would notice it.
+  if present cronjob "${RELEASE}-walg-retention"; then
+    local rjobs
+    rjobs="$(inflight_retention_jobs)" || die "could not list Jobs to check for an in-flight walg-retention prune; not re-checking."
+    [ -z "$rjobs" ] || die "walg-retention prune still in flight (${rjobs//$'\n'/ }): it is deleting base backups and WAL. NOT safe to bounce. Wait for it or delete it (kubectl delete job <name>), then recheck."
   fi
   local active
   active="$(psql_ro "SELECT 'MARK:' || count(*) FROM cron.job WHERE active;")"
