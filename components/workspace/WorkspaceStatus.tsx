@@ -27,12 +27,11 @@ function StepList({ state }: { state: WorkspaceState }) {
               <Spinner size="xs" />
             ) : (
               <Icon
+                as={mark === "done" ? LuCheck : mark === "failed" ? LuX : LuCircle}
                 aria-hidden
                 color={mark === "done" ? "fg.success" : mark === "failed" ? "fg.error" : "fg.subtle"}
                 boxSize={3.5}
-              >
-                {mark === "done" ? <LuCheck /> : mark === "failed" ? <LuX /> : <LuCircle />}
-              </Icon>
+              />
             )}
             <Text fontSize="sm" color={mark === "pending" ? "fg.muted" : undefined}>
               {step.label}

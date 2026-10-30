@@ -11,6 +11,8 @@ import {
   TestingUser
 } from "./TestingUtils";
 
+import { assertReflowAt320, assertStudentPageAccessible } from "./axeStudentA11y";
+
 dotenv.config({ path: ".env.local", quiet: true });
 
 // CW-22: the workspace card against the simulated Coder client, through the preview route.
@@ -69,6 +71,7 @@ test.describe("Workspace status (simulated)", () => {
 
     await expect(status).toHaveText("Your workspace is ready.", { timeout: 10_000 });
     await expect(page.getByRole("link", { name: "Open in VS Code" })).toBeVisible();
+    await assertStudentPageAccessible(page, "workspace ready");
     await testInfo.attach("3-ready", { body: await page.screenshot(), contentType: "image/png" });
   });
 
@@ -88,5 +91,35 @@ test.describe("Workspace status (simulated)", () => {
 
     await page.getByRole("button", { name: "Retry" }).click();
     await expect(status).toContainText("Starting your workspace");
+  });
+
+  test("ignores an unknown step in ?fail and starts normally", async ({ page }) => {
+    await setCourseFeature(course.id, "cloud-workspaces", true);
+    await loginAsUser(page, student, course);
+    await page.goto(previewUrl({ fail: "not-a-step" }));
+
+    await page.getByRole("button", { name: "Open workspace" }).click();
+    await expect(page.getByTestId("workspace-status")).toHaveText("Your workspace is ready.", { timeout: 10_000 });
+  });
+
+  test("passes axe and reflows at 320px in each state", async ({ page }) => {
+    await setCourseFeature(course.id, "cloud-workspaces", true);
+    await loginAsUser(page, student, course);
+    await page.goto(previewUrl({ stepMs: 600_000 }));
+    const status = page.getByTestId("workspace-status");
+
+    await expect(status).toHaveText("Your workspace is not running.");
+    await assertStudentPageAccessible(page, "workspace not started");
+
+    await page.getByRole("button", { name: "Open workspace" }).click();
+    await expect(status).toContainText("Starting your workspace");
+    await assertStudentPageAccessible(page, "workspace starting");
+    await assertReflowAt320(page, "workspace starting");
+
+    await page.goto(previewUrl({ stepMs: 300, fail: "git_setup" }));
+    await page.getByRole("button", { name: "Open workspace" }).click();
+    await expect(status).toContainText("Workspace not ready", { timeout: 10_000 });
+    await assertStudentPageAccessible(page, "workspace failed");
+    await assertReflowAt320(page, "workspace failed");
   });
 });
