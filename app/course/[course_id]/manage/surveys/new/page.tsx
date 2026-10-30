@@ -6,6 +6,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
+import { publishBlockedByDuplicateNames } from "@/components/survey/questionNames";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
@@ -483,6 +484,13 @@ export default function NewSurveyPage() {
           });
           return;
         }
+      }
+
+      // Two questions with one name share one answer (#1005); the database refuses these too.
+      const duplicateNames = publishBlockedByDuplicateNames({ json: values.json, status: values.status });
+      if (duplicateNames) {
+        toaster.create({ title: "Cannot Publish Survey", description: duplicateNames, type: "error" });
+        return;
       }
 
       // Validate student assignments
