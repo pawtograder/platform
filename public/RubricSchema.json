@@ -29,30 +29,48 @@
           "type": "string"
         },
         "data": {
-          "additionalProperties": false,
-          "properties": {
-            "options": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "description": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "points": {
-                    "type": "number"
-                  }
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "exam_question_id": {
+                  "type": "number"
                 },
-                "required": ["label", "points"],
-                "type": "object"
+                "options": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "points": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["label", "points"],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
               },
-              "type": "array"
+              "required": ["options"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Data on a check generated from an exam question, linking it back to that question.",
+              "properties": {
+                "exam_question_id": {
+                  "type": "number"
+                }
+              },
+              "required": ["exam_question_id"],
+              "type": "object"
             }
-          },
-          "required": ["options"],
-          "type": "object"
+          ]
         },
         "description": {
           "type": "string"

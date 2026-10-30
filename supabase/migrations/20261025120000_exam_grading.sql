@@ -621,6 +621,7 @@ declare
   v_l3_count integer;
   v_delivery text;
   v_in_app boolean;
+  v_lost_check text;
 begin
   select class_id, assignment_id, delivery_mode into v_class_id, v_assignment_id, v_delivery
     from public.exams where id = p_exam_id;
@@ -741,6 +742,29 @@ begin
       select 1 from public.exam_questions q
       where q.exam_id = p_exam_id and q.id = (pt.data->>'exam_question_id')::bigint
     );
+
+  -- A generated check found by name but not by exam_question_id lost its key (an editor save
+  -- used to null check data). The loop below would insert a second copy, so refuse instead.
+  select c.name into v_lost_check
+    from public.exam_questions q
+    join public.rubric_criteria cr
+      on cr.rubric_id = p_rubric_id
+     and (cr.data->>'exam_question_id')::bigint = case when q.level = 3 then q.parent_id else q.id end
+    join public.rubric_checks c
+      on c.rubric_criteria_id = cr.id
+     and not coalesce(c.data ? 'exam_question_id', false)
+     and c.name = coalesce(q.label, 'Check')
+    where q.exam_id = p_exam_id
+      and not exists (select 1 from public.exam_questions ch where ch.parent_id = q.id)
+      and not (v_in_app and q.answer_type in ('multiple_choice','true_false','numeric') and q.correct_answer is not null)
+      and not exists (
+        select 1 from public.rubric_checks k
+        where k.rubric_criteria_id = cr.id and (k.data->>'exam_question_id')::bigint = q.id
+      )
+    limit 1;
+  if found then
+    raise exception 'Rubric check "%" has lost its exam_question_id, so rebuilding would add a second copy. Delete the check or restore its data, then rebuild.', v_lost_check;
+  end if;
 
   -- level 1 -> rubric_parts
   for r1 in select * from public.exam_questions where exam_id = p_exam_id and level = 1 order by ordinal loop

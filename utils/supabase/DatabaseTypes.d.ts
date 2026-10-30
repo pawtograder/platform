@@ -776,6 +776,12 @@ export type RubricChecksDataType = {
     description?: string;
     points: number;
   }[];
+  exam_question_id?: number;
+};
+/** Data on a check generated from an exam question, linking it back to that question. */
+export type ExamRubricCheckDataType = {
+  exam_question_id: number;
+  options?: never;
 };
 export type HydratedRubricParts = Database["public"]["Tables"]["rubric_parts"]["Row"] & {
   rubric_criteria: HydratedRubricCriteria[];
@@ -870,7 +876,7 @@ export type YmlRubricChecksType = Omit<
   artifact?: string;
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
-  data?: RubricChecksDataType;
+  data?: RubricChecksDataType | ExamRubricCheckDataType;
   kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
   references?: YamlReference[];
 };
