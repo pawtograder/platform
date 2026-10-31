@@ -54,26 +54,60 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
       throw new Error("Failed to get remaining members");
     }
     if (remaining_members.length === 0) {
-      // Remove any invitations to the group
-      await adminSupabase
-        .from("assignment_group_invitations")
-        .delete()
-        .eq("assignment_group_id", old_assignment_group_id);
-      // Remove any join requests to the group
-      await adminSupabase
-        .from("assignment_group_join_request")
-        .delete()
-        .eq("assignment_group_id", old_assignment_group_id);
+      // The member removal above is already committed, so nothing below may abort the move:
+      // a failure here keeps the empty group (and its repo) instead of leaving the student
+      // in no group. A group with submissions is always kept, as publish_assignment_group_changes does.
       const oldGroupRepo = currentGroup.assignment_groups!.repositories[0];
-      if (oldGroupRepo) {
-        const parts = oldGroupRepo.repository.split("/");
-        const repoName = parts.length > 1 ? parts[1] : parts[0];
-        if (repoName) {
-          await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
-        }
-        await adminSupabase.from("repositories").delete().eq("id", oldGroupRepo.id);
+      const { count: submissionCount, error: submissions_error } = await adminSupabase
+        .from("submissions")
+        .select("id", { count: "exact", head: true })
+        .or(
+          oldGroupRepo
+            ? `assignment_group_id.eq.${old_assignment_group_id},repository_id.eq.${oldGroupRepo.id}`
+            : `assignment_group_id.eq.${old_assignment_group_id}`
+        );
+      let keepGroup = submissions_error !== null || (submissionCount ?? 0) > 0;
+      if (submissions_error) {
+        console.error(submissions_error);
+        Sentry.captureException(submissions_error, scope);
       }
-      await adminSupabase.from("assignment_groups").delete().eq("id", old_assignment_group_id);
+      if (!keepGroup && oldGroupRepo) {
+        // Raises 23503 for any reference it does not clear; the group is then kept.
+        const { error: delete_repo_error } = await adminSupabase.rpc("delete_repository_rows", {
+          p_repository_ids: [oldGroupRepo.id]
+        });
+        if (delete_repo_error) {
+          console.error(delete_repo_error);
+          Sentry.captureException(delete_repo_error, scope);
+          keepGroup = true;
+        } else {
+          // Everything after the FIRST slash: the repo name can itself contain one.
+          const slash = oldGroupRepo.repository.indexOf("/");
+          const repoName = slash >= 0 ? oldGroupRepo.repository.slice(slash + 1) : oldGroupRepo.repository;
+          if (repoName) {
+            await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
+          }
+        }
+      }
+      if (!keepGroup) {
+        // Invitations and join requests only go once the group itself is going.
+        await adminSupabase
+          .from("assignment_group_invitations")
+          .delete()
+          .eq("assignment_group_id", old_assignment_group_id);
+        await adminSupabase
+          .from("assignment_group_join_request")
+          .delete()
+          .eq("assignment_group_id", old_assignment_group_id);
+        const { error: delete_group_error } = await adminSupabase
+          .from("assignment_groups")
+          .delete()
+          .eq("id", old_assignment_group_id);
+        if (delete_group_error) {
+          console.error(delete_group_error);
+          Sentry.captureException(delete_group_error, scope);
+        }
+      }
     }
     const repository = currentGroup.assignment_groups!.repositories[0];
     if (repository && remaining_members.length > 0) {
