@@ -85,7 +85,14 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
           const slash = oldGroupRepo.repository.indexOf("/");
           const repoName = slash >= 0 ? oldGroupRepo.repository.slice(slash + 1) : oldGroupRepo.repository;
           if (repoName) {
-            await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
+            // The repo row is gone, so a failed enqueue only leaves the GitHub repo unarchived;
+            // report it and finish the move rather than strand the student.
+            try {
+              await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
+            } catch (archive_error) {
+              console.error(archive_error);
+              Sentry.captureException(archive_error, scope);
+            }
           }
         }
       }
