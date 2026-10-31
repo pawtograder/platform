@@ -17,10 +17,15 @@
 --    release cron nor the membership trigger ever creates repos for it; and
 --    fork_from_prior_assignment is not deferred, because both filter on template_repo and
 --    would never create its repos.
+--    Clearing a future release_date to NULL would strand the deferred repos, so a new
+--    trigger refuses that while any group is still waiting for one (section 4).
 --
 -- Function bodies are copied, because Postgres cannot patch one statement of a function:
 --   publish_assignment_group_changes from 20260816120000_bound_repo_creation_retries.sql
 --   copy_groups_from_assignment      from 20260624000000_fix_group_repo_permission_sync.sql
+-- copy_groups_from_assignment also gets the first-slash fix that 20260816120000 gave
+-- publish_assignment_group_changes: its archive and permission-sync calls used
+-- split_part(repository, '/', 2), which truncates a repo name containing a slash.
 -- The next revision of either supersedes this copy and must carry these changes forward.
 -- Grants match 20261015120000_lock_down_security_definer_functions.sql.
 --
@@ -671,7 +676,8 @@ BEGIN
         PERFORM enqueue_github_archive_repo(
           p_class_id,
           v_github_org,
-          split_part(v_repo_record.repository, '/', 2),
+          -- everything after the FIRST slash: the repo name can itself contain one
+          substring(v_repo_record.repository from position('/' in v_repo_record.repository) + 1),
           'copy-groups-dissolve-' || v_empty_gid::text
         );
       END IF;
@@ -724,7 +730,7 @@ BEGIN
         PERFORM enqueue_github_sync_repo_permissions(
           p_class_id,
           v_github_org,
-          split_part(v_repo_record.repository, '/', 2),
+          substring(v_repo_record.repository from position('/' in v_repo_record.repository) + 1),
           v_course_slug,
           v_usernames,
           'copy-groups-sync-' || v_repo_record.assignment_group_id::text
@@ -745,3 +751,46 @@ $$;
 
 REVOKE ALL ON FUNCTION public.copy_groups_from_assignment(bigint, bigint, bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.copy_groups_from_assignment(bigint, bigint, bigint) TO authenticated, service_role;
+
+-- ── 4. Refuse to clear a future release_date while group repos are deferred ──
+-- Section 2 defers group repo creation to the release fan-out. Moving release_date
+-- into the past still creates the repos (check_assignment_for_repo_creation), but
+-- clearing it to NULL would strand them: the release cron, that trigger and the
+-- membership trigger all ignore a NULL release_date. Neither the UI (release date is
+-- required) nor the CLI clears it, so rather than add a second creation path this
+-- fails safe: set a past release date instead.
+create or replace function public.guard_release_date_cleared_with_deferred_group_repos()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+    if old.release_date > now()
+       and new.template_repo is not null and new.template_repo <> ''
+       and new.repo_mode not in ('none', 'no_submission', 'fork_from_prior_assignment')
+       and exists (
+           select 1
+           from public.assignment_groups ag
+           where ag.assignment_id = new.id
+             and not exists (
+                 select 1 from public.repositories r
+                 where r.assignment_id = new.id and r.assignment_group_id = ag.id
+             )
+       ) then
+        raise exception 'Cannot clear the release date of assignment %: its groups have no repositories yet, and they are only created at release', new.id
+            using errcode = 'check_violation',
+                  hint = 'Set release_date to a past time to release now, or keep a future date.';
+    end if;
+    return new;
+end;
+$$;
+
+revoke all on function public.guard_release_date_cleared_with_deferred_group_repos() from public, anon, authenticated;
+
+drop trigger if exists guard_release_date_cleared_with_deferred_group_repos on public.assignments;
+create trigger guard_release_date_cleared_with_deferred_group_repos
+    before update of release_date on public.assignments
+    for each row
+    when (old.release_date is not null and new.release_date is null)
+    execute function public.guard_release_date_cleared_with_deferred_group_repos();
