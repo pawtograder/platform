@@ -128,6 +128,16 @@ Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Ad
 - Docker in this cloud VM requires `fuse-overlayfs` storage driver and `iptables-legacy`. These are configured during initial setup.
 - Edge Functions should be started with `.env.local` when needed: `npx supabase functions serve --env-file .env.local`.
 
+### Deleting repositories and submissions
+
+We prefer failing safe to failing dangerously, so foreign keys into `repositories` and `submissions` are `NO ACTION`, not `ON DELETE CASCADE`. A submission carries grades, reviews, comments and regrade requests. A cascade would delete them without anyone deciding to. With `NO ACTION`, a delete path that misses a child table raises 23503 and rolls back. The cost is that every delete path has to clear its child tables explicitly, and has to be updated by hand whenever a new child table appears.
+
+- **Adding a table that references `submissions` or `repositories`** (for example, when the create-submission workflow starts recording something new per submission): make the foreign key `NO ACTION`. Then check every delete path. In SQL these are `delete_repository_rows`, `cleanup_individual_repositories_for_assignment` and `delete_assignment_with_all_data`. In TypeScript they are the rollbacks `safeCleanupRejectedSubmission` (`autograder-create-submission`) and `cleanupPushDirectSubmission` (`github-repo-webhook`). A rollback only clears the rows the create-submission path writes, so add the new table there if create-submission writes it. Finally, record the key in `FOREIGN_KEYS` in `scripts/CheckDeletePaths.ts`.
+- **Deleting a repository**: call `public.delete_repository_rows(ids)`, from SQL or as a service-role RPC. Do not delete the row directly. The function clears check runs and workflow telemetry, but never submissions, so a repository that still has a submission cannot be deleted by accident.
+- **Deleting submissions**: do it only in a registered path, and throw on any delete error. Never ignore one.
+
+`npm run check:delete-paths` (CI runs it after the migrations) fails on a new or changed foreign key into either table. It also fails when a registered SQL path does not clear a `NO ACTION` child table, and when any other SQL function or source file deletes from either table directly. It cannot check the TypeScript rollbacks, so review those by hand.
+
 ### GitHub App webhook subscription (ACTION REQUIRED for deployment ingestion)
 
 The App-level webhook event subscription lives in the **GitHub App settings UI**, not in this repo

@@ -71,9 +71,23 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         if (repoName) {
           await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
         }
-        await adminSupabase.from("repositories").delete().eq("id", oldGroupRepo.id);
+        // Raises 23503 if the repo still has submissions; the group is then left in place.
+        const { error: delete_repo_error } = await adminSupabase.rpc("delete_repository_rows", {
+          p_repository_ids: [oldGroupRepo.id]
+        });
+        if (delete_repo_error) {
+          console.error(delete_repo_error);
+          throw new Error(`Failed to delete repository for empty group: ${delete_repo_error.message}`);
+        }
       }
-      await adminSupabase.from("assignment_groups").delete().eq("id", old_assignment_group_id);
+      const { error: delete_group_error } = await adminSupabase
+        .from("assignment_groups")
+        .delete()
+        .eq("id", old_assignment_group_id);
+      if (delete_group_error) {
+        console.error(delete_group_error);
+        throw new Error(`Failed to delete empty group: ${delete_group_error.message}`);
+      }
     }
     const repository = currentGroup.assignment_groups!.repositories[0];
     if (repository && remaining_members.length > 0) {
