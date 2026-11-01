@@ -4,8 +4,9 @@
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/GitHubWrapper.oidc.test.ts
  * (--no-check: GitHubWrapper transitively imports octokit, whose bundled types trip deno's checker.)
  */
-import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
+import { assertEquals, assertInstanceOf, assertRejects } from "jsr:@std/assert@^1";
 import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
+import { JobTokenRejectedError } from "./HandlerUtils.ts";
 
 // GitHubWrapper builds a GitHub App at import time, which needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
@@ -80,7 +81,9 @@ async function withJwks(byUrl: Record<string, { jwk: JsonWebKey }[]>, fn: (fetch
 /** SecurityError keeps a fixed message and puts the reason in `details`. */
 async function assertSecurityError(fn: () => Promise<unknown>, reason: string) {
   const err = await assertRejects(fn);
-  assertEquals((err as { details?: string }).details?.startsWith(reason), true);
+  // wrapRequestHandler reports this type to Sentry even on endpoints that mute other denials.
+  assertInstanceOf(err, JobTokenRejectedError);
+  assertEquals(err.details.startsWith(reason), true);
 }
 
 const assertUntrustedIssuer = (fn: () => Promise<unknown>) => assertSecurityError(fn, "Untrusted OIDC token issuer");
@@ -267,6 +270,22 @@ Deno.test("validateOIDCToken: owner case differences in the audience are accepte
     const claims = await validateOIDCToken(await sign(key, { ...githubClaims, aud: "https://github.com/Demo-Class" }));
     assertEquals(claims.provider, "github");
   });
+});
+
+Deno.test("validateOIDCToken: only the owner is case-insensitive, not a FORGEJO_URL path", async () => {
+  const key = await signingKey("fj-1");
+  const base = `${FORGEJO_URL}/Forge`;
+  const claims = { ...forgejoClaims, iss: `${base}/api/actions` };
+  await withForgejoUrl(base, () =>
+    withJwks({ [`${base}/api/actions/.well-known/keys`]: [key] }, async () => {
+      await assertSecurityError(
+        () => sign(key, { ...claims, aud: `${FORGEJO_URL}/forge/demo-class` }).then(validateEither),
+        "Unexpected OIDC token audience"
+      );
+      const verified = await validateEither(await sign(key, { ...claims, aud: `${base}/Demo-Class` }));
+      assertEquals(verified.provider, "forgejo");
+    })
+  );
 });
 
 Deno.test(

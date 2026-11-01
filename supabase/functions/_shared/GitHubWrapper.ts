@@ -6,7 +6,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "npm:octokit";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
-import { SecurityError } from "./HandlerUtils.ts";
+import { JobTokenRejectedError, SecurityError } from "./HandlerUtils.ts";
 
 // Structured error used to signal Octokit secondary rate limit back to callers
 export class SecondaryRateLimitError extends Error {
@@ -1321,10 +1321,10 @@ export async function validateOIDCToken(
   const iss = (decoded[1] as { iss?: unknown } | null)?.iss;
   const issuer = typeof iss === "string" ? trustedJobTokenIssuer(iss) : undefined;
   if (!issuer) {
-    throw new SecurityError(`Untrusted OIDC token issuer: ${String(iss)}`);
+    throw new JobTokenRejectedError("issuer", `Untrusted OIDC token issuer: ${String(iss)}`);
   }
   if (!allowedProviders.includes(issuer.provider)) {
-    throw new SecurityError(`OIDC token provider not accepted here: ${issuer.provider}`);
+    throw new JobTokenRejectedError("provider", `OIDC token provider not accepted here: ${issuer.provider}`);
   }
   const jwks = await (await fetch(issuer.jwksUrl)).json();
   const publicKey = jwks.keys.find((key: { kid?: string }) => key.kid === kid);
@@ -1344,10 +1344,14 @@ export async function validateOIDCToken(
   const verified = (await verify(token, key, {
     expLeeway: 3600 // 1 hour
   })) as GitHubOIDCToken;
-  // Owner names are case-insensitive on both hosts.
-  const expectedAudience = `${issuer.audienceBase}/${verified.repository_owner}`.toLowerCase();
-  if (typeof verified.aud !== "string" || verified.aud.toLowerCase() !== expectedAudience) {
-    throw new SecurityError(`Unexpected OIDC token audience: ${String(verified.aud)}`);
+  // Owner names are case-insensitive on both hosts; the base, including any FORGEJO_URL path, is not.
+  const audienceBase = `${issuer.audienceBase}/`;
+  if (
+    typeof verified.aud !== "string" ||
+    !verified.aud.startsWith(audienceBase) ||
+    verified.aud.slice(audienceBase.length).toLowerCase() !== verified.repository_owner.toLowerCase()
+  ) {
+    throw new JobTokenRejectedError("audience", `Unexpected OIDC token audience: ${String(verified.aud)}`);
   }
   return { ...verified, provider: issuer.provider };
 }
