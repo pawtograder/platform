@@ -40,25 +40,27 @@
 
 ARG DENO_IMAGE=denoland/deno:alpine-2.9.8@sha256:75749604f68aea01d39bead15fd1c86343639e44eb8c58ab051da8a924799d01
 
-FROM ${DENO_IMAGE}
+# Two stages only so CI can read the resolved git version before the final
+# build (see GIT_RESOLVED_VERSION below). `--target git` is everything up to and
+# including the git install; the final stage continues from it unchanged.
+FROM ${DENO_IMAGE} AS git
 
-# Exact apk version, deliberately. Alpine keeps only the newest build of a
-# package in a branch, so when a git security release lands, this pin stops
-# resolving and the image build fails. That failure is the signal to bump the
-# pin, which is the "rebuild for every git security release" rule in spec §8.1
-# made mechanical rather than remembered. A fuzzy pin (`git~2.54`) would pick up
-# the fix silently on the next rebuild, but would also make two builds of the
-# same commit differ.
-ARG GIT_VERSION=2.54.0-r0
-# The floor the engine's git invocations need (spec §3.1). Checked at build time
-# so a mistaken downgrade of GIT_VERSION fails here, not on the first sync.
+# A version FLOOR, not an exact package revision. Alpine keeps only the newest
+# build of a package in a branch, so an exact pin (`git=2.54.0-r0`) stops
+# resolving the day a security fix lands, and that would fail this image's
+# build, and with it deploy-staging, for a reason unrelated to the change being
+# shipped. With a floor, every build takes the newest git the pinned base's
+# Alpine branch carries: a rebuild IS the git security update spec §8.1 asks
+# for, and the base digest still bounds it to one Alpine branch. The cost is that
+# two builds of one commit can carry different git patch releases, so the
+# version actually installed is recorded in the image (/usr/share/pawtograder/
+# git-version, and the org.pawtograder.git-version label when CI supplies it).
+#
+# 2.45 is what the engine's git invocations need (spec §3.1); `<3.0` keeps a
+# future major, with its changed defaults, from arriving through a base bump
+# unreviewed. The floor is also asserted against `git --version`, so a package
+# that misreports its version cannot slip under it.
 ARG GIT_MIN_VERSION=2.45.0
-
-# The worker's entrypoint, relative to supabase/functions/. PLACEHOLDER until
-# WP5 lands: handout-sync-worker/main.ts does not exist yet, and the build fails
-# on purpose while it is missing (see the cache step below). release-images.yml
-# skips this build until the file exists.
-ARG WORKER_ENTRYPOINT=handout-sync-worker/main.ts
 
 # Fixed, non-root, and not 1000 (the base image's `deno` user), so the UID in
 # the chart's securityContext names this image's user and nothing else.
@@ -67,11 +69,10 @@ ARG WORKER_UID=10001
 ENV DENO_DIR=/deno-dir \
     DENO_NO_UPDATE_CHECK=1 \
     DENO_NO_PROMPT=1 \
-    HOME=/tmp \
-    WORKER_ENTRYPOINT=${WORKER_ENTRYPOINT}
+    HOME=/tmp
 
 RUN set -eux; \
-    apk add --no-cache "git=${GIT_VERSION}"; \
+    apk add --no-cache "git>=${GIT_MIN_VERSION}" "git<3.0"; \
     have="$(git --version | awk '{print $3}')"; \
     lowest="$(printf '%s\n%s\n' "$GIT_MIN_VERSION" "$have" | sort -V | head -1)"; \
     if [ "$lowest" != "$GIT_MIN_VERSION" ]; then \
@@ -84,7 +85,20 @@ RUN set -eux; \
       if apk info -e "$p" >/dev/null; then echo "$p must not be installed"; exit 1; fi; \
     done; \
     echo "handout-sync:x:${WORKER_UID}:${WORKER_UID}:handout-sync:/tmp:/sbin/nologin" >> /etc/passwd; \
-    echo "handout-sync:x:${WORKER_UID}:" >> /etc/group
+    echo "handout-sync:x:${WORKER_UID}:" >> /etc/group; \
+    mkdir -p /usr/share/pawtograder; \
+    apk list --installed git | awk '{print $1}' > /usr/share/pawtograder/git-version; \
+    cat /usr/share/pawtograder/git-version
+
+FROM git AS runtime
+
+# The worker's entrypoint, relative to supabase/functions/. PLACEHOLDER until
+# WP5 lands: handout-sync-worker/main.ts does not exist yet, and the build fails
+# on purpose while it is missing (see the cache step below). release-images.yml
+# skips this build until the file exists.
+ARG WORKER_ENTRYPOINT=handout-sync-worker/main.ts
+
+ENV WORKER_ENTRYPOINT=${WORKER_ENTRYPOINT}
 
 # Only the module graph processEnvelope() reaches: the import map, _shared/, the
 # async worker it lives in, and the new worker directory. Copying all of
@@ -128,6 +142,7 @@ RUN set -eux; \
 RUN ["/bin/busybox", "sh", "-c", "set -eu; b=/bin/busybox; $b rm -f /usr/local/bin/docker-entrypoint.sh /sbin/apk /usr/bin/ssl_client; for l in $($b --list-full); do if [ -L \"/$l\" ]; then $b rm -f \"/$l\"; fi; done; $b rm -f /bin/sh /bin/busybox"]
 
 # Sanity checks that need no shell: git and deno both run as the worker user.
+ARG WORKER_UID=10001
 USER ${WORKER_UID}:${WORKER_UID}
 RUN ["git", "--version"]
 RUN ["deno", "--version"]
@@ -135,12 +150,20 @@ RUN ["deno", "--version"]
 WORKDIR /work
 
 # Light-touch labels so `docker inspect` can show provenance.
+# GIT_RESOLVED_VERSION is the apk package (`git-2.54.0-r0`) that the `git` stage
+# installed. A Dockerfile cannot copy a RUN's output into a LABEL, so
+# release-images.yml builds `--target git` first, reads the file, and passes it
+# in; this final build reuses that cached layer, so the label describes the git
+# actually in the image. Declared down here so it never busts the install layer's
+# cache. A local build without it gets "unrecorded"; the file is authoritative.
 ARG GIT_SHA=""
 ARG VERSION=""
+ARG GIT_RESOLVED_VERSION="unrecorded"
 LABEL org.opencontainers.image.source="https://github.com/pawtograder/platform" \
       org.opencontainers.image.title="pawtograder-handout-sync-worker" \
       org.opencontainers.image.revision="$GIT_SHA" \
-      org.opencontainers.image.version="$VERSION"
+      org.opencontainers.image.version="$VERSION" \
+      org.pawtograder.git-version="$GIT_RESOLVED_VERSION"
 
 # Metrics and /healthz. The chart's handoutSyncWorker.metricsPort must match.
 EXPOSE 9464

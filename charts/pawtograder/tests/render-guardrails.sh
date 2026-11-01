@@ -944,7 +944,7 @@ fi
 for want in "automountServiceAccountToken: false" "readOnlyRootFilesystem: true" \
             "allowPrivilegeEscalation: false" "runAsNonRoot: true" "runAsUser: 10001" \
             "type: RuntimeDefault" 'drop: ["ALL"]' "sizeLimit: 20Gi" "enableServiceLinks: false" \
-            "terminationGracePeriodSeconds: 960" "path: /healthz"; do
+            "terminationGracePeriodSeconds: 300" "path: /healthz"; do
   assert_rendered_contains "worker renders: $want" "$HSW_T" "$want" "${HSW[@]}"
 done
 # The allowlist is the point: envFrom would hand the pod every credential in
@@ -959,9 +959,15 @@ assert_rendered_contains "worker image tag follows the edge functions tag" "$HSW
 assert_rendered_contains "worker is a maintenance writer (replicas 0 under the posture)" "$HSW_T" \
   "replicas: 0" "${HSW[@]}" --set maintenance.enabled=true --set maintenance.active=true
 
-assert_refused "worker refuses a grace period shorter than the job deadline" \
-  "terminationGracePeriodSeconds=600 is below jobDeadlineSeconds" \
-  "${HSW[@]}" --set handoutSyncWorker.terminationGracePeriodSeconds=600
+assert_rendered_contains "worker passes the shutdown grace to the process" "$HSW_T" \
+  "HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS" "${HSW[@]}"
+assert_refused "worker refuses a grace period that cannot cover the shutdown wait" \
+  "terminationGracePeriodSeconds=250 is below shutdownGraceSeconds (240) + 30" \
+  "${HSW[@]}" --set handoutSyncWorker.terminationGracePeriodSeconds=250
+assert_refused "worker refuses a shutdown wait as long as a job" \
+  "shutdownGraceSeconds=900 is not below jobDeadlineSeconds" \
+  "${HSW[@]}" --set handoutSyncWorker.shutdownGraceSeconds=900 \
+  --set handoutSyncWorker.terminationGracePeriodSeconds=1000
 assert_refused "worker refuses a heartbeat that cannot miss a beat" \
   "must be at least 5 and at most half of visibilityTimeoutSeconds" \
   "${HSW[@]}" --set handoutSyncWorker.heartbeatSeconds=90

@@ -28,6 +28,7 @@ the edge-functions pod follows from those two facts:
 {{- $hb := int $w.heartbeatSeconds -}}
 {{- $deadline := int $w.jobDeadlineSeconds -}}
 {{- $grace := int $w.terminationGracePeriodSeconds -}}
+{{- $shutdown := int $w.shutdownGraceSeconds -}}
 {{- if or (lt (int $w.concurrency) 1) (gt (int $w.concurrency) 8) -}}
 {{- fail (printf "handoutSyncWorker.concurrency=%v is outside 1-8. 0 reads nothing while /healthz stays green. Above 8, every job's git children share one pod's 1Gi memory limit and one /work emptyDir; add replicas instead." $w.concurrency) -}}
 {{- end -}}
@@ -40,8 +41,14 @@ the edge-functions pod follows from those two facts:
 {{- if lt $deadline 60 -}}
 {{- fail (printf "handoutSyncWorker.jobDeadlineSeconds=%d is below 60. A depth-1 fetch of a large student repo alone can take that long, so every such sync would time out and land in the DLQ." $deadline) -}}
 {{- end -}}
-{{- if lt $grace (add $deadline 30) -}}
-{{- fail (printf "handoutSyncWorker.terminationGracePeriodSeconds=%d is below jobDeadlineSeconds (%d) + 30. On SIGTERM the worker lets in-flight jobs run to their deadline; a shorter grace period SIGKILLs them mid-push on every rollout and node drain." $grace $deadline) -}}
+{{- if lt $shutdown 0 -}}
+{{- fail (printf "handoutSyncWorker.shutdownGraceSeconds=%d is negative." $shutdown) -}}
+{{- end -}}
+{{- if lt $grace (add $shutdown 30) -}}
+{{- fail (printf "handoutSyncWorker.terminationGracePeriodSeconds=%d is below shutdownGraceSeconds (%d) + 30. On SIGTERM the worker waits shutdownGraceSeconds for in-flight jobs and then aborts their git children; the kubelet's SIGKILL has to land after that abort, or it interrupts the cleanup instead of the jobs." $grace $shutdown) -}}
+{{- end -}}
+{{- if ge $shutdown $deadline -}}
+{{- fail (printf "handoutSyncWorker.shutdownGraceSeconds=%d is not below jobDeadlineSeconds (%d). The shutdown wait exists to be SHORTER than a job: past the deadline the job aborts on its own, so a longer wait only delays rollouts, drains and maintenance.sh down." $shutdown $deadline) -}}
 {{- end -}}
 {{- if lt (int $w.maxReadCount) 1 -}}
 {{- fail (printf "handoutSyncWorker.maxReadCount=%v must be at least 1, or every message goes straight to handout_sync_dlq." $w.maxReadCount) -}}
@@ -167,6 +174,10 @@ spec:
               value: {{ $w.heartbeatSeconds | quote }}
             - name: HANDOUT_SYNC_JOB_DEADLINE_SECONDS
               value: {{ $w.jobDeadlineSeconds | quote }}
+            # SIGTERM: stop reading, wait this long for in-flight jobs, abort
+            # them, exit. terminationGracePeriodSeconds sits above it.
+            - name: HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS
+              value: {{ $w.shutdownGraceSeconds | quote }}
             - name: HANDOUT_SYNC_MAX_READ_COUNT
               value: {{ $w.maxReadCount | quote }}
             - name: HANDOUT_SYNC_MAX_REPO_KIB

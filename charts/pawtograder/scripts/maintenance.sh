@@ -87,9 +87,10 @@ INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
 # are discovered at runtime). `functions` is included here so it is captured,
 # scaled, gated, and restored uniformly with the rest. `handout-sync-worker`
 # writes through PostgREST and pushes to GitHub; it is absent (and so skipped)
-# unless handoutSyncWorker.enabled. Its terminationGracePeriodSeconds (960) is
-# above DRAIN_TIMEOUT_SECONDS' 900 default, because SIGTERM lets an in-flight
-# sync run to its 15-minute deadline.
+# unless handoutSyncWorker.enabled. On SIGTERM it waits at most
+# handoutSyncWorker.shutdownGraceSeconds (240) for in-flight syncs, then aborts
+# them (they redeliver and converge), so it terminates well inside
+# DRAIN_TIMEOUT_SECONDS.
 STABLE_WRITERS=(functions web rest auth storage realtime handout-sync-worker)
 
 # Write-capable CronJobs to suspend for the window (component suffixes).

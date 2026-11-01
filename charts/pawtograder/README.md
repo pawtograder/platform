@@ -697,9 +697,9 @@ ways an operator has to know about:
   `cilium.extraFQDNs`.
 - `/work` is a 20Gi `emptyDir` per pod and the pod requests that much
   `ephemeral-storage`, so nodes need the disk.
-- SIGTERM lets in-flight syncs run to their 15-minute deadline, so the grace
-  period is 960s, longer than `scripts/maintenance.sh`'s default 900s
-  `DRAIN_TIMEOUT_SECONDS`.
+- On SIGTERM it waits up to `shutdownGraceSeconds` (240s) for in-flight syncs,
+  then aborts them; their messages redeliver after the visibility timeout and
+  converge. `terminationGracePeriodSeconds` (300s) is the backstop above that.
 
 ## Monitoring (metrics + logs)
 

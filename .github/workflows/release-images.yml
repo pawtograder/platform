@@ -429,6 +429,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # git is installed with a version floor, not an exact revision, so which
+      # git a build gets depends on the day. Build the `git` stage alone, read
+      # the package it installed, and pass that into the final build as the
+      # org.pawtograder.git-version label. The final build reuses this stage's
+      # layers from the same builder, so the label matches the image.
+      - name: Resolve the git version the image will carry
+        id: gitver
+        if: steps.entry.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          docker buildx build --load --target git \
+            --cache-from type=gha,scope=handout-sync-worker \
+            -f charts/pawtograder/images/handout-sync-worker/Dockerfile \
+            -t handout-sync-worker-git:local .
+          v="$(docker run --rm --entrypoint cat handout-sync-worker-git:local /usr/share/pawtograder/git-version)"
+          echo "resolved git package: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
       - name: Build & push handout-sync-worker image
         if: steps.entry.outputs.present == 'true'
         uses: docker/build-push-action@v6
@@ -440,6 +458,7 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             VERSION=${{ needs.meta.outputs.version }}
+            GIT_RESOLVED_VERSION=${{ steps.gitver.outputs.version }}
           cache-from: type=gha,scope=handout-sync-worker
           cache-to: type=gha,scope=handout-sync-worker,mode=max
 

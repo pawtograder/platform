@@ -1887,15 +1887,20 @@ handoutSyncWorker:
   # Ingress; it is reachable only from the release's own pods and the monitoring
   # namespace when networkPolicy.enabled.
   metricsPort: 9464
-  # SIGTERM stops reading and lets in-flight jobs run to their deadline (spec
-  # §3.1), so the SIGKILL backstop has to sit above jobDeadlineSeconds. The chart
-  # refuses anything under jobDeadlineSeconds + 30.
+  # Shutdown (spec §3.1). On SIGTERM the worker stops reading, waits up to
+  # shutdownGraceSeconds (HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS) for in-flight
+  # jobs, then aborts their git children and exits. It does NOT run jobs to the
+  # 15-minute jobDeadlineSeconds: an aborted job's message becomes visible again
+  # after visibilityTimeoutSeconds and converges on the rerun, because every
+  # step is safe to repeat (spec §6.1). That keeps a rollout, a node drain and
+  # `scripts/maintenance.sh down` (DRAIN_TIMEOUT_SECONDS, 900 by default) to a
+  # few minutes instead of a quarter of an hour.
   #
-  # This also bounds how long `scripts/maintenance.sh down` waits for this
-  # pod: its DRAIN_TIMEOUT_SECONDS defaults to 900, which is SHORTER than this.
-  # A worker that really is mid-job at the deadline makes `down` give up; raise
-  # DRAIN_TIMEOUT_SECONDS for windows taken while syncs are running.
-  terminationGracePeriodSeconds: 960
+  # terminationGracePeriodSeconds is the SIGKILL backstop above that wait: it
+  # has to cover the abort, the children's exit and the process's own cleanup.
+  # The chart refuses anything under shutdownGraceSeconds + 30.
+  shutdownGraceSeconds: 240
+  terminationGracePeriodSeconds: 300
   # Spec §3.1: the JS heap holds metadata only. ephemeral-storage is requested
   # at the full /work + /tmp size, so the scheduler only places the pod where
   # that disk exists; without it, a node short on disk hits node-pressure
