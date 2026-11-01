@@ -136,8 +136,9 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   # Own build dir, so a dev or prod server from this checkout keeps its .next.
   export NEXT_DIST_DIR=.next-sso-e2e
   # NEXT_PUBLIC_* is inlined at build time, so SKIP_BUILD reuses a build only if they match.
+  # Include the env files next build loads, not just the exported shell.
   BUILD_STAMP="$REPO/$NEXT_DIST_DIR/.sso-e2e-public-env"
-  PUBLIC_ENV="$(env | grep '^NEXT_PUBLIC_' | sort)"
+  PUBLIC_ENV="$({ env; cat .env.production.local .env.local .env.production .env 2>/dev/null || true; } | grep '^NEXT_PUBLIC_' | sort)"
   if [ "${SKIP_BUILD:-}" != "1" ] || [ "$(cat "$BUILD_STAMP" 2>/dev/null)" != "$PUBLIC_ENV" ]; then
     log "Building Pawtograder"
     rm -rf "${REPO:?}/$NEXT_DIST_DIR"
