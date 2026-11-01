@@ -11,6 +11,7 @@ import {
   RepositoryCheckRun
 } from "../_shared/FunctionTypes.d.ts";
 import {
+  assertJobTokenMatchesRepository,
   resolveRef,
   publicSupabaseUrl,
   validateOIDCTokenOrAllowE2E,
@@ -483,6 +484,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
+  await assertJobTokenMatchesRepository(adminSupabase, decoded);
   const { repository, sha, run_id, run_attempt } = decoded;
   scope?.setTag("repository", repository);
   scope?.setTag("sha", sha);

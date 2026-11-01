@@ -2,7 +2,7 @@ import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { bottleneckRedisOptions, getBottleneckConnection } from "./Redis.ts";
 import { createAppAuth } from "npm:@octokit/auth-app";
 import { throttling } from "npm:@octokit/plugin-throttling";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "npm:octokit";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -1427,6 +1427,32 @@ export async function validateOIDCTokenOrAllowE2E(
     return { ...payload, provider: "github" };
   }
   return await validateOIDCToken(token, allowedProviders);
+}
+
+/**
+ * Binds a verified job token to the repository it names. `repositories.repository` holds bare
+ * `owner/name`, which can exist on both hosts, so the token's provider must match the row's
+ * `git_provider`. Repositories without a row (grader, handout, E2E) are on GitHub.
+ */
+export async function assertJobTokenMatchesRepository(
+  supabase: SupabaseClient<Database>,
+  token: { repository: string; provider: JobTokenProvider }
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("repositories")
+    .select("git_provider")
+    .eq("repository", token.repository)
+    .maybeSingle();
+  if (error) {
+    throw new UserVisibleError(`Failed to query repositories: ${error.message}`);
+  }
+  const repositoryProvider = data?.git_provider ?? "github";
+  if (repositoryProvider !== token.provider) {
+    throw new JobTokenRejectedError(
+      "provider",
+      `OIDC token from ${token.provider} names a ${repositoryProvider} repository: ${token.repository}`
+    );
+  }
 }
 
 export async function getRepos(org: string, scope?: Sentry.Scope) {
