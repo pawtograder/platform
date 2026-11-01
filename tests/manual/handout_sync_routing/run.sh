@@ -23,11 +23,15 @@ set -euo pipefail
 
 DB_URL="${1:?usage: run.sh <postgres url of an isolated, migrated database>}"
 
+# The URL with any password removed, for messages. A refusal is printed to the terminal and
+# often to a log, and the URL it names may carry a real password.
+SHOWN_URL="$(printf '%s' "$DB_URL" | sed -E 's#(://[^:/@?]*):[^@/?]*@#\1:***@#; s#([?&]password=)[^&]*#\1***#')"
+
 # Inclusive port ranges of shared stacks this script must never touch.
 FORBIDDEN_PORT_RANGES=("54320 54329" "58320 58329")
 
 SERVER_PORT="$(psql -XAt -v ON_ERROR_STOP=1 "$DB_URL" -c 'show port')" || {
-  echo "could not ask $DB_URL for its port; refusing to run" >&2
+  echo "could not ask $SHOWN_URL for its port; refusing to run" >&2
   exit 2
 }
 # A docker-mapped Supabase stack's server reports the port inside its container (5432), never the
@@ -39,7 +43,7 @@ for range in "${FORBIDDEN_PORT_RANGES[@]}"; do
   read -r lo hi <<<"$range"
   for p in "$SERVER_PORT" "$CLIENT_PORT"; do
     if [ "$p" -ge "$lo" ] && [ "$p" -le "$hi" ]; then
-      echo "refusing to run: $DB_URL is port $p, inside the shared range $lo-$hi" >&2
+      echo "refusing to run: $SHOWN_URL is port $p, inside the shared range $lo-$hi" >&2
       exit 2
     fi
   done
