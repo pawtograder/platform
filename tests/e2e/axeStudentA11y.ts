@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Page as PlaywrightCorePage } from "playwright-core";
 
-const DEFAULT_EXCLUDES = [
+export const DEFAULT_EXCLUDES = [
   // NOTE: Monaco (`.monaco-editor`) is deliberately NOT excluded. The read-only
   // code viewer is configured for accessibility (ariaLabel /
   // accessibilitySupport:"on" / tabFocusMode — components/ui/code-file-monaco.tsx)
@@ -53,7 +53,7 @@ const DEFAULT_EXCLUDES = [
 ];
 
 /** Scope axe scanning to the rules we actually want to enforce. */
-const DEFAULT_WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
+export const DEFAULT_WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 
 /**
  * Best-practice rules we want enforced *in addition to* the WCAG tag set.
@@ -61,7 +61,7 @@ const DEFAULT_WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
  * levels (e.g. h1 → h3) materially hurts screen-reader navigation, so we
  * enable it explicitly.
  */
-const ADDITIONAL_RULES = ["heading-order"];
+export const ADDITIONAL_RULES = ["heading-order"];
 
 export type AxeAssertOptions = {
   /** Extra CSS selectors to exclude from the scan. Merged with DEFAULT_EXCLUDES. */
