@@ -189,6 +189,17 @@ Size: medium. No dependency on WP1–WP3.
 
 It calls `processEnvelope` with `queue_name: "handout_sync"`.
 
+Carried over from the WP4 audit:
+
+- `sendToDeadLetterQueue` in `github-async-worker/index.ts` hardcodes `async_calls_dlq`. A
+  poison `handout_sync` message must land in `handout_sync_dlq`, so it has to follow
+  `meta.queue_name`.
+- `processEnvelope` has no shadow guard. Add one that refuses a message marked `shadow`, as a
+  backstop to the routing in the worker.
+- `get_queue_metrics` (20260811120200) has fixed columns and omits `handout_sync` and its DLQ.
+  WP6's alerts need them.
+- The shadow handler writes with `insert … on conflict (msg_id) do nothing`.
+
 Shadow messages never reach `processEnvelope`, because it writes `sync_data` and the sync
 columns on the `repositories` row. The worker routes a message marked `shadow` to a plan-only
 engine call: no push, no PR, no REST writes, and the token is scoped to `contents: read`. It
