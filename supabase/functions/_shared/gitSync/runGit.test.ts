@@ -27,6 +27,10 @@ import {
   type GitRequest,
   type GitResult,
   parseGitVersion,
+  assertGitRuntime,
+  gh001Path,
+  lsRemoteSyncBranch,
+  parseLsRemoteExact,
   runGit,
   runGitChecked
 } from "./runGit.ts";
@@ -69,8 +73,44 @@ if (SKIP_REAL_GIT) {
     [
       "",
       "!!! runGit.test.ts: `git` is not visible to this Deno (spawn failed with NotFound; the snap Deno does this).",
-      "!!! SKIPPED: version check, real-git failure classification, and the .gitattributes canary.",
+      "!!! SKIPPED: every case that runs real git (each is listed as ignored below).",
       "!!! These cases are NOT covered by this run. Use a non-snap Deno, or set CI=1 to make the skip a failure.",
+      ""
+    ].join("\n")
+  );
+}
+
+/**
+ * The kill tests need a Deno whose `detached` spawn makes the child a process-group leader. The
+ * snap Deno 2.3.7 does not, so they are skipped there, loudly, and never in CI. Production checks
+ * the same property at startup with `assertChildProcessGroups`.
+ */
+async function detachedMakesProcessGroup(): Promise<boolean> {
+  const options: Deno.CommandOptions & { detached?: boolean } = {
+    args: ["5"],
+    detached: true,
+    stdout: "null",
+    stderr: "null"
+  };
+  const child = new Deno.Command("sleep", options).spawn();
+  try {
+    // Succeeds only if a group with the child's pid as its id exists. See assertChildProcessGroups.
+    Deno.kill(-child.pid, "SIGCONT");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    child.kill("SIGKILL");
+    await child.status;
+  }
+}
+const SKIP_PROCESS_GROUPS = !Deno.env.get("CI") && !(await detachedMakesProcessGroup());
+if (SKIP_PROCESS_GROUPS) {
+  console.error(
+    [
+      "",
+      "!!! runGit.test.ts: this Deno's detached spawn does not create a process group (the snap Deno 2.3.7 does this).",
+      "!!! SKIPPED: the process-group kill cases (listed as ignored below). They are NOT covered by this run.",
       ""
     ].join("\n")
   );
@@ -305,8 +345,6 @@ function hostileRequests(gitDir: string, bad: string): Array<[string, GitRequest
     ["fetch.repo", { op: "fetch", gitDir, repo: bad, target: { kind: "sha", sha: SHA_A } }],
     ["fetch.sha", { op: "fetch", gitDir, repo: GOOD_REPO, target: { kind: "sha", sha: bad } }],
     ["fetch.trackingRef", { op: "fetch", gitDir, repo: GOOD_REPO, target: { kind: "main", trackingRef: bad } }],
-    ["ls-remote.repo", { op: "ls-remote", gitDir, repo: bad, branch: GOOD_BRANCH }],
-    ["ls-remote.branch", { op: "ls-remote", gitDir, repo: GOOD_REPO, branch: bad }],
     ["push.repo", { op: "push", gitDir, repo: bad, commit: SHA_A, branch: GOOD_BRANCH, expect: null }],
     ["push.commit", { op: "push", gitDir, repo: GOOD_REPO, commit: bad, branch: GOOD_BRANCH, expect: null }],
     ["push.branch", { op: "push", gitDir, repo: GOOD_REPO, commit: SHA_A, branch: bad, expect: null }],
@@ -352,6 +390,13 @@ Deno.test("runGit rejects hostile input in every request field without spawning"
       await assertRejects(() => runGit(req, ctx), InvalidSyncInputError, undefined, `${field}=${JSON.stringify(bad)}`);
       cases++;
     }
+    const gitDir = "/nonexistent/job.git";
+    await assertRejects(
+      () => lsRemoteSyncBranch({ gitDir, repo: bad, branch: GOOD_BRANCH }, ctx),
+      InvalidSyncInputError
+    );
+    await assertRejects(() => lsRemoteSyncBranch({ gitDir, repo: GOOD_REPO, branch: bad }, ctx), InvalidSyncInputError);
+    cases += 2;
   }
   const index = "/nonexistent/job.git/sync.index";
   const others: GitRequest[] = [
@@ -401,7 +446,7 @@ Deno.test("runGit rejects hostile input in every request field without spawning"
 
 Deno.test("remote URLs must match the declared protocol, and https must be plain github.com", async () => {
   const spawned: string[][] = [];
-  const req: GitRequest = { op: "ls-remote", gitDir: "/j", repo: GOOD_REPO, branch: GOOD_BRANCH };
+  const req: GitRequest = { op: "fetch", gitDir: "/j", repo: GOOD_REPO, target: { kind: "sha", sha: SHA_A } };
   const base = { home: "/h", log: () => {}, testOnly: { onSpawn: (a: readonly string[]) => spawned.push([...a]) } };
   const urls: Array<["https" | "file", string]> = [
     ["file", "ext::sh -c id"],
@@ -660,68 +705,175 @@ Deno.test("stderr past its cap kills the child", async () => {
 // Failure classification
 // ---------------------------------------------------------------------------------------------
 
+const GH001_STDERR = [
+  "remote: error: Trace: 0123456789abcdef",
+  "remote: error: See https://gh.io/lfs for more information.",
+  "remote: error: File assets/big.ppm is 120.50 MB; this exceeds GitHub's file size limit of 100.00 MB",
+  "remote: error: GH001: Large files detected. You may want to try Git Large File Storage - https://git-lfs.github.com.",
+  " ! [remote rejected] abc -> sync-to-abcdef0 (pre-receive hook declined)"
+].join("\n");
+
 Deno.test("known git failure text maps to the error types of spec §7", () => {
-  const cases: Array<[string, GitFailureKind | null, boolean | null]> = [
+  const cases: Array<[string, string, GitFailureKind | null, boolean | null]> = [
+    ["push", GH001_STDERR, "file_too_large", false],
     [
-      [
-        "remote: error: Trace: 0123456789abcdef",
-        "remote: error: See https://gh.io/lfs for more information.",
-        "remote: error: File assets/big.ppm is 120.50 MB; this exceeds GitHub's file size limit of 100.00 MB",
-        "remote: error: GH001: Large files detected. You may want to try Git Large File Storage - https://git-lfs.github.com.",
-        " ! [remote rejected] abc -> sync-to-abcdef0 (pre-receive hook declined)"
-      ].join("\n"),
-      "file_too_large",
-      false
-    ],
-    [
+      "push",
       " ! [rejected]        abc -> sync-to-abcdef0 (stale info)\nerror: failed to push some refs",
       "lease_rejected",
       true
     ],
     [
+      "push",
       " ! [remote rejected] abc -> sync-to-abcdef0 (cannot lock ref 'refs/heads/sync-to-abcdef0': is at 1 but expected 2)",
       "lease_rejected",
       true
     ],
-    ["fatal: remote error: upload-pack: not our ref 1111111111111111111111111111111111111111", "unfetchable", true],
     [
+      "fetch",
+      "fatal: remote error: upload-pack: not our ref 1111111111111111111111111111111111111111",
+      "unfetchable",
+      true
+    ],
+    [
+      "fetch",
       "error: Server does not allow request for unadvertised object 1111111111111111111111111111111111111111",
       "unfetchable",
       true
     ],
-    ["fatal: couldn't find remote ref refs/heads/main", "unfetchable", true],
-    ["error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502", "network", true],
-    ["error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)", "network", true],
+    ["fetch", "fatal: couldn't find remote ref refs/heads/main", "unfetchable", true],
+    ["fetch", "error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502", "network", true],
+    ["push", "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)", "network", true],
     [
+      "fetch",
       "fetch-pack: unexpected disconnect while reading sideband packet\nfatal: early EOF\nfatal: index-pack failed",
       "network",
       true
     ],
-    ["fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com", "network", true],
-    ["fatal: the remote end hung up unexpectedly", "network", true],
     [
+      "ls-remote",
+      "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com",
+      "network",
+      true
+    ],
+    ["push", "fatal: the remote end hung up unexpectedly", "network", true],
+    [
+      "fetch",
       "fatal: sha1 file '/work/jobs/1.git/objects/pack/tmp_pack_x' write error: No space left on device\nfatal: early EOF",
       "disk_full",
       true
     ],
-    ["error: unable to write file: ENOSPC", "disk_full", true],
+    ["update-index", "error: unable to write file: ENOSPC", "disk_full", true],
     [
+      "fetch",
       "remote: Repository not found.\nfatal: repository 'https://github.com/o/r.git/' not found",
       "remote_repo_not_found",
       true
     ],
-    ["fatal: something new and strange", null, null]
+    ["fetch", "error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401", "auth_failed", true],
+    ["push", "error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403", "auth_failed", true],
+    [
+      "push",
+      "remote: Permission to org/repo.git denied to pawtograder[bot].\nfatal: unable to access",
+      "auth_failed",
+      true
+    ],
+    ["fetch", "fatal: Authentication failed for 'https://github.com/o/r.git/'", "auth_failed", true],
+    [
+      "fetch",
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      "auth_failed",
+      true
+    ],
+    ["fetch", "fatal: something new and strange", null, null]
   ];
-  for (const [stderr, kind, retryable] of cases) {
-    const error = classifyGitStderr("push", stderr);
-    assertEquals(error?.kind ?? null, kind, stderr);
+  for (const [op, stderr, kind, retryable] of cases) {
+    const error = classifyGitStderr(op, stderr);
+    assertEquals(error?.kind ?? null, kind, `${op}: ${stderr}`);
     if (error) assertEquals(error.retryable, retryable, stderr);
   }
-  const gh001 = classifyGitStderr("push", cases[0][0]);
+  const gh001 = classifyGitStderr("push", GH001_STDERR);
   assertInstanceOf(gh001, GitSyncTerminalError);
   assertEquals(gh001.reason, "file_too_large");
   assertEquals(gh001.path, "assets/big.ppm");
-  assertInstanceOf(classifyGitStderr("fetch", cases[3][0]), GitUnfetchableError);
+  assertInstanceOf(classifyGitStderr("fetch", cases[3][1]), GitUnfetchableError);
+});
+
+Deno.test("classification believes each failure only from the ops that produce it", () => {
+  // A local op whose stderr echoes a path or message containing GitHub's wording.
+  assertEquals(classifyGitStderr("read-tree", GH001_STDERR), null);
+  assertEquals(classifyGitStderr("read-tree", "fatal: bad path 'remote: error: GH001: x'"), null);
+  // On push, GH001 counts only as GitHub's own anchored line.
+  assertEquals(classifyGitStderr("push", "error: src refspec GH001 does not match any"), null);
+  assertEquals(classifyGitStderr("push", "remote: error: see GH001: elsewhere"), null);
+  // Lease wording is only believed from push.
+  assertEquals(classifyGitStderr("fetch", "error: cannot lock ref 'refs/remotes/student/main'"), null);
+  assertEquals(classifyGitStderr("update-index", "fatal: (stale info) failed to update ref"), null);
+  // Unfetchable wording is only believed from fetch.
+  assertEquals(classifyGitStderr("cat-file", "fatal: not our ref"), null);
+  // Transport wording is only believed from ops that talk to a remote.
+  assertEquals(classifyGitStderr("ls-tree", "fatal: early EOF"), null);
+  assertEquals(classifyGitStderr("merge-file", "error: RPC failed; HTTP 502"), null);
+  // 4xx other than auth is the request's fault, not the network's.
+  assertEquals(
+    classifyGitStderr("push", "error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413"),
+    null
+  );
+  assertEquals(
+    classifyGitStderr("fetch", "error: RPC failed; HTTP 404 curl 22 The requested URL returned error: 404"),
+    null
+  );
+  assertEquals(
+    classifyGitStderr("push", "error: RPC failed; HTTP 503 curl 22 The requested URL returned error: 503")?.kind,
+    "network"
+  );
+});
+
+Deno.test("gh001Path parses GitHub's line and nothing else", () => {
+  assertEquals(gh001Path(GH001_STDERR), "assets/big.ppm");
+  assertEquals(
+    gh001Path("remote: error: File a b/c is d.bin is 101.00 MB; this exceeds GitHub's limit"),
+    "a b/c is d.bin"
+  );
+  assertEquals(gh001Path("remote: error: File x is big; this exceeds"), undefined);
+  assertEquals(gh001Path("error: File x is 101.00 MB; this exceeds"), undefined);
+});
+
+/** Times `fn` and fails if it takes longer than `limitMs`. */
+function assertFast(label: string, limitMs: number, fn: () => unknown): void {
+  const started = performance.now();
+  fn();
+  const elapsed = performance.now() - started;
+  assert(elapsed < limitMs, `${label} took ${elapsed.toFixed(0)} ms (limit ${limitMs} ms)`);
+}
+
+/** 1 MiB inputs, the stderr cap, shaped to trigger backtracking in the patterns this module uses. */
+const ADVERSARIAL: Array<[string, string]> = [
+  ["a.a.a.", "a.".repeat(512 * 1024)],
+  ["scheme chars then ://", "a".repeat(1024 * 1024 - 3) + "://"],
+  ["://x repeated", "://x".repeat(256 * 1024)],
+  ["File File", "remote: error: File " + "File ".repeat(200 * 1024)],
+  ["File lines", "remote: error: File x is \n".repeat(40 * 1024)],
+  ["is is", "remote: error: File" + " is".repeat(340 * 1024)],
+  ["basic spaces", ("basic" + " ".repeat(1000)).repeat(1000)],
+  ["authorization spaces", ("authorization" + " ".repeat(1000)).repeat(1000)],
+  ["x-access-token", "x-access-token:".repeat(70 * 1024)],
+  ["Permission to", ("Permission to " + "a".repeat(300)).repeat(3400)],
+  ["returned error", "returned error: 4".repeat(60 * 1024)]
+];
+
+Deno.test("redaction is linear: 1 MiB of adversarial stderr in under 200 ms each", () => {
+  for (const [label, input] of ADVERSARIAL) {
+    assertFast(`redactSecrets(${label})`, 200, () => redactSecrets(input, ["some-known-secret-value"]));
+  }
+});
+
+Deno.test("classification is linear: 1 MiB of adversarial stderr in under 200 ms each", () => {
+  for (const [label, input] of ADVERSARIAL) {
+    for (const op of ["push", "fetch"]) {
+      assertFast(`classifyGitStderr(${op}, ${label})`, 200, () => classifyGitStderr(op, input));
+    }
+    assertFast(`gh001Path(${label})`, 200, () => gh001Path(input));
+  }
 });
 
 Deno.test("classifyGitFailure: clean exit is null, unknown failure is git_failed", () => {
@@ -928,8 +1080,7 @@ Deno.test(
         // empty-tree override has to defeat. The worker's own job repos keep an unborn HEAD.
         await fixtureGit(["--git-dir", job, "update-ref", "refs/heads/main", H], { cwd: root });
         const branch = syncBranchFor(H);
-        const lsRemote = await runGitChecked({ op: "ls-remote", gitDir: job, repo: "org/student", branch }, ctx);
-        assertEquals(text(lsRemote.stdout), "");
+        assertEquals(await lsRemoteSyncBranch({ gitDir: job, repo: "org/student", branch }, ctx), null);
 
         assertEquals(
           (await runGit({ op: "cat-file", gitDir: job, object: H, mode: "exists", peel: "commit" }, ctx)).code,
@@ -1021,10 +1172,7 @@ Deno.test(
         assert(committed.endsWith(`Sync handout updates to ${H.slice(0, 7)}\n\nbody\n`));
 
         await runGitChecked({ op: "push", gitDir: job, repo: "org/student", commit, branch, expect: null }, ctx);
-        const head = text(
-          (await runGitChecked({ op: "ls-remote", gitDir: job, repo: "org/student", branch }, ctx)).stdout
-        );
-        assertEquals(head, `${commit}\trefs/heads/${branch}\n`);
+        assertEquals(await lsRemoteSyncBranch({ gitDir: job, repo: "org/student", branch }, ctx), { sha: commit });
         await runGitChecked({ op: "count-objects", gitDir: job }, ctx);
 
         // Merged content landed on the remote without anything materialized here.
@@ -1093,7 +1241,7 @@ Deno.test("positionals follow -- in network argv, and the lease is spelled as th
     await runGit({ op: "push", gitDir: dir, repo: GOOD_REPO, commit: SHA_A, branch: GOOD_BRANCH, expect: null }, ctx);
     await runGit({ op: "push", gitDir: dir, repo: GOOD_REPO, commit: SHA_A, branch: GOOD_BRANCH, expect: SHA_B }, ctx);
     await runGit({ op: "fetch", gitDir: dir, repo: GOOD_REPO, target: { kind: "sha", sha: SHA_A }, depth: 1 }, ctx);
-    await runGit({ op: "ls-remote", gitDir: dir, repo: GOOD_REPO, branch: GOOD_BRANCH }, ctx);
+    await lsRemoteSyncBranch({ gitDir: dir, repo: GOOD_REPO, branch: GOOD_BRANCH }, ctx);
     const tails = spawns.map((argv) => argv.slice(argv.indexOf("--")));
     assertEquals(tails, [
       ["--", url, `${SHA_A}:refs/heads/${GOOD_BRANCH}`],
@@ -1109,7 +1257,7 @@ Deno.test("positionals follow -- in network argv, and the lease is spelled as th
       log: () => {},
       testOnly: { gitBinary: ok, onSpawn: (a) => spawns.push([...a]) }
     };
-    await runGit({ op: "ls-remote", gitDir: dir, repo: GOOD_REPO, branch: GOOD_BRANCH }, prod);
+    await lsRemoteSyncBranch({ gitDir: dir, repo: GOOD_REPO, branch: GOOD_BRANCH }, prod);
     const last = spawns[spawns.length - 1];
     assert(last.includes(`https://github.com/${GOOD_REPO}.git`));
     assert(last.includes("protocol.https.allow=always"));
@@ -1126,3 +1274,347 @@ async function exists(path: string): Promise<boolean> {
     throw e;
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Process-group kills (no orphaned helpers)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * True while `pid` exists. SIGCONT is harmless to a running process and fails with ESRCH once the
+ * pid is gone. (Deno requires `--allow-all` to read `/proc/<pid>`.) An orphan is reparented and
+ * reaped within milliseconds, so the zombie window does not matter to `gone()`.
+ */
+function alive(pid: number): Promise<boolean> {
+  try {
+    Deno.kill(pid, "SIGCONT");
+    return Promise.resolve(true);
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
+/** Waits up to `ms` for `pid` to be gone. Returns whether it is gone. */
+async function gone(pid: number, ms = 1_000): Promise<boolean> {
+  const until = performance.now() + ms;
+  while (performance.now() < until) {
+    if (!(await alive(pid))) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return !(await alive(pid));
+}
+
+/** Kills a leftover test process so a failing assertion does not leave it behind. */
+function reap(pid: number): void {
+  try {
+    Deno.kill(pid, "SIGKILL");
+  } catch {
+    // Already gone.
+  }
+}
+
+/** A stand-in git that starts a long-lived grandchild and records its pid, then waits. */
+async function forkingStub(dir: string, grandchild = "sleep 300"): Promise<{ bin: string; pidFile: string }> {
+  const pidFile = `${dir}/grandchild.pid`;
+  const bin = await stubBinary(dir, "forking", `${grandchild} &\necho $! > "${pidFile}"\nexec sleep 301`);
+  return { bin, pidFile };
+}
+
+async function readPid(pidFile: string): Promise<number> {
+  return Number((await Deno.readTextFile(pidFile)).trim());
+}
+
+Deno.test({
+  name: "a timeout kill reaches the grandchildren git started, not only git",
+  ignore: SKIP_PROCESS_GROUPS,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      const { bin, pidFile } = await forkingStub(dir);
+      const { ctx } = fileContext(dir, dir, { testOnly: { gitBinary: bin } });
+      const result = await runGit({ op: "ls-tree", gitDir: dir, treeish: SHA_A, timeoutMs: 300 }, ctx);
+      const pid = await readPid(pidFile);
+      try {
+        assert(result.timedOut);
+        assert(await gone(pid), `grandchild ${pid} survived the timeout kill`);
+      } finally {
+        reap(pid);
+      }
+    });
+  }
+});
+
+Deno.test({
+  name: "a job-deadline abort reaches the grandchildren git started",
+  ignore: SKIP_PROCESS_GROUPS,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      const { bin, pidFile } = await forkingStub(dir);
+      const deadline = new AbortController();
+      const { ctx } = fileContext(dir, dir, { signal: deadline.signal, testOnly: { gitBinary: bin } });
+      setTimeout(() => deadline.abort(), 300);
+      const result = await runGit(
+        { op: "fetch", gitDir: dir, repo: GOOD_REPO, target: { kind: "sha", sha: SHA_A } },
+        ctx
+      );
+      const pid = await readPid(pidFile);
+      try {
+        assert(result.aborted);
+        assert(await gone(pid), `grandchild ${pid} survived the abort`);
+      } finally {
+        reap(pid);
+      }
+    });
+  }
+});
+
+Deno.test({
+  name: "a grandchild that ignores SIGTERM is swept with SIGKILL once git has exited",
+  ignore: SKIP_PROCESS_GROUPS,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      // `exec` keeps the ignored disposition, so only SIGKILL stops this sleep.
+      const { bin, pidFile } = await forkingStub(dir, "(trap '' TERM; exec sleep 300)");
+      const { ctx } = fileContext(dir, dir, { testOnly: { gitBinary: bin, killGraceMs: 10_000 } });
+      const result = await runGit({ op: "ls-tree", gitDir: dir, treeish: SHA_A, timeoutMs: 300 }, ctx);
+      const pid = await readPid(pidFile);
+      try {
+        assert(result.timedOut);
+        assertEquals(result.signal, "SIGTERM");
+        // Well inside the 10 s grace: the sweep after git's exit, not the escalation timer, did it.
+        assert(await gone(pid), `grandchild ${pid} that ignores SIGTERM survived`);
+      } finally {
+        reap(pid);
+      }
+    });
+  }
+});
+
+/**
+ * Every process whose environment has `HOME=<home>`, from `ps e` (Deno requires `--allow-all` to
+ * read `/proc/<pid>/environ` directly). Each job has its own HOME, so this finds exactly the
+ * processes that one test's git calls started.
+ */
+async function processesWithHome(home: string): Promise<Array<{ pid: number; cmdline: string }>> {
+  const out = await new Deno.Command("ps", { args: ["-ww", "-e", "e", "-o", "pid=,args="], stdout: "piped" }).output();
+  const needle = ` HOME=${home}`;
+  return new TextDecoder()
+    .decode(out.stdout)
+    .split("\n")
+    .filter((line) => line.includes(`${needle} `) || line.endsWith(needle))
+    .map((line) => {
+      const trimmed = line.trim();
+      const space = trimmed.indexOf(" ");
+      return { pid: Number(trimmed.slice(0, space)), cmdline: trimmed.slice(space + 1, space + 200) };
+    });
+}
+
+Deno.test({
+  name: "real git: a fetch hung on a silent server leaves no git-remote-https behind",
+  ignore: SKIP_REAL_GIT || SKIP_PROCESS_GROUPS,
+  fn: async () => {
+    await withTempDir(async (root) => {
+      // Accepts connections and never answers, so curl's CONNECT through it hangs.
+      const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+      const conns: Deno.Conn[] = [];
+      const accepting = (async () => {
+        try {
+          for await (const conn of listener) conns.push(conn);
+        } catch {
+          // Listener closed.
+        }
+      })();
+      const home = `${root}/home`;
+      await Deno.mkdir(home);
+      const proxy = `http://127.0.0.1:${(listener.addr as Deno.NetAddr).port}`;
+      const ctx: GitContext = {
+        home,
+        token: "ghs_" + "P".repeat(36),
+        log: () => {},
+        testOnly: { extraEnv: { https_proxy: proxy, HTTPS_PROXY: proxy } }
+      };
+      const job = `${home}/job.git`;
+      let leftovers: Array<{ pid: number; cmdline: string }> = [];
+      try {
+        await runGitChecked({ op: "init", gitDir: job }, ctx);
+        const result = await runGit(
+          {
+            op: "fetch",
+            gitDir: job,
+            repo: GOOD_REPO,
+            target: { kind: "sha", sha: SHA_A },
+            depth: 1,
+            timeoutMs: 1_500
+          },
+          ctx
+        );
+        assert(result.timedOut, `fetch was not killed by the timeout: ${result.stderr}`);
+        assert(conns.length > 0, "git never reached the silent server, so this proves nothing");
+        await new Promise((r) => setTimeout(r, 300));
+        leftovers = await processesWithHome(home);
+        assertEquals(leftovers, [], "processes with the job's HOME survived the kill");
+      } finally {
+        for (const { pid } of leftovers) reap(pid);
+        listener.close();
+        for (const conn of conns) conn.close();
+        await accepting;
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// ls-remote reads only the exact ref
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("parseLsRemoteExact ignores tail-matching decoys and refuses duplicates", () => {
+  const ref = `refs/heads/${GOOD_BRANCH}`;
+  const decoy = `${SHA_A}\trefs/heads/x/${ref}\n`;
+  assertEquals(parseLsRemoteExact(decoy, ref), null);
+  assertEquals(parseLsRemoteExact(`${decoy}${SHA_B}\t${ref}\n`, ref), { sha: SHA_B });
+  assertEquals(parseLsRemoteExact(`${SHA_B}\t${ref}\n${decoy}`, ref), { sha: SHA_B });
+  assertEquals(parseLsRemoteExact("", ref), null);
+  const dup = assertThrowsGit(() => parseLsRemoteExact(`${SHA_A}\t${ref}\n${SHA_B}\t${ref}\n`, ref));
+  assertStringIncludes(dup.message, "more than once");
+  assertThrowsGit(() => parseLsRemoteExact(`nothex\t${ref}\n`, ref));
+});
+
+function assertThrowsGit(fn: () => unknown): GitSyncError {
+  try {
+    fn();
+  } catch (e) {
+    assertInstanceOf(e, GitSyncError);
+    return e;
+  }
+  throw new Error("did not throw");
+}
+
+Deno.test({
+  name: "real git: lsRemoteSyncBranch ignores a decoy ref and finds the real branch",
+  ignore: SKIP_REAL_GIT,
+  fn: async () => {
+    await withTempDir(async (root) => {
+      const [first, second] = await makeRemote(root, "org/student", [{ "a.txt": "1\n" }, { "a.txt": "2\n" }]);
+      const remote = remotePath(root, "org/student");
+      const branch = GOOD_BRANCH;
+      // A student can push this ref. ls-remote's tail match prints it for our pattern.
+      await fixtureGit(["--git-dir", remote, "update-ref", `refs/heads/x/refs/heads/${branch}`, first], { cwd: root });
+      const job = `${root}/job.git`;
+      const { ctx } = fileContext(root, root);
+      await runGitChecked({ op: "init", gitDir: job }, ctx);
+      assertEquals(await lsRemoteSyncBranch({ gitDir: job, repo: "org/student", branch }, ctx), null);
+      await fixtureGit(["--git-dir", remote, "update-ref", `refs/heads/${branch}`, second], { cwd: root });
+      assertEquals(await lsRemoteSyncBranch({ gitDir: job, repo: "org/student", branch }, ctx), { sha: second });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Attribute isolation is load-bearing
+// ---------------------------------------------------------------------------------------------
+
+Deno.test({
+  name: "real git: EMPTY_TREE_SHA is git's own empty tree (an unresolvable attr.tree is silently ignored)",
+  ignore: SKIP_REAL_GIT,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      assertEquals(await fixtureGit(["hash-object", "-t", "tree", "/dev/null"], { cwd: dir }), EMPTY_TREE_SHA);
+    });
+  }
+});
+
+/** The numstat record for `path`, such as "1\t1" or "-\t-" (binary). */
+function numstatFor(output: string, path: string): string | undefined {
+  const record = output.split("\0").find((r) => r.endsWith(`\t${path}`) || r === path);
+  return record?.slice(0, record.lastIndexOf("\t"));
+}
+
+Deno.test({
+  name: "real git: attr.tree keeps a tree's '* -diff' from turning a text diff into binary",
+  ignore: SKIP_REAL_GIT,
+  fn: async () => {
+    await withTempDir(async (root) => {
+      const attrs = "* -diff\n";
+      const [F, H] = await makeRemote(root, "org/handout", [
+        { ".gitattributes": attrs, "a.txt": "one\n" },
+        { ".gitattributes": attrs, "a.txt": "two\n" }
+      ]);
+      const job = `${root}/job.git`;
+      const { ctx } = fileContext(root, root);
+      await runGitChecked({ op: "init", gitDir: job }, ctx);
+      for (const sha of [F, H]) {
+        await runGitChecked({ op: "fetch", gitDir: job, repo: "org/handout", target: { kind: "sha", sha } }, ctx);
+      }
+      // HEAD resolves to a tree carrying the attribute, which a bare repo would otherwise read.
+      await fixtureGit(["--git-dir", job, "update-ref", "refs/heads/main", H], { cwd: root });
+      const ours = text(
+        (await runGitChecked({ op: "diff-tree", gitDir: job, from: F, to: H, format: "numstat" }, ctx)).stdout
+      );
+      assertEquals(numstatFor(ours, "a.txt"), "1\t1");
+      // The same command without attr.tree (plain git, test-only) reads the attribute.
+      const raw = await fixtureGit(
+        ["--git-dir", job, "diff-tree", "-r", "-z", "--no-renames", "--numstat", F, H, "--"],
+        {
+          cwd: root
+        }
+      );
+      assertEquals(numstatFor(raw, "a.txt"), "-\t-", "control: without attr.tree the attribute should apply");
+    });
+  }
+});
+
+Deno.test({
+  name: "real git: core.attributesFile keeps $HOME/.config/git/attributes out",
+  ignore: SKIP_REAL_GIT,
+  fn: async () => {
+    await withTempDir(async (root) => {
+      const [F, H] = await makeRemote(root, "org/handout", [{ "a.txt": "one\n" }, { "a.txt": "two\n" }]);
+      const home = `${root}/home`;
+      await Deno.mkdir(`${home}/.config/git`, { recursive: true });
+      await Deno.writeTextFile(`${home}/.config/git/attributes`, "* -diff\n");
+      const job = `${home}/job.git`;
+      const { ctx } = fileContext(root, home);
+      await runGitChecked({ op: "init", gitDir: job }, ctx);
+      for (const sha of [F, H]) {
+        await runGitChecked({ op: "fetch", gitDir: job, repo: "org/handout", target: { kind: "sha", sha } }, ctx);
+      }
+      const ours = text(
+        (await runGitChecked({ op: "diff-tree", gitDir: job, from: F, to: H, format: "numstat" }, ctx)).stdout
+      );
+      assertEquals(numstatFor(ours, "a.txt"), "1\t1");
+      // fixtureGit sets HOME to its cwd, so plain git reads that attributes file.
+      const raw = await fixtureGit(["--git-dir", job, "diff-tree", "-r", "-z", "--numstat", F, H, "--"], { cwd: home });
+      assertEquals(numstatFor(raw, "a.txt"), "-\t-", "control: without core.attributesFile the file should apply");
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Spawn failures and the startup check
+// ---------------------------------------------------------------------------------------------
+
+Deno.test("a spawn that cannot start becomes a GitSyncError, not a raw Deno error", async () => {
+  await withTempDir(async (dir) => {
+    const missingBinary = fileContext(dir, dir, { testOnly: { gitBinary: `${dir}/no-such-git` } }).ctx;
+    const e1 = await assertRejects(() => runGit({ op: "count-objects", gitDir: dir }, missingBinary), GitSyncError);
+    assertEquals(e1.kind, "spawn_failed");
+    assertEquals(e1.retryable, true);
+    // init runs in HOME; a job directory removed under us is a missing cwd.
+    const missingCwd = fileContext(dir, `${dir}/gone`, { testOnly: { gitBinary: "/bin/true" } }).ctx;
+    const e2 = await assertRejects(
+      () => runGit({ op: "init", gitDir: `${dir}/gone/job.git` }, missingCwd),
+      GitSyncError
+    );
+    assertEquals(e2.kind, "spawn_failed");
+  });
+});
+
+Deno.test({
+  name: "real git: assertGitRuntime passes where children get their own process group",
+  ignore: SKIP_REAL_GIT || SKIP_PROCESS_GROUPS,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      const { ctx } = fileContext(dir, dir);
+      const version = await assertGitRuntime(ctx);
+      assert(version[0] >= 2);
+    });
+  }
+});

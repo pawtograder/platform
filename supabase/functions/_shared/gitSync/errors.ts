@@ -24,6 +24,9 @@
  *   that is degraded, retryable or terminal depends on which input it was (§5.1, §5.2), so the
  *   engine decides.
  * - `network`: transport failure (`RPC failed`, `early EOF`, DNS, connection resets, HTTP 5xx).
+ * - `auth_failed`: the remote refused the credential (HTTP 401 or 403, "Authentication failed").
+ *   Retryable, because the usual cause is an expired or under-scoped installation token, but kept
+ *   apart from `network` so it shows up on its own in metrics.
  * - `disk_full`: `ENOSPC` while writing objects or the index.
  * - `timeout`: the per-call timeout killed the child.
  * - `deadline_exceeded`: the job's `AbortSignal` fired and killed the child.
@@ -32,6 +35,9 @@
  *   for a missing repo and for one the token cannot see, so it is reported but not made terminal
  *   here. The REST pre-check (§8.4) is where a real 404 becomes terminal.
  * - `git_version_unsupported`: the installed git is older than the engine needs.
+ * - `runtime_unsupported`: this Deno does not put a spawned child in its own process group, so a
+ *   kill could not reach the helpers git starts (see `assertGitRuntime`).
+ * - `spawn_failed`: the child could not be started (git missing, or the cwd is gone).
  * - `git_failed`: a non-zero exit that matched none of the above.
  */
 export type GitFailureKind =
@@ -45,7 +51,10 @@ export type GitFailureKind =
   | "deadline_exceeded"
   | "output_cap_exceeded"
   | "remote_repo_not_found"
+  | "auth_failed"
   | "git_version_unsupported"
+  | "runtime_unsupported"
+  | "spawn_failed"
   | "git_failed";
 
 /** Terminal reasons this module can produce. They become `TerminalSyncError.reason` in WP3. */

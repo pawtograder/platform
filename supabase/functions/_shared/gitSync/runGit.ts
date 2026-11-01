@@ -20,6 +20,8 @@
  *   `GIT_CONFIG_COUNT`/`KEY_0`/`VALUE_0`, so it never appears in argv (`ps`), a URL or a config
  *   file.
  * - Each call has a timeout, honors the job's `AbortSignal`, and caps captured output (§8.4).
+ *   Git runs in its own process group and every kill goes to the whole group, so no helper git
+ *   started outlives the call. `assertGitRuntime` checks at startup that this holds.
  * - stderr is redacted before it is logged, returned or put into an error.
  *
  * `runGit` returns the result of any exit, because several non-zero exits are answers rather than
@@ -85,9 +87,14 @@ export const DEFAULT_TIMEOUT_MS: Readonly<Record<GitOp, number>> = {
 };
 
 /**
- * After SIGTERM, how long git gets before SIGKILL. SIGTERM comes first because git handles it by
- * removing its lock and temp files and signalling the children it started (`git-remote-https`,
- * `index-pack`, `pack-objects`). SIGKILL would orphan them with the pipes still open.
+ * After SIGTERM, how long the process group gets before SIGKILL. SIGTERM comes first so git can
+ * remove its lock and temp files (`shallow.lock`, `tmp_pack_*`).
+ *
+ * Git does NOT pass a signal on to the helpers it starts. Measured: after SIGTERM to `git fetch`,
+ * `git-remote-https` was reparented to init and kept running, with the token in its environment.
+ * So every git runs in its own process group (`detached: true`, which is `setsid` in Deno 2.x), and
+ * every signal goes to the whole group. That needs no shell or `setsid` binary, which the
+ * production image does not have.
  */
 const KILL_GRACE_MS = 2_000;
 
@@ -147,8 +154,12 @@ export interface FetchRequest extends RequestBase {
   depth?: number;
 }
 
-/** Reads the head of one sync branch on the remote (§5.2). */
-export interface LsRemoteRequest extends RequestBase {
+/**
+ * Reads the head of one sync branch on the remote (§5.2). Not part of `GitRequest`: callers use
+ * `lsRemoteSyncBranch`, which parses the output, because ls-remote matches patterns against the
+ * tail of each refname and so also prints decoys such as `refs/heads/x/refs/heads/sync-to-…`.
+ */
+interface LsRemoteRequest extends RequestBase {
   op: "ls-remote";
   repo: string;
   branch: string;
@@ -260,7 +271,6 @@ export interface CountObjectsRequest extends RequestBase {
 export type GitRequest =
   | InitRequest
   | FetchRequest
-  | LsRemoteRequest
   | PushRequest
   | DiffTreeRequest
   | LsTreeRequest
@@ -271,6 +281,9 @@ export type GitRequest =
   | CommitTreeRequest
   | CatFileRequest
   | CountObjectsRequest;
+
+/** Every request `buildInvocation` handles, including the ones only this module issues. */
+type AnyGitRequest = GitRequest | LsRemoteRequest;
 
 // ---------------------------------------------------------------------------------------------
 // Context and results
@@ -318,6 +331,11 @@ export interface GitTestHooks {
   stdoutCapBytes?: number;
   stderrCapBytes?: number;
   killGraceMs?: number;
+  /**
+   * Added to the child's environment. Used only to point curl at a local proxy that never answers,
+   * so a test can watch a real `git-remote-https` hang and get killed.
+   */
+  extraEnv?: Record<string, string>;
 }
 
 /** Per-job settings shared by every call the job makes. */
@@ -365,6 +383,8 @@ interface Invocation {
   extraEnv: Record<string, string>;
   stdin: Uint8Array | null;
   timeoutMs: number;
+  /** Internal: runs after spawn and before stdin is written. Used only by the startup probe. */
+  onSpawned?: (pid: number) => Promise<void>;
 }
 
 /**
@@ -476,7 +496,7 @@ function positiveInt(value: unknown, field: string): number {
  * Validates `req` and returns the argv tail, cwd, per-call environment and stdin. Everything that
  * can throw `InvalidSyncInputError` runs here, before `spawnGit` is reached.
  */
-function buildInvocation(req: GitRequest, ctx: GitContext): Invocation {
+function buildInvocation(req: AnyGitRequest, ctx: GitContext): Invocation {
   const remote = ctx.remote ?? GITHUB_REMOTE;
   if (remote.protocol !== "https" && remote.protocol !== "file") {
     throw new InvalidSyncInputError("remote protocol", String(remote.protocol), "must be https or file");
@@ -710,6 +730,48 @@ export async function runGitChecked(req: GitRequest, ctx: GitContext): Promise<G
   return result;
 }
 
+/**
+ * The head of `refs/heads/<branch>` on the remote, or `null` when that exact ref does not exist
+ * (§5.2, §5.8). Throws the classified error when ls-remote fails.
+ *
+ * ls-remote matches a pattern against the TAIL of each refname, so asking for
+ * `refs/heads/sync-to-abc1234` also prints `refs/heads/x/refs/heads/sync-to-abc1234`, and sorts it
+ * first. A student can create that ref. Only the line whose refname is exactly the one asked for
+ * counts.
+ */
+export async function lsRemoteSyncBranch(
+  req: { gitDir: string; repo: string; branch: string; timeoutMs?: number },
+  ctx: GitContext
+): Promise<{ sha: string } | null> {
+  const branch = validateSyncBranch(req.branch);
+  const result = await spawnGit(buildInvocation({ ...req, op: "ls-remote", branch }, ctx), ctx);
+  const error = classifyGitFailure(result);
+  if (error) throw error;
+  return parseLsRemoteExact(new TextDecoder().decode(result.stdout), `refs/heads/${branch}`);
+}
+
+/**
+ * Picks the line for exactly `refname` out of ls-remote output (`<sha>\t<refname>` per line).
+ * Every other line is ignored. The same refname twice, or a malformed sha on its line, is an error
+ * rather than a guess.
+ */
+export function parseLsRemoteExact(stdout: string, refname: string): { sha: string } | null {
+  let found: string | null = null;
+  for (const line of stdout.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab < 0 || line.slice(tab + 1) !== refname) continue;
+    if (found !== null) {
+      throw new GitSyncError(`ls-remote listed ${refname} more than once`, "git_failed", true);
+    }
+    const sha = line.slice(0, tab);
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      throw new GitSyncError(`ls-remote printed a malformed sha for ${refname}`, "git_failed", true);
+    }
+    found = sha;
+  }
+  return found === null ? null : { sha: found };
+}
+
 async function spawnGit(inv: Invocation, ctx: GitContext): Promise<GitResult> {
   const remote = ctx.remote ?? GITHUB_REMOTE;
   const secrets = knownSecrets(ctx);
@@ -717,40 +779,59 @@ async function spawnGit(inv: Invocation, ctx: GitContext): Promise<GitResult> {
   if (ctx.signal?.aborted) {
     throw new GitSyncRetryableError(`git ${inv.op} not started: job deadline reached`, "deadline_exceeded");
   }
-  const env = { ...baseEnv(ctx, remote.protocol), ...inv.extraEnv };
+  const env = { ...baseEnv(ctx, remote.protocol), ...inv.extraEnv, ...ctx.testOnly?.extraEnv };
   const stdoutCap = ctx.testOnly?.stdoutCapBytes ?? STDOUT_CAP_BYTES;
   const stderrCap = ctx.testOnly?.stderrCapBytes ?? STDERR_CAP_BYTES;
   const killGraceMs = ctx.testOnly?.killGraceMs ?? KILL_GRACE_MS;
 
   ctx.testOnly?.onSpawn?.(argv);
   const started = performance.now();
-  const child = new Deno.Command(ctx.testOnly?.gitBinary ?? "git", {
+  // `detached` is spelled out in the type because older Deno typings (2.3) lack it. Where the
+  // runtime ignores it, `assertChildProcessGroups` fails at startup.
+  const options: Deno.CommandOptions & { detached?: boolean } = {
     args: inv.args,
     cwd: inv.cwd,
     clearEnv: true,
     env,
+    // Its own process group, so a kill reaches the helpers git starts. See KILL_GRACE_MS.
+    detached: true,
     stdin: inv.stdin ? "piped" : "null",
     stdout: "piped",
     stderr: "piped"
-  }).spawn();
+  };
+  let child: Deno.ChildProcess;
+  try {
+    child = new Deno.Command(ctx.testOnly?.gitBinary ?? "git", options).spawn();
+  } catch (e) {
+    // A missing git binary or a missing cwd (the job directory removed under us). Neither says
+    // anything about the repo, so it is retryable infrastructure failure, not a terminal one.
+    const why = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    throw new GitSyncError(`git ${inv.op} could not be started: ${redactSecrets(why, secrets)}`, "spawn_failed", true);
+  }
+
+  // Signals the whole group. If there is no group to signal (every member has exited, or a Deno
+  // whose `detached` does not call setsid), it falls back to the child alone.
+  const signalGroup = (signal: Deno.Signal) => {
+    try {
+      Deno.kill(-child.pid, signal);
+      return;
+    } catch {
+      // ESRCH: no such group.
+    }
+    try {
+      child.kill(signal);
+    } catch {
+      // Already exited.
+    }
+  };
 
   let killedBy: KillReason | null = null;
   let escalation: ReturnType<typeof setTimeout> | undefined;
   const kill = (reason: KillReason) => {
     if (killedBy !== null) return;
     killedBy = reason;
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Already exited.
-    }
-    escalation = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Already exited.
-      }
-    }, killGraceMs);
+    signalGroup("SIGTERM");
+    escalation = setTimeout(() => signalGroup("SIGKILL"), killGraceMs);
   };
 
   const timer = setTimeout(() => kill("timeout"), inv.timeoutMs);
@@ -759,7 +840,13 @@ async function spawnGit(inv: Invocation, ctx: GitContext): Promise<GitResult> {
 
   const stdoutReader = capture(child.stdout, stdoutCap, () => kill("stdout_cap"));
   const stderrReader = capture(child.stderr, stderrCap, () => kill("stderr_cap"));
-  const stdinDone = inv.stdin ? writeStdin(child.stdin, inv.stdin) : Promise.resolve();
+  const stdin = inv.stdin;
+  const stdinDone = (async () => {
+    // A failing hook must not leave the child waiting on stdin, so its error is swallowed here.
+    // The probe that uses it records its own failure.
+    if (inv.onSpawned) await inv.onSpawned(child.pid).catch(() => {});
+    if (stdin) await writeStdin(child.stdin, stdin);
+  })();
 
   let status: Deno.CommandStatus;
   try {
@@ -768,6 +855,14 @@ async function spawnGit(inv: Invocation, ctx: GitContext): Promise<GitResult> {
     clearTimeout(timer);
     clearTimeout(escalation);
     ctx.signal?.removeEventListener("abort", onAbort);
+    // Nothing git started may outlive the call, whether git exited on its own or was killed. With
+    // the group already empty this is a no-op (ESRCH). It never reaches the child's pid alone,
+    // which has been reaped by now and could belong to an unrelated process.
+    try {
+      Deno.kill(-child.pid, "SIGKILL");
+    } catch {
+      // No group left.
+    }
   }
   await stdinDone;
   // A grandchild that git started can keep a pipe open after git itself is gone. Give the readers
@@ -879,14 +974,17 @@ function tail(text: string, max: number): string {
 // Failure classification (§7)
 // ---------------------------------------------------------------------------------------------
 
+// Every pattern here is a literal or a literal with a bounded tail, so matching is linear in the
+// size of stderr (up to the 1 MiB cap). A backtracking pattern over capped stderr would block the
+// event loop, and with it the job heartbeat, for minutes.
 const DISK_FULL_RE = /No space left on device|ENOSPC/i;
-const GH001_RE = /\bGH001\b/;
-/** GitHub's wording: "remote: error: File big.bin is 120.00 MB; this exceeds GitHub's file size limit". */
-const GH001_PATH_RE = /File (.+?) is [\d.]+ MB; this exceeds/;
+/** GitHub's rejection line. Anchored, so a path or message that merely contains "GH001" is ignored. */
+const GH001_RE = /^remote: error: GH001:/m;
 const LEASE_RE = /\(stale info\)|cannot lock ref|incorrect old value|failed to update ref/i;
-const UNFETCHABLE_RE =
-  /not our ref|unadvertised object|couldn't find remote ref|no such remote ref|upload-pack: not our ref/i;
+const UNFETCHABLE_RE = /not our ref|unadvertised object|couldn't find remote ref|no such remote ref/i;
 const REPO_NOT_FOUND_RE = /Repository not found/i;
+const AUTH_RE =
+  /returned error: 40[13]\b|HTTP 40[13]\b|Authentication failed|could not read Username|terminal prompts disabled|Permission to \S{1,200} denied/i;
 const NETWORK_RE = new RegExp(
   [
     "RPC failed",
@@ -903,44 +1001,74 @@ const NETWORK_RE = new RegExp(
     "GnuTLS",
     "gnutls_handshake",
     "TLS connection",
-    "returned error: 5\\d\\d",
     "HTTP/2 stream",
     "index-pack failed",
     "invalid index-pack output"
   ].join("|"),
   "i"
 );
+/** An HTTP status in git's output. Only 5xx is a network failure; 4xx is the request's fault. */
+const HTTP_STATUS_RE = /(?:returned error:|HTTP) ([1-5]\d\d)\b/;
+
+/** Ops that talk to a remote. Transport failures are only believed from these. */
+const NETWORK_OPS = new Set(["fetch", "ls-remote", "push"]);
+
+/**
+ * The path in GitHub's "remote: error: File <path> is <n> MB; this exceeds GitHub's file size
+ * limit" line, or undefined. Parsed with string searches, not a regex, so it stays linear: a lazy
+ * `File (.+?) is` is quadratic on input such as "File File File …".
+ */
+export function gh001Path(stderr: string): string | undefined {
+  const prefix = "remote: error: File ";
+  for (const line of stderr.split("\n")) {
+    if (!line.startsWith(prefix)) continue;
+    const marker = line.lastIndexOf(" is ");
+    if (marker <= prefix.length) continue;
+    if (!/^ is [\d.]{1,20} MB; this exceeds/.test(line.slice(marker, marker + 64))) continue;
+    return line.slice(prefix.length, marker);
+  }
+  return undefined;
+}
 
 /**
  * Maps a git child's (already redacted) stderr to an error type, or `null` when the text matches
  * no known failure. Exported so the patterns can be tested against captured git output.
  *
- * Order matters where one failure prints another's symptom: `ENOSPC` during `index-pack` also
- * prints `early EOF`, and a refused SHA is reported as a `remote error`.
+ * Each class is believed only from the ops that can produce it: `GH001` and lease failures only
+ * from `push`, unfetchable objects only from `fetch`, transport failures only from ops that talk to
+ * a remote. A local op whose stderr echoes a path or message containing those words therefore stays
+ * unclassified. Order matters where one failure prints another's symptom: `ENOSPC` during
+ * `index-pack` also prints `early EOF`, and a 403 also prints `RPC failed`.
  */
 export function classifyGitStderr(op: string, stderr: string): GitSyncError | null {
   const detail = tail(stderr.trim(), 2000);
   if (DISK_FULL_RE.test(stderr)) {
     return new GitSyncRetryableError(`git ${op}: disk full: ${detail}`, "disk_full");
   }
-  if (GH001_RE.test(stderr)) {
-    const path = GH001_PATH_RE.exec(stderr)?.[1];
+  if (op === "push" && GH001_RE.test(stderr)) {
+    const path = gh001Path(stderr);
     return new GitSyncTerminalError(
       `git ${op}: GitHub refused a file over its size limit${path ? ` (${path})` : ""}: ${detail}`,
       "file_too_large",
       path
     );
   }
-  if (LEASE_RE.test(stderr)) {
+  if (op === "push" && LEASE_RE.test(stderr)) {
     return new GitSyncRetryableError(`git ${op}: branch lease rejected: ${detail}`, "lease_rejected");
   }
-  if (UNFETCHABLE_RE.test(stderr)) {
+  if (op === "fetch" && UNFETCHABLE_RE.test(stderr)) {
     return new GitUnfetchableError(`git ${op}: remote would not serve the object: ${detail}`);
   }
+  if (!NETWORK_OPS.has(op)) return null;
   if (REPO_NOT_FOUND_RE.test(stderr)) {
     return new GitSyncRetryableError(`git ${op}: repository not found: ${detail}`, "remote_repo_not_found");
   }
-  if (NETWORK_RE.test(stderr)) {
+  if (AUTH_RE.test(stderr)) {
+    return new GitSyncRetryableError(`git ${op}: remote refused the credential: ${detail}`, "auth_failed");
+  }
+  const status = HTTP_STATUS_RE.exec(stderr)?.[1];
+  if (status !== undefined && !status.startsWith("5")) return null;
+  if (status !== undefined || NETWORK_RE.test(stderr)) {
     return new GitSyncRetryableError(`git ${op}: network failure: ${detail}`, "network");
   }
   return null;
@@ -974,6 +1102,65 @@ export function classifyGitFailure(result: GitResult): GitSyncError | null {
 // ---------------------------------------------------------------------------------------------
 // Version check
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Run once at worker startup: the git version (`assertGitVersion`) and the process-group
+ * isolation that every kill depends on (`assertChildProcessGroups`).
+ */
+export async function assertGitRuntime(ctx: GitContext): Promise<[number, number, number]> {
+  const version = await assertGitVersion(ctx);
+  await assertChildProcessGroups(ctx);
+  return version;
+}
+
+/**
+ * Asserts that a spawned git leads its own process group, which is what lets a kill reach the
+ * helpers it starts (see `KILL_GRACE_MS`). Deno's `detached` calls `setsid` in current releases,
+ * but not in every build (the snap-packaged Deno 2.3.7 does not), and a runtime that silently
+ * dropped it would bring back orphaned `git-remote-https` processes holding the token.
+ *
+ * It starts `git hash-object --stdin`, which waits on stdin, and while it waits sends SIGCONT to
+ * the process group whose id is the child's pid. SIGCONT does nothing to a running process, and
+ * the send fails with ESRCH exactly when no such group exists, that is, when the child did not
+ * become a group leader. (Reading `/proc/<pid>/stat` would say the same, but Deno requires
+ * `--allow-all` for `/proc/<pid>` paths.)
+ */
+export async function assertChildProcessGroups(ctx: GitContext): Promise<void> {
+  validateLocalPath(ctx.home, "home");
+  let pid = 0;
+  let groupError: string | null = "probe did not run";
+  const result = await spawnGit(
+    {
+      op: "version",
+      args: ["hash-object", "--stdin"],
+      cwd: ctx.home,
+      extraEnv: {},
+      stdin: new TextEncoder().encode("probe\n"),
+      timeoutMs: 10_000,
+      onSpawned: (childPid) => {
+        pid = childPid;
+        try {
+          Deno.kill(-childPid, "SIGCONT");
+          groupError = null;
+        } catch (e) {
+          groupError = e instanceof Error ? e.message : String(e);
+        }
+        return Promise.resolve();
+      }
+    },
+    ctx
+  );
+  if (result.code !== 0) {
+    throw new GitSyncError(`process-group probe failed: ${result.stderr.trim()}`, "git_failed", true);
+  }
+  if (groupError !== null) {
+    throw new GitSyncError(
+      `git child ${pid} does not lead its own process group (${groupError}); this Deno's detached spawn does not setsid`,
+      "runtime_unsupported",
+      false
+    );
+  }
+}
 
 /** Parses `git version 2.43.0` (and vendor suffixes) into numbers, or `null`. */
 export function parseGitVersion(text: string): [number, number, number] | null {
