@@ -20,6 +20,11 @@
 --    Clearing a future release_date to NULL would strand the deferred repos, so a new
 --    trigger refuses that while any group is still waiting for one (section 4).
 --
+-- 3. Students who leave a group lose GitHub access to its repo even when the group is
+--    kept because it has submissions. publish_assignment_group_changes used to skip the
+--    permission sync for kept groups, so their former members could still push.
+--    copy_groups_from_assignment already synced every target group that has a repo.
+--
 -- Function bodies are copied, because Postgres cannot patch one statement of a function:
 --   publish_assignment_group_changes from 20260816120000_bound_repo_creation_retries.sql
 --   copy_groups_from_assignment      from 20260624000000_fix_group_repo_permission_sync.sql
@@ -110,9 +115,6 @@ declare
 
     v_affected_groups   bigint[] := '{}';
     v_deleted_groups    bigint[] := '{}';
-    -- empty groups we intentionally keep (they have submissions); excluded from
-    -- the permission sync so their preserved repo's GitHub access is left as-is
-    v_preserved_groups  bigint[] := '{}';
 
     v_groups_created    integer := 0;
     v_members_added     integer := 0;
@@ -380,7 +382,8 @@ begin
             join public.repositories r on r.id = s.repository_id
             where r.assignment_group_id = v_empty_gid
         ) then
-            v_preserved_groups := array_append(v_preserved_groups, v_empty_gid);
+            -- Kept, but still in v_affected_groups: Phase 3 syncs its repo to the
+            -- now-empty member list, which revokes the students who left.
             continue;
         end if;
 
@@ -415,7 +418,10 @@ begin
     end loop;
 
     -- Phase 3: enqueue ONE permission sync per affected repo
-    -- Deduplicate and exclude dissolved + preserved groups.
+    -- Deduplicate and exclude dissolved groups. Preserved (empty, with submissions)
+    -- groups are included on purpose: their sync has no usernames, so the worker
+    -- removes every student collaborator. Students who leave a group lose access
+    -- to its repo even when the repo is kept for its submissions.
     -- Enqueue the sync even for repos that aren't GitHub-ready yet: newly-created
     -- group repos are created via enqueue_github_create_repo with an EMPTY
     -- collaborator list, so this sync is the only path that grants member access.
@@ -430,7 +436,6 @@ begin
         from   unnest(v_affected_groups) as gid(g)
         join   public.repositories r on r.assignment_group_id = gid.g
         where  not (gid.g = any(v_deleted_groups))
-          and  not (gid.g = any(v_preserved_groups))
     loop
         begin
             declare
