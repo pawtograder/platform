@@ -49,18 +49,32 @@ const TEST_ROOT =
 
 /**
  * The snap-packaged Deno runs in a mount namespace without the host's git, so the cases that need
- * real git are skipped there, with a warning. In CI (`CI` set) they always run, so a runner that
- * lost git fails loudly instead of skipping.
+ * real git are skipped there. The skip condition is narrow on purpose: only a spawn that fails
+ * with `NotFound` (no `git` executable visible to this Deno) skips. Any other spawn error, such as
+ * a missing `--allow-run`, propagates and fails the file, and a git that runs but exits non-zero
+ * does not skip. In CI (`CI` set) nothing is skipped, so a runner that lost git fails loudly.
  */
-const GIT_SPAWNABLE = await (async () => {
+async function gitIsMissing(): Promise<boolean> {
   try {
-    return (await new Deno.Command("git", { args: ["--version"], stdout: "null", stderr: "null" }).output()).success;
-  } catch {
+    await new Deno.Command("git", { args: ["--version"], stdout: "null", stderr: "null" }).output();
     return false;
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return true;
+    throw e;
   }
-})();
-const SKIP_REAL_GIT = !GIT_SPAWNABLE && !Deno.env.get("CI");
-if (SKIP_REAL_GIT) console.warn("runGit.test.ts: git cannot be spawned from this Deno; skipping real-git cases");
+}
+const SKIP_REAL_GIT = !Deno.env.get("CI") && (await gitIsMissing());
+if (SKIP_REAL_GIT) {
+  console.error(
+    [
+      "",
+      "!!! runGit.test.ts: `git` is not visible to this Deno (spawn failed with NotFound; the snap Deno does this).",
+      "!!! SKIPPED: version check, real-git failure classification, and the .gitattributes canary.",
+      "!!! These cases are NOT covered by this run. Use a non-snap Deno, or set CI=1 to make the skip a failure.",
+      ""
+    ].join("\n")
+  );
+}
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);

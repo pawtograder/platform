@@ -735,7 +735,7 @@ async function spawnGit(inv: Invocation, ctx: GitContext): Promise<GitResult> {
   }).spawn();
 
   let killedBy: KillReason | null = null;
-  let escalation: number | undefined;
+  let escalation: ReturnType<typeof setTimeout> | undefined;
   const kill = (reason: KillReason) => {
     if (killedBy !== null) return;
     killedBy = reason;
@@ -849,7 +849,7 @@ function capture(stream: ReadableStream<Uint8Array>, cap: number, onExceed: () =
 }
 
 async function settleWithin(ms: number, captures: Capture[]): Promise<Uint8Array[]> {
-  let timer: number | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const all = Promise.all(captures.map((c) => c.done));
   const expired = new Promise<"expired">((resolve) => {
     timer = setTimeout(() => resolve("expired"), ms);
