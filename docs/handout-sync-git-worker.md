@@ -114,7 +114,9 @@ git -C $TCACHE cat-file -e $H^{commit} || git -C $TCACHE fetch --depth=1 --no-ta
 ```
 
 - An in-process mutex per template serializes fetches into the same cache dir. Across pods
-  nothing is shared, which is fine.
+  nothing is shared, which is fine. Because the mutex is the only writer, any `*.lock` file found
+  in a cache dir while holding the mutex was left by a killed git. Delete it before fetching.
+  Otherwise one SIGKILL leaves that template unfetchable until the pod restarts.
 - A cache dir is evicted by LRU when `/work` passes 70 % of `sizeLimit`. A pod restart wipes
   it, which is also fine.
 - If `F` can't be fetched (history rewritten and GC'd), the old-handout side becomes the empty
@@ -140,6 +142,9 @@ git ls-remote $R_URL refs/heads/sync-to-${H:0:7}           # existing sync branc
   `S := head of main`, which is the documented null-baseline behavior, and tag
   `sync_baseline_unreachable`.
 - If the repo itself is missing (404), use the existing `TerminalSyncError` path.
+- If the student repo has no `main` (it is empty, or its default branch has another name), fetching
+  `main` fails with `couldn't find remote ref`. That is not the same as `S` being unfetchable.
+  It is terminal `student_repo_has_no_main`, and it must not take the head fallback above.
 
 ### 5.3 Compute the handout diff
 
@@ -164,6 +169,11 @@ Each record maps to the existing `ChangedFileShape`:
 - `--no-renames` turns a rename into `D` + `A`, so each side is classified independently. Today
   compare reports `renamed`, and the code handles it inconsistently. This is an improvement.
 - An empty diff returns `{ success: true, no_changes: true }`, as today.
+
+Paths are handled as raw bytes from `-z` output. A path that is not valid UTF-8 cannot pass
+through the JS string APIs unchanged, so a handout diff containing one is terminal
+`non_utf8_path`, with the path shown escaped. Student-side paths that are not valid UTF-8 never
+need to be written, because only the handout's paths become index entries.
 
 ### 5.4 Classify (unchanged policy)
 
@@ -196,8 +206,12 @@ unless the path is in `removedPaths`. Then `decideFileAction(shape, reason)` for
   "unmodified" means. The fallback-to-template branch is the same. Both become one line.
 - `merge-file --object-id` writes the merged blob straight into `$JOB`'s object store. Nothing is
   materialized in JS.
-- A merge-file child killed by the cgroup OOM killer degrades one file to "left to the student".
-  It never fails the sync. That is the resilience property for pathological text files.
+- `merge-file` has no memory bound of its own, and the cgroup OOM killer picks its victim by
+  size, so it may kill the Deno worker, not the git child. So the engine never runs `merge-file`
+  on a file whose student, old-handout or new-handout blob exceeds
+  `HANDOUT_SYNC_MAX_MERGE_BYTES` (default 8 MiB, read with `cat-file -s`). Such a file is skipped
+  with `content_differs` and tagged `merge_file_too_large`. A `merge-file` child that times out
+  or is killed degrades that one file the same way. Neither ever fails the sync.
 
 #### 5.5.1 `modeFor`
 
@@ -332,6 +346,9 @@ protects the branch.
 | Job deadline hit | retryable | kill children, throw |
 | `H` unfetchable after 5 retries | terminal `handout_revision_missing` | `sync_blocked_at` set |
 | Push `GH001` | terminal `file_too_large` | names the path |
+| Student repo has no `main` | terminal `student_repo_has_no_main` | §5.2 |
+| Handout diff has a non-UTF-8 path | terminal `non_utf8_path` | §5.3 |
+| HTTP 401/403 from git | retryable `auth_failed` | its own kind, so a revoked installation is visible in metrics |
 | Student or template repo over `HANDOUT_SYNC_MAX_REPO_KIB` | terminal `repo_too_large` | checked before fetching (§8.4) |
 | `template_repo` is the solution repo | terminal `template_is_solution_repo` | §8.3 |
 | Repo name or SHA fails validation | terminal `invalid_sync_input` | nothing is spawned (§8.1) |

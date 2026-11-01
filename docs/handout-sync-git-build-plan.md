@@ -103,6 +103,14 @@ Acceptance:
   no diff, other than removals the spec lists for Phase 3.
 - G-* gates.
 
+Also covered, from the WP1 review:
+
+- The template cache's stale-lock cleanup (spec §5.1).
+- The merge size cap (spec §5.5).
+- The no-`main` and non-UTF-8 terminals (spec §5.2, §5.3).
+- Cases: a template cache holding a stale `shallow.lock`; a student repo with no `main`; a
+  student file above the merge cap.
+
 Size: large. Depends on WP1. The supervisor reviews in two rounds: first the fixtures and the
 §5.3 and §5.4 mapping, then tree building, commit and push.
 
