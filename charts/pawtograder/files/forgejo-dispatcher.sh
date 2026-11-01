@@ -52,7 +52,6 @@ spawn() {
 
 while true; do
   sleep "$POLL_INTERVAL"
-  # Job pods are owned by the chart's ConfigMap, so disabling the runner or uninstalling garbage-collects them.
   OWNER=$(kube "$KAPI/configmaps/$PREFIX" | jq -c --arg n "$PREFIX" '[{apiVersion: "v1", kind: "ConfigMap", name: $n, uid: .metadata.uid}]') || continue
   pods=$(kube "$KAPI/pods?labelSelector=$SELECTOR") || continue
   for p in $(jq -r '.items[] | select(.status.phase == "Succeeded" or .status.phase == "Failed") | .metadata.name' <<<"$pods"); do

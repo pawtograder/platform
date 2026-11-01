@@ -2673,7 +2673,6 @@ forgejo:
   podSecurityContext:
     fsGroup: 1000
     seccompProfile: { type: RuntimeDefault }
-  # The subchart's documented rootless set, without SYS_CHROOT (SSH is off); applies to its init containers too.
   containerSecurityContext:
     allowPrivilegeEscalation: false
     capabilities: { drop: [ALL] }
@@ -2782,7 +2781,6 @@ forgejoRunner:
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { cpu: 200m, memory: 128Mi }
-  # Needs a CNI that enforces NetworkPolicy.
   networkPolicy:
     enabled: true
     privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
@@ -2827,7 +2825,6 @@ coder:
               [ "$(date +%s)" -lt "$deadline" ] || { echo "coderd not healthy after 10m" >&2; tail -50 /tmp/first-owner.log >&2; exit 1; }
               sleep 2
             done
-            # Coder answers 200 once a user exists and 404 before; anything else is an error, not "no user".
             status=$(c -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
             if [ "$status" = 200 ]; then
               echo "first user exists"
