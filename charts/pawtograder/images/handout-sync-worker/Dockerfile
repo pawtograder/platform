@@ -153,9 +153,12 @@ WORKDIR /work
 # GIT_RESOLVED_VERSION is the apk package (`git-2.54.0-r0`) that the `git` stage
 # installed. A Dockerfile cannot copy a RUN's output into a LABEL, so
 # release-images.yml builds `--target git` first, reads the file, and passes it
-# in; this final build reuses that cached layer, so the label describes the git
-# actually in the image. Declared down here so it never busts the install layer's
-# cache. A local build without it gets "unrecorded"; the file is authoritative.
+# in. Both CI builds use --no-cache-filter git, so each release reinstalls git
+# fresh instead of reusing a cached layer from an older release; the two
+# installs are seconds apart, so the label matches the image unless Alpine
+# publishes a git inside that window. The file is authoritative either way.
+# Declared down here so it never busts the install layer's cache in local
+# builds. A local build without it gets "unrecorded".
 ARG GIT_SHA=""
 ARG VERSION=""
 ARG GIT_RESOLVED_VERSION="unrecorded"

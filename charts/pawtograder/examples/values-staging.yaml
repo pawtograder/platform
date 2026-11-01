@@ -368,16 +368,6 @@ migrations:
 supavisor:
   enabled: false
 
-# ----- Shared in-cluster Redis (same instance previews use) -----------------
-# Staging deliberately uses `shared`, NOT the chart's `internal` Redis: staging
-# and PR previews share one cluster-wide Redis so Bottleneck rate-limiter state
-# amortises across deploys. Bootstrap manifests live in
-# charts/pawtograder/examples/shared-redis/; the OpenBao path
-# apps/pawtograder/redis-shared is provisioned once per cluster via
-# scripts/setup-openbao-redis-shared.sh and consumed by both namespaces'
-# pawtograder-redis ExternalSecrets.
-# (Production, with no external shared Redis, would set `provider: internal` to
-# have the chart deploy its own — see redis.internal.* in values.yaml.)
 # ----- Handout sync worker (docs/handout-sync-git-worker.md) -----------------
 # OFF until WP5 merges handout-sync-worker/main.ts: release-images.yml does not
 # build the image before then, so enabling this would ImagePullBackOff and fail
@@ -400,6 +390,16 @@ handoutSyncWorker:
     # stop mattering.
     clusterCIDRs: ["10.244.0.0/16", "10.96.0.0/12"]
 
+# ----- Shared in-cluster Redis (same instance previews use) -----------------
+# Staging deliberately uses `shared`, NOT the chart's `internal` Redis: staging
+# and PR previews share one cluster-wide Redis so Bottleneck rate-limiter state
+# amortises across deploys. Bootstrap manifests live in
+# charts/pawtograder/examples/shared-redis/; the OpenBao path
+# apps/pawtograder/redis-shared is provisioned once per cluster via
+# scripts/setup-openbao-redis-shared.sh and consumed by both namespaces'
+# pawtograder-redis ExternalSecrets.
+# (Production, with no external shared Redis, would set `provider: internal` to
+# have the chart deploy its own — see redis.internal.* in values.yaml.)
 redis:
   provider: shared
 

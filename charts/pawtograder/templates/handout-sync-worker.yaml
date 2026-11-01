@@ -57,6 +57,14 @@ the edge-functions pod follows from those two facts:
 {{- if or (lt $evict 10) (gt $evict 90) -}}
 {{- fail (printf "handoutSyncWorker.workEvictPercent=%d is outside 10-90. Above 90 there is no headroom left for in-flight job scratch before the kubelet evicts the pod at sizeLimit; below 10 the template cache is evicted almost as soon as it is filled." $evict) -}}
 {{- end -}}
+{{- if hasKey ($w.resources.requests | default dict) "ephemeral-storage" -}}
+{{- fail (printf "handoutSyncWorker.resources.requests.ephemeral-storage is computed by the chart from workSizeLimit + tmpSizeLimit; remove it (got %v). A hand-set value drifts from the emptyDir sizes the moment either changes, and too small a request lets the scheduler place the pod on a node that cannot hold /work." (index $w.resources.requests "ephemeral-storage")) -}}
+{{- end -}}
+{{- range $e := $w.extraEnv -}}
+{{- if has $e.name (list "INJECT_DLQ_FAILURE" "NODE_ENV") -}}
+{{- fail (printf "handoutSyncWorker.extraEnv must not set %s. processEnvelope() injects artificial failures that drive messages into the DLQ when NODE_ENV is not \"production\" and INJECT_DLQ_FAILURE=1; the chart pins NODE_ENV=production and refuses both here, because a duplicate env name's later entry wins." $e.name) -}}
+{{- end -}}
+{{- end -}}
 {{- $workLimit := $w.workSizeLimit | toString -}}
 {{- $workKib := 0 -}}
 {{- if hasSuffix "Gi" $workLimit -}}{{- $workKib = mul (trimSuffix "Gi" $workLimit | int) 1048576 -}}
@@ -64,6 +72,18 @@ the edge-functions pod follows from those two facts:
 {{- else -}}
 {{- fail (printf "handoutSyncWorker.workSizeLimit=%q must be a whole number of Gi or Mi. It is passed to the worker as bytes for its eviction threshold, and the chart does not guess at other units." $workLimit) -}}
 {{- end -}}
+{{- $tmpLimit := $w.tmpSizeLimit | toString -}}
+{{- $tmpMi := 0 -}}
+{{- if hasSuffix "Gi" $tmpLimit -}}{{- $tmpMi = mul (trimSuffix "Gi" $tmpLimit | int) 1024 -}}
+{{- else if hasSuffix "Mi" $tmpLimit -}}{{- $tmpMi = trimSuffix "Mi" $tmpLimit | int -}}
+{{- else -}}
+{{- fail (printf "handoutSyncWorker.tmpSizeLimit=%q must be a whole number of Gi or Mi; the chart adds it to workSizeLimit for the ephemeral-storage request." $tmpLimit) -}}
+{{- end -}}
+{{- /* The ephemeral-storage request is exactly what the two emptyDirs may hold,
+       so the scheduler only places the pod where that disk exists. */ -}}
+{{- $ephemeralMi := add (div $workKib 1024) $tmpMi -}}
+{{- $resources := deepCopy $w.resources -}}
+{{- $_ := set $resources "requests" (merge (dict "ephemeral-storage" (printf "%dMi" $ephemeralMi)) ($resources.requests | default dict)) -}}
 {{- /* Two repos at the ceiling must fit with the cache already at the eviction
        mark; otherwise the size check passes a job that then fills /work. */ -}}
 {{- if gt (mul (int64 $w.maxRepoKib) 2) (div (mul $workKib (sub 100 $evict)) 100) -}}
@@ -178,6 +198,11 @@ spec:
             # them, exit. terminationGracePeriodSeconds sits above it.
             - name: HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS
               value: {{ $w.shutdownGraceSeconds | quote }}
+            # processEnvelope() turns INJECT_DLQ_FAILURE=1 into artificial failures
+            # unless NODE_ENV is "production". Pinned here, and both names are
+            # refused in extraEnv above.
+            - name: NODE_ENV
+              value: "production"
             - name: HANDOUT_SYNC_MAX_READ_COUNT
               value: {{ $w.maxReadCount | quote }}
             - name: HANDOUT_SYNC_MAX_REPO_KIB
@@ -234,6 +259,14 @@ spec:
             #   SUPABASE_DB_URL / POSTGRES_PASSWORD
             #       nothing in the graph opens a Postgres connection; all data
             #       access is PostgREST through Kong.
+            #   SUPABASE_PUBLIC_URL
+            #       read only by toPublicSupabaseUrl() in GitHubWrapper.ts, which
+            #       rebases storage signed URLs for the grader; no sync path calls
+            #       it.
+            #   INJECT_DLQ_FAILURE
+            #       a test switch in processEnvelope() (index.ts) that fails
+            #       messages on purpose. Never set, refused in extraEnv, and
+            #       NODE_ENV=production (non-secret, above) disables it anyway.
             - name: SUPABASE_SERVICE_ROLE_KEY   # every createClient() in the graph
               valueFrom:
                 secretKeyRef:
@@ -316,7 +349,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 4
           resources:
-            {{- toYaml $w.resources | nindent 12 }}
+            {{- toYaml $resources | nindent 12 }}
           volumeMounts:
             - name: work
               mountPath: /work

@@ -315,10 +315,6 @@ auth:
     enabled: true
     senderName: "Pawtograder"
 
-# Prod Redis should be ESO-backed, not chart-generated, so no Redis password
-# lands in Helm release state. Point this at a managed or cluster-level Redis
-# you operate separately; the chart syncs REDIS_URL into pawtograder-redis and
-# mounts it into web + edge-functions.
 # ----- Handout sync worker (docs/handout-sync-git-worker.md) -----------------
 # Rendered but scaled to 0 until the Phase 2 cutover in
 # docs/handout-sync-git-build-plan.md (S4 sets replicas: 2). At 0 the routing
@@ -338,6 +334,10 @@ handoutSyncWorker:
     # stop mattering.
     clusterCIDRs: ["10.244.0.0/16", "10.96.0.0/12"]
 
+# Prod Redis should be ESO-backed, not chart-generated, so no Redis password
+# lands in Helm release state. Point this at a managed or cluster-level Redis
+# you operate separately; the chart syncs REDIS_URL into pawtograder-redis and
+# mounts it into web + edge-functions.
 redis:
   provider: shared
   shared:

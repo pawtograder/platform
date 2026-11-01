@@ -1,5 +1,5 @@
 {{- /*
-Egress policy for the handout sync worker (docs/handout-sync-git-worker.md §8.5).
+Ingress and egress policy for the handout sync worker (docs/handout-sync-git-worker.md §8.5).
 
 The worker runs git against student-controlled repositories while holding the
 GitHub App private key and the service-role key. If a git parsing bug is ever
@@ -11,9 +11,20 @@ reach exactly:
   Redis   the Redis behind REDIS_URL (in-release or the shared one)
   GitHub  HTTPS, port 443
 
-Ingress is NOT handled here. The release-wide policies in networkpolicy.yaml
-(networkPolicy.enabled) already select this pod by the release labels:
-default-deny, plus same-release and monitoring access to the metrics port.
+and on 443 only to PUBLIC addresses. "Outside the cluster" is not enough: the
+clusterCIDRs are the pod and service ranges, and the LAN around the cluster
+(Ceph RGW, haproxy fronts, OpenBao and Proxmox UIs) is on private addresses
+outside them. So every RFC 1918, CGNAT, link-local and loopback range is
+excepted from the 443 rule by the template itself, not by values, and a values
+file cannot remove one. Anything private the worker genuinely needs (an
+in-cluster Sentry) goes in extraEgress, where review sees it.
+
+Ingress is handled HERE too, not by networkpolicy.yaml. That file's policies
+exist only with networkPolicy.enabled (off on staging), and its same-release
+rule would open every worker port to web, edge functions and Studio; it
+excludes this component instead. The only ingress the worker accepts is its
+metrics port from the monitoring namespace (when monitoring.enabled). Kubelet
+probes come from the node, which neither CNI subjects to these rules.
 
 Two forms, never both (decision D2 in docs/handout-sync-git-build-plan.md):
 
@@ -39,6 +50,14 @@ to a pod address.
 {{- end }}
 {{- $kongLabels := include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "kong") | fromYaml -}}
 {{- $workerLabels := include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "handout-sync-worker") | fromYaml -}}
+{{- /* Not values: see the header. IPv4 and IPv6 private, CGNAT, link-local,
+       loopback and (v6) unique-local ranges. */ -}}
+{{- $privateV4 := list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8" -}}
+{{- $privateV6 := list "fc00::/7" "fe80::/10" "::1/128" -}}
+{{- $monSel := .Values.networkPolicy.monitoringNamespaceSelector -}}
+{{- if and .Values.monitoring.enabled (empty $monSel) }}
+{{- fail "networkPolicy.monitoringNamespaceSelector must be non-empty when handoutSyncWorker.networkPolicy.enabled=true and monitoring.enabled=true. The worker's ingress rule admits its metrics port from that selector, and an empty namespaceSelector matches EVERY namespace." }}
+{{- end }}
 {{- $redisPort := int $np.redis.port -}}
 {{- $redisNs := $np.redis.namespace -}}
 {{- $redisLabels := $np.redis.podLabels -}}
@@ -51,7 +70,7 @@ to a pod address.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker-egress") }}
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker") }}
   namespace: {{ $ns }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
@@ -59,7 +78,17 @@ spec:
   podSelector:
     matchLabels:
       {{- toYaml $workerLabels | nindent 6 }}
-  policyTypes: ["Egress"]
+  policyTypes: ["Ingress", "Egress"]
+  # Empty when monitoring is off: then nothing may connect in at all.
+  ingress:
+    {{- if .Values.monitoring.enabled }}
+    - from:
+        - namespaceSelector:
+            {{- toYaml $monSel | nindent 12 }}
+      ports:
+        - { port: metrics, protocol: TCP }
+    {{- else }} []
+    {{- end }}
   egress:
     - to:
         - namespaceSelector:
@@ -88,15 +117,15 @@ spec:
       ports:
         - { port: {{ $redisPort }}, protocol: TCP }
     {{- end }}
-    # GitHub (and Upstash or an external Sentry when used), by elimination.
-    # An ipBlock's `except` must lie inside its `cidr`, so each external range
-    # only carries the cluster ranges of its own address family.
+    # GitHub (and Upstash or an external Sentry when used), by elimination:
+    # public addresses only. An ipBlock's `except` must lie inside its `cidr`,
+    # so each external range carries only the ranges of its own address family.
     - to:
         {{- range $ext := $np.externalCIDRs }}
         {{- $v6 := contains ":" $ext }}
         - ipBlock:
             cidr: {{ $ext }}
-            {{- $except := list }}
+            {{- $except := ternary $privateV6 $privateV4 $v6 }}
             {{- range $c := $np.clusterCIDRs }}
             {{- if eq (contains ":" $c) $v6 }}{{- $except = append $except $c }}{{- end }}
             {{- end }}
@@ -114,7 +143,7 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker-egress") }}
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker") }}
   namespace: {{ $ns }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
@@ -122,6 +151,28 @@ spec:
   endpointSelector:
     matchLabels:
       {{- toYaml $workerLabels | nindent 6 }}
+  # Any ingress section switches the endpoint to default-deny for ingress, so
+  # an empty one (monitoring off) admits nothing. The probe port is opened to
+  # the `host` entity explicitly; Cilium usually allows it anyway, but that
+  # depends on the agent's allow-localhost setting.
+  ingress:
+    - fromEntities: ["host"]
+      toPorts:
+        - ports:
+            - { port: {{ .Values.handoutSyncWorker.metricsPort | quote }}, protocol: TCP }
+    {{- if .Values.monitoring.enabled }}
+    {{- if or $monSel.matchExpressions (empty $monSel.matchLabels) }}
+    {{- fail "networkPolicy.monitoringNamespaceSelector must use matchLabels only for the Cilium form of the handout-sync-worker policy: each label becomes a k8s:io.cilium.k8s.namespace.labels.<key> endpoint selector, and matchExpressions have no such translation here." }}
+    {{- end }}
+    - fromEndpoints:
+        - matchLabels:
+            {{- range $k, $v := $monSel.matchLabels }}
+            k8s:io.cilium.k8s.namespace.labels.{{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            - { port: {{ .Values.handoutSyncWorker.metricsPort | quote }}, protocol: TCP }
+    {{- end }}
   egress:
     # The DNS rule does double duty: it allows lookups, and the `dns` L7 rule
     # routes them through Cilium's DNS proxy, which is how toFQDNs learns the

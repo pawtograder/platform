@@ -358,7 +358,7 @@ assert_control "removing the dlq/low-priority exclusion is caught by the exclusi
 # control above, on the handout rule's own floor: the guard never matches, and
 # a healthy handout push to a large class pages again.
 assert_control "an unreachable handout_sync floor is caught by the handout release scenario" \
-  's/\* 60 < -1$/* 60 < -600/' \
+  's/\* 60 < -0[.]5$/* 60 < -600/' \
   "a 300-message handout release that drains does not page"
 
 # handout_sync dropped from the generic aging rule's exclusion. The generic rule
@@ -366,7 +366,7 @@ assert_control "an unreachable handout_sync floor is caught by the handout relea
 # threshold that a single deadline-length job can reach on its own.
 assert_control "dropping the handout_sync exclusion is caught by the double-page scenario" \
   's/|async_calls_low_priority|handout_sync"/|async_calls_low_priority"/g' \
-  "a stuck handout_sync message pages on the handout rule only"
+  "a stuck handout_sync message warns on the handout rule only"
 
 # The msg_id threshold, moved DOWN into the range ordinary traffic occupies.
 # 1e+5 is below the 137,603 the busiest prod sequence already holds, so the alert

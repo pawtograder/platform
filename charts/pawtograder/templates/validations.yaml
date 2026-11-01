@@ -735,7 +735,7 @@ PrometheusRule must not fail a render over numbers that have no effect.
      anyway -- but a large value on any threshold that is NOT cast would reach
      the expression in that form, so the check has to allow what PromQL allows
      rather than what looks tidy in values.yaml. */ -}}
-{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "handoutSyncOldestSeconds" "handoutSyncDrainMessagesPerMinute" "handoutSyncDlqGrowthPerHour" "handoutSyncWorkUsageRatio" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "postgrestSchemaCacheLoadsPerHour" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
+{{- range $k := (list "backupMaxAgeHours" "certExpiryWarningDays" "notificationEmailBacklog" "queueOldestSeconds" "queueDrainMessagesPerMinute" "handoutSyncOldestSeconds" "handoutSyncOldestCriticalSeconds" "handoutSyncDrainMessagesPerMinute" "handoutSyncDlqGrowthPerHour" "handoutSyncWorkUsageRatio" "discordDlqGrowthPerHour" "gradebookRecalcDlqGrowthPerHour" "edgeFunctionRestarts30m" "edgeFunctionMemoryRatio" "nodeMemoryRatio" "connectionUsagePercentWarning" "connectionUsagePercentCritical" "postgrestSchemaCacheLoadsPerHour" "replicationLagBytesWarning" "queueMsgIdWarning" "queueMsgIdCritical") -}}
 {{- $raw := "" -}}
 {{- if hasKey $pr $k -}}{{- $raw = (index $pr $k) | toString -}}{{- end -}}
 {{- if and (ne $raw "") (not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $raw)) -}}
@@ -791,20 +791,35 @@ directions, and neither is visible from the rendered rule.
 {{- end -}}
 {{- end -}}
 {{- /* The handout_sync floor has no measured band yet (the worker has not
-     drained a real release), so only the two values that break the rule
-     outright are refused. At 0 the guard suppresses every queue that moves at
-     all, a stall drifting at 0.1 msg/min included. A usage ratio outside (0, 1]
-     either fires permanently or can never fire. */ -}}
-{{- with $pr.handoutSyncDrainMessagesPerMinute -}}
-{{- if le (. | toString | float64) 0.0 -}}
-{{- fail (printf "monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute=%v must be above 0. At 0 the drain guard suppresses PawtograderHandoutSyncQueueAging for any queue that is moving at all, which hides a worker that is crawling rather than stopped." .) -}}
+     drained a real release), so only values that break the rules outright are
+     refused. hasKey, not `with`: `with` treats 0 as empty, which skipped exactly
+     the zero these checks exist to refuse. At 0 the drain guard suppresses
+     every queue that moves at all. A usage ratio outside (0, 1] either fires
+     permanently or can never fire, and one at or below workEvictPercent fires
+     on a template cache doing its job. */ -}}
+{{- if hasKey $pr "handoutSyncDrainMessagesPerMinute" -}}
+{{- $v := $pr.handoutSyncDrainMessagesPerMinute | toString -}}
+{{- if and (ne $v "") (le ($v | float64) 0.0) -}}
+{{- fail (printf "monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute=%s must be above 0. At 0 the drain guard suppresses PawtograderHandoutSyncQueueAging for any queue that is moving at all, which hides a worker that is crawling rather than stopped." $v) -}}
 {{- end -}}
 {{- end -}}
-{{- with $pr.handoutSyncWorkUsageRatio -}}
-{{- $r := . | toString | float64 -}}
+{{- if hasKey $pr "handoutSyncWorkUsageRatio" -}}
+{{- $v := $pr.handoutSyncWorkUsageRatio | toString -}}
+{{- if ne $v "" -}}
+{{- $r := $v | float64 -}}
 {{- if or (le $r 0.0) (gt $r 1.0) -}}
-{{- fail (printf "monitoring.prometheusRules.handoutSyncWorkUsageRatio=%v must be in (0, 1]. It is a fraction of handoutSyncWorker.workSizeLimit: above 1 the alert can never fire (the kubelet evicts the pod at 1), and 0 fires permanently." .) -}}
+{{- fail (printf "monitoring.prometheusRules.handoutSyncWorkUsageRatio=%s must be in (0, 1]. It is a fraction of handoutSyncWorker.workSizeLimit: above 1 the alert can never fire (the kubelet evicts the pod at 1), and 0 fires permanently." $v) -}}
 {{- end -}}
+{{- $evict := divf (.Values.handoutSyncWorker.workEvictPercent | float64) 100.0 -}}
+{{- if and .Values.handoutSyncWorker.enabled (le $r $evict) -}}
+{{- fail (printf "monitoring.prometheusRules.handoutSyncWorkUsageRatio=%s is not above handoutSyncWorker.workEvictPercent (%v%%). The worker evicts cached templates only once /work passes that mark, so usage sits at or just under it whenever the cache is full, and the alert would fire on a cache doing its job." $v .Values.handoutSyncWorker.workEvictPercent) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $hw := $pr.handoutSyncOldestSeconds | default 1800 | toString | float64 -}}
+{{- $hc := $pr.handoutSyncOldestCriticalSeconds | default 5400 | toString | float64 -}}
+{{- if le $hc $hw -}}
+{{- fail (printf "monitoring.prometheusRules.handoutSyncOldestCriticalSeconds (%v) must be above handoutSyncOldestSeconds (%v). The critical tier exists to page only past what one repository retrying to the DLQ can produce; at or below the warning it pages for that case too." $hc $hw) -}}
 {{- end -}}
 {{- /*
 THE MSG_ID THRESHOLDS HAVE A RANGE AND AN ORDER.

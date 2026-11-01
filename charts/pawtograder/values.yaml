@@ -1834,8 +1834,14 @@ edgeFunctions:
 #
 # Off by default. Its image runs supabase/functions/handout-sync-worker/main.ts,
 # which does not exist until WP5 of docs/handout-sync-git-build-plan.md; the
-# image build is skipped until then, so enabling this before that ships an
-# ImagePullBackOff.
+# image build is skipped until then.
+#
+# Enabling this requires the image tag to EXIST in the registry. The image
+# build is not a prerequisite of deploy-staging or publish-chart in
+# release-images.yml (so a flaky fetch there cannot block unrelated deploys),
+# which means a deploy can reference a tag that was never pushed. The visible
+# failure is an ImagePullBackOff on this Deployment alone; check the
+# build-handout-sync-worker job for that commit.
 # -----------------------------------------------------------------------------
 handoutSyncWorker:
   enabled: false
@@ -1901,12 +1907,13 @@ handoutSyncWorker:
   # The chart refuses anything under shutdownGraceSeconds + 30.
   shutdownGraceSeconds: 240
   terminationGracePeriodSeconds: 300
-  # Spec §3.1: the JS heap holds metadata only. ephemeral-storage is requested
-  # at the full /work + /tmp size, so the scheduler only places the pod where
-  # that disk exists; without it, a node short on disk hits node-pressure
-  # eviction (which takes neighbors) before this pod reaches its own sizeLimit.
+  # Spec §3.1: the JS heap holds metadata only. Do not set ephemeral-storage
+  # here: the chart renders the request as workSizeLimit + tmpSizeLimit (and
+  # refuses a hand-set one), so the scheduler only places the pod where that
+  # disk exists. Without it, a node short on disk hits node-pressure eviction
+  # (which takes neighbors) before this pod reaches its own sizeLimit.
   resources:
-    requests: { cpu: "250m", memory: "512Mi", ephemeral-storage: "21Gi" }
+    requests: { cpu: "250m", memory: "512Mi" }
     limits: { cpu: "2", memory: "1Gi" }
   # Where the worker's secret keys come from. The pod does NOT envFrom the edge
   # functions Secret: it gets exactly the keys processEnvelope's module graph
@@ -1922,11 +1929,16 @@ handoutSyncWorker:
     # edge functions.
     redis: ""
   # Plain env entries appended after the chart's own (same shape as
-  # edgeFunctions.extraEnv). Not a route for secrets.
+  # edgeFunctions.extraEnv). Not a route for secrets. NODE_ENV and
+  # INJECT_DLQ_FAILURE are refused: together they make processEnvelope() fail
+  # messages on purpose.
   extraEnv: []
-  # Egress lockdown (spec §8.5): DNS, Kong, Redis, and HTTPS to GitHub, nothing
-  # else. Independent of the release-wide networkPolicy.enabled, which only
-  # governs ingress. Requires a CNI that enforces egress policy.
+  # The worker's own NetworkPolicy (spec §8.5). Egress: DNS, Kong, Redis, and
+  # HTTPS to public addresses (GitHub), nothing else. Ingress: the metrics port
+  # from networkPolicy.monitoringNamespaceSelector when monitoring.enabled,
+  # nothing otherwise. Independent of the release-wide networkPolicy.enabled,
+  # whose same-release rule excludes this pod. Requires a CNI that enforces
+  # NetworkPolicy.
   networkPolicy:
     enabled: true
     # REQUIRED for the plain NetworkPolicy (not for cilium.enabled): every in-cluster range (pod CIDR, service CIDR, and
@@ -1948,6 +1960,9 @@ handoutSyncWorker:
       podLabels: { app.kubernetes.io/name: pawtograder-shared-redis }
       port: 6379
     # Extra NetworkPolicyEgressRule entries, e.g. an in-cluster Sentry/Bugsink.
+    # Needed for ANY private address: the 443 rule always excepts RFC 1918,
+    # CGNAT, link-local and loopback ranges (not configurable), so a Sentry or
+    # Upstash endpoint on a LAN address is unreachable without a rule here.
     extraEgress: []
     # Replace the plain NetworkPolicy with a CiliumNetworkPolicy whose HTTPS rule
     # is toFQDNs instead of "anything outside the cluster". The two are not
@@ -2652,14 +2667,17 @@ monitoring:
     # Raise it only if a real stall is drifting faster than 2 msg/min; lowering it re-admits the
     # release pages. charts/pawtograder/tests/promrules-unit.sh fails if the change inverts the guard.
     queueDrainMessagesPerMinute: 2
-    # PawtograderHandoutSyncQueueAging: oldest handout_sync message age (seconds) and drain
-    # floor (messages/minute). Sized for the handout-sync worker, not the edge worker: a
-    # message is archived only when its job ends, so with every slot on a 900s-deadline job
-    # the next message is ~1800s old when it finishes, healthily. The floor assumes 4 slots
-    # (2 replicas x 2) and jobs of up to 4 minutes; re-derive both from the staging bulk
-    # release (build plan S3.2) before cutover. See the rule's comment.
+    # PawtograderHandoutSyncQueueAging, two tiers: oldest handout_sync message age (seconds)
+    # for the warning and the critical, and the drain floor (messages/minute) both share.
+    # Warning at 1800s: a healthy message can reach ~1800s behind deadline-length jobs, and one
+    # repo that hits its deadline on every read stays ~85 minutes before the DLQ takes it.
+    # Critical at 5400s: past what any single message can spend before the DLQ, so the worker
+    # is not progressing. Must be above the warning. The floor is half the 1 msg/min that 4
+    # slots of 4-minute jobs drain. Re-derive all three from the staging bulk release (build
+    # plan S3.2) before cutover. See the rule's comment.
     handoutSyncOldestSeconds: 1800
-    handoutSyncDrainMessagesPerMinute: 1
+    handoutSyncOldestCriticalSeconds: 5400
+    handoutSyncDrainMessagesPerMinute: 0.5
     # Growth in handout_sync_dlq over an hour above which PawtograderHandoutSyncDLQGrowing
     # fires. Each message is a student repo that did not receive a handout update.
     handoutSyncDlqGrowthPerHour: 3

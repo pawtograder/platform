@@ -1106,43 +1106,68 @@ spec:
         # big batch from a stopped worker.
         #
         # Its own rule, not a third queue in the generic one, because both numbers there were
-        # set for the edge worker and neither transfers:
+        # set for the edge worker and neither transfers. It has two tiers because one failure
+        # mode is common and survivable and the other is not:
         #
-        #   age   The generic 1200s sits below this worker's own job deadline plus one wait. A
-        #         message is not archived until its job finishes, so with every slot busy on a
-        #         deadline-length job, the next message is 900s old when it starts and up to
-        #         1800s old when it finishes, all of it healthy. Default 1800s, held 10m.
-        #   floor Throughput is set by replicas x concurrency (2 x 2 shipped) and job length,
-        #         not by the edge leaseholder. No release has run through this worker yet, so
-        #         there is no measured band as there is for async_calls (0.66 vs 8 msg/min).
-        #         The 1 msg/min default assumes 4 slots and jobs of up to 4 minutes; a stuck
-        #         worker drains at 0. Re-derive it from the S3.2 staging bulk release in the
-        #         build plan before cutover.
+        #   warning  1800s  A message is not archived until its job finishes, so with every
+        #                   slot on a deadline-length job the next message is ~1800s old when it
+        #                   finishes, healthily. Past that, something is slow. The usual cause is
+        #                   one repository that hits its 900s deadline on every read: it sits at
+        #                   the head of the queue for ~85 minutes (5 reads x (15m + 2m visibility
+        #                   timeout)) and then handout_sync_dlq takes it. One student's repo is
+        #                   worth a ticket, not a page.
+        #   critical 5400s  Longer than any single message can stay before the read cap moves
+        #                   it to the DLQ, so an oldest message this old means the worker is not
+        #                   making progress at all (no replicas, a crash loop, routing switched
+        #                   to "git" at 0 replicas). The age first exceeds 5400s one evaluation
+        #                   after the 90-minute mark; held 4m, a fully stopped queue pages at
+        #                   95 minutes.
+        #
+        # The drain floor (0.5 msg/min) is half the slowest healthy drain the defaults assume:
+        # 4 slots (2 replicas x 2) of 4-minute jobs is 1 msg/min. No release has run through
+        # this worker yet, so there is no measured band as there is for async_calls (0.66 vs
+        # 8 msg/min). Re-derive both the floor and the thresholds from the S3.2 staging bulk
+        # release in the build plan before cutover.
         #
         # Replicas at 0 (production before cutover) is covered: routing still says "rest",
-        # so nothing enqueues here. If routing is switched to "git" with no worker running,
-        # the queue fills, depth rises, and this fires, which is the right answer.
+        # so nothing enqueues here.
         #
         # Needs the metrics edge function to report handout_sync in BOTH labelled gauges,
-        # pawtograder_queue_oldest_message_seconds and pawtograder_queue_depth. Until it does,
-        # this rule has no series and is silent.
+        # pawtograder_queue_oldest_message_seconds and pawtograder_queue_depth (WP5). Until it
+        # does, these rules have no series and are silent.
         - alert: PawtograderHandoutSyncQueueAging
           expr: |
             max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue="handout_sync"}) > {{ .Values.monitoring.prometheusRules.handoutSyncOldestSeconds | default 1800 }}
             unless
-            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue="handout_sync"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 1 }}
+            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue="handout_sync"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 0.5 }}
           for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder handout sync queue is slow to drain"
+            description: >-
+              The oldest handout_sync message in {{ $ns }} has been waiting over
+              {{ .Values.monitoring.prometheusRules.handoutSyncOldestSeconds | default 1800 }}s AND the queue is draining slower
+              than {{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 0.5 }} msg/min. One repository
+              retrying against its job deadline looks like this; find it in the handout-sync-worker
+              logs, and check the Deployment has ready replicas.
+        - alert: PawtograderHandoutSyncQueueAging
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue="handout_sync"}) > {{ .Values.monitoring.prometheusRules.handoutSyncOldestCriticalSeconds | default 5400 }}
+            unless
+            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue="handout_sync"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 0.5 }}
+          for: 4m
           labels:
             severity: critical
           annotations:
             summary: "Pawtograder handout sync queue is not draining"
             description: >-
               The oldest handout_sync message in {{ $ns }} has been waiting over
-              {{ .Values.monitoring.prometheusRules.handoutSyncOldestSeconds | default 1800 }}s AND the
-              queue is draining slower than
-              {{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 1 }}
-              msg/min. Check that the handout-sync-worker Deployment has ready replicas, and its logs
-              for jobs hitting the deadline.
+              {{ .Values.monitoring.prometheusRules.handoutSyncOldestCriticalSeconds | default 5400 }}s AND the queue is draining
+              slower than {{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 0.5 }} msg/min. That is
+              longer than one message can spend retrying before handout_sync_dlq takes it, so the
+              worker is not making progress. Check that the handout-sync-worker Deployment has ready
+              replicas.
         # handout_sync_dlq is growing. A RATE, like the Discord and gradebook DLQ rules above and
         # for their reason: one poison message parks in a DLQ for good, so a level threshold fires
         # forever and gets silenced, while growth means new failures. delta(), not increase(),

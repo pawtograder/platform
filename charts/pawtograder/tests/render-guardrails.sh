@@ -984,8 +984,6 @@ assert_refused "plain egress policy refuses an empty clusterCIDRs" \
   --set handoutSyncWorker.enabled=true
 assert_rendered_contains "plain egress policy excepts the cluster ranges from 443" "$HSW_NP" \
   "10.96.0.0/12" "${HSW[@]}"
-assert_rendered_contains "plain egress policy is egress-only" "$HSW_NP" \
-  'policyTypes: ["Egress"]' "${HSW[@]}"
 # Cilium form replaces, never joins, the plain one: allow rules union, so the
 # plain policy's wide 443 rule would make the FQDN list meaningless.
 assert_rendered_contains "cilium egress policy narrows 443 to GitHub by FQDN" "$HSW_NP" \
@@ -997,8 +995,69 @@ assert_rendered_lacks "cilium mode renders no plain NetworkPolicy beside it" "$H
 
 # The generic aging rule must exclude handout_sync, or one stuck sync pages twice.
 assert_rendered_contains "handout_sync has its own aging rule" templates/prometheus-rules.yaml \
-  'queue="handout_sync"}[15m])) * 60 < -1' \
+  'queue="handout_sync"}[15m])) * 60 < -0.5' \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
+
+# Review round 2 (2026-11-01). Each case below failed on the round-1 chart.
+MON=(--set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps)
+
+# (1) "443 outside the cluster" must not mean "443 to the LAN". The clusterCIDRs
+# are only the pod/service ranges; Ceph RGW, haproxy fronts and the OpenBao or
+# Proxmox UIs live on private addresses outside them. These are hardcoded in the
+# template, so no values file can drop one.
+for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8; do
+  assert_rendered_contains "plain egress 443 rule always excepts $cidr" "$HSW_NP" \
+    "$cidr" "${HSW[@]}" --set 'handoutSyncWorker.networkPolicy.clusterCIDRs={172.31.0.0/16}'
+done
+
+# (2) Worker ingress is the worker policy's job, not the release-wide one's:
+# without networkPolicy.enabled (staging) nothing else restricts it, and with it
+# the same-release rule would open every worker port to web, edge and Studio.
+assert_rendered_contains "worker policy restricts ingress as well as egress" "$HSW_NP" \
+  'policyTypes: ["Ingress", "Egress"]' "${HSW[@]}"
+assert_rendered_contains "worker ingress admits only the metrics port" "$HSW_NP" \
+  "port: metrics" "${HSW[@]}" "${MON[@]}"
+assert_rendered_contains "worker admits no ingress at all when monitoring is off" "$HSW_NP" \
+  "ingress: []" "${HSW[@]}"
+# Both release-wide allow rules must leave the worker out (two matches).
+if [ "$(helm template t "$CHART" "${BASE[@]}" --set networkPolicy.enabled=true "${HSW[@]}" "${MON[@]}" \
+        --show-only templates/networkpolicy.yaml 2>"$ERRFILE" | grep -c 'values: \[handout-sync-worker\]')" = 2 ]; then
+  echo "ok   [release-wide same-release and monitoring rules leave the worker out]"
+else
+  echo "FAIL [release-wide same-release and monitoring rules leave the worker out]: expected the NotIn exclusion on both"
+  FAILED=1
+fi
+assert_rendered_contains "cilium worker policy restricts ingress to the monitoring namespace" "$HSW_NP" \
+  "k8s:io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name" \
+  --set handoutSyncWorker.enabled=true --set handoutSyncWorker.networkPolicy.cilium.enabled=true "${MON[@]}"
+assert_refused "worker ingress refuses an empty monitoring namespace selector" \
+  "networkPolicy.monitoringNamespaceSelector must be non-empty" \
+  "${HSW[@]}" "${MON[@]}" --set networkPolicy.monitoringNamespaceSelector=null
+
+# (5) Threshold validation that a zero slipped through, plus the cross-checks.
+assert_refused "a zero handout_sync drain floor is refused" \
+  "handoutSyncDrainMessagesPerMinute=0 must be above 0" \
+  "${MON[@]}" --set monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute=0
+assert_refused "a zero /work usage ratio is refused" \
+  "handoutSyncWorkUsageRatio=0 must be in (0, 1]" \
+  "${MON[@]}" --set monitoring.prometheusRules.handoutSyncWorkUsageRatio=0
+assert_refused "a /work usage ratio at or below the cache eviction mark is refused" \
+  "is not above handoutSyncWorker.workEvictPercent" \
+  "${HSW[@]}" "${MON[@]}" --set monitoring.prometheusRules.handoutSyncWorkUsageRatio=0.7
+assert_rendered_contains "worker ephemeral-storage request is derived from /work + /tmp" "$HSW_T" \
+  "ephemeral-storage: 20736Mi" "${HSW[@]}"
+assert_refused "a hand-set ephemeral-storage request is refused" \
+  "resources.requests.ephemeral-storage is computed by the chart" \
+  "${HSW[@]}" --set 'handoutSyncWorker.resources.requests.ephemeral-storage=5Gi'
+
+# (6) processEnvelope injects DLQ failures when NODE_ENV != production and
+# INJECT_DLQ_FAILURE=1. The worker pins the first and refuses the second.
+assert_rendered_contains "worker pins NODE_ENV=production" "$HSW_T" \
+  "name: NODE_ENV" "${HSW[@]}"
+assert_refused "worker refuses INJECT_DLQ_FAILURE in extraEnv" \
+  "handoutSyncWorker.extraEnv must not set INJECT_DLQ_FAILURE" \
+  "${HSW[@]}" --set 'handoutSyncWorker.extraEnv[0].name=INJECT_DLQ_FAILURE' \
+  --set-string 'handoutSyncWorker.extraEnv[0].value=1'
 echo "== edge-function envFrom Secrets are never mandatory =="
 assert_edge_envfrom_optional "edge-functions deployment envFrom is optional" \
   templates/edge-functions.yaml

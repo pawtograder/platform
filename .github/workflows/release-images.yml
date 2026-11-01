@@ -400,9 +400,14 @@ jobs:
   # The image's entrypoint, supabase/functions/handout-sync-worker/main.ts,
   # lands in a later change (WP5 of docs/handout-sync-git-build-plan.md) and the
   # Dockerfile refuses to build without it. Until then every step after the
-  # check is skipped and the job succeeds, so deploy-staging and publish-chart,
-  # which need it, are not held up. The gate is per step, not a job-level `if:`,
-  # because a skipped job also skips every job that needs it.
+  # check is skipped and the job succeeds.
+  #
+  # Deliberately NOT in deploy-staging's or publish-chart's `needs`. This build
+  # fetches from the Alpine mirror and from esm.sh/jsr/npm, and a flaky fetch
+  # here must not block an unrelated deploy or chart release. The price is that
+  # a deploy can reference a handout-sync-worker tag that was never pushed; with
+  # handoutSyncWorker.enabled that shows up as an ImagePullBackOff on the worker
+  # alone (values.yaml says so).
   build-handout-sync-worker:
     needs: meta
     runs-on: pawtograder-ci
@@ -432,14 +437,21 @@ jobs:
       # git is installed with a version floor, not an exact revision, so which
       # git a build gets depends on the day. Build the `git` stage alone, read
       # the package it installed, and pass that into the final build as the
-      # org.pawtograder.git-version label. The final build reuses this stage's
-      # layers from the same builder, so the label matches the image.
+      # org.pawtograder.git-version label.
+      #
+      # Both builds pass --no-cache-filter git, so neither can take that layer
+      # from the gha cache: every release reinstalls git from the Alpine branch
+      # as it is that day, which is how a git security fix reaches the image.
+      # The cost is a window of seconds between the two installs; a git
+      # published inside it would leave the label one patch behind the image.
+      # /usr/share/pawtograder/git-version in the image is always exact.
       - name: Resolve the git version the image will carry
         id: gitver
         if: steps.entry.outputs.present == 'true'
         run: |
           set -euo pipefail
           docker buildx build --load --target git \
+            --no-cache-filter git \
             --cache-from type=gha,scope=handout-sync-worker \
             -f charts/pawtograder/images/handout-sync-worker/Dockerfile \
             -t handout-sync-worker-git:local .
@@ -461,6 +473,7 @@ jobs:
             GIT_RESOLVED_VERSION=${{ steps.gitver.outputs.version }}
           cache-from: type=gha,scope=handout-sync-worker
           cache-to: type=gha,scope=handout-sync-worker,mode=max
+          no-cache-filters: git
 
       - name: Tag additional refs
         if: steps.entry.outputs.present == 'true'
@@ -600,7 +613,7 @@ jobs:
     # by tag only, so it's fine to publish the chart without a same-tag
     # web image; consumers of the chart override web.image.tag to a
     # workflow_dispatch-built image keyed to their environment.
-    needs: [meta, build-edge-functions, build-migrations, build-backup, build-handout-sync-worker]
+    needs: [meta, build-edge-functions, build-migrations, build-backup]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -650,16 +663,7 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs:
-      [
-        meta,
-        build-web,
-        build-edge-functions,
-        build-migrations,
-        build-maintenance,
-        build-backup,
-        build-handout-sync-worker
-      ]
+    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable

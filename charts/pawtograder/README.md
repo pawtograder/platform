@@ -690,13 +690,19 @@ ways an operator has to know about:
 - Its environment is an allowlist of `secretKeyRef`s, not `envFrom`. If the
   GitHub App keys live outside `pawtograder-edge-functions`, name that Secret in
   `handoutSyncWorker.secretSources.github`.
-- It ships an egress policy. The plain `NetworkPolicy` form needs
+- Enabling it requires its image tag to exist. The image build does not gate
+  the staging deploy or the chart release, so a missing image shows up only as
+  an ImagePullBackOff on this Deployment.
+- It ships its own ingress and egress policy. Ingress admits only the metrics
+  port from the monitoring namespace; HTTPS egress never reaches private
+  (RFC 1918, CGNAT, link-local) addresses. The plain `NetworkPolicy` form needs
   `handoutSyncWorker.networkPolicy.clusterCIDRs`; the `CiliumNetworkPolicy` form
   (`networkPolicy.cilium.enabled`) narrows HTTPS to GitHub by FQDN instead.
   Any other HTTPS host the worker must reach (Sentry, Upstash) goes in
-  `cilium.extraFQDNs`.
-- `/work` is a 20Gi `emptyDir` per pod and the pod requests that much
-  `ephemeral-storage`, so nodes need the disk.
+  `cilium.extraFQDNs`, or in `networkPolicy.extraEgress` if it has a private
+  address.
+- `/work` is a 20Gi `emptyDir` per pod, and the chart sets the pod's
+  `ephemeral-storage` request to `/work` plus `/tmp`, so nodes need the disk.
 - On SIGTERM it waits up to `shutdownGraceSeconds` (240s) for in-flight syncs,
   then aborts them; their messages redeliver after the visibility timeout and
   converge. `terminationGracePeriodSeconds` (300s) is the backstop above that.
