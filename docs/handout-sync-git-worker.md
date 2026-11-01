@@ -119,9 +119,12 @@ git -C $TCACHE cat-file -e $H^{commit} || git -C $TCACHE fetch --depth=1 --no-ta
   Otherwise one SIGKILL leaves that template unfetchable until the pod restarts.
 - A cache dir is evicted by LRU when `/work` passes 70 % of `sizeLimit`. A pod restart wipes
   it, which is also fine.
-- If `F` can't be fetched (history rewritten and GC'd), the old-handout side becomes the empty
-  tree `4b825dc6…`. Tag `sync_from_sha_unfetchable`. This fails in the safe direction: every
-  path the student holds classifies as theirs. It is exactly today's `fromSha = null` semantics.
+- If `F` can't be fetched (history rewritten and GC'd), the job is retryable, and terminal
+  `handout_base_missing` once `retry_count` reaches 5. It does not fall back to the empty tree.
+  Today a missing `F` also fails the sync (`getRepoTree` throws), and falling back would open a
+  PR that lists nearly every file as the student's own work. The empty tree stands in for `F`
+  only when the row records no `synced_handout_sha` at all: legacy, adopted or hand-made rows,
+  which is today's `fromSha = null` semantics.
 - If `H` can't be fetched, the job is retryable. Once `retry_count` reaches 5 it becomes terminal
   `handout_revision_missing`.
 
@@ -153,7 +156,14 @@ git diff-tree -r -z --no-renames --raw     $F_TREE $H_TREE      # status, old/ne
 git diff-tree -r -z --no-renames --numstat $F_TREE $H_TREE      # "-\t-" marks binary
 ```
 
-Each record maps to the existing `ChangedFileShape`:
+Each record maps to the existing `ChangedFileShape`. `isBinary` is true when numstat reports
+`-\t-` OR the path has an extension in today's `isBinaryPath` list
+(`GitHubSyncHelpers.ts:248`, moved into a pure module so the engine can import it without the
+REST stack). The extension list keeps today's behavior for files such as PDFs and class files
+whose content happens to look like text. Today's other binary signal, "GitHub's compare omitted
+the patch", is an artifact of the API and is dropped (§6.5).
+
+
 
 | git status | `status` | `isBinary` | `hasPatch` | `patchDeletesFile` |
 |---|---|---|---|---|
@@ -335,6 +345,12 @@ protects the branch.
   mis-merges.
 - For any file the student didn't touch the outcome is unchanged, because those never merge
   (§5.5).
+- A large text file the student edited used to be skipped whenever GitHub's compare omitted its
+  patch. It is now merged with `merge-file` up to `HANDOUT_SYNC_MAX_MERGE_BYTES` (§5.5).
+- On a handout whose history was rewritten, every entry used to arrive as "added" with no patch,
+  so a file the student edited was never merged. Now a modified file merges with `F`'s blob as
+  the base. That is a correct 3-way merge: rewriting history does not change the content the
+  student received at `F`.
 
 ## 7. Error taxonomy
 
@@ -347,14 +363,15 @@ protects the branch.
 | `H` unfetchable after 5 retries | terminal `handout_revision_missing` | `sync_blocked_at` set |
 | Push `GH001` | terminal `file_too_large` | names the path |
 | Student repo has no `main` | terminal `student_repo_has_no_main` | §5.2 |
-| Handout diff has a non-UTF-8 path | terminal `non_utf8_path` | §5.3 |
+| Handout diff has a non-UTF-8 path | terminal `non_utf8_path` | §5.3; removing such a path is terminal too, since the index entry needs the path |
+| `F` unfetchable after 5 retries | terminal `handout_base_missing` | §5.1 |
 | HTTP 401/403 from git | retryable `auth_failed` | its own kind, so a revoked installation is visible in metrics |
 | Student or template repo over `HANDOUT_SYNC_MAX_REPO_KIB` | terminal `repo_too_large` | checked before fetching (§8.4) |
 | `template_repo` is the solution repo | terminal `template_is_solution_repo` | §8.3 |
 | Repo name or SHA fails validation | terminal `invalid_sync_input` | nothing is spawned (§8.1) |
 | Foreign commits on the sync branch | terminal `sync_branch_not_ours` (existing) | unchanged |
 | Repo 404 / not granted | terminal (existing) | unchanged |
-| `F` unfetchable / `S` unfetchable | degraded, not an error | tagged; safe-direction fallback (§5.1, §5.2) |
+| `S` unfetchable | degraded, not an error | tagged; falls back to the current head (§5.2) |
 | `merge-file` conflict / killed | degraded, per file | file left to the student |
 
 Terminal errors flow through the existing `TerminalSyncError` → `terminal_reason` path, so the
