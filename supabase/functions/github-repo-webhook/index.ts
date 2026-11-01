@@ -1817,6 +1817,7 @@ async function handlePushToStudentRepo(
     .select(
       "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date, classes(late_tokens_per_student)"
     )
+    .eq("git_provider", "github")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -2445,6 +2446,7 @@ async function handlePushToGraderSolution(
         const { data: handoutTarget, error: handoutTargetError } = await adminSupabase
           .from("assignments")
           .select("template_repo, latest_template_sha, class_id")
+          .eq("git_provider", "github")
           .eq("id", autograder.id)
           .maybeSingle();
         if (handoutTargetError) {
@@ -2862,6 +2864,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const { data: studentRepo, error: studentRepoError } = await adminSupabase
         .from("repositories")
         .select("*")
+        .eq("git_provider", "github")
         .eq("repository", repoName)
         .maybeSingle();
       if (studentRepoError) {
@@ -2892,7 +2895,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       scope.setTag("repo_type", "grader_solution");
       const { data: graderSolution, error: graderSolutionError } = await adminSupabase
         .from("autograder")
-        .select("*")
+        .select("*, assignments!inner(git_provider)")
+        .eq("assignments.git_provider", "github")
         .eq("grader_repo", repoName);
       if (graderSolutionError) {
         console.error(graderSolutionError);
@@ -2910,6 +2914,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const { data: templateRepo, error: templateRepoError } = await adminSupabase
         .from("assignments")
         .select("*")
+        .eq("git_provider", "github")
         .eq("template_repo", repoName);
       if (templateRepoError) {
         console.error(templateRepoError);
@@ -2945,7 +2950,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
-          .select("*")
+          .select("*, repositories!inner(git_provider)")
+          .eq("repositories.git_provider", "github")
           .eq("check_run_id", payload.check_run.id)
           .maybeSingle();
         if (checkRun && checkRun.data) {
@@ -3559,6 +3565,7 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
     const { data: matchedRepo, error: repoError } = await adminSupabase
       .from("repositories")
       .select("id, class_id")
+      .eq("git_provider", "github")
       .eq("repository", repository.full_name)
       .maybeSingle();
 
@@ -3686,6 +3693,7 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
     const { data: matchedRepo, error: repoError } = await adminSupabase
       .from("repositories")
       .select("id, class_id")
+      .eq("git_provider", "github")
       .eq("repository", repoFullName)
       .maybeSingle();
     if (repoError) {
@@ -3705,7 +3713,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
       // head_sha silently drops deployments for push-mode submissions.
       const { data: matchedSubmission, error: submissionError } = await adminSupabase
         .from("submissions")
-        .select("class_id")
+        .select("class_id, assignments!inner(git_provider)")
+        .eq("assignments.git_provider", "github")
         .eq("repository", repoFullName)
         .or(`head_sha.eq.${sha},sha.eq.${sha}`)
         .limit(1)
@@ -3818,6 +3827,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const { data: assignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
     .select("id, class_id, upstream_base_branch, pr_identification, pr_branch_convention")
+    .eq("git_provider", "github")
     .eq("submission_mode", "pr")
     .ilike("upstream_repo", upstreamRepoPattern);
   if (assignmentsError) {
@@ -3891,6 +3901,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const { data: repoRow, error: repoRowError } = await adminSupabase
     .from("repositories")
     .select("id, profile_id, assignment_group_id, assignment_id, class_id")
+    .eq("git_provider", "github")
     .eq("repository", headRepo)
     .maybeSingle();
   if (repoRowError) {
@@ -4120,6 +4131,7 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       const { data: repo, error: repoError } = await adminSupabase
         .from("repositories")
         .select("id, synced_handout_sha, desired_handout_sha, sync_data, sync_blocked_at")
+        .eq("git_provider", "github")
         .eq("repository", repoFullName)
         .maybeSingle();
 
