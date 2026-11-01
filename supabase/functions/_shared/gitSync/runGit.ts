@@ -282,6 +282,26 @@ export type GitRequest =
   | CatFileRequest
   | CountObjectsRequest;
 
+/**
+ * The only variables `testOnly.extraEnv` may add. Proxies cannot weaken anything here: curl tunnels
+ * https through a proxy with CONNECT, so TLS and the auth header still go end to end to GitHub.
+ */
+const TEST_EXTRA_ENV_KEYS: ReadonlySet<string> = new Set(["https_proxy", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]);
+
+function testExtraEnv(ctx: GitContext): Record<string, string> {
+  const extra = ctx.testOnly?.extraEnv;
+  if (extra === undefined) return {};
+  for (const [key, value] of Object.entries(extra)) {
+    if (!TEST_EXTRA_ENV_KEYS.has(key)) {
+      throw new InvalidSyncInputError("testOnly.extraEnv key", key, "only proxy variables may be added");
+    }
+    if (typeof value !== "string" || /[\0\r\n]/.test(value)) {
+      throw new InvalidSyncInputError(`testOnly.extraEnv.${key}`, value, "must be a single-line string");
+    }
+  }
+  return { ...extra };
+}
+
 /** Every request `buildInvocation` handles, including the ones only this module issues. */
 type AnyGitRequest = GitRequest | LsRemoteRequest;
 
@@ -333,7 +353,9 @@ export interface GitTestHooks {
   killGraceMs?: number;
   /**
    * Added to the child's environment. Used only to point curl at a local proxy that never answers,
-   * so a test can watch a real `git-remote-https` hang and get killed.
+   * so a test can watch a real `git-remote-https` hang and get killed. Restricted to
+   * `TEST_EXTRA_ENV_KEYS`, and anything else throws before spawning, so it cannot replace a
+   * hardening variable (`GIT_ALLOW_PROTOCOL`, the extraheader, `PATH`, `HOME`, …).
    */
   extraEnv?: Record<string, string>;
 }
@@ -779,7 +801,8 @@ async function spawnGit(inv: Invocation, ctx: GitContext): Promise<GitResult> {
   if (ctx.signal?.aborted) {
     throw new GitSyncRetryableError(`git ${inv.op} not started: job deadline reached`, "deadline_exceeded");
   }
-  const env = { ...baseEnv(ctx, remote.protocol), ...inv.extraEnv, ...ctx.testOnly?.extraEnv };
+  // Test variables go first, so the base environment would win even if the key check were bypassed.
+  const env = { ...testExtraEnv(ctx), ...baseEnv(ctx, remote.protocol), ...inv.extraEnv };
   const stdoutCap = ctx.testOnly?.stdoutCapBytes ?? STDOUT_CAP_BYTES;
   const stderrCap = ctx.testOnly?.stderrCapBytes ?? STDERR_CAP_BYTES;
   const killGraceMs = ctx.testOnly?.killGraceMs ?? KILL_GRACE_MS;

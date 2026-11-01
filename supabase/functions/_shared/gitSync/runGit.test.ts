@@ -544,6 +544,56 @@ Deno.test("the child environment contains none of the parent's variables", async
   });
 });
 
+Deno.test("testOnly.extraEnv admits only proxy variables and cannot replace a hardening variable", async () => {
+  await withTempDir(async (dir) => {
+    const printEnv = await stubBinary(dir, "print-env", "exec /usr/bin/env");
+    const spawned: string[][] = [];
+    const ctxWith = (extraEnv: Record<string, string>): GitContext => ({
+      home: dir,
+      token: "ghs_" + "E".repeat(36),
+      remote: { protocol: "file", remoteUrlFor: (n) => `file://${remotePath(dir, n)}` },
+      log: () => {},
+      testOnly: { gitBinary: printEnv, onSpawn: (a) => spawned.push([...a]), extraEnv }
+    });
+    for (const [key, value] of [
+      ["GIT_ALLOW_PROTOCOL", "ext:file:https"],
+      ["GIT_CONFIG_COUNT", "2"],
+      ["GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic attacker"],
+      ["GIT_CONFIG_PARAMETERS", "'core.hookspath'='/tmp/evil'"],
+      ["GIT_SSL_NO_VERIFY", "1"],
+      ["GIT_TRACE", "1"],
+      ["PATH", "/tmp/evil"],
+      ["HOME", "/tmp/evil"],
+      ["LD_PRELOAD", "/tmp/evil.so"],
+      ["http_proxy", "http://127.0.0.1:1"]
+    ]) {
+      await assertRejects(
+        () => runGit({ op: "count-objects", gitDir: dir }, ctxWith({ [key]: value })),
+        InvalidSyncInputError,
+        undefined,
+        key
+      );
+    }
+    await assertRejects(
+      () => runGit({ op: "count-objects", gitDir: dir }, ctxWith({ https_proxy: "http://x\nGIT_TRACE=1" })),
+      InvalidSyncInputError
+    );
+    assertEquals(spawned, [], "a rejected extraEnv still spawned");
+
+    // The allowed keys pass through, and the hardening variables keep their values.
+    const proxy = "http://127.0.0.1:9";
+    const result = await runGit(
+      { op: "count-objects", gitDir: dir },
+      ctxWith({ https_proxy: proxy, HTTPS_PROXY: proxy, no_proxy: "localhost", NO_PROXY: "localhost" })
+    );
+    const env = parseEnv(text(result.stdout));
+    assertEquals(env.get("https_proxy"), proxy);
+    assertEquals(env.get("NO_PROXY"), "localhost");
+    assertEquals(env.get("GIT_ALLOW_PROTOCOL"), "file");
+    assertEquals(env.get("PATH"), "/usr/local/bin:/usr/bin:/bin");
+  });
+});
+
 Deno.test("without a token there is no extraheader, and commit-tree adds only identity variables", async () => {
   await withTempDir(async (dir) => {
     const printEnv = await stubBinary(dir, "print-env", "cat >/dev/null; exec /usr/bin/env");
@@ -597,6 +647,72 @@ Deno.test("redactSecrets removes tokens, Authorization headers and URL userinfo"
   assertStringIncludes(out, "RPC failed");
   assertStringIncludes(out, "github.com/o/r.git");
   assertEquals(redactSecrets("plain message"), "plain message");
+});
+
+Deno.test("URL userinfo after another URL is redacted, whatever separates them", () => {
+  for (const input of [
+    "'https://example.com','https://bob:hunter2pass@host/x'",
+    "(https://example.com)https://bob:hunter2pass@host/x",
+    "https://a.com|https://bob:hunter2pass@host"
+  ]) {
+    const out = redactSecrets(input);
+    assert(!out.includes("hunter2pass"), `userinfo survived in ${JSON.stringify(out)}`);
+    assertStringIncludes(out, "https://[REDACTED]@host");
+  }
+});
+
+/** The URL-userinfo regex redact.ts used before the linear scan. Quadratic: short inputs only. */
+const OLD_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi;
+
+/** A small deterministic PRNG (mulberry32), so a failing corpus string can be reproduced. */
+function prng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+Deno.test("differential: the scan redacts every URL userinfo the old regex redacted", () => {
+  const next = prng(20261101);
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(next() * xs.length)];
+  const schemes = ["https", "http", "git+ssh", "a.b", "x", "ftp", ""];
+  const userinfoParts = ["bob", ":", "pw", "x", ".", "-", "%40", "a:b", "", "://"];
+  const hosts = ["host", "github.com", "a.com", "example", "", ":"];
+  const separators = ["", " ", "\t", "\n", "'", "','", ",", "(", ")", "|", ":", "/", "@", "://"];
+  const noise = ["/", ":", "@", "://", "x", "a.", "@@", ":/"];
+  // A URL-shaped segment: scheme, separator, optional userinfo and `@`, host, optional path.
+  const url = () => {
+    let u = `${pick(schemes)}://`;
+    const parts = Math.floor(next() * 3);
+    for (let i = 0; i < parts; i++) u += pick(userinfoParts);
+    if (next() < 0.7) u += "@";
+    u += pick(hosts);
+    if (next() < 0.5) u += "/x";
+    return u;
+  };
+  let oldMatches = 0;
+  for (let n = 0; n < 4000; n++) {
+    let input = "";
+    const segments = 1 + Math.floor(next() * 4);
+    for (let i = 0; i < segments; i++) {
+      if (i > 0) input += pick(separators);
+      input += next() < 0.75 ? url() : pick(noise);
+    }
+    const out = redactSecrets(input);
+    // Run the old regex over the NEW output. Whatever it would still redact must already be the
+    // marker; otherwise the scan missed a userinfo the old regex caught.
+    for (const m of out.matchAll(OLD_USERINFO_RE)) {
+      const userinfo = m[0].slice(m[1].length, -1);
+      assert(userinfo.endsWith("[REDACTED]"), `missed userinfo in ${JSON.stringify(input)} -> ${JSON.stringify(out)}`);
+    }
+    oldMatches += [...input.matchAll(OLD_USERINFO_RE)].length;
+  }
+  // The corpus has to exercise the old regex often enough for the comparison to mean something.
+  assert(oldMatches > 1000, `corpus too weak: the old regex matched only ${oldMatches} times`);
 });
 
 Deno.test("redactSecrets removes known secrets that match no pattern", () => {
@@ -838,13 +954,21 @@ Deno.test("gh001Path parses GitHub's line and nothing else", () => {
   assertEquals(gh001Path("error: File x is 101.00 MB; this exceeds"), undefined);
 });
 
-/** Times `fn` and fails if it takes longer than `limitMs`. */
-function assertFast(label: string, limitMs: number, fn: () => unknown): void {
+/**
+ * Times `fn`, fails if it takes longer than `limitMs`, and returns the time taken. The budgets are
+ * generous on purpose: the linear versions take milliseconds, the quadratic ones tens of seconds,
+ * so a slow CI runner cannot blur the two.
+ */
+function assertFast(label: string, limitMs: number, fn: () => unknown): number {
   const started = performance.now();
   fn();
   const elapsed = performance.now() - started;
   assert(elapsed < limitMs, `${label} took ${elapsed.toFixed(0)} ms (limit ${limitMs} ms)`);
+  return elapsed;
 }
+
+const PER_CALL_BUDGET_MS = 1_000;
+const AGGREGATE_BUDGET_MS = 5_000;
 
 /** 1 MiB inputs, the stderr cap, shaped to trigger backtracking in the patterns this module uses. */
 const ADVERSARIAL: Array<[string, string]> = [
@@ -861,19 +985,25 @@ const ADVERSARIAL: Array<[string, string]> = [
   ["returned error", "returned error: 4".repeat(60 * 1024)]
 ];
 
-Deno.test("redaction is linear: 1 MiB of adversarial stderr in under 200 ms each", () => {
+Deno.test("redaction is linear: 1 MiB of adversarial stderr, 1 s per call, 5 s in total", () => {
+  let total = 0;
   for (const [label, input] of ADVERSARIAL) {
-    assertFast(`redactSecrets(${label})`, 200, () => redactSecrets(input, ["some-known-secret-value"]));
+    total += assertFast(`redactSecrets(${label})`, PER_CALL_BUDGET_MS, () =>
+      redactSecrets(input, ["some-known-secret-value"])
+    );
   }
+  assert(total < AGGREGATE_BUDGET_MS, `redaction took ${total.toFixed(0)} ms in total`);
 });
 
-Deno.test("classification is linear: 1 MiB of adversarial stderr in under 200 ms each", () => {
+Deno.test("classification is linear: 1 MiB of adversarial stderr, 1 s per call, 5 s in total", () => {
+  let total = 0;
   for (const [label, input] of ADVERSARIAL) {
     for (const op of ["push", "fetch"]) {
-      assertFast(`classifyGitStderr(${op}, ${label})`, 200, () => classifyGitStderr(op, input));
+      total += assertFast(`classifyGitStderr(${op}, ${label})`, PER_CALL_BUDGET_MS, () => classifyGitStderr(op, input));
     }
-    assertFast(`gh001Path(${label})`, 200, () => gh001Path(input));
+    total += assertFast(`gh001Path(${label})`, PER_CALL_BUDGET_MS, () => gh001Path(input));
   }
+  assert(total < AGGREGATE_BUDGET_MS, `classification took ${total.toFixed(0)} ms in total`);
 });
 
 Deno.test("classifyGitFailure: clean exit is null, unknown failure is git_failed", () => {
