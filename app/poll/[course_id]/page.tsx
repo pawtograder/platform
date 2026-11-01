@@ -8,7 +8,7 @@ import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
-import { DefaultDark, DefaultLight } from "survey-core/themes";
+import { AccessibleDark, AccessibleLight } from "@/components/survey/surveyThemes";
 import "survey-core/survey-core.min.css";
 import { PollResponseData } from "@/types/poll";
 
@@ -180,9 +180,9 @@ export default function PollRespondPage() {
   useEffect(() => {
     if (surveyModel) {
       if (isDarkMode) {
-        surveyModel.applyTheme(DefaultDark);
+        surveyModel.applyTheme(AccessibleDark);
       } else {
-        surveyModel.applyTheme(DefaultLight);
+        surveyModel.applyTheme(AccessibleLight);
       }
     }
   }, [isDarkMode, surveyModel]);
