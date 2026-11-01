@@ -2,13 +2,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
-import {
-  createRepo,
-  getOctoKit,
-  NonRetryableRepoError,
-  reinviteToOrgTeam,
-  syncRepoPermissions
-} from "../_shared/GitHubWrapper.ts";
+import { getOctoKit, NonRetryableRepoError, reinviteToOrgTeam } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import {
   assertUserIsInstructor,
   SecurityError,
@@ -393,7 +388,13 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               repairKinds.add("group_repo_create");
               return assignment;
             }
-            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!, {}, jobScope);
+            const headSha = await getGitProvider().createRepo(
+              c.classes!.github_org!,
+              repoName,
+              assignment.template_repo!,
+              {},
+              jobScope
+            );
             const { error: updateRepoError } = await adminSupabase
               .from("repositories")
               .update({
@@ -432,7 +433,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
               .join(", ")}`,
             level: "info"
           });
-          const { madeChanges: madeChangesForRepo } = await syncRepoPermissions(
+          const { madeChanges: madeChangesForRepo } = await getGitProvider().syncRepoPermissions(
             c.classes!.github_org!,
             repoName,
             c.classes!.slug!,
@@ -530,14 +531,20 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
           repairKinds.add("individual_repo_create");
           return `e2e-skip-${repoName}`;
         }
-        const new_repo_sha = await createRepo(
+        const new_repo_sha = await getGitProvider().createRepo(
           assignment.classes!.github_org!,
           repoName,
           assignment.template_repo,
           {},
           jobScope
         );
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
+        await getGitProvider().syncRepoPermissions(
+          assignment.classes!.github_org!,
+          repoName,
+          courseSlug!,
+          [githubUsername],
+          jobScope
+        );
         const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
@@ -587,7 +594,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             message: `Syncing permissions for ${repo.repository}, githubUsername: ${githubUsername}`,
             level: "info"
           });
-          const { madeChanges: madeChangesForRepo } = await syncRepoPermissions(
+          const { madeChanges: madeChangesForRepo } = await getGitProvider().syncRepoPermissions(
             orgName,
             repoName,
             classSlug,
@@ -633,7 +640,7 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
             message: `Syncing permissions for ${repo.repository}, groupMemberUsernames: ${groupMemberUsernames.join(", ")}`,
             level: "info"
           });
-          const { madeChanges: madeChangesForRepo } = await syncRepoPermissions(
+          const { madeChanges: madeChangesForRepo } = await getGitProvider().syncRepoPermissions(
             orgName,
             repoName,
             classSlug,

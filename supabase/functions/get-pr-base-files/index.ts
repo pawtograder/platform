@@ -24,7 +24,8 @@
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "../_shared/GitHubWrapper.ts";
+import { END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { assertUserIsInCourse, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { collectTextFilesFromZipBuffer } from "../_shared/SubmissionIngestion.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -131,7 +132,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
       // runs work. For E2E the base_sha is synthetic (won't exist in the fixture),
       // so clone at HEAD — mirroring the autograder's `isE2ERun ? "HEAD" : sha`.
       const isE2E = upstreamRepo.startsWith(END_TO_END_REPO_PREFIX);
-      const zipBuffer = await cloneRepository(
+      const zipBuffer = await getGitProvider().cloneRepository(
         getRepoToCloneConsideringE2E(upstreamRepo),
         isE2E ? "HEAD" : baseSha,
         scope

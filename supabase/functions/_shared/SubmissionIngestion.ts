@@ -41,7 +41,8 @@ import { createHash } from "node:crypto";
 import { Open as openZip } from "npm:unzipper";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { cloneRepository, END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "./GitHubWrapper.ts";
+import { END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "./GitHubWrapper.ts";
+import { getGitProvider } from "./GitProvider.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
 
 // Safety guards for the in-memory repo unzip. create-submission downloads the
@@ -614,6 +615,10 @@ export async function ingestSubmissionFilesFromRepo(params: IngestFromRepoParams
   // For E2E the caller's sha is synthetic and won't exist in the fixture repo, so
   // clone at HEAD — mirroring the autograder's `isE2ERun ? "HEAD" : sha`.
   const isE2E = repo.startsWith(END_TO_END_REPO_PREFIX);
-  const zipBuffer = await cloneRepository(getRepoToCloneConsideringE2E(repo), isE2E ? "HEAD" : sha, scope);
+  const zipBuffer = await getGitProvider().cloneRepository(
+    getRepoToCloneConsideringE2E(repo),
+    isE2E ? "HEAD" : sha,
+    scope
+  );
   return await ingestSubmissionFilesFromZip({ ...rest, scope, zipBuffer });
 }
