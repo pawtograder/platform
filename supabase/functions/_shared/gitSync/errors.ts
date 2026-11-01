@@ -39,6 +39,10 @@
  *   kill could not reach the helpers git starts (see `assertGitRuntime`).
  * - `spawn_failed`: the child could not be started (git missing, or the cwd is gone).
  * - `git_failed`: a non-zero exit that matched none of the above.
+ * - `student_repo_has_no_main`: the student repo has no `refs/heads/main` (it is empty, or its
+ *   default branch has another name). Raised by the engine, not by `runGit`. Terminal (§5.2).
+ * - `non_utf8_path`: the handout diff names a path that is not valid UTF-8, which cannot pass
+ *   through JS strings unchanged. Raised by the engine. Terminal (§5.3).
  */
 export type GitFailureKind =
   | "invalid_sync_input"
@@ -55,10 +59,12 @@ export type GitFailureKind =
   | "git_version_unsupported"
   | "runtime_unsupported"
   | "spawn_failed"
-  | "git_failed";
+  | "git_failed"
+  | "student_repo_has_no_main"
+  | "non_utf8_path";
 
 /** Terminal reasons this module can produce. They become `TerminalSyncError.reason` in WP3. */
-export type GitTerminalReason = "invalid_sync_input" | "file_too_large";
+export type GitTerminalReason = "invalid_sync_input" | "file_too_large" | "student_repo_has_no_main" | "non_utf8_path";
 
 /** Base class for every git sync failure. `retryable` is false only for the terminal subclass. */
 export class GitSyncError extends Error {
@@ -80,7 +86,10 @@ export class GitSyncTerminalError extends GitSyncError {
   constructor(
     message: string,
     readonly reason: GitTerminalReason,
-    /** For `file_too_large`: the path GitHub named, when the remote message included one. */
+    /**
+     * For `file_too_large`: the path GitHub named, when the remote message included one. For
+     * `non_utf8_path`: the offending path, escaped.
+     */
     readonly path?: string
   ) {
     super(message, reason, false);
