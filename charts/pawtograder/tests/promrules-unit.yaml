@@ -434,3 +434,159 @@ tests:
                 a burst of IncreaseConnectionPool. Usually means the
                 realtime_connect pool is too small for the join rate. Runbook:
                 docs/operations/monitoring-alerting.md.
+
+  # ---------------------------------------------------------------------------
+  # H1-H6. THE handout_sync QUEUE (PawtograderHandoutSyncQueueAging and friends).
+  #
+  # The handout-sync worker drains its own queue at its own rate (replicas x
+  # concurrency, 4 slots shipped), with a 900s job deadline, so it has its own
+  # rule instead of a third queue in PawtograderQueueOldestMessageAging. The
+  # properties are the same ones scenarios 1-8 above pin for async_calls: a healthy
+  # bulk enqueue does not page, a stopped queue does, and a missing depth gauge
+  # degrades to paging rather than to silence. Plus the exclusion: the generic
+  # rule must not ALSO page for handout_sync.
+  # ---------------------------------------------------------------------------
+
+  # H1. HEALTHY HANDOUT PUSH TO A 300-STUDENT CLASS: must not page.
+  # One message per student repo in one transaction, drained at 4 msg/min
+  # (4 slots x 1-minute jobs). The oldest message passes 1800s at t=30m and
+  # the queue is still 20 deep at t=70m, so without the drain guard this pages
+  # from t=40m on. deriv is -4/min, below the -1 floor, so it is subtracted.
+  - interval: 1m
+    name: a 300-message handout release that drains does not page
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="handout_sync"}'
+        values: "0+60x75 0x5"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="handout_sync"}'
+        values: "300-4x75 0x5"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: PawtograderHandoutSyncQueueAging
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: PawtograderHandoutSyncQueueAging
+        exp_alerts: []
+
+  # H2. ONE STUCK MESSAGE, QUEUE NOT MOVING: must page, exactly once.
+  # Depth pinned at 1 while its age climbs: the worker is down or wedged on it.
+  # Past 1800s at t=30m, held 10m, firing by t=45m. The generic aging rule must
+  # stay quiet for this queue (its 1200s threshold would otherwise make this a
+  # double page); drop the handout_sync exclusion and this scenario goes red.
+  - interval: 1m
+    name: a stuck handout_sync message pages on the handout rule only
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="handout_sync"}'
+        values: "0+60x60"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="handout_sync"}'
+        values: "1x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: PawtograderHandoutSyncQueueAging
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, queue: handout_sync, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder handout sync queue is not draining"
+              description:
+                "The oldest handout_sync message in pawtograder has been waiting over 1800s AND the queue is
+                draining slower than 1 msg/min. Check that the handout-sync-worker Deployment has ready
+                replicas, and its logs for jobs hitting the deadline."
+      - eval_time: 45m
+        alertname: PawtograderQueueOldestMessageAging
+        exp_alerts: []
+
+  # H3. CRAWLING, NOT STOPPED: must page.
+  # 0.5 msg/min, below the 1 msg/min floor: moving, but slower than a healthy
+  # worker can be. Pins the floor's magnitude, not just its sign.
+  - interval: 1m
+    name: a handout_sync queue crawling below the floor still pages
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="handout_sync"}'
+        values: "0+60x60"
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="handout_sync"}'
+        values: "60-0.5x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: PawtograderHandoutSyncQueueAging
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, queue: handout_sync, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder handout sync queue is not draining"
+              description:
+                "The oldest handout_sync message in pawtograder has been waiting over 1800s AND the queue is
+                draining slower than 1 msg/min. Check that the handout-sync-worker Deployment has ready
+                replicas, and its logs for jobs hitting the deadline."
+
+  # H4. DEPTH GAUGE ABSENT: must page. The metrics function reports
+  # handout_sync in a separate change from this rule; until both gauges exist,
+  # `unless` must leave the age half standing.
+  - interval: 1m
+    name: handout_sync aging still fires when the depth gauge is missing
+    input_series:
+      - series: 'pawtograder_queue_oldest_message_seconds{namespace="pawtograder",queue="handout_sync"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: PawtograderHandoutSyncQueueAging
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, queue: handout_sync, severity: critical }
+            exp_annotations:
+              summary: "Pawtograder handout sync queue is not draining"
+              description:
+                "The oldest handout_sync message in pawtograder has been waiting over 1800s AND the queue is
+                draining slower than 1 msg/min. Check that the handout-sync-worker Deployment has ready
+                replicas, and its logs for jobs hitting the deadline."
+
+  # H5. handout_sync_dlq: growth pages, a parked backlog does not.
+  # One new dead letter a minute is 60/h against a threshold of 3. A DLQ that
+  # has sat at 40 all along is old failures nobody has cleared, not new ones.
+  - interval: 1m
+    name: a growing handout_sync_dlq warns and a static one does not
+    input_series:
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="handout_sync_dlq"}'
+        values: "0+1x90"
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: PawtograderHandoutSyncDLQGrowing
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, severity: warning }
+            exp_annotations:
+              summary: "Pawtograder handout sync DLQ is growing"
+              description:
+                "The handout_sync dead-letter queue in pawtograder grew by more than 3 in the last hour. Each
+                message is a student repo that did not get a handout update; the error is recorded on the
+                message. Inspect pgmq.q_handout_sync_dlq."
+  - interval: 1m
+    name: a static handout_sync_dlq does not warn
+    input_series:
+      - series: 'pawtograder_queue_depth{namespace="pawtograder",queue="handout_sync_dlq"}'
+        values: "40x90"
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: PawtograderHandoutSyncDLQGrowing
+        exp_alerts: []
+
+  # H6. /work near its sizeLimit, per pod. Pod a holds 18 of 20 GB (0.9) and
+  # warns; pod b sits at 14 of 20 (0.7, the LRU eviction mark, i.e. a full
+  # template cache doing its job) and must not.
+  - interval: 1m
+    name: handout-sync /work above the ratio warns for that pod only
+    input_series:
+      - series: 'pawtograder_handout_sync_work_bytes{namespace="pawtograder",pod="hsw-a"}'
+        values: "18e9x30"
+      - series: 'pawtograder_handout_sync_work_limit_bytes{namespace="pawtograder",pod="hsw-a"}'
+        values: "20e9x30"
+      - series: 'pawtograder_handout_sync_work_bytes{namespace="pawtograder",pod="hsw-b"}'
+        values: "14e9x30"
+      - series: 'pawtograder_handout_sync_work_limit_bytes{namespace="pawtograder",pod="hsw-b"}'
+        values: "20e9x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PawtograderHandoutSyncWorkDiskHigh
+        exp_alerts:
+          - exp_labels: { namespace: pawtograder, pod: hsw-a, severity: warning }
+            exp_annotations:
+              summary: "Handout sync worker /work is nearly full"
+              description:
+                "hsw-a in pawtograder has held /work above 0.85 of its sizeLimit for 10m. At the limit the
+                kubelet evicts the pod and its in-flight syncs restart elsewhere. Look for an oversized
+                handout or student repo in the worker logs."

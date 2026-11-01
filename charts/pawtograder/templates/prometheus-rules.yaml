@@ -881,11 +881,17 @@ spec:
         # repo-analytics queue is starved by design and its oldest message ages past any threshold on
         # a completely healthy system. Including it would produce a permanent critical that gets
         # silenced -- exactly the shape the DLQ exclusion above rejects.
+        #
+        # handout_sync is excluded because it has its own rule,
+        # PawtograderHandoutSyncQueueAging in the pawtograder.handoutsync group
+        # below, with thresholds sized to that worker. Matching it here as well
+        # would page twice for one stall, and on this rule's 1200s age a single
+        # healthy job near its 15-minute deadline could page on its own.
         - alert: PawtograderQueueOldestMessageAging
           expr: |
-            max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
+            max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority|handout_sync"}) > {{ .Values.monitoring.prometheusRules.queueOldestSeconds | default 1200 }}
             unless
-            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }}
+            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue!~".*_dlq|async_calls_low_priority|handout_sync"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.queueDrainMessagesPerMinute | default 2 }}
           for: 10m
           labels:
             severity: critical
@@ -1088,6 +1094,92 @@ spec:
               server no longer existing at all; check public.discord_circuit_breakers.last_reason and
               trip_count, and the class's discord_membership_status rows. A trip_count above 1 means
               the guild has re-tripped after its window expired, so nobody has fixed it yet.
+    - name: pawtograder.handoutsync
+      rules:
+        # The handout_sync queue is not draining (docs/handout-sync-git-worker.md §3).
+        #
+        # Same shape as PawtograderQueueOldestMessageAging above, for the same reason, and with
+        # the same `unless` (read that comment for the bulk-release arithmetic and why `and`
+        # would fail open). A handout push enqueues one message per student repo in one
+        # transaction, so a 300-student class ages its oldest message to 300/R minutes however
+        # healthy the worker is. Age alone measures the class size; the drain rate separates a
+        # big batch from a stopped worker.
+        #
+        # Its own rule, not a third queue in the generic one, because both numbers there were
+        # set for the edge worker and neither transfers:
+        #
+        #   age   The generic 1200s sits below this worker's own job deadline plus one wait. A
+        #         message is not archived until its job finishes, so with every slot busy on a
+        #         deadline-length job, the next message is 900s old when it starts and up to
+        #         1800s old when it finishes, all of it healthy. Default 1800s, held 10m.
+        #   floor Throughput is set by replicas x concurrency (2 x 2 shipped) and job length,
+        #         not by the edge leaseholder. No release has run through this worker yet, so
+        #         there is no measured band as there is for async_calls (0.66 vs 8 msg/min).
+        #         The 1 msg/min default assumes 4 slots and jobs of up to 4 minutes; a stuck
+        #         worker drains at 0. Re-derive it from the S3.2 staging bulk release in the
+        #         build plan before cutover.
+        #
+        # Replicas at 0 (production before cutover) is covered: routing still says "rest",
+        # so nothing enqueues here. If routing is switched to "git" with no worker running,
+        # the queue fills, depth rises, and this fires, which is the right answer.
+        #
+        # Needs the metrics edge function to report handout_sync in BOTH labelled gauges,
+        # pawtograder_queue_oldest_message_seconds and pawtograder_queue_depth. Until it does,
+        # this rule has no series and is silent.
+        - alert: PawtograderHandoutSyncQueueAging
+          expr: |
+            max by (namespace, queue) (pawtograder_queue_oldest_message_seconds{namespace="{{ $ns }}", queue="handout_sync"}) > {{ .Values.monitoring.prometheusRules.handoutSyncOldestSeconds | default 1800 }}
+            unless
+            max by (namespace, queue) (deriv(pawtograder_queue_depth{namespace="{{ $ns }}", queue="handout_sync"}[15m])) * 60 < -{{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 1 }}
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pawtograder handout sync queue is not draining"
+            description: >-
+              The oldest handout_sync message in {{ $ns }} has been waiting over
+              {{ .Values.monitoring.prometheusRules.handoutSyncOldestSeconds | default 1800 }}s AND the
+              queue is draining slower than
+              {{ .Values.monitoring.prometheusRules.handoutSyncDrainMessagesPerMinute | default 1 }}
+              msg/min. Check that the handout-sync-worker Deployment has ready replicas, and its logs
+              for jobs hitting the deadline.
+        # handout_sync_dlq is growing. A RATE, like the Discord and gradebook DLQ rules above and
+        # for their reason: one poison message parks in a DLQ for good, so a level threshold fires
+        # forever and gets silenced, while growth means new failures. delta(), not increase(),
+        # because this is a gauge. Each message here is one student repo that did not receive a
+        # handout update after maxReadCount attempts, so the default is low.
+        - alert: PawtograderHandoutSyncDLQGrowing
+          expr: |
+            delta(max by (namespace) (pawtograder_queue_depth{namespace="{{ $ns }}", queue="handout_sync_dlq"})[1h:5m]) > {{ .Values.monitoring.prometheusRules.handoutSyncDlqGrowthPerHour | default 3 }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pawtograder handout sync DLQ is growing"
+            description: >-
+              The handout_sync dead-letter queue in {{ $ns }} grew by more than
+              {{ .Values.monitoring.prometheusRules.handoutSyncDlqGrowthPerHour | default 3 }} in the
+              last hour. Each message is a student repo that did not get a handout update; the
+              error is recorded on the message. Inspect pgmq.q_handout_sync_dlq.
+        # /work on a worker pod is close to its emptyDir sizeLimit. The worker evicts cached
+        # templates by LRU at handoutSyncWorker.workEvictPercent (70% shipped), so usage held above
+        # that means the in-flight job scratch, not the cache, is what is large. At 100% the
+        # kubelet evicts the pod and every job on it redelivers after the visibility timeout; a
+        # repo that keeps doing this is one the size ceiling (maxRepoKib) let through. Gauges are
+        # exported by the worker itself, per pod, so the pod label names the culprit.
+        - alert: PawtograderHandoutSyncWorkDiskHigh
+          expr: |
+            max by (namespace, pod) (pawtograder_handout_sync_work_bytes{namespace="{{ $ns }}"} / pawtograder_handout_sync_work_limit_bytes{namespace="{{ $ns }}"}) > {{ .Values.monitoring.prometheusRules.handoutSyncWorkUsageRatio | default 0.85 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Handout sync worker /work is nearly full"
+            description: >-
+              {{`{{ $labels.pod }}`}} in {{ $ns }} has held /work above
+              {{ .Values.monitoring.prometheusRules.handoutSyncWorkUsageRatio | default 0.85 }} of its
+              sizeLimit for 10m. At the limit the kubelet evicts the pod and its in-flight syncs
+              restart elsewhere. Look for an oversized handout or student repo in the worker logs.
     - name: pawtograder.workflowmetrics
       rules:
         # The metrics leader is failing to refresh the workflow gauges.

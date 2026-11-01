@@ -378,6 +378,28 @@ supavisor:
 # pawtograder-redis ExternalSecrets.
 # (Production, with no external shared Redis, would set `provider: internal` to
 # have the chart deploy its own — see redis.internal.* in values.yaml.)
+# ----- Handout sync worker (docs/handout-sync-git-worker.md) -----------------
+# OFF until WP5 merges handout-sync-worker/main.ts: release-images.yml does not
+# build the image before then, so enabling this would ImagePullBackOff and fail
+# the deploy's --wait. Turned on for build-plan step S1. The tag follows
+# edgeFunctions.image.tag, which deploy-staging pins per build.
+handoutSyncWorker:
+  enabled: false
+  replicas: 2
+  # Staging keeps the GitHub App and Sentry DSN in their own Secrets (see
+  # edgeFunctions.envFromSecrets above), not in pawtograder-edge-functions.
+  secretSources:
+    github: pawtograder-github-app
+    sentry: pawtograder-sentry
+  networkPolicy:
+    enabled: true
+    # PLACEHOLDERS: Talos' default pod and service subnets. Confirm the
+    # cluster's real ranges before enabling (decision D2 in
+    # docs/handout-sync-git-build-plan.md); if this cluster's Cilium permits
+    # namespace-scoped toFQDNs policies, set cilium.enabled instead and these
+    # stop mattering.
+    clusterCIDRs: ["10.244.0.0/16", "10.96.0.0/12"]
+
 redis:
   provider: shared
 

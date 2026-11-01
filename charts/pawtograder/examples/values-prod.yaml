@@ -319,6 +319,25 @@ auth:
 # lands in Helm release state. Point this at a managed or cluster-level Redis
 # you operate separately; the chart syncs REDIS_URL into pawtograder-redis and
 # mounts it into web + edge-functions.
+# ----- Handout sync worker (docs/handout-sync-git-worker.md) -----------------
+# Rendered but scaled to 0 until the Phase 2 cutover in
+# docs/handout-sync-git-build-plan.md (S4 sets replicas: 2). At 0 the routing
+# setting still sends every sync to the edge worker, so nothing is queued for
+# this Deployment. The image tag follows edgeFunctions.image.tag. The GitHub
+# App keys and SENTRY_DSN come from pawtograder-edge-functions (the ESO
+# github-app bundle), the chart default.
+handoutSyncWorker:
+  enabled: true
+  replicas: 0
+  networkPolicy:
+    enabled: true
+    # PLACEHOLDERS: Talos' default pod and service subnets. Confirm the
+    # cluster's real ranges before enabling (decision D2 in
+    # docs/handout-sync-git-build-plan.md); if this cluster's Cilium permits
+    # namespace-scoped toFQDNs policies, set cilium.enabled instead and these
+    # stop mattering.
+    clusterCIDRs: ["10.244.0.0/16", "10.96.0.0/12"]
+
 redis:
   provider: shared
   shared:

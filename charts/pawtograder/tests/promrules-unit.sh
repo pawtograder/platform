@@ -351,8 +351,22 @@ assert_control "a floor no real drain can reach is caught by the healthy-release
 # becomes a permanent critical and gets silenced — taking the live queues with
 # it. This control also proves the exclusion scenario is not vacuous.
 assert_control "removing the dlq/low-priority exclusion is caught by the exclusion scenario" \
-  's/, queue!~"[.][*]_dlq|async_calls_low_priority"//g' \
+  's/, queue!~"[.][*]_dlq|async_calls_low_priority|handout_sync"//g' \
   "dlq and low-priority queues stay excluded from the age alert"
+
+# The handout_sync drain floor moved out of reach. Same mutation as the -600
+# control above, on the handout rule's own floor: the guard never matches, and
+# a healthy handout push to a large class pages again.
+assert_control "an unreachable handout_sync floor is caught by the handout release scenario" \
+  's/\* 60 < -1$/* 60 < -600/' \
+  "a 300-message handout release that drains does not page"
+
+# handout_sync dropped from the generic aging rule's exclusion. The generic rule
+# then pages for the same stuck message the handout rule pages for, on a 1200s
+# threshold that a single deadline-length job can reach on its own.
+assert_control "dropping the handout_sync exclusion is caught by the double-page scenario" \
+  's/|async_calls_low_priority|handout_sync"/|async_calls_low_priority"/g' \
+  "a stuck handout_sync message pages on the handout rule only"
 
 # The msg_id threshold, moved DOWN into the range ordinary traffic occupies.
 # 1e+5 is below the 137,603 the busiest prod sequence already holds, so the alert

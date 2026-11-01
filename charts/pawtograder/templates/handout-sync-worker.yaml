@@ -1,0 +1,332 @@
+{{- /*
+Handout sync worker: metrics Service + Deployment (docs/handout-sync-git-worker.md
+§3.1, §8.2, §8.5). The egress policy is in handout-sync-worker-networkpolicy.yaml,
+the PodDisruptionBudget in pdb.yaml, the ServiceMonitor in monitoring.yaml, and the
+queue alerts in prometheus-rules.yaml.
+
+This pod holds the GitHub App private key and the service-role key, and it runs
+git against repositories students control. Everything below that differs from
+the edge-functions pod follows from those two facts:
+
+  * securityContext is HARDCODED, not taken from values or the global default.
+    Spec §8.5 is the contract, and a values override that loosens it should
+    have to edit this file, where review will see it.
+  * no ServiceAccount token. The worker never talks to the Kubernetes API, so a
+    git exploit must not find credentials for it on disk.
+  * the environment is an ALLOWLIST of secretKeyRefs, never envFrom of the edge
+    functions Secret. That Secret carries Discord, Canvas, LLM, SMTP and other
+    credentials this process never reads; envFrom would hand all of them to it.
+*/ -}}
+{{- if .Values.handoutSyncWorker.enabled }}
+{{- $w := .Values.handoutSyncWorker -}}
+{{- $name := include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker") -}}
+
+{{- /* Coherence checks. Each of these renders a Deployment that starts and
+       looks healthy while doing the wrong thing, so they are refused here
+       rather than discovered in a sync that never converges. */ -}}
+{{- $vt := int $w.visibilityTimeoutSeconds -}}
+{{- $hb := int $w.heartbeatSeconds -}}
+{{- $deadline := int $w.jobDeadlineSeconds -}}
+{{- $grace := int $w.terminationGracePeriodSeconds -}}
+{{- if or (lt (int $w.concurrency) 1) (gt (int $w.concurrency) 8) -}}
+{{- fail (printf "handoutSyncWorker.concurrency=%v is outside 1-8. 0 reads nothing while /healthz stays green. Above 8, every job's git children share one pod's 1Gi memory limit and one /work emptyDir; add replicas instead." $w.concurrency) -}}
+{{- end -}}
+{{- if lt $vt 30 -}}
+{{- fail (printf "handoutSyncWorker.visibilityTimeoutSeconds=%d is below 30. The heartbeat extends it, but the first extension has to land before it lapses, and a Postgres round trip under load plus the poll interval needs that much slack." $vt) -}}
+{{- end -}}
+{{- if or (lt $hb 5) (gt (mul $hb 2) $vt) -}}
+{{- fail (printf "handoutSyncWorker.heartbeatSeconds=%d must be at least 5 and at most half of visibilityTimeoutSeconds (%d). Above half, ONE delayed set_vt lets the message become visible while its job is still pushing, and a second pod starts the same sync." $hb $vt) -}}
+{{- end -}}
+{{- if lt $deadline 60 -}}
+{{- fail (printf "handoutSyncWorker.jobDeadlineSeconds=%d is below 60. A depth-1 fetch of a large student repo alone can take that long, so every such sync would time out and land in the DLQ." $deadline) -}}
+{{- end -}}
+{{- if lt $grace (add $deadline 30) -}}
+{{- fail (printf "handoutSyncWorker.terminationGracePeriodSeconds=%d is below jobDeadlineSeconds (%d) + 30. On SIGTERM the worker lets in-flight jobs run to their deadline; a shorter grace period SIGKILLs them mid-push on every rollout and node drain." $grace $deadline) -}}
+{{- end -}}
+{{- if lt (int $w.maxReadCount) 1 -}}
+{{- fail (printf "handoutSyncWorker.maxReadCount=%v must be at least 1, or every message goes straight to handout_sync_dlq." $w.maxReadCount) -}}
+{{- end -}}
+{{- $evict := int $w.workEvictPercent -}}
+{{- if or (lt $evict 10) (gt $evict 90) -}}
+{{- fail (printf "handoutSyncWorker.workEvictPercent=%d is outside 10-90. Above 90 there is no headroom left for in-flight job scratch before the kubelet evicts the pod at sizeLimit; below 10 the template cache is evicted almost as soon as it is filled." $evict) -}}
+{{- end -}}
+{{- $workLimit := $w.workSizeLimit | toString -}}
+{{- $workKib := 0 -}}
+{{- if hasSuffix "Gi" $workLimit -}}{{- $workKib = mul (trimSuffix "Gi" $workLimit | int) 1048576 -}}
+{{- else if hasSuffix "Mi" $workLimit -}}{{- $workKib = mul (trimSuffix "Mi" $workLimit | int) 1024 -}}
+{{- else -}}
+{{- fail (printf "handoutSyncWorker.workSizeLimit=%q must be a whole number of Gi or Mi. It is passed to the worker as bytes for its eviction threshold, and the chart does not guess at other units." $workLimit) -}}
+{{- end -}}
+{{- /* Two repos at the ceiling must fit with the cache already at the eviction
+       mark; otherwise the size check passes a job that then fills /work. */ -}}
+{{- if gt (mul (int64 $w.maxRepoKib) 2) (div (mul $workKib (sub 100 $evict)) 100) -}}
+{{- fail (printf "handoutSyncWorker.maxRepoKib=%v x 2 does not fit in the %d%% of workSizeLimit (%s) left above the cache eviction mark. A student repo and a template both at the ceiling would fill /work, and the kubelet would evict the pod with every other job on it. Raise workSizeLimit or lower maxRepoKib." $w.maxRepoKib (sub 100 $evict) $workLimit) -}}
+{{- end -}}
+
+{{- $secretFor := dict
+      "github" ($w.secretSources.github | default .Values.secrets.names.edgeFunctions)
+      "sentry" ($w.secretSources.sentry | default .Values.secrets.names.edgeFunctions)
+      "redis"  ($w.secretSources.redis  | default .Values.secrets.names.edgeFunctions) -}}
+{{- $imageTag := $w.image.tag | default .Values.edgeFunctions.image.tag -}}
+{{- $image := dict "repository" $w.image.repository "tag" $imageTag "pullPolicy" $w.image.pullPolicy -}}
+# Headless: it exists only so the ServiceMonitor can find the pods. Nothing
+# calls the worker; it pulls its work from pgmq.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: metrics
+      port: {{ $w.metricsPort }}
+      targetPort: metrics
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
+  {{- if .Values.edgeFunctions.reloader.enabled }}
+  annotations:
+    # Same reason as the edge functions: the GitHub App key arrives in a Secret
+    # applied outside helm, and a rotation must roll this pod too.
+    reloader.stakater.com/auto: "true"
+  {{- end }}
+spec:
+  replicas: {{ include "pawtograder.maintenance.writerReplicas" (dict "ctx" . "replicas" $w.replicas) }}
+  {{- include "pawtograder.deploymentStrategy" (dict "component" $w) | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      # Pod-level, so it holds even if serviceAccount.automountToken is turned on
+      # for the shared ServiceAccount.
+      automountServiceAccountToken: false
+      # No Kubernetes service links: they would add a *_SERVICE_HOST/_PORT pair
+      # for every Service in the namespace to the environment, which is exactly
+      # the kind of unlisted variable the allowlist below exists to avoid.
+      enableServiceLinks: false
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- include "pawtograder.priorityClassName" (dict "ctx" . "component" $w) | nindent 6 }}
+      # UID/GID 10001 is the user the image creates (WORKER_UID in
+      # images/handout-sync-worker/Dockerfile). fsGroup makes the emptyDirs
+      # writable by it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: {{ $grace }}
+      containers:
+        - name: worker
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" $image) }}
+          imagePullPolicy: {{ $w.image.pullPolicy }}
+          # The image's ENTRYPOINT carries the `deno run` permission flags
+          # (--allow-run=git, --allow-read/--allow-write=/work,/tmp, no -A); see
+          # the Dockerfile. The chart deliberately does not override it, so the
+          # flags have one source.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: metrics
+              containerPort: {{ $w.metricsPort }}
+          env:
+            # ---- Non-secret configuration -----------------------------------
+            - name: SUPABASE_URL
+              value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
+            - name: HANDOUT_SYNC_CONCURRENCY
+              value: {{ $w.concurrency | quote }}
+            - name: HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS
+              value: {{ $w.visibilityTimeoutSeconds | quote }}
+            - name: HANDOUT_SYNC_HEARTBEAT_SECONDS
+              value: {{ $w.heartbeatSeconds | quote }}
+            - name: HANDOUT_SYNC_JOB_DEADLINE_SECONDS
+              value: {{ $w.jobDeadlineSeconds | quote }}
+            - name: HANDOUT_SYNC_MAX_READ_COUNT
+              value: {{ $w.maxReadCount | quote }}
+            - name: HANDOUT_SYNC_MAX_REPO_KIB
+              value: {{ $w.maxRepoKib | int64 | toString | quote }}
+            - name: HANDOUT_SYNC_WORK_DIR
+              value: /work
+            # Bytes, so the worker can export pawtograder_handout_sync_work_limit_bytes
+            # and compute its LRU threshold without parsing Kubernetes quantities.
+            - name: HANDOUT_SYNC_WORK_LIMIT_BYTES
+              value: {{ mul $workKib 1024 | int64 | toString | quote }}
+            - name: HANDOUT_SYNC_WORK_EVICT_PERCENT
+              value: {{ $w.workEvictPercent | quote }}
+            - name: HANDOUT_SYNC_METRICS_PORT
+              value: {{ $w.metricsPort | quote }}
+            # Sentry and lease identity, same values and same readers as the edge
+            # functions (_shared/SentryContext.ts, _shared/workerRun.ts).
+            - name: ENVIRONMENT
+              value: {{ .Values.global.environment | quote }}
+            - name: DEPLOY_KIND
+              value: {{ .Values.global.environment | quote }}
+            {{- with $imageTag }}
+            - name: RELEASE_VERSION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.global.deploy.branch }}
+            - name: DEPLOY_BRANCH
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.global.deploy.pr }}
+            - name: DEPLOY_PR
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.global.deploy.commit }}
+            - name: GIT_COMMIT_SHA
+              value: {{ . | quote }}
+            {{- end }}
+            # ---- Secrets: the allowlist -------------------------------------
+            # Every key processEnvelope()'s module graph reads from Deno.env at
+            # runtime, and no other. Derived by walking the imports of
+            # github-async-worker/index.ts. Keys that graph reads but this pod
+            # deliberately does NOT get:
+            #   GITHUB_OAUTH_CLIENT_ID/SECRET, GITHUB_WEBHOOK_SECRET
+            #       read by the module-level `new App(...)` in GitHubWrapper.ts,
+            #       but only used for OAuth and webhook verification. App
+            #       construction succeeds without them (checked in the image).
+            #   END_TO_END_SECRET, E2E_ENABLE, PAWTOGRADER_GITHUB_STUB*
+            #       test-only bypasses (GitHubWrapper.ts, e2eGithubGuard.ts).
+            #   SUPABASE_ANON_KEY, EDGE_FUNCTION_NAME
+            #       read by HandlerUtils.ts request handlers, which the worker
+            #       does not serve.
+            #   EDGE_FUNCTION_SECRET, EDGE_WORKER_TIMEOUT_MS
+            #       read only by the edge worker's HTTP entry and drain loop in
+            #       github-async-worker/index.ts, not by processEnvelope().
+            #   SUPABASE_DB_URL / POSTGRES_PASSWORD
+            #       nothing in the graph opens a Postgres connection; all data
+            #       access is PostgREST through Kong.
+            - name: SUPABASE_SERVICE_ROLE_KEY   # every createClient() in the graph
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+            - name: GITHUB_APP_ID               # GitHubWrapper.ts App, GitHubSyncHelpers.ts limiter id
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.github }}
+                  key: GITHUB_APP_ID
+            - name: GITHUB_PRIVATE_KEY_STRING   # GitHubWrapper.ts App; required at import time
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.github }}
+                  key: GITHUB_PRIVATE_KEY_STRING
+            - name: GITHUB_APP_SLUG             # GitHubWrapper.ts getAppSlug(); falls back to GET /app
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.github }}
+                  key: GITHUB_APP_SLUG
+                  optional: true
+            - name: SENTRY_DSN                  # SentryInit.ts; no-op when absent
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.sentry }}
+                  key: SENTRY_DSN
+                  optional: true
+            {{- if ne (.Values.redis.provider | default "external") "external" }}
+            # Redis.ts. REQUIRED, as for the edge functions: without it the
+            # per-org GitHub limiters fall back to per-process Bottleneck and
+            # stop coordinating with the edge tier, which shares those limits.
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pawtograder-redis
+                  key: REDIS_URL
+            {{- else }}
+            # Redis.ts, provider=external: whichever of REDIS_URL or the Upstash
+            # REST pair the install provides.
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.redis }}
+                  key: REDIS_URL
+                  optional: true
+            - name: UPSTASH_REDIS_REST_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.redis }}
+                  key: UPSTASH_REDIS_REST_URL
+                  optional: true
+            - name: UPSTASH_REDIS_REST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretFor.redis }}
+                  key: UPSTASH_REDIS_REST_TOKEN
+                  optional: true
+            {{- end }}
+            {{- with $w.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # /healthz on the metrics port. Readiness gates nothing that routes
+          # traffic (the Service is headless and only scraped); it is there so
+          # a rollout waits for a pod that has actually started polling.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # Generous on purpose: a restart abandons in-flight jobs to the
+          # visibility timeout. The worker's /healthz should report the poll
+          # loop, not job progress, so a 14-minute push is not "unhealthy".
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml $w.resources | nindent 12 }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Node disk, not memory: a tmpfs would count the template cache against
+        # the 1Gi memory limit.
+        - name: work
+          emptyDir:
+            sizeLimit: {{ $w.workSizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ $w.tmpSizeLimit }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" $w)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" $w)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- include "pawtograder.componentAffinity" (dict "ctx" . "component" $w "name" "handout-sync-worker") | nindent 6 }}
+{{- end }}

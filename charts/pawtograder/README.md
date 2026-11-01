@@ -679,6 +679,28 @@ realtime:
   spreadAcrossNodes: true # podAntiAffinity hint
 ```
 
+## Handout sync worker
+
+`handoutSyncWorker` (default off) runs the git-based handout sync from
+[`docs/handout-sync-git-worker.md`](../../docs/handout-sync-git-worker.md) as its own
+Deployment: plain Deno plus a pinned git, built from
+`images/handout-sync-worker/Dockerfile`. It differs from the edge functions in
+ways an operator has to know about:
+
+- Its environment is an allowlist of `secretKeyRef`s, not `envFrom`. If the
+  GitHub App keys live outside `pawtograder-edge-functions`, name that Secret in
+  `handoutSyncWorker.secretSources.github`.
+- It ships an egress policy. The plain `NetworkPolicy` form needs
+  `handoutSyncWorker.networkPolicy.clusterCIDRs`; the `CiliumNetworkPolicy` form
+  (`networkPolicy.cilium.enabled`) narrows HTTPS to GitHub by FQDN instead.
+  Any other HTTPS host the worker must reach (Sentry, Upstash) goes in
+  `cilium.extraFQDNs`.
+- `/work` is a 20Gi `emptyDir` per pod and the pod requests that much
+  `ephemeral-storage`, so nodes need the disk.
+- SIGTERM lets in-flight syncs run to their 15-minute deadline, so the grace
+  period is 960s, longer than `scripts/maintenance.sh`'s default 900s
+  `DRAIN_TIMEOUT_SECONDS`.
+
 ## Monitoring (metrics + logs)
 
 Gated behind `monitoring.enabled` (default `false`). When enabled, the
@@ -708,6 +730,7 @@ Prometheus or Grafana itself.
 | supavisor        | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:SUPAVISOR_METRICS_BEARER` |
 | web (Next.js)    | `:3000 /api/metrics`     | bearer in `pawtograder-jwt:METRICS_SCRAPE_TOKEN` |
 | metrics-leader   | `:3000 /api/metrics`     | same bearer (only when `web.metricsLeader.enabled`) |
+| handout-sync-worker | `:9464 /metrics`       | none: no Kong route, no Ingress (only when `handoutSyncWorker.enabled`) |
 
 ### Workflow metrics and the metrics leader
 

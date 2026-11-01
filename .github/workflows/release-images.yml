@@ -1,9 +1,10 @@
 name: Release images
 
-# Builds and pushes the three OCI images that the Helm chart consumes:
-#   - web              (Next.js)
-#   - edge-functions   (Deno runtime + supabase/functions/)
-#   - migrations       (postgres-client + supabase/migrations/)
+# Builds and pushes the OCI images that the Helm chart consumes, including:
+#   - web                  (Next.js)
+#   - edge-functions       (Deno runtime + supabase/functions/)
+#   - migrations           (postgres-client + supabase/migrations/)
+#   - handout-sync-worker  (Deno + git; skipped until its entrypoint exists)
 # and publishes the chart itself as an OCI artifact.
 #
 # Triggers:
@@ -391,6 +392,68 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.version }}
           done
 
+  # Deno + pinned git for the handout-sync-worker Deployment
+  # (docs/handout-sync-git-worker.md §3.1). Built from the same commit as
+  # edge-functions because the worker imports processEnvelope() and _shared/;
+  # the chart defaults its tag to edgeFunctions.image.tag for the same reason.
+  #
+  # The image's entrypoint, supabase/functions/handout-sync-worker/main.ts,
+  # lands in a later change (WP5 of docs/handout-sync-git-build-plan.md) and the
+  # Dockerfile refuses to build without it. Until then every step after the
+  # check is skipped and the job succeeds, so deploy-staging and publish-chart,
+  # which need it, are not held up. The gate is per step, not a job-level `if:`,
+  # because a skipped job also skips every job that needs it.
+  build-handout-sync-worker:
+    needs: meta
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check for the worker entrypoint
+        id: entry
+        run: |
+          if [ -f supabase/functions/handout-sync-worker/main.ts ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::supabase/functions/handout-sync-worker/main.ts is not in this commit; skipping the handout-sync-worker image"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.entry.outputs.present == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.entry.outputs.present == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push handout-sync-worker image
+        if: steps.entry.outputs.present == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/handout-sync-worker/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/handout-sync-worker:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=handout-sync-worker
+          cache-to: type=gha,scope=handout-sync-worker,mode=max
+
+      - name: Tag additional refs
+        if: steps.entry.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/handout-sync-worker:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/handout-sync-worker:${{ needs.meta.outputs.version }}
+          done
+
   build-migrations:
     needs: meta
     runs-on: pawtograder-ci
@@ -518,7 +581,7 @@ jobs:
     # by tag only, so it's fine to publish the chart without a same-tag
     # web image; consumers of the chart override web.image.tag to a
     # workflow_dispatch-built image keyed to their environment.
-    needs: [meta, build-edge-functions, build-migrations, build-backup]
+    needs: [meta, build-edge-functions, build-migrations, build-backup, build-handout-sync-worker]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -568,7 +631,16 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup]
+    needs:
+      [
+        meta,
+        build-web,
+        build-edge-functions,
+        build-migrations,
+        build-maintenance,
+        build-backup,
+        build-handout-sync-worker
+      ]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable

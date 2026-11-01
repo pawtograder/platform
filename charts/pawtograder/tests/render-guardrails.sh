@@ -920,6 +920,79 @@ assert_rendered_contains "smtp-relay does not automount the SA token" \
   --set auth.smtp.enabled=true --set auth.smtp.relay.enabled=true \
   --set auth.smtp.relay.downstream=lxc.example.edu:2525
 
+# ---------------------------------------------------------------------------
+# Handout sync worker (templates/handout-sync-worker*.yaml). This pod holds the
+# GitHub App private key and the service-role key while running git against
+# student-controlled repositories, so its spec §8.5 hardening is pinned here
+# rather than trusted to survive edits. Each property below is one line in the
+# manifest that a refactor could drop without anything else failing.
+# ---------------------------------------------------------------------------
+echo "== handout sync worker: hardening, env allowlist, egress =="
+HSW=(--set handoutSyncWorker.enabled=true
+     --set 'handoutSyncWorker.networkPolicy.clusterCIDRs={10.244.0.0/16,10.96.0.0/12}')
+HSW_T=templates/handout-sync-worker.yaml
+HSW_NP=templates/handout-sync-worker-networkpolicy.yaml
+
+# Off by default: the template renders nothing at all, which --show-only
+# reports as an error, so check the full render instead.
+if helm template t "$CHART" "${BASE[@]}" 2>"$ERRFILE" | grep -q 'component: handout-sync-worker'; then
+  echo "FAIL [worker is off by default]: a default render contains handout-sync-worker objects"
+  FAILED=1
+else
+  echo "ok   [worker is off by default]"
+fi
+for want in "automountServiceAccountToken: false" "readOnlyRootFilesystem: true" \
+            "allowPrivilegeEscalation: false" "runAsNonRoot: true" "runAsUser: 10001" \
+            "type: RuntimeDefault" 'drop: ["ALL"]' "sizeLimit: 20Gi" "enableServiceLinks: false" \
+            "terminationGracePeriodSeconds: 960" "path: /healthz"; do
+  assert_rendered_contains "worker renders: $want" "$HSW_T" "$want" "${HSW[@]}"
+done
+# The allowlist is the point: envFrom would hand the pod every credential in
+# the edge functions Secret (Discord, Canvas, LLM, SMTP, ...).
+assert_rendered_lacks "worker never envFroms a Secret" "$HSW_T" "envFrom:" "${HSW[@]}"
+for gone in GITHUB_OAUTH_CLIENT_SECRET GITHUB_WEBHOOK_SECRET END_TO_END_SECRET \
+            SUPABASE_DB_URL POSTGRES_PASSWORD SUPABASE_ANON_KEY; do
+  assert_rendered_lacks "worker env omits $gone" "$HSW_T" "name: $gone" "${HSW[@]}"
+done
+assert_rendered_contains "worker image tag follows the edge functions tag" "$HSW_T" \
+  "handout-sync-worker:v1.0.0" "${HSW[@]}"
+assert_rendered_contains "worker is a maintenance writer (replicas 0 under the posture)" "$HSW_T" \
+  "replicas: 0" "${HSW[@]}" --set maintenance.enabled=true --set maintenance.active=true
+
+assert_refused "worker refuses a grace period shorter than the job deadline" \
+  "terminationGracePeriodSeconds=600 is below jobDeadlineSeconds" \
+  "${HSW[@]}" --set handoutSyncWorker.terminationGracePeriodSeconds=600
+assert_refused "worker refuses a heartbeat that cannot miss a beat" \
+  "must be at least 5 and at most half of visibilityTimeoutSeconds" \
+  "${HSW[@]}" --set handoutSyncWorker.heartbeatSeconds=90
+assert_refused "worker refuses a size ceiling /work cannot hold twice" \
+  "does not fit in the 30% of workSizeLimit" \
+  "${HSW[@]}" --set handoutSyncWorker.workSizeLimit=10Gi
+assert_refused "worker refuses a floating image tag in production" \
+  "handoutSyncWorker.image.tag=\"main-latest\" is a floating tag" \
+  "${HSW[@]}" --set handoutSyncWorker.image.tag=main-latest
+
+# Egress (D2). Plain form: 443 only to addresses outside the cluster ranges.
+assert_refused "plain egress policy refuses an empty clusterCIDRs" \
+  "handoutSyncWorker.networkPolicy.clusterCIDRs is empty" \
+  --set handoutSyncWorker.enabled=true
+assert_rendered_contains "plain egress policy excepts the cluster ranges from 443" "$HSW_NP" \
+  "10.96.0.0/12" "${HSW[@]}"
+assert_rendered_contains "plain egress policy is egress-only" "$HSW_NP" \
+  'policyTypes: ["Egress"]' "${HSW[@]}"
+# Cilium form replaces, never joins, the plain one: allow rules union, so the
+# plain policy's wide 443 rule would make the FQDN list meaningless.
+assert_rendered_contains "cilium egress policy narrows 443 to GitHub by FQDN" "$HSW_NP" \
+  'matchName: "codeload.github.com"' --set handoutSyncWorker.enabled=true \
+  --set handoutSyncWorker.networkPolicy.cilium.enabled=true
+assert_rendered_lacks "cilium mode renders no plain NetworkPolicy beside it" "$HSW_NP" \
+  "kind: NetworkPolicy" --set handoutSyncWorker.enabled=true \
+  --set handoutSyncWorker.networkPolicy.cilium.enabled=true
+
+# The generic aging rule must exclude handout_sync, or one stuck sync pages twice.
+assert_rendered_contains "handout_sync has its own aging rule" templates/prometheus-rules.yaml \
+  'queue="handout_sync"}[15m])) * 60 < -1' \
+  --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 echo "== edge-function envFrom Secrets are never mandatory =="
 assert_edge_envfrom_optional "edge-functions deployment envFrom is optional" \
   templates/edge-functions.yaml
@@ -1863,6 +1936,8 @@ assert_alert_uses_unless "aging alert subtracts the draining case with unless" \
   PawtograderQueueOldestMessageAging
 assert_alert_uses_unless "stuck alert subtracts the draining case with unless" \
   PawtograderAsyncQueueStuck
+assert_alert_uses_unless "handout_sync aging alert subtracts the draining case with unless" \
+  PawtograderHandoutSyncQueueAging
 
 # The guard is only a guard if it reads the labelled depth gauge. The per-queue
 # depth gauges (pawtograder_async_queue_size and friends) are separate metric
@@ -1871,7 +1946,7 @@ assert_alert_uses_unless "stuck alert subtracts the draining case with unless" \
 # match anything.
 assert_rendered_contains "aging guard reads the labelled depth gauge" \
   templates/prometheus-rules.yaml \
-  'deriv(pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}[15m])' \
+  'deriv(pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority|handout_sync"}[15m])' \
   --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 assert_rendered_contains "stuck guard reads the labelled depth gauge" \
   templates/prometheus-rules.yaml \
@@ -1903,7 +1978,7 @@ assert_rendered_contains "drain floor is configurable" \
 # nothing if they diverge.
 assert_rendered_contains "aging alert still excludes DLQs and low-priority on both sides" \
   templates/prometheus-rules.yaml \
-  'pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority"}' \
+  'pawtograder_queue_depth{namespace="default", queue!~".*_dlq|async_calls_low_priority|handout_sync"}' \
   --namespace default --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 
 # The `queue` label values in metrics/index.ts must be IDENTICAL between the two

@@ -1,0 +1,174 @@
+{{- /*
+Egress policy for the handout sync worker (docs/handout-sync-git-worker.md §8.5).
+
+The worker runs git against student-controlled repositories while holding the
+GitHub App private key and the service-role key. If a git parsing bug is ever
+exploited, this policy is what decides where that process can send them. It may
+reach exactly:
+
+  DNS     kube-dns, port 53
+  Kong    this release's Kong pods, for PostgREST (SUPABASE_URL)
+  Redis   the Redis behind REDIS_URL (in-release or the shared one)
+  GitHub  HTTPS, port 443
+
+Ingress is NOT handled here. The release-wide policies in networkpolicy.yaml
+(networkPolicy.enabled) already select this pod by the release labels:
+default-deny, plus same-release and monitoring access to the metrics port.
+
+Two forms, never both (decision D2 in docs/handout-sync-git-build-plan.md):
+
+  plain NetworkPolicy (default)
+      Cannot match hostnames, so "GitHub" is "443 to anything in externalCIDRs
+      outside clusterCIDRs". That stops lateral movement inside the cluster
+      but not exfiltration to an arbitrary internet host on 443.
+  CiliumNetworkPolicy (cilium.enabled)
+      Same rules, with HTTPS narrowed by toFQDNs to the GitHub hosts. Allow
+      rules from different policies are a union, so the plain policy is NOT
+      rendered alongside it: its wide 443 rule would cancel the narrowing.
+
+Kong and Redis are matched on pod labels and the POD port, not the Service
+port: both Cilium and Calico evaluate egress after the ClusterIP is translated
+to a pod address.
+*/ -}}
+{{- if and .Values.handoutSyncWorker.enabled .Values.handoutSyncWorker.networkPolicy.enabled }}
+{{- $np := .Values.handoutSyncWorker.networkPolicy -}}
+{{- $ns := .Release.Namespace -}}
+{{- $provider := .Values.redis.provider | default "external" -}}
+{{- if and (not $np.cilium.enabled) (empty $np.clusterCIDRs) }}
+{{- fail "handoutSyncWorker.networkPolicy.clusterCIDRs is empty. The HTTPS rule is \"443 to externalCIDRs EXCEPT the cluster's own ranges\", so with no exceptions the worker could reach every in-cluster HTTPS endpoint (the Kubernetes API, Studio, other tenants). List the pod and service CIDRs (and the node range if in-cluster services answer there), or use the CiliumNetworkPolicy form (handoutSyncWorker.networkPolicy.cilium.enabled), which needs no CIDRs, or set handoutSyncWorker.networkPolicy.enabled=false to run without egress restrictions." }}
+{{- end }}
+{{- $kongLabels := include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "kong") | fromYaml -}}
+{{- $workerLabels := include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "handout-sync-worker") | fromYaml -}}
+{{- $redisPort := int $np.redis.port -}}
+{{- $redisNs := $np.redis.namespace -}}
+{{- $redisLabels := $np.redis.podLabels -}}
+{{- if eq $provider "internal" }}
+{{- $redisNs = $ns -}}
+{{- $redisLabels = include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "redis") | fromYaml -}}
+{{- $redisPort = int (.Values.redis.internal.service.port | default 6379) -}}
+{{- end }}
+{{- if not $np.cilium.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker-egress") }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $workerLabels | nindent 6 }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.dns.podLabels | nindent 14 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $kongLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.kong.service.port }}, protocol: TCP }
+    {{- if ne $provider "external" }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $redisNs }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $redisLabels | nindent 14 }}
+      ports:
+        - { port: {{ $redisPort }}, protocol: TCP }
+    {{- end }}
+    # GitHub (and Upstash or an external Sentry when used), by elimination.
+    # An ipBlock's `except` must lie inside its `cidr`, so each external range
+    # only carries the cluster ranges of its own address family.
+    - to:
+        {{- range $ext := $np.externalCIDRs }}
+        {{- $v6 := contains ":" $ext }}
+        - ipBlock:
+            cidr: {{ $ext }}
+            {{- $except := list }}
+            {{- range $c := $np.clusterCIDRs }}
+            {{- if eq (contains ":" $c) $v6 }}{{- $except = append $except $c }}{{- end }}
+            {{- end }}
+            {{- with $except }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+      ports:
+        - { port: 443, protocol: TCP }
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- else }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "handout-sync-worker-egress") }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "handout-sync-worker") | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- toYaml $workerLabels | nindent 6 }}
+  egress:
+    # The DNS rule does double duty: it allows lookups, and the `dns` L7 rule
+    # routes them through Cilium's DNS proxy, which is how toFQDNs learns the
+    # IPs github.com resolved to. Without it toFQDNs matches nothing.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $np.dns.namespace }}
+            {{- range $k, $v := $np.dns.podLabels }}
+            {{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            - { port: "53", protocol: ANY }
+          rules:
+            dns:
+              {{- range $np.cilium.dnsMatchPatterns }}
+              - matchPattern: {{ . | quote }}
+              {{- end }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $ns }}
+            {{- range $k, $v := $kongLabels }}
+            {{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            - { port: {{ .Values.kong.service.port | quote }}, protocol: TCP }
+    {{- if ne $provider "external" }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $redisNs }}
+            {{- range $k, $v := $redisLabels }}
+            {{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            - { port: {{ $redisPort | quote }}, protocol: TCP }
+    {{- end }}
+    - toFQDNs:
+        {{- range (concat $np.cilium.fqdns $np.cilium.extraFQDNs) }}
+        - matchName: {{ . | quote }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - { port: "443", protocol: TCP }
+    {{- with $np.cilium.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}
