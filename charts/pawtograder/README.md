@@ -700,7 +700,7 @@ Clients are registered by an admin; dynamic registration stays off. To turn this
 
 `DISABLE_REGISTRATION: true` doesn't block these sign-ins: Forgejo gates OAuth auto-registration only on `ENABLE_AUTO_REGISTRATION`. GoTrue requires PKCE on every authorization request. Forgejo and Coder both send it, but a Forgejo login source added with `forgejo admin auth add-oauth` against a running server sends no PKCE on its first sign-in. The subchart's init container adds the source before Forgejo starts, so this chart avoids that.
 
-ID tokens carry `sub`, `email`, `email_verified` and `name`. Pawtograder users have no name in their auth metadata, so `name` is the email. Course roles aren't in the token, so they can't map to Forgejo teams or Coder groups yet.
+ID tokens carry `sub`, `email`, `email_verified` and `name`. Pawtograder users have no name in their auth metadata, so `name` is the email. The token has no `nickname` or `preferred_username`, so the example sets `oauth2_client.USERNAME: userid` and Forgejo names each account after the user's `sub`. `USERNAME: email` takes the part before `@`, so `alex@school-a.edu` and `alex@school-b.edu` both get `alex`; with `ACCOUNT_LINKING: disabled`, the second one's first sign-in fails with a 500. Course roles aren't in the token, so they can't map to Forgejo teams or Coder groups yet.
 
 ### NetworkPolicy
 

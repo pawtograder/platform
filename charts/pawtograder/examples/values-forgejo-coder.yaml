@@ -36,7 +36,7 @@ forgejo:
     config:
       oauth2_client:
         ENABLE_AUTO_REGISTRATION: true
-        USERNAME: email
+        USERNAME: userid
         ACCOUNT_LINKING: disabled
       storage:
         STORAGE_TYPE: minio
