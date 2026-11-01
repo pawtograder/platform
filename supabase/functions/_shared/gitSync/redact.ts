@@ -35,9 +35,15 @@ const PATTERNS: ReadonlyArray<[RegExp, string]> = [
  *
  * A hand-written scan, not a regex. The obvious pattern (`[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@`) retries
  * the scheme from every start position, which is quadratic: 160 KB of `a.a.a.` took 14 s, and
- * stderr is capped at 1 MiB. Here each `://` is found once, and the forward scan from it stops at
- * the first `@`, `/` or whitespace. The next `://` contains a `/`, so no character is scanned twice.
- * Any scheme is covered, since the scheme does not matter for whether userinfo is a secret.
+ * stderr is capped at 1 MiB. Here the forward scan from each `://` stops at the first `@`, `/` or
+ * whitespace, and the search for the next `://` resumes just after the current one. Resuming at the
+ * stop position instead would miss a separator whose `:` the scan already passed, as in
+ * `https://a.com|https://bob:pw@host`.
+ *
+ * Still linear: any `://` inside the scanned span would have stopped the scan at its `/`, so the
+ * next separator starts at or after the stop position and forward scans never overlap. Each
+ * character is read at most twice, once by a forward scan and once by `indexOf`. Any scheme is
+ * covered, since the scheme does not matter for whether userinfo is a secret.
  */
 function redactUrlUserinfo(text: string): string {
   let out = "";
@@ -58,7 +64,7 @@ function redactUrlUserinfo(text: string): string {
       out += text.slice(copied, start) + REDACTED;
       copied = i;
     }
-    from = Math.max(i, start);
+    from = start;
   }
   return copied === 0 ? text : out + text.slice(copied);
 }
