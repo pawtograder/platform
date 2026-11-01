@@ -601,7 +601,8 @@ class Job implements SyncJob {
             parents: [parent],
             message,
             identity: this.ctx.identity,
-            date: analysis.handoutCommitDate
+            // The explicit epoch form: git refuses a bare `<secs> <tz>` outside ~1973-2100.
+            date: `@${analysis.handoutCommitDate}`
           },
           this.git
         )
