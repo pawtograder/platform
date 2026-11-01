@@ -219,6 +219,10 @@ Carried over from the WP4 audit:
   its own row type.
 - Read the env knobs WP6 defined (`HANDOUT_SYNC_*`, including
   `HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS`) and emit the metric names in WP6's table.
+- Exercise the image's Deno permissions once `main.ts` exists. Sentry's integrations may need
+  `--allow-read=/app` and more `--allow-sys`. `--allow-net` can be narrowed per release, with
+  the chart passing Kong, Redis, the GitHub hosts and the metrics listener; that constrains JS
+  only, not git.
 - `/healthz` reports whether the poll loop is alive, not job progress. Set V8's
   `--max-old-space-size` inside the 1 Gi limit.
 
@@ -331,6 +335,12 @@ These are spec §9.3, run with the git engine actually pushing for one staging c
    - A template set to a grader repo is refused with `template_is_solution_repo`.
 
 ### S4. Prod shadow **[Jon]**
+
+Before this step: the real prod overlay (`prod-charts/values/values-prod.yaml`) pulls every
+image from the Khoury Harbor registry, and `release-images.yml` pushes the worker image only to
+ghcr. So mirror the worker image into Harbor the way the other images get there, and set
+`handoutSyncWorker.image.repository` in the overlay. Replace the example's placeholder CIDRs with
+the cluster's real ones (D2).
 
 Deploy to prod with replicas at 2 and set `{"engine": "rest", "shadow": true}`. Run the S2
 comparison on 7 days of prod traffic.
