@@ -363,7 +363,7 @@ begin
     perform pg_temp.expect('7 ' || v_role || ': select refused', '42501', v_outcome);
     begin
       perform set_config('role', v_role, true);
-      insert into public.handout_sync_shadow_results (repository_id, to_sha) values (910001, 'x');
+      insert into public.handout_sync_shadow_results (msg_id, repository_id, to_sha) values (1, 910001, 'x');
       v_outcome := 'allowed';
     exception when others then
       v_outcome := sqlstate;
@@ -382,11 +382,37 @@ begin
   -- 20261015120000), so read into a variable and switch back before recording.
   perform set_config('role', 'service_role', true);
   insert into public.handout_sync_shadow_results
-    (repository_id, to_sha, from_sha, synced_repo_sha, predicted_tree, predicted_commit_parent, unresolved)
-  values (910001, 'sha-v2', 'sha-v1', 'repo-head-1', 'tree-abc', 'repo-head-1', '["src/Main.java"]');
+    (msg_id, repository_id, to_sha, from_sha, synced_repo_sha, predicted_tree, predicted_commit_parent, unresolved)
+  values (77001, 910001, 'sha-v2', 'sha-v1', 'repo-head-1', 'tree-abc', 'repo-head-1', '["src/Main.java"]');
   v_outcome := (select predicted_tree from public.handout_sync_shadow_results where repository_id = 910001);
   perform set_config('role', 'postgres', true);
   perform pg_temp.expect('7 service_role: insert and read back', 'tree-abc', v_outcome);
+
+  -- A redelivered shadow message: the worker's ON CONFLICT (msg_id) DO NOTHING insert is a no-op
+  -- and keeps the first prediction.
+  perform set_config('role', 'service_role', true);
+  insert into public.handout_sync_shadow_results (msg_id, repository_id, to_sha, predicted_tree)
+  values (77001, 910001, 'sha-v2', 'tree-from-redelivery')
+  on conflict (msg_id) do nothing;
+  v_outcome := (select count(*)::text || ':' || min(predicted_tree)
+                  from public.handout_sync_shadow_results where msg_id = 77001);
+  perform set_config('role', 'postgres', true);
+  perform pg_temp.expect('7 redelivery with ON CONFLICT (msg_id) DO NOTHING: still one row, first prediction kept',
+    '1:tree-abc', v_outcome);
+
+  -- Without ON CONFLICT the duplicate is refused outright.
+  begin
+    perform set_config('role', 'service_role', true);
+    insert into public.handout_sync_shadow_results (msg_id, repository_id, to_sha) values (77001, 910001, 'sha-v2');
+    v_outcome := 'inserted';
+  exception when others then
+    v_outcome := sqlstate;
+  end;
+  perform set_config('role', 'postgres', true);
+  perform pg_temp.expect('7 plain duplicate msg_id insert fails with 23505', '23505', v_outcome);
+  perform pg_temp.expect('7 msg_id is NOT NULL', 'true',
+    (select attnotnull::text from pg_attribute
+      where attrelid = 'public.handout_sync_shadow_results'::regclass and attname = 'msg_id'));
 end $$;
 
 -- delete_assignment_with_all_data ------------------------------------------------------------

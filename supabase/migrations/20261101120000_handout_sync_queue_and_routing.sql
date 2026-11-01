@@ -1002,6 +1002,10 @@ COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boole
 -- against predicted_tree. unresolved is the list of paths the engine would leave to the student;
 -- error is set instead when the plan itself failed.
 --
+-- msg_id is the handout_sync message the run came from, and it is unique: the worker writes with
+-- `insert ... on conflict (msg_id) do nothing`, so a shadow message that is redelivered (its pod died
+-- after the insert but before the archive) cannot record a second prediction for the same sync.
+--
 -- NO FOREIGN KEY TO repositories, deliberately. Foreign keys into repositories are NO ACTION, never
 -- CASCADE, so that a delete path which misses a child table fails rather than destroying graded
 -- work (fail-safe deletes, PR #1175 and scripts/CheckDeletePaths.ts there). A NO ACTION key here
@@ -1020,6 +1024,7 @@ COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boole
 -- anon and authenticated full access to new tables in public, so those are revoked explicitly.
 create table if not exists public.handout_sync_shadow_results (
     id bigint generated always as identity primary key,
+    msg_id bigint not null,
     repository_id bigint not null,
     to_sha text not null,
     from_sha text,
@@ -1028,7 +1033,8 @@ create table if not exists public.handout_sync_shadow_results (
     predicted_commit_parent text,
     unresolved jsonb,
     error text,
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    constraint handout_sync_shadow_results_msg_id_key unique (msg_id)
 );
 
 create index if not exists handout_sync_shadow_results_repository_to_sha_idx
@@ -1042,6 +1048,8 @@ grant select, insert, delete on table public.handout_sync_shadow_results to serv
 comment on table public.handout_sync_shadow_results is
     'What the git handout-sync engine would have built for a sync the REST path ran, recorded by '
     'plan-only shadow runs (system_settings handout_sync_engine shadow=true). from_sha and '
-    'synced_repo_sha are the inputs as read when the sync was queued. No foreign key to repositories '
+    'synced_repo_sha are the inputs as read when the sync was queued. msg_id (the handout_sync '
+    'message) is unique, so a redelivered shadow message cannot add a second row: insert with '
+    'on conflict (msg_id) do nothing. No foreign key to repositories '
     'on purpose: these are diagnostic rows and must not block or be removed by a repository delete. '
     'service_role only.';

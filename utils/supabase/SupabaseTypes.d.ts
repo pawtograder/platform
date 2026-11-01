@@ -4578,6 +4578,7 @@ export type Database = {
           error: string | null;
           from_sha: string | null;
           id: number;
+          msg_id: number;
           predicted_commit_parent: string | null;
           predicted_tree: string | null;
           repository_id: number;
@@ -4590,6 +4591,7 @@ export type Database = {
           error?: string | null;
           from_sha?: string | null;
           id?: never;
+          msg_id: number;
           predicted_commit_parent?: string | null;
           predicted_tree?: string | null;
           repository_id: number;
@@ -4602,6 +4604,7 @@ export type Database = {
           error?: string | null;
           from_sha?: string | null;
           id?: never;
+          msg_id?: number;
           predicted_commit_parent?: string | null;
           predicted_tree?: string | null;
           repository_id?: number;
