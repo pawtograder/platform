@@ -12,8 +12,9 @@
 import { assert, assertEquals, assertInstanceOf, assertRejects } from "jsr:@std/assert@^1";
 import type { UnresolvedReason } from "../syncConflictGuard.ts";
 import {
-  type ClassifiedFile,
+  HandoutBaseUnfetchableError,
   HandoutRevisionUnfetchableError,
+  readLocalRef,
   type SyncAnalysis,
   type SyncInput,
   type SyncJobContext,
@@ -24,13 +25,20 @@ import { GitSyncError, GitSyncTerminalError, InvalidSyncInputError } from "./err
 import { runGit } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 import {
+  binary,
   fixtureGit,
   type FixtureRepo,
   GitFixture,
   listTree,
+  omit,
+  R,
   shouldSkipRealGit,
   type Snapshot,
-  text
+  spawnsTo,
+  T,
+  text,
+  verdicts,
+  world
 } from "./testFixtures.ts";
 import { EMPTY_TREE_SHA } from "./validate.ts";
 import { escapePath, parseCommitHeader, parseDiffTreeRaw, parseLsTree, parseNumstatBinary } from "./gitOutput.ts";
@@ -43,55 +51,6 @@ function gitTest(name: string, fn: () => Promise<void>): void {
   Deno.test({ name, ignore: SKIP, fn });
 }
 
-const T = "org/handout";
-const R = "org/student-a";
-
-/** Bytes git's numstat reads as binary: a NUL in the first 8000 bytes. */
-function binary(seed: number, length = 64): Uint8Array {
-  const out = new Uint8Array(length);
-  for (let i = 0; i < length; i++) out[i] = (i * 31 + seed) & 0xff;
-  out[0] = 0;
-  return out;
-}
-
-interface World {
-  fx: GitFixture;
-  template: FixtureRepo;
-  student: FixtureRepo;
-  F: string;
-  H: string;
-  /** The student's commit at the last sync. */
-  S: string;
-  input: SyncInput;
-}
-
-/**
- * The common shape: the handout goes from `before` to `after` (H's parent is F); the student repo
- * starts from the handout's `before` contents (GitHub's "generate from template" makes a new root
- * commit with the same tree) and, when `student` is given, commits that snapshot on top. `S` is
- * the student's latest commit, so everything in `student` predates the last sync and is theirs.
- */
-async function world(
-  fx: GitFixture,
-  spec: { before: Snapshot; after: Snapshot; student?: (before: Snapshot) => Snapshot }
-): Promise<World> {
-  const template = await fx.createRepo(T);
-  const F = await template.commitOn("main", spec.before, { message: "handout v1\n" });
-  const H = await template.commitOn("main", spec.after, { message: "handout v2\n", date: "1700000500 -0500" });
-  const student = await fx.createRepo(R);
-  let S = await student.commitOn("main", spec.before, { message: "Initial commit\n" });
-  if (spec.student) S = await student.commitOn("main", spec.student({ ...spec.before }), { message: "student work\n" });
-  return {
-    fx,
-    template,
-    student,
-    F,
-    H,
-    S,
-    input: { templateRepo: T, fromSha: F, toSha: H, syncedRepoSha: S, repoFullName: R }
-  };
-}
-
 async function analyze(
   fx: GitFixture,
   input: SyncInput,
@@ -100,23 +59,6 @@ async function analyze(
   const ctx = fx.jobContext(overrides);
   const analysis = await withSyncJob(ctx, (job) => job.analyze(input));
   return { ...analysis, ctx };
-}
-
-/** `path -> "status reason action"`, the compact form the policy cases assert against. */
-function verdicts(files: readonly ClassifiedFile[]): Record<string, string> {
-  return Object.fromEntries(files.map((f) => [f.change.path, `${f.change.status} ${f.reason ?? "-"} ${f.action}`]));
-}
-
-function omit(snapshot: Snapshot, ...paths: string[]): Snapshot {
-  const copy = { ...snapshot };
-  for (const p of paths) delete copy[p];
-  return copy;
-}
-
-/** Spawns whose argv names the given remote. */
-function spawnsTo(ctx: { spawns: string[][] }, fx: GitFixture, fullName: string, op?: string): string[][] {
-  const url = `file://${fx.remotePath(fullName)}`;
-  return ctx.spawns.filter((argv) => argv.includes(url) && (op === undefined || argv.includes(op)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -429,7 +371,7 @@ gitTest("§5.1: a stale shallow.lock in the cache is removed before fetching", a
   });
 });
 
-gitTest("§5.1: an unfetchable F degrades to the empty tree, so everything the student holds is theirs", async () => {
+gitTest("§5.1: an unfetchable F is a retryable HandoutBaseUnfetchableError, not an empty-tree fallback", async () => {
   await GitFixture.with(async (fx) => {
     const template = await fx.createRepo(T);
     const before = { "keep.txt": "k\n", "edit.txt": "e\n" };
@@ -441,14 +383,16 @@ gitTest("§5.1: an unfetchable F degrades to the empty tree, so everything the s
     assert(!(await template.hasObject(F)), "F should be collected");
     const student = await fx.createRepo(R);
     const S = await student.commitOn("main", before);
-    const a = await analyze(fx, { templateRepo: T, fromSha: F, toSha: H, syncedRepoSha: S, repoFullName: R });
-    assertEquals(a.tags.sync_from_sha_unfetchable, "true");
-    assertEquals(a.handoutBeforeTree, EMPTY_TREE_SHA);
-    assertEquals(verdicts(a.files), {
-      "edit.txt": "added only_in_your_repo skip",
-      "keep.txt": "added only_in_your_repo skip",
-      "new.txt": "added - write"
-    });
+    const ctx = fx.jobContext();
+    const e = await assertRejects(
+      () =>
+        withSyncJob(ctx, (job) =>
+          job.plan({ templateRepo: T, fromSha: F, toSha: H, syncedRepoSha: S, repoFullName: R })
+        ),
+      HandoutBaseUnfetchableError
+    );
+    assertEquals([e.kind, e.retryable, e.sha], ["unfetchable", true, F]);
+    assertEquals(spawnsTo(ctx, fx, R).length, 0, "the student repo is not touched when F is missing");
   });
 });
 
@@ -1012,4 +956,17 @@ Deno.test("classifyPaths exempts removals from the ancestor check, as findStuden
     "foo/bar.ts": "path_blocked_in_your_repo"
   });
   assertEquals(Object.fromEntries(classifyPaths(["foo/bar.ts"], student, handout, new Set(["foo/bar.ts"]))), {});
+});
+
+gitTest("readLocalRef reads a packed ref as well as a loose one", async () => {
+  await GitFixture.with(async (fx) => {
+    const repo = await fx.createRepo("org/refs");
+    const sha = await repo.commitOn("main", { "a.txt": "a\n" });
+    await repo.setRef("refs/remotes/student/main", sha);
+    assertEquals(await readLocalRef(repo.gitDir, "refs/remotes/student/main"), sha);
+    await repo.git(["pack-refs", "--all"]);
+    await assertRejects(() => Deno.stat(`${repo.gitDir}/refs/remotes/student/main`), Deno.errors.NotFound);
+    assertEquals(await readLocalRef(repo.gitDir, "refs/remotes/student/main"), sha);
+    await assertRejects(() => readLocalRef(repo.gitDir, "refs/remotes/student/other"), GitSyncError);
+  });
 });

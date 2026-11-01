@@ -15,7 +15,10 @@ import type { TreeEntry, TreeEntryType } from "../syncConflictGuard.ts";
 const NUL = 0x00;
 const TAB = 0x09;
 
-const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+// `ignoreBOM: true` keeps a leading U+FEFF. The default strips it, which decoded the distinct
+// path "\uFEFFfoo.txt" to "foo.txt": the two collapsed into one map key, and the BOM file's blob
+// was written over foo.txt.
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const ascii = new TextDecoder("ascii");
 
 /** The path as a JS string, or `null` when its bytes are not valid UTF-8. */

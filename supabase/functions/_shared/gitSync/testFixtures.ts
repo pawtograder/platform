@@ -16,7 +16,7 @@
  * Fixture roots live under `.test-tmp/` at the repo root (gitignored; override with
  * `GITSYNC_TEST_TMPDIR`), because the snap-packaged Deno can read neither `/tmp` nor `~/.cache`.
  */
-import type { SyncJobContext } from "./engine.ts";
+import type { ClassifiedFile, SyncInput, SyncJobContext } from "./engine.ts";
 import type { GitLogEntry, RemoteConfig } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 
@@ -259,6 +259,27 @@ export class FixtureRepo {
     return new Set(out ? out.split("\n") : []);
   }
 
+  /** The bytes of `<commit>:<path>` as text. */
+  async show(commit: string, path: string): Promise<string> {
+    return new TextDecoder().decode((await this.git(["cat-file", "blob", `${commit}:${path}`])).stdout);
+  }
+
+  /** `path -> "<mode> <type> <oid>"` for every entry of a commit, recursively, trees included. */
+  async lsTree(commit: string): Promise<Record<string, string>> {
+    const out = text(await this.git(["ls-tree", "-r", "-t", "--full-tree", commit]));
+    return Object.fromEntries(
+      (out ? out.split("\n") : []).map((line) => {
+        const tab = line.indexOf("\t");
+        return [line.slice(tab + 1), line.slice(0, tab)];
+      })
+    );
+  }
+
+  /** Every ref and its target, one `<sha> <ref>` line each, sorted. */
+  async refs(): Promise<string> {
+    return text(await this.git(["for-each-ref", "--format=%(objectname) %(refname)"]));
+  }
+
   /** Removes unreachable objects, as GitHub's GC eventually does after a force-push. */
   async gc(): Promise<void> {
     await this.git(["reflog", "expire", "--expire=now", "--all"]);
@@ -362,4 +383,74 @@ export async function listTree(dir: string): Promise<string[]> {
   };
   await walk("");
   return out.sort();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scenario helpers shared by the engine test files
+// ---------------------------------------------------------------------------------------------
+
+export const T = "org/handout";
+export const R = "org/student-a";
+
+/** Bytes git's numstat reads as binary: a NUL in the first 8000 bytes. */
+export function binary(seed: number, length = 64): Uint8Array {
+  const out = new Uint8Array(length);
+  for (let i = 0; i < length; i++) out[i] = (i * 31 + seed) & 0xff;
+  out[0] = 0;
+  return out;
+}
+
+export interface World {
+  fx: GitFixture;
+  template: FixtureRepo;
+  student: FixtureRepo;
+  F: string;
+  H: string;
+  /** The student's commit at the last sync. */
+  S: string;
+  input: SyncInput;
+}
+
+/**
+ * The common shape: the handout goes from `before` to `after` (H's parent is F); the student repo
+ * starts from the handout's `before` contents (GitHub's "generate from template" makes a new root
+ * commit with the same tree) and, when `student` is given, commits that snapshot on top. `S` is
+ * the student's latest commit, so everything in `student` predates the last sync and is theirs.
+ */
+export async function world(
+  fx: GitFixture,
+  spec: { before: Snapshot; after: Snapshot; student?: (before: Snapshot) => Snapshot }
+): Promise<World> {
+  const template = await fx.createRepo(T);
+  const F = await template.commitOn("main", spec.before, { message: "handout v1\n" });
+  const H = await template.commitOn("main", spec.after, { message: "handout v2\n", date: "1700000500 -0500" });
+  const student = await fx.createRepo(R);
+  let S = await student.commitOn("main", spec.before, { message: "Initial commit\n" });
+  if (spec.student) S = await student.commitOn("main", spec.student({ ...spec.before }), { message: "student work\n" });
+  return {
+    fx,
+    template,
+    student,
+    F,
+    H,
+    S,
+    input: { templateRepo: T, fromSha: F, toSha: H, syncedRepoSha: S, repoFullName: R }
+  };
+}
+
+/** `path -> "status reason action"`, the compact form the policy cases assert against. */
+export function verdicts(files: readonly ClassifiedFile[]): Record<string, string> {
+  return Object.fromEntries(files.map((f) => [f.change.path, `${f.change.status} ${f.reason ?? "-"} ${f.action}`]));
+}
+
+export function omit(snapshot: Snapshot, ...paths: string[]): Snapshot {
+  const copy = { ...snapshot };
+  for (const p of paths) delete copy[p];
+  return copy;
+}
+
+/** Spawns whose argv names the given remote. */
+export function spawnsTo(ctx: { spawns: string[][] }, fx: GitFixture, fullName: string, op?: string): string[][] {
+  const url = `file://${fx.remotePath(fullName)}`;
+  return ctx.spawns.filter((argv) => argv.includes(url) && (op === undefined || argv.includes(op)));
 }
