@@ -118,6 +118,10 @@ Wire the engine into a function with the same signature and `SyncResult` contrac
 - the blocked-recheck path
 - the terminal error mapping
 
+WP1's errors are separate types, because importing `GitHubSyncHelpers.ts` would load Redis,
+Sentry, Supabase and Bottleneck. WP3 maps `GitSyncTerminalError` onto `TerminalSyncError`
+(same `reason`), because the handler branches on `instanceof`.
+
 The queue decides the engine (D3): the handler takes the git path when `meta.queue_name` is
 `handout_sync` and the REST path otherwise, which stays untouched.
 
@@ -199,6 +203,16 @@ Carried over from the WP4 audit:
 - `get_queue_metrics` (20260811120200) has fixed columns and omits `handout_sync` and its DLQ.
   WP6's alerts need them.
 - The shadow handler writes with `insert … on conflict (msg_id) do nothing`.
+- The queue gauges for `handout_sync` and `handout_sync_dlq` need `get_queue_metrics` and
+  `metrics/index.ts`, and the parity guardrail requires both. WP6's alerts read
+  `pawtograder_queue_depth` and `pawtograder_queue_oldest_message_seconds`, and stay silent
+  until they exist.
+- The generated types give `pgmq_public.set_vt` an `unknown[]` return, so the heartbeat needs
+  its own row type.
+- Read the env knobs WP6 defined (`HANDOUT_SYNC_*`, including
+  `HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS`) and emit the metric names in WP6's table.
+- `/healthz` reports whether the poll loop is alive, not job progress. Set V8's
+  `--max-old-space-size` inside the 1 Gi limit.
 
 Shadow messages never reach `processEnvelope`, because it writes `sync_data` and the sync
 columns on the `repositories` row. The worker routes a message marked `shadow` to a plan-only
@@ -258,15 +272,27 @@ it runs. Claude prepares the commands and runs them only after that approval.
 ### S1. Deploy to staging **[Jon]**
 
 Merge WP1–WP6 into `staging` and deploy. Run `NOTIFY pgrst`. Check the worker's `/healthz`,
-check that the metrics are scraped, and check that no service account token is mounted
-(`kubectl exec … ls /var/run/secrets` fails).
+check that the metrics are scraped, and check that no service account token is mounted. The
+image has no shell or `ls`, so use
+`kubectl exec … -- deno eval 'Deno.statSync("/var/run/secrets/kubernetes.io")'` (it must throw
+NotFound) or `kubectl debug` with a separate image.
 
 ### S2. Shadow comparison on staging (no pushes)
+
+Precondition: the deployed worker image includes WP5's shadow routing and the `processEnvelope`
+shadow guard. A shadow copy is a complete, valid sync envelope, so a consumer without the
+guard would run it as a real second sync of the same revision.
 
 Set `shadow: true` on staging **[Jon]**. For each message marked `shadow`, the worker runs
 the engine through tree building, records `{ predicted_tree, unresolved }` in a table, and
 pushes nothing. The REST path still does the real sync. A comparison script reads the tree of
 each commit the REST path pushed and diffs it against the prediction.
+
+The script compares a shadow row only with a REST push that was built from the same inputs:
+its `from_sha` and `synced_repo_sha` must equal the REST job's actual handout base and branch
+parent. A shadow copy carries the inputs read at enqueue time. When a second revision is queued
+before the first one lands, the REST job for the later revision builds from a different base, so
+those pairs are reported as skipped, not compared.
 
 Pass criteria:
 
@@ -289,7 +315,8 @@ These are spec §9.3, run with the git engine actually pushing for one staging c
 5. `kubectl delete pod` during a push and during a merge. Each message converges within 2 min
    of the pod coming back.
 6. **Security checks on the live pod:**
-   - `ps` inside the pod during a push shows no token.
+   - Using `kubectl debug` (the image has no `ps`), the process list during a push shows no
+     token in any git argv.
    - `/proc/<git pid>/environ` holds no Supabase or App keys.
    - The token's `GET /installation/repositories` lists exactly the two repos.
    - An egress attempt to a non-GitHub external host fails.
@@ -322,6 +349,13 @@ Acceptance:
 - A grep shows no remaining references to the deleted symbols.
 - The edge-functions image builds and its eszip bundle for `github-async-worker` shrinks. Record
   the size.
+
+## Operational notes
+
+- With `engine: "git"` the worker must be running. With replicas at 0, syncs queue
+  indefinitely, and an assignment delete can refuse (55006) while a stale marker matches a
+  queued `handout_sync` msg_id. Never set `engine: "git"` with the worker scaled to 0.
+- Bump the chart version when the WP6 PR merges.
 
 ## Stop conditions
 

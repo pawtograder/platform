@@ -69,8 +69,13 @@ queue_repository_syncs()  ──pgmq.send──▶  handout_sync  ──▶  han
 
 The poll loop reads up to `free_slots` messages from `handout_sync`, runs each under the
 heartbeat, and archives on `true`. Anything else is left to `processEnvelope`'s existing
-failure handling. A SIGTERM stops reading, lets in-flight jobs finish up to the deadline, and
-then exits.
+failure handling.
+
+On SIGTERM the worker stops reading and waits up to `HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS`
+(240 s) for in-flight jobs. It then aborts their git children and exits without archiving them.
+Those messages come back after one VT and converge, because a re-run from scratch is safe
+(§6.1). `terminationGracePeriodSeconds` is 300, which stays inside the 900 s drain timeout that
+`maintenance.sh` allows each writer. Running jobs to the 15-minute deadline would not.
 
 Git config, set per invocation through `-c` by `runGit()` (§8.6), alongside the hardening flags in §8.1:
 
@@ -354,7 +359,7 @@ calls `git`.
 | Argument injection (`fetch <url> --upload-pack=<cmd>`) | A "sha" or repo name starting with `-` becomes an option | SHAs must match `^[0-9a-f]{40}$`. Branch names are built from a validated SHA. Positionals follow `--` wherever the subcommand accepts it. Paths never appear in argv: `update-index` reads them from stdin with `-z`, and `merge-file` takes object ids |
 | Hooks | Fetch never copies hooks, and the worker creates every repo | `core.hooksPath=/dev/null` as a backstop |
 | Repo-supplied config | Fetch never copies `.git/config` | git runs only in directories the worker created. `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null` keep image or host config out |
-| `.gitattributes` drivers (merge, diff, textconv, filter) | Attributes can only name a driver, and the worker defines none. Git 2.42 and later do read attributes from the tree in bare repos | `attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904` (the empty tree), which also keeps a student's `-diff` attribute from changing binary detection |
+| `.gitattributes` drivers (merge, diff, textconv, filter) | Attributes can only name a driver, and the worker defines none. None of the builders consults attributes for a driver: `--numstat` runs no textconv, `merge-file` ignores attributes, and job repos have an unborn HEAD | Defense in depth, since no builder is exposed today: `attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904` (the empty tree), `core.attributesFile=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, and `--no-ext-diff --no-textconv` where they apply. WP1's tests show `attr.tree` alone stops a driver if a builder ever gains `-p --textconv`. It also keeps a student's `-diff` attribute from changing binary detection |
 | Submodules | Gitlinks are dropped (§5.3) and never fetched | `fetch.recurseSubmodules=false`, `submodule.recurse=false` |
 | Path traversal (`../`, `.git/…`, symlink tricks such as CVE-2024-32002) | Needs a working tree, and the worker never writes one. Symlink blobs (`120000`) are only stored | Never add a checkout step. A test asserts that no job directory contains anything outside the bare repo layout |
 | Bugs in git's own pack and object parsing | Student repos are untrusted input to git | Pin git in the image and rebuild for every git security release. The pod hardening in §8.5 limits what an exploit can reach |
