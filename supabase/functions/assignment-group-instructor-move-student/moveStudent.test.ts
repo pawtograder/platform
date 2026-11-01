@@ -68,8 +68,13 @@ class FakeDb {
   repoDeleteCalls: number[][] = [];
   private nextId = 1000;
 
-  addGroup(id: number, opts: { repo?: string; repoId?: number } = {}) {
-    this.groups.push({ id, assignment_id: ASSIGNMENT_ID, class_id: CLASS.id, name: `group-${id}` });
+  addGroup(id: number, opts: { repo?: string; repoId?: number; classId?: number; assignmentId?: number } = {}) {
+    this.groups.push({
+      id,
+      assignment_id: opts.assignmentId ?? ASSIGNMENT_ID,
+      class_id: opts.classId ?? CLASS.id,
+      name: `group-${id}`
+    });
     if (opts.repo) {
       this.repos.push({ id: opts.repoId ?? id * 10, assignment_group_id: id, repository: opts.repo });
     }
@@ -521,6 +526,48 @@ Deno.test("destination group does not exist: rejected before the student leaves 
 
   assertEquals(db.membersOf(1), ["alice"]);
   assert(db.repoOf(1));
+  assertEquals(archives, []);
+  assertEquals(syncs, []);
+});
+
+Deno.test("same old and new group: rejected before the sole member's group is dissolved", async () => {
+  const db = new FakeDb();
+  db.addGroup(1, { repo: OLD_REPO });
+  db.addMember(1, "alice");
+  const { deps, archives, syncs } = harness(db);
+
+  await assertRejects(() => moveStudentBetweenGroups(move(1, 1), deps), IllegalArgumentError);
+
+  assertEquals(db.membersOf(1), ["alice"]);
+  assert(db.repoOf(1));
+  assertEquals(db.repoDeleteCalls, []);
+  assertEquals(archives, []);
+  assertEquals(syncs, []);
+});
+
+Deno.test("destination group in another class: rejected before the student leaves the old group", async () => {
+  const db = twoGroups();
+  db.addGroup(3, { repo: "other-org/other-class-hw1-group-3", classId: 99 });
+  const { deps, archives, syncs } = harness(db);
+
+  await assertRejects(() => moveStudentBetweenGroups(move(1, 3), deps), IllegalArgumentError);
+
+  assertEquals(db.membersOf(1), ["alice"]);
+  assertEquals(db.membersOf(3), []);
+  assertEquals(archives, []);
+  assertEquals(syncs, []);
+});
+
+Deno.test("destination group in another assignment: rejected before the student leaves the old group", async () => {
+  const db = twoGroups();
+  db.addGroup(4, { repo: "neu-cs3100/cs3100-f26-hw2-group-4", assignmentId: ASSIGNMENT_ID + 1 });
+  const { deps, archives, syncs } = harness(db);
+
+  await assertRejects(() => moveStudentBetweenGroups(move(1, 4), deps), IllegalArgumentError);
+
+  assertEquals(db.membersOf(1), ["alice"]);
+  assertEquals(db.membersOf(4), []);
+  assertEquals(db.repoDeleteCalls, []);
   assertEquals(archives, []);
   assertEquals(syncs, []);
 });

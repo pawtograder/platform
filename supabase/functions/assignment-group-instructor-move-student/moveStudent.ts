@@ -29,7 +29,8 @@ export type MoveStudentDeps = {
 /**
  * Moves a student out of `old_assignment_group_id` (if any) and into `new_assignment_group_id`
  * (if any). The steps are separate requests, not one transaction. Everything that can reject the
- * move (student not in the old group, new group missing) is checked before anything changes.
+ * move (same group, new group missing or in another class or assignment, student not in the old
+ * group) is checked before anything changes.
  * Once the old membership is deleted, cleanup failures are reported and never thrown: throwing
  * would leave the student in no group, and a retry would fail with "Student not in group".
  *
@@ -49,8 +50,13 @@ export async function moveStudentBetweenGroups(
   const { supabase, adminSupabase, addedBy, reportError } = deps;
 
   // Validate the destination before touching the old membership.
+  if (old_assignment_group_id !== null && old_assignment_group_id === new_assignment_group_id) {
+    // Running the removal first would dissolve a sole member's group and then fail to re-add them.
+    throw new IllegalArgumentError("Student is already in that group");
+  }
   let newGroup: {
     assignment_id: number;
+    class_id: number;
     repositories: { repository: string }[];
     classes: { github_org: string | null; slug: string | null } | null;
   } | null = null;
@@ -60,7 +66,9 @@ export async function moveStudentBetweenGroups(
       .select("*, repositories(*), classes(github_org, slug)")
       .eq("id", new_assignment_group_id)
       .single();
-    if (!data) {
+    // The admin client bypasses RLS, so the class check is what keeps an instructor of one class
+    // from moving a student into another class's group.
+    if (!data || data.class_id !== class_id) {
       throw new IllegalArgumentError("New group not found");
     }
     newGroup = data;
@@ -76,6 +84,9 @@ export async function moveStudentBetweenGroups(
       .single();
     if (!currentGroup) {
       throw new IllegalArgumentError("Student not in group");
+    }
+    if (newGroup && newGroup.assignment_id !== currentGroup.assignment_id) {
+      throw new IllegalArgumentError("New group belongs to a different assignment");
     }
     const { error: remove_member_error } = await adminSupabase
       .from("assignment_groups_members")
