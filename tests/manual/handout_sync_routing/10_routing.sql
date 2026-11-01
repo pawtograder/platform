@@ -429,7 +429,8 @@ begin
   -- A shadow copy a worker is holding: plan-only, so it must not block the delete.
   perform pgmq.send('handout_sync', pg_temp.expected(910003) || '{"shadow": true}');
   perform pgmq.read('handout_sync', 600, 10);   -- claims all three, as a worker would
-  -- Hand repo 2's and the shadow's back to the queue: unclaimed, so cancellable.
+  -- Hand repo 2's back to the queue: unclaimed, so cancellable. The shadow copy deliberately stays
+  -- claimed, to show that a claimed shadow copy neither blocks the delete nor escapes cancellation.
   update pgmq.q_handout_sync set vt = clock_timestamp() - interval '1 second'
    where message->'args'->>'repository_id' in ('910002');
 
@@ -490,6 +491,112 @@ begin
     v_outcome := sqlstate;
   end;
   perform pg_temp.expect('8b marker on a handout_sync message: delete refuses with 55006', '55006', v_outcome);
+end $$;
+
+-- A fresh assignment with p_n repositories (ids p_id*10+1 ..), so each delete case below starts
+-- from its own fixture and earlier deletes do not have to be undone.
+create or replace function pg_temp.new_assignment(p_id bigint, p_n int) returns void language plpgsql as $$
+begin
+  insert into assignments (id, class_id, title, slug, due_date, group_config, self_review_setting_id,
+                           template_repo, latest_template_sha, release_date)
+  values (p_id, 910001, 'WP4 ' || p_id, 'wp4-' || p_id, now() + interval '7 days', 'individual', 910001,
+          'wp4-org/handout-' || p_id, 'sha-' || p_id, now() - interval '1 day');
+  insert into repositories (id, assignment_id, class_id, repository, is_github_ready, synced_handout_sha)
+  select p_id * 10 + g, p_id, 910001, 'wp4-org/a' || p_id || '-stu-' || g, true, 'sha-old'
+  from generate_series(1, p_n) g;
+end $$;
+
+-- A sync message for repository p_repo on p_queue; p_claimed makes it look held by a worker.
+create or replace function pg_temp.send_sync(p_queue text, p_repo bigint, p_claimed boolean) returns bigint
+language plpgsql as $$
+declare
+  v_msg bigint;
+begin
+  v_msg := (select pgmq.send(p_queue, jsonb_build_object(
+    'method', 'sync_repo_to_handout', 'class_id', 910001, 'repo_id', p_repo,
+    'args', jsonb_build_object('repository_id', p_repo, 'to_sha', 'sha-new',
+                               'repository_full_name', (select repository from repositories where id = p_repo)))));
+  if p_claimed then
+    execute format('update pgmq.%I set read_ct = 1, vt = clock_timestamp() + interval ''10 minutes'' where msg_id = $1',
+                   'q_' || p_queue) using v_msg;
+  end if;
+  return v_msg;
+end $$;
+
+-- 1 if message p_msg is still on p_queue, else 0.
+create or replace function pg_temp.present(p_queue text, p_msg bigint) returns text language plpgsql as $$
+declare
+  v bigint;
+begin
+  execute format('select count(*) from pgmq.%I where msg_id = $1', 'q_' || p_queue) into v using p_msg;
+  return v::text;
+end $$;
+
+\echo '=== 8c. assignment delete: the edge queues still refuse on claimed syncs and cancel unclaimed ones ==='
+do $$
+declare
+  v_queue text;
+  v_assignment bigint := 910010;
+  v_claimed bigint;
+  v_unclaimed bigint;
+  v_outcome text;
+  r jsonb;
+begin
+  -- The arms copied unchanged from 20261016120000, checked so the copy cannot have broken them.
+  perform pg_temp.reset();
+  foreach v_queue in array array['async_calls', 'async_calls_low_priority'] loop
+    v_assignment := v_assignment + 1;
+    perform pg_temp.new_assignment(v_assignment, 2);
+    v_claimed := pg_temp.send_sync(v_queue, v_assignment * 10 + 1, true);
+    v_unclaimed := pg_temp.send_sync(v_queue, v_assignment * 10 + 2, false);
+
+    begin
+      perform public.delete_assignment_with_all_data(v_assignment, 910001, true, null);
+      v_outcome := 'deleted';
+    exception when others then
+      v_outcome := sqlstate;
+    end;
+    perform pg_temp.expect(format('8c %s: claimed sync refuses with 55006', v_queue), '55006', v_outcome);
+    perform pg_temp.expect(format('8c %s: refused delete cancelled nothing', v_queue), '1',
+      pg_temp.present(v_queue, v_unclaimed));
+
+    -- The claim ends (handler finished elsewhere and archived it): only the unclaimed one is left.
+    perform pgmq.archive(v_queue, v_claimed);
+    begin
+      r := public.delete_assignment_with_all_data(v_assignment, 910001, true, null);
+    exception when others then
+      r := jsonb_build_object('success', sqlstate || ': ' || sqlerrm);
+    end;
+    perform pg_temp.expect(format('8c %s: delete goes through once nothing is claimed', v_queue), 'true', r->>'success');
+    perform pg_temp.expect(format('8c %s: unclaimed sync cancelled', v_queue), '0', pg_temp.present(v_queue, v_unclaimed));
+    perform pg_temp.expect(format('8c %s: handout_syncs_cancelled', v_queue), '1', r->>'handout_syncs_cancelled');
+  end loop;
+end $$;
+
+\echo '=== 8d. assignment delete with p_enqueue_github_archives = false against handout_sync ==='
+do $$
+declare
+  v_claimed bigint;
+  v_unclaimed bigint;
+  r jsonb;
+begin
+  -- The legacy caller has already committed its own archive jobs, so the delete must not refuse
+  -- (20261016120000, ROLLOUT). It cancels what is not running and leaves the running job alone.
+  perform pg_temp.reset();
+  perform pg_temp.new_assignment(910020, 2);
+  v_claimed := pg_temp.send_sync('handout_sync', 9100201, true);
+  v_unclaimed := pg_temp.send_sync('handout_sync', 9100202, false);
+  begin
+    r := public.delete_assignment_with_all_data(910020, 910001, false, null);
+  exception when others then
+    r := jsonb_build_object('success', sqlstate || ': ' || sqlerrm);
+  end;
+  perform pg_temp.expect('8d legacy caller: delete goes through despite a running git sync', 'true', r->>'success');
+  perform pg_temp.expect('8d legacy caller: no archive jobs queued', '0', r->>'github_archives_queued');
+  perform pg_temp.expect('8d legacy caller: handout_syncs_cancelled counts the unclaimed one only', '1',
+    r->>'handout_syncs_cancelled');
+  perform pg_temp.expect('8d legacy caller: unclaimed git sync cancelled', '0', pg_temp.present('handout_sync', v_unclaimed));
+  perform pg_temp.expect('8d legacy caller: running git sync left in the queue', '1', pg_temp.present('handout_sync', v_claimed));
 end $$;
 
 -- Report -------------------------------------------------------------------------------------
