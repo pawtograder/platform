@@ -293,7 +293,7 @@ The branch is `B = sync-to-${H:0:7}`, and `X` is its head from `ls-remote` (§5.
 | absent | `git push --force-with-lease=refs/heads/$B: $R_URL $COMMIT:refs/heads/$B` (an empty lease means "must not exist") |
 | `== COMMIT` | Skip the push. This is a retry of a job that already pushed. |
 | `== S` | `git push --force-with-lease=refs/heads/$B:$S …` |
-| other | `assertSyncBranchSafeToReset(R, B, S)` (REST compare, unchanged), then `git push --force-with-lease=refs/heads/$B:$X …` |
+| other | `confirmResetSafe({ head: X, base: S })`, which compares `S...X` over REST for exactly that `X` and returns the sha it approved. The engine pushes `--force-with-lease=refs/heads/$B:$X …` only if the approved sha equals `X` |
 
 - `--force-with-lease` is a real server-side compare-and-swap. It replaces
   `updateRefWithExpectedHead`, `assertBranchStillAt` and the PATCH and delete+create fallbacks.
@@ -332,7 +332,15 @@ Every step is either read-only, content-addressed, or a compare-and-swap:
 - The merge is already idempotent.
 
 So a retry from scratch after a crash at any point converges, and no progress needs to be
-persisted. `sync_data.phase` (`fetch | classify | push | pr | merge`) is written only for
+persisted.
+
+One input is not a pure function of the repository state: a `merge-file` that times out or is
+killed leaves its file to the student on that attempt, and a retry may merge it. The two
+attempts then build different commits. That is still safe. The retry finds the earlier attempt's
+commit on the branch, which is ours, and resets it under the lease after the safety check. The
+merge size cap is deterministic and does not cause this. With `S` null (the head stands in), a
+retry after `main` moved also builds a different commit, for the same reason and with the same
+outcome. `sync_data.phase` (`fetch | classify | push | pr | merge`) is written only for
 observability.
 
 ### 6.2 Matched pair

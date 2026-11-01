@@ -375,6 +375,14 @@ Acceptance:
   queued `handout_sync` msg_id. Never set `engine: "git"` with the worker scaled to 0.
 - Bump the chart version when the WP6 PR merges.
 
+## Follow-ups outside this project
+
+- `syncConflictGuard.findBlockingAncestor` compares type and sha but not mode. A student's
+  mode-only change (e.g. `chmod +x config`) on a file the handout replaces with a directory is
+  lost, while the file is reported as left untouched. This is a pre-existing gap shared by the
+  REST and git paths, and the fix belongs in the guard module (compare modes in
+  `handoutPutItThere`). Found in the WP2 round B review.
+
 ## Stop conditions
 
 The supervisor halts the plan and reports to Jon if any of these happen:
