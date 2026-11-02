@@ -90,11 +90,11 @@ export default function SurveyComponent({
   // The database title is the one instructors set and the survey list shows.
   // The JSON title is often the visual builder's "Survey Name" placeholder
   // (issue #1002). The model holds its own copy, so the stored JSON is untouched.
-  // A rename arrives as a realtime update while a student may be mid-answer, so it
-  // updates the existing model instead of rebuilding it (which would discard the
-  // answers, page and focus). A layout effect sets it before the first paint, so
-  // the JSON title never flashes. Without a database title the JSON title comes back,
-  // per-locale values included.
+  // A rename can arrive as a realtime update (on the staff channel) while someone is
+  // mid-answer, so it updates the existing model instead of rebuilding it (which would
+  // discard the answers, page and focus). A layout effect sets it before the first
+  // paint, so the JSON title never flashes. Without a database title the JSON title
+  // comes back, per-locale values included, or no title if the JSON has none.
   useLayoutEffect(() => {
     if (title) {
       // SurveyJS fills "{name}" in its strings with the answer to question `name`. The
@@ -103,7 +103,9 @@ export default function SurveyComponent({
       survey.title = title;
     } else {
       survey.locTitle.onGetTextCallback = (processed) => processed;
-      survey.locTitle.setJson(JSON.parse(surveyJsonKey)?.title);
+      // setJson(undefined) clears the string without signalling a change, so the old
+      // title would stay on screen; an empty string does signal it.
+      survey.locTitle.setJson(JSON.parse(surveyJsonKey)?.title ?? "");
     }
   }, [survey, surveyJsonKey, title]);
 
