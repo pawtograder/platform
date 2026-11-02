@@ -221,6 +221,42 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       .toEqual({ q1: "Changed after the failed Complete", is_submitted: true });
   });
 
+  test("a Complete the server refuses keeps the form, and can be pressed again", async ({ page }) => {
+    const survey = await seedSurvey("Server Error Complete Survey");
+    await loginAsUser(page, student, course);
+    // The first submit gets a 500 from the server; everything else goes through.
+    let refusedSubmit = false;
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
+      if (route.request().method() !== "POST" || !body?.is_submitted || refusedSubmit) return route.fallback();
+      refusedSubmit = true;
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "XX000", message: "internal error", details: null, hint: null })
+      });
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("Answer before a server error");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Answer before a server error", is_submitted: false });
+    await page.getByRole("button", { name: "Complete" }).click();
+
+    await expect(page.getByRole("alert").filter({ hasText: "Your survey wasn't submitted" })).toBeVisible();
+    await expect(input).toHaveValue("Answer before a server error");
+    await expect(input).toBeEditable();
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Answer before a server error", is_submitted: false });
+
+    await page.getByRole("button", { name: "Complete" }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    await expect
+      .poll(() => storedResponse(survey.id))
+      .toEqual({ q1: "Answer before a server error", is_submitted: true });
+  });
+
   // Holds the first draft upsert forever: the request is sent but never gets a response.
   const neverAnswerFirstWrite = async (page: Page) => {
     let writes = 0;
@@ -349,5 +385,31 @@ test.describe("Survey answers survive leaving the page and losing the network", 
 
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 30_000 });
     expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted with a fast clock", is_submitted: true });
+  });
+
+  test("a Complete that never gets an answer and never reached the database keeps the form", async ({ page }) => {
+    test.setTimeout(90_000);
+    const survey = await seedSurvey("Unanswered Complete Survey");
+    await loginAsUser(page, student, course);
+    // The submit is held and never sent on, so only the draft row with the same answer exists.
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
+      if (route.request().method() !== "POST" || !body?.is_submitted) return route.fallback();
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("Never submitted");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Never submitted", is_submitted: false });
+    await page.getByRole("button", { name: "Complete" }).click();
+
+    await expect(page.getByRole("alert").filter({ hasText: "The server took too long to respond." })).toBeVisible({
+      timeout: 30_000
+    });
+    await expect(input).toHaveValue("Never submitted");
+    await expect(input).toBeEditable();
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Never submitted", is_submitted: false });
   });
 });
