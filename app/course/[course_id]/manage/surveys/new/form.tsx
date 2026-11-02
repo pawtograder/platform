@@ -673,8 +673,15 @@ export default function SurveyForm({
                       name="allow_response_editing"
                       control={control}
                       render={({ field }) => (
-                        <VStack align="start" gap={1}>
-                          <HStack gap={3} align="center">
+                        // The label sits inside Checkbox.Root so it names the checkbox, and the
+                        // field links the help text to it as its description.
+                        <CkField.Root alignItems="start" gap={1}>
+                          <Checkbox.Root
+                            checked={field.value}
+                            onCheckedChange={(details) => field.onChange(details.checked)}
+                            gap={3}
+                          >
+                            <Checkbox.HiddenInput />
                             <Box position="relative">
                               <Box
                                 position="absolute"
@@ -688,21 +695,17 @@ export default function SurveyForm({
                                 borderRadius="xs"
                                 zIndex="0"
                               />
-                              <Checkbox.Root
-                                checked={field.value}
-                                onCheckedChange={(details) => field.onChange(details.checked)}
-                              >
-                                <Checkbox.HiddenInput />
-                                <Checkbox.Control />
-                              </Checkbox.Root>
+                              <Checkbox.Control position="relative" />
                             </Box>
-                            <Text color="fg">Let students edit their responses after submitting</Text>
-                          </HStack>
-                          <Text fontSize="sm" color="fg.subtle" pl="8">
+                            <Checkbox.Label color="fg" fontWeight="normal" textStyle="md">
+                              Let students edit their responses after submitting
+                            </Checkbox.Label>
+                          </Checkbox.Root>
+                          <CkField.HelperText fontSize="sm" lineHeight="inherit" color="fg.subtle" pl="8" mt={0}>
                             When off, a student&apos;s first submission is final. Answers in progress auto-save either
                             way.
-                          </Text>
-                        </VStack>
+                          </CkField.HelperText>
+                        </CkField.Root>
                       )}
                     />
                   </Fieldset.Content>
