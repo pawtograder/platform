@@ -699,6 +699,39 @@ test.describe("Surveys Page", () => {
     });
   }
 
+  // studentA's stored answer to q1 and whether the row is submitted, or null when there is no row.
+  const storedResponse = async (surveyId: string) => {
+    const { data, error } = await supabase
+      .from("survey_responses")
+      .select("response, is_submitted")
+      .eq("survey_id", surveyId)
+      .eq("profile_id", studentA.private_profile_id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
+  };
+
+  test("an answered survey shows as In Progress on the list (editing off)", async ({ page }) => {
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Answered Not Completed Survey",
+      status: "published",
+      allow_response_editing: false,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Answer without completing");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Answer without completing", is_submitted: false });
+
+    await page.goto(`/course/${course.id}/surveys`);
+    await expect(page.getByText("Answered Not Completed Survey")).toBeVisible();
+    await expect(page.locator("span.chakra-badge", { hasText: "In Progress" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Continue Survey" })).toBeVisible();
+  });
+
   // Each debounced autosave is its own upsert. Holding the first one back makes a later write
   // reach the server before it; the writes must still land in the order the student made them.
   const holdFirstResponseWrite = async (page: Page, holdMs: number) => {
