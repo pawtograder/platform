@@ -692,7 +692,10 @@ test.describe("Surveys Page", () => {
         .toEqual({ q1: "Answer before reload", is_submitted: false });
 
       await page.reload();
-      await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Answer before reload");
+      const input = page.getByRole("textbox", { name: "Question 1" });
+      await expect(input).toHaveValue("Answer before reload");
+      // A draft comes back as a draft: the student can keep answering.
+      await expect(input).toBeEditable();
     });
   }
 
@@ -750,6 +753,7 @@ test.describe("Surveys Page", () => {
 
     await page.reload();
     await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Newer answer");
+    await expect(input).toBeEditable();
   });
 
   test("no draft autosave reaches the server after Complete", async ({ page }) => {
