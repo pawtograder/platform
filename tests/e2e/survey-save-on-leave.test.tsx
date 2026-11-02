@@ -1,5 +1,7 @@
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import type { Page } from "@playwright/test";
+import { AxeBuilder } from "@axe-core/playwright";
+import type { Page as PlaywrightCorePage } from "playwright-core";
 import { test, expect } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
 
@@ -412,4 +414,78 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await expect(input).toBeEditable();
     expect(await storedResponse(survey.id)).toEqual({ q1: "Never submitted", is_submitted: false });
   });
+
+  test("the save status changes when a save starts and when it lands, not on every keystroke", async ({ page }) => {
+    const survey = await seedSurvey("Status Per Save Survey");
+    await loginAsUser(page, student, course);
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeEditable();
+    // Every text the save status shows, in order, as a screen reader would hear it.
+    await page.evaluate(
+      (statusTexts) => {
+        const seen: string[] = [];
+        (window as unknown as { __saveStatusTexts: string[] }).__saveStatusTexts = seen;
+        new MutationObserver(() => {
+          const shown = Array.from(document.querySelectorAll('[role="status"]'))
+            .map((element) => element.textContent ?? "")
+            .find((text) => statusTexts.includes(text));
+          if (shown && seen[seen.length - 1] !== shown) seen.push(shown);
+        }).observe(document.body, { subtree: true, childList: true, characterData: true });
+      },
+      ["Saving…", SAVED_STATUS, OFFLINE_STATUS, "Not saved yet. Retrying…", "Your latest answers aren't saved."]
+    );
+
+    await input.pressSequentially("One key at a time", { delay: 40 });
+    await expect(page.getByRole("status").filter({ hasText: SAVED_STATUS })).toBeVisible();
+    const seen = await page.evaluate(() => (window as unknown as { __saveStatusTexts: string[] }).__saveStatusTexts);
+    expect(seen).toEqual(["Saving…", SAVED_STATUS]);
+  });
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`the save status meets text contrast in ${colorScheme} mode`, async ({ page }) => {
+      test.setTimeout(90_000);
+      const survey = await seedSurvey(`Status Contrast Survey (${colorScheme})`);
+      await loginAsUser(page, student, course);
+      await page.emulateMedia({ colorScheme });
+
+      await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+      await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${colorScheme}\\b`));
+      const input = page.getByRole("textbox", { name: "Question 1" });
+
+      const expectReadable = async (text: string) => {
+        const status = page.getByRole("status").filter({ hasText: text });
+        await expect(status).toBeVisible({ timeout: 30_000 });
+        await status.evaluate((element) => element.setAttribute("data-save-status-under-test", ""));
+        // @axe-core/playwright types against playwright-core's Page, as in axeStudentA11y.ts.
+        const results = await new AxeBuilder({ page: page as unknown as PlaywrightCorePage })
+          .include("[data-save-status-under-test]")
+          .withRules(["color-contrast"])
+          .analyze();
+        await status.evaluate((element) => element.removeAttribute("data-save-status-under-test"));
+        expect(results.violations, `"${text}" in ${colorScheme} mode`).toEqual([]);
+        expect(results.incomplete, `"${text}" in ${colorScheme} mode`).toEqual([]);
+        expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
+      };
+
+      await input.fill("Saved answer");
+      await expectReadable(SAVED_STATUS);
+
+      await page.context().setOffline(true);
+      await input.fill("Offline answer");
+      await expectReadable(OFFLINE_STATUS);
+      await page.context().setOffline(false);
+      await expectReadable(SAVED_STATUS);
+
+      // Every draft save now fails, so the retries run out.
+      await page.route("**/rest/v1/survey_responses*", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+      });
+      await input.fill("Answer the server keeps refusing");
+      await expectReadable("Not saved yet. Retrying…");
+      await expectReadable("Your latest answers aren't saved.");
+    });
+  }
 });
