@@ -1,10 +1,10 @@
 /**
  * Tests for lib/surveyAutosaveQueue.ts, the debounced autosave behind the student survey page.
  *
- * What it must guarantee: writes reach the server one at a time and in order, every write carries
- * the newest answers, and no single write can block the ones behind it (or Complete, which waits
- * for the queue) for longer than its time limit. A failed write is retried with capped backoff, a
- * few times, and while offline it waits for the network instead; the status says which.
+ * What it must guarantee: save requests reach the server one at a time and in order, every request
+ * carries the newest answers, and no single request can block the ones behind it (or Complete, which
+ * waits for the queue) for longer than its time limit. A failed save is retried with capped backoff,
+ * a few times, and while offline it waits for the network instead; the status says which.
  */
 import {
   retryDelayMs,
@@ -28,7 +28,7 @@ function deferred(): Deferred {
   return { promise, resolve, reject };
 }
 
-/** A fake transport: each write waits until the test settles it. */
+/** A fake transport: each request waits until the test settles it. */
 function fakeServer() {
   const writes: { value: string; signal: AbortSignal; keepalive: boolean; done: Deferred }[] = [];
   const save = jest.fn((value: string, { signal, keepalive }: SaveAttempt) => {
@@ -109,7 +109,7 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes.map((write) => write.value)).toEqual(["ab"]);
   });
 
-  test("holds a newer snapshot until the older write finishes", async () => {
+  test("holds a newer snapshot until the older request finishes", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
 
@@ -117,7 +117,7 @@ describe("SurveyAutosaveQueue", () => {
     jest.advanceTimersByTime(1_000);
     queue.schedule("newer");
     jest.advanceTimersByTime(1_000);
-    // One write at a time: "newer" waits behind "older".
+    // One request at a time: "newer" waits behind "older".
     expect(server.writes.map((write) => write.value)).toEqual(["older"]);
 
     server.writes[0].done.resolve();
@@ -125,7 +125,7 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes.map((write) => write.value)).toEqual(["older", "newer"]);
   });
 
-  test("sends only the newest of several snapshots queued behind a slow write", async () => {
+  test("sends only the newest of several snapshots queued behind a slow request", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
 
@@ -141,7 +141,7 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes.map((write) => write.value)).toEqual(["first", "third"]);
   });
 
-  test("gives up on a write that never settles and sends the newer snapshot", async () => {
+  test("gives up on a request that never settles and sends the newer snapshot", async () => {
     const server = fakeServer();
     const onError = jest.fn();
     const queue = makeQueue(server.save, () => true, { onError });
@@ -161,7 +161,7 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes.map((write) => write.value)).toEqual(["stuck", "next"]);
   });
 
-  test("whenIdle settles once a stuck write times out", async () => {
+  test("whenIdle settles once a stuck request times out", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
     queue.schedule("stuck");
@@ -209,7 +209,7 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes).toHaveLength(1);
   });
 
-  test("a flush on leave asks for keepalive, and does not overtake a write in flight", async () => {
+  test("a flush on leave asks for keepalive, and does not overtake a request in flight", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
 
@@ -226,7 +226,7 @@ describe("SurveyAutosaveQueue", () => {
       ["typed before leaving", true]
     ]);
 
-    // Later edits on a page that stayed open go out as ordinary writes again.
+    // Later edits on a page that stayed open go out as ordinary requests again.
     server.writes[1].done.resolve();
     await settle();
     queue.schedule("back on the page");
@@ -241,7 +241,7 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.save).not.toHaveBeenCalled();
   });
 
-  test("retries a failed write with growing delays, then waits for the next edit", async () => {
+  test("retries a failed save with growing delays, then waits for the next edit", async () => {
     const server = fakeServer();
     const statuses: AutosaveStatus[] = [];
     const queue = makeQueue(server.save, () => true, { onStatusChange: (status) => statuses.push(status) });

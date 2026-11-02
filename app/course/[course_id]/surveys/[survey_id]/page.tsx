@@ -30,8 +30,8 @@ import {
 import { upsertSurveyResponseWithKeepalive, type SurveyResponseUpsert } from "@/lib/surveyResponseKeepalive";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
-// Upper bound on one write, autosave or Complete. A survey upsert normally takes well under a
-// second; past this the request is cancelled, so it cannot hold up the saves queued behind it.
+// Upper bound on one save request, autosave or Complete. A survey upsert normally takes well under
+// a second; past this the request is cancelled, so it cannot hold up the saves queued behind it.
 const SAVE_TIMEOUT_MS = 10_000;
 // A failed autosave is retried after 1, 2, 4 and 8 s, then waits for the next edit or for the
 // browser to come back online.
@@ -56,7 +56,7 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   failed: "fg.error"
 };
 // The project the browser Supabase client talks to (utils/supabase/client.ts), for the keepalive
-// write sent while the page unloads.
+// request sent while the page unloads.
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -120,14 +120,14 @@ export default function SurveyTakingPage() {
   // Which (survey, profile) pair responseStateRef describes, so a re-run of the loader effect
   // for the same response cannot silently discard what it learned.
   const responseStateKeyRef = useRef<string | null>(null);
-  // Holds the newest unsaved answers and writes them one at a time, so a slow older write can never
-  // land after a newer one. Complete pauses it and waits for the write in flight.
+  // Holds the newest unsaved answers and sends them one request at a time, so a slow older request
+  // can never land after a newer one. Complete pauses it and waits for the request in flight.
   const autosaveQueueRef = useRef<SurveyAutosaveQueue<ResponseData> | null>(null);
   // The queue outlives renders, so it reads the current save function and guards through refs.
   const saveDraftRef = useRef<(responseData: ResponseData, attempt: SaveAttempt) => Promise<void>>(async () => {});
   const canAutosaveRef = useRef<() => boolean>(() => false);
-  // The student's access token, kept current so the write sent while the page unloads does not have
-  // to wait for the Supabase client to read it.
+  // The student's access token, kept current so the request sent while the page unloads does not
+  // have to wait for the Supabase client to read it.
   const accessTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -166,7 +166,7 @@ export default function SurveyTakingPage() {
       window.removeEventListener("online", retryOnReconnect);
       window.removeEventListener("offline", noteOffline);
       // Flush rather than merely cancel when the student navigates away inside the app. That
-      // write still goes out, but nothing is retried once the page is gone.
+      // request still goes out, but nothing is retried once the page is gone.
       queue.flush();
       queue.dispose();
       if (autosaveQueueRef.current === queue) autosaveQueueRef.current = null;
@@ -275,9 +275,9 @@ export default function SurveyTakingPage() {
     }
   }, [isLoading, surveyMissing, course_id, router]);
 
-  // The row a write sends, or null when it must be skipped. An autosave never downgrades a
+  // The row an upsert sends, or null when it must be skipped. An autosave never downgrades a
   // submitted response: on an editable survey it persists the edit as still-submitted and omits
-  // submitted_at, so the upsert leaves the original submission time in place. A write against a
+  // submitted_at, so the upsert leaves the original submission time in place. An upsert against a
   // row we could not read is dropped.
   const buildResponseRow = useCallback(
     (responseData: ResponseData, isSubmitted: boolean): SurveyResponseUpsert | null => {
@@ -342,8 +342,8 @@ export default function SurveyTakingPage() {
       // SurveyJS has already switched to its completed page. Say the answers are on their way
       // rather than leaving the thank-you text to claim they arrived.
       options?.showSaveInProgress("Submitting your answers…");
-      // Stop the autosave queue and wait out the write in flight, so the submit upsert is the
-      // last write. The wait is bounded: every write gives up after SAVE_TIMEOUT_MS.
+      // Stop the autosave queue and wait out the request in flight, so the submit upsert is the
+      // last one. The wait is bounded: every request gives up after SAVE_TIMEOUT_MS.
       const autosaveQueue = autosaveQueueRef.current;
       autosaveQueue?.pause();
       let submitted = false;
@@ -400,7 +400,7 @@ export default function SurveyTakingPage() {
       // been submitted, while it waited behind a slow save.
       !isSubmittingRef.current &&
       shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing }) &&
-      // A row that could not be read gets no draft write at all (see resolveResponseWriteFlags).
+      // A row that could not be read gets no draft upsert at all (see resolveResponseWriteFlags).
       !resolveResponseWriteFlags({ isSubmitted: false, loadedState: responseStateRef.current }).skip,
     [allowResponseEditing]
   );

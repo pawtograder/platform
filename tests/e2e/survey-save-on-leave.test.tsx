@@ -221,7 +221,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       .toEqual({ q1: "Changed after the failed Complete", is_submitted: true });
   });
 
-  // Holds the first draft write forever: the request is sent but never gets a response.
+  // Holds the first draft upsert forever: the request is sent but never gets a response.
   const neverAnswerFirstWrite = async (page: Page) => {
     let writes = 0;
     await page.route("**/rest/v1/survey_responses*", async (route) => {
@@ -234,7 +234,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
   };
 
   test("a save that never gets a response does not hold up later saves", async ({ page }) => {
-    // The stuck write is only given up on after the page's 10 s save time limit.
+    // The stuck request is only given up on after the page's 10 s save time limit.
     test.setTimeout(90_000);
     const survey = await seedSurvey("Stuck Save Survey");
     await loginAsUser(page, student, course);

@@ -3,13 +3,14 @@
  * `app/course/[course_id]/surveys/[survey_id]/page.tsx`.
  *
  * It keeps one slot: the newest snapshot of the answers that the server has not confirmed. At most
- * one write is in flight, so writes reach the server in the order the student made them, and every
- * write carries the newest snapshot, so an older snapshot is never sent after a newer one.
+ * one save request is in flight, so the answers reach the server in the order the student gave them,
+ * and every request carries the newest snapshot, so an older snapshot is never sent after a newer
+ * one.
  *
- * Every write has a time limit. A request that never settles used to hold up the whole chain, and
+ * Every request has a time limit. A request that never settles used to hold up the whole chain, and
  * Complete waits for that chain, so one stuck request blocked every later save and the submission.
  *
- * A failed write is kept and retried with capped exponential backoff, a few times. Then the queue
+ * A snapshot whose request failed is kept and retried with capped exponential backoff, a few times. Then the queue
  * waits for the next edit or for {@link SurveyAutosaveQueue.retryNow} (the page calls it on the
  * browser's `online` event). While the browser is offline it does not count down retries at all:
  * it waits for `online`. The answers are only ever kept in memory and in the database.
@@ -18,7 +19,7 @@
 export type SaveAttempt = {
   /** Aborted when the attempt runs past `timeoutMs`. */
   signal: AbortSignal;
-  /** The page is being hidden or unloaded: send the write so that it outlives the page. */
+  /** The page is being hidden or unloaded: send the request so that it outlives the page. */
   keepalive: boolean;
 };
 
@@ -28,8 +29,8 @@ export type SaveAttempt = {
  * - `idle`: nothing has changed since the page loaded.
  * - `saving`: answers are waiting for the debounce or on the wire.
  * - `saved`: the server has every answer.
- * - `retrying`: a write failed and another attempt is scheduled or running.
- * - `offline`: a write failed while the browser is offline; the next one goes out on `online`.
+ * - `retrying`: a save failed and another attempt is scheduled or running.
+ * - `offline`: a save failed while the browser is offline; the next attempt goes out on `online`.
  * - `failed`: the retries are used up; the next edit or {@link SurveyAutosaveQueue.retryNow} tries again.
  */
 export type AutosaveStatus = "idle" | "saving" | "saved" | "retrying" | "offline" | "failed";
@@ -44,7 +45,7 @@ export type RetryPolicy = {
 };
 
 export type SurveyAutosaveQueueOptions<T> = {
-  /** Writes one snapshot. Should pass `signal` on to fetch, so a timed-out request is cancelled. */
+  /** Saves one snapshot. Should pass `signal` on to fetch, so a timed-out request is cancelled. */
   save: (value: T, attempt: SaveAttempt) => Promise<void>;
   /**
    * Checked when a snapshot's turn comes, not when it is scheduled: Complete may have started, or
@@ -102,14 +103,14 @@ export class SurveyAutosaveQueue<T> {
   private inFlight: Promise<void> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Failed writes in a row since the last success, edit or retryNow(): what the backoff counts. */
+  /** Failed attempts in a row since the last success, edit or retryNow(): what the backoff counts. */
   private failures = 0;
-  /** A write failed and none has succeeded since. Keeps the warning up across new edits. */
+  /** A save failed and none has succeeded since. Keeps the warning up across new edits. */
   private unresolvedFailure = false;
   private status: AutosaveStatus = "idle";
   private paused = false;
   private disposed = false;
-  /** Set by a flush on leave; the next write that starts carries it. */
+  /** Set by a flush on leave; the next request that starts carries it. */
   private keepaliveRequested = false;
 
   constructor(options: SurveyAutosaveQueueOptions<T>) {
@@ -136,8 +137,8 @@ export class SurveyAutosaveQueue<T> {
 
   /**
    * Sends the pending snapshot now instead of at the end of the debounce or retry delay. With
-   * `keepalive` (the page is being hidden or unloaded) the write is asked to outlive the page. A
-   * write already in flight is not overtaken: the pending snapshot follows it, still with
+   * `keepalive` (the page is being hidden or unloaded) the request is asked to outlive the page. A
+   * request already in flight is not overtaken: the pending snapshot follows it, still with
    * `keepalive`.
    */
   flush(options: { keepalive?: boolean } = {}): void {
@@ -158,7 +159,7 @@ export class SurveyAutosaveQueue<T> {
     if (this.latest) this.setStatus("offline");
   }
 
-  /** Stops starting writes (Complete is under way). A write already in flight carries on. */
+  /** Stops starting requests (Complete is under way). A request already in flight carries on. */
   pause(): void {
     this.paused = true;
     this.clearTimers();
@@ -179,7 +180,7 @@ export class SurveyAutosaveQueue<T> {
   }
 
   /**
-   * The page is going away. A write in flight, and the snapshot owed after it, still go out once;
+   * The page is going away. A request in flight, and the snapshot owed after it, still go out once;
    * nothing is retried and no status is reported after this.
    */
   dispose(): void {
@@ -193,7 +194,7 @@ export class SurveyAutosaveQueue<T> {
   }
 
   /**
-   * Settles once no write is in flight. Each write is bounded by `timeoutMs`, so this cannot hang.
+   * Settles once no request is in flight. Each one is bounded by `timeoutMs`, so this cannot hang.
    * Call {@link pause} first if nothing new may start afterwards.
    */
   async whenIdle(): Promise<void> {
@@ -210,7 +211,7 @@ export class SurveyAutosaveQueue<T> {
 
   /**
    * The status while answers are waiting or on the wire. After a failure the warning stays up until
-   * a write succeeds, rather than flipping to "saving" at every pause in typing while the network
+   * a save succeeds, rather than flipping to "saving" at every pause in typing while the network
    * is still down.
    */
   private pendingStatus(): AutosaveStatus {
@@ -281,7 +282,7 @@ export class SurveyAutosaveQueue<T> {
     if (this.paused || (this.disposed && this.unresolvedFailure)) return;
     if (!this.latest || this.debounceTimer) return;
     if (!this.unresolvedFailure) {
-      // A newer snapshot arrived while this write was on the wire: it goes next.
+      // A newer snapshot arrived while this request was on the wire: it goes next.
       this.run();
       return;
     }

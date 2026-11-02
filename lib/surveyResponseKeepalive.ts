@@ -1,5 +1,5 @@
 /**
- * The survey draft write the student page sends while the page is being hidden or unloaded.
+ * The survey draft upsert the student page sends while the page is being hidden or unloaded.
  *
  * A reload or a closed tab never unmounts React, and the browser cancels an ordinary request once
  * the page unloads, so answers still waiting for the autosave debounce were lost. A `keepalive`

@@ -63,7 +63,7 @@ test("sends a body over the keepalive limit as an ordinary request rather than n
   expect(fetchMock.mock.calls[0][1].keepalive).toBe(false);
 });
 
-test("rejects with the PostgREST error when the server refuses the write", async () => {
+test("rejects with the PostgREST error when the server refuses the upsert", async () => {
   fetchMock.mockResolvedValue({
     ok: false,
     status: 403,
