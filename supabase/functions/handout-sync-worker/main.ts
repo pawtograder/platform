@@ -85,13 +85,31 @@ export interface WorkerConfig {
   metricsPort: number;
   /** How long the loop sleeps when the queue is empty or every slot is busy. Not an env knob. */
   idlePollMs: number;
+  /**
+   * Timeout for the worker's own queue calls (`read`, `set_vt`). At most RPC_TIMEOUT_MS, and
+   * below the VT's margin over the heartbeat (`validateConfig`), so a hung renewal is given up on
+   * while the VT it was renewing still holds. Not an env knob; `configFromEnv` derives it.
+   */
+  rpcTimeoutMs: number;
+  /** DEADLINE_SETTLE_MS in production. Not an env knob. */
+  deadlineSettleMs: number;
+}
+
+/** The ceiling on `rpcTimeoutMs`. */
+export const RPC_TIMEOUT_MS = 15_000;
+
+/** The `rpcTimeoutMs` a VT and heartbeat allow: half the margin, capped at RPC_TIMEOUT_MS. */
+export function rpcTimeoutFor(visibilityTimeoutSeconds: number, heartbeatSeconds: number): number {
+  return Math.min(RPC_TIMEOUT_MS, Math.floor(((visibilityTimeoutSeconds - heartbeatSeconds) * 1000) / 2));
 }
 
 /**
- * How long a job may keep its slot after its deadline fired. The abort kills git children at
- * once; this bounds the REST and database calls that run after them. Past it, the job is fenced
- * and its slot is freed, and its message comes back after one VT. The heartbeat keeps running
- * until then, so a job holds its message for at most the §3.1 deadline plus this.
+ * How long a job may keep running after its deadline fired before it is fenced. The abort kills
+ * git children at once and refuses the job's next GitHub request; this bounds the database and
+ * in-flight REST calls after them. Past it, the job's database client is fenced and its renewals
+ * stop, so its message comes back after one VT; the job still holds its slot until it returns.
+ * The heartbeat runs until then, so a job holds its message for at most the §3.1 deadline plus
+ * this.
  */
 export const DEADLINE_SETTLE_MS = 30_000;
 
@@ -126,12 +144,14 @@ export function configFromEnv(): WorkerConfig {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceRoleKey) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
+  const visibilityTimeoutSeconds = intFromEnv("HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS", 120, 1);
+  const heartbeatSeconds = intFromEnv("HANDOUT_SYNC_HEARTBEAT_SECONDS", 45, 1);
   return validateConfig({
     supabaseUrl,
     serviceRoleKey,
     concurrency: intFromEnv("HANDOUT_SYNC_CONCURRENCY", 2, 1),
-    visibilityTimeoutSeconds: intFromEnv("HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS", 120, 1),
-    heartbeatSeconds: intFromEnv("HANDOUT_SYNC_HEARTBEAT_SECONDS", 45, 1),
+    visibilityTimeoutSeconds,
+    heartbeatSeconds,
     jobDeadlineSeconds: intFromEnv("HANDOUT_SYNC_JOB_DEADLINE_SECONDS", 900, 1),
     shutdownGraceSeconds: intFromEnv("HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS", 240, 0),
     maxReadCount: intFromEnv("HANDOUT_SYNC_MAX_READ_COUNT", 5, 1),
@@ -141,7 +161,9 @@ export function configFromEnv(): WorkerConfig {
     maxRepoKib: intFromEnv("HANDOUT_SYNC_MAX_REPO_KIB", DEFAULT_MAX_REPO_KIB, 1),
     maxMergeBytes: intFromEnv("HANDOUT_SYNC_MAX_MERGE_BYTES", 8 * 1024 * 1024, 1),
     metricsPort: intFromEnv("HANDOUT_SYNC_METRICS_PORT", 9464, 1),
-    idlePollMs: 5_000
+    idlePollMs: 5_000,
+    rpcTimeoutMs: rpcTimeoutFor(visibilityTimeoutSeconds, heartbeatSeconds),
+    deadlineSettleMs: DEADLINE_SETTLE_MS
   });
 }
 
@@ -155,6 +177,13 @@ export function validateConfig(config: WorkerConfig): WorkerConfig {
       `HANDOUT_SYNC_HEARTBEAT_SECONDS (${config.heartbeatSeconds}) must be below ` +
         `HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS (${config.visibilityTimeoutSeconds}), or a running ` +
         `job's message becomes visible before its first renewal`
+    );
+  }
+  const margin = (config.visibilityTimeoutSeconds - config.heartbeatSeconds) * 1000;
+  if (!(config.rpcTimeoutMs > 0 && config.rpcTimeoutMs <= RPC_TIMEOUT_MS && config.rpcTimeoutMs < margin)) {
+    throw new Error(
+      `the queue-call timeout (${config.rpcTimeoutMs} ms) must be above 0, at most ${RPC_TIMEOUT_MS} ms and below ` +
+        `the VT's margin over the heartbeat (${margin} ms), or a hung renewal outlives the VT it renews`
     );
   }
   return config;
@@ -184,7 +213,7 @@ type Envelope = GitHubAsyncEnvelope & { original_enqueued_at?: string };
 // ---------------------------------------------------------------------------------------------
 
 /** Why a job's AbortController fired. */
-export type AbortReason = "deadline" | "lost" | "shutdown";
+export type AbortReason = "deadline" | "lost" | "vt_lapsing" | "shutdown";
 
 /** One structured worker event. Never carries credentials or file content. */
 export type WorkerEvent = { msg: string } & Record<string, unknown>;
@@ -195,6 +224,8 @@ export interface WorkerTestHooks {
   gitDeps?: Partial<GitSyncDeps>;
   /** `file://` remotes instead of GitHub. */
   remote?: RemoteConfig;
+  /** The fetch under every Supabase client the worker builds. A test makes it hang. */
+  fetch?: typeof fetch;
 }
 
 class RunningJob {
@@ -285,7 +316,7 @@ export class HandoutSyncWorker {
     const fencedFetch: typeof fetch = (input, init) =>
       fenced()
         ? Promise.reject(new Error("handout-sync-worker: this job is fenced; its database writes are refused"))
-        : fetch(input, init);
+        : (this.testOnly.fetch ?? fetch)(input, init);
     return createClient<Database>(this.#config.supabaseUrl, this.#config.serviceRoleKey, {
       auth: REQUEST_SCOPED_AUTH_OPTIONS,
       global: { fetch: fencedFetch }
@@ -383,7 +414,7 @@ export class HandoutSyncWorker {
         try {
           read = await this.#readAndStart(free);
         } catch (e) {
-          this.#log({ msg: "queue read failed", error: e instanceof Error ? e.message : String(e) });
+          this.#log({ msg: "queue read failed", error: describeError(e) });
           Sentry.captureException(e, this.#scope);
         }
       }
@@ -397,11 +428,15 @@ export class HandoutSyncWorker {
   }
 
   async #readAndStart(free: number): Promise<number> {
-    const { data, error } = await this.#admin.schema("pgmq_public").rpc("read", {
-      queue_name: HANDOUT_SYNC_QUEUE,
-      sleep_seconds: this.#config.visibilityTimeoutSeconds,
-      n: free
-    });
+    // Bounded, so a hung read cannot stop the loop (and /healthz) from turning.
+    const { data, error } = await this.#admin
+      .schema("pgmq_public")
+      .rpc("read", {
+        queue_name: HANDOUT_SYNC_QUEUE,
+        sleep_seconds: this.#config.visibilityTimeoutSeconds,
+        n: free
+      })
+      .abortSignal(AbortSignal.timeout(this.#config.rpcTimeoutMs));
     if (error) throw error;
     const messages = (data ?? []) as unknown as PgmqMessageRecord<Envelope>[];
     for (const message of messages) {
@@ -425,14 +460,20 @@ export class HandoutSyncWorker {
     const deadline = setTimeout(() => {
       this.#log({ msg: "job deadline reached; killing its git children", msg_id: message.msg_id });
       job.abort("deadline");
-      // The abort reaches git, not REST or the database. If the job is still here once those have
-      // had DEADLINE_SETTLE_MS, give the slot back and let the message redeliver.
+      // The abort kills git and refuses the job's next GitHub request; a request already in
+      // flight finishes. If the job is still running once deadlineSettleMs has passed, fence its
+      // database client and stop renewing, so its message comes back after one VT. The job keeps
+      // its slot until it actually returns: releasing it early would let this pod run more jobs
+      // than HANDOUT_SYNC_CONCURRENCY while the stuck one still holds memory and a request.
       setTimeout(() => {
-        if (!this.#jobs.has(message.msg_id) || this.#jobs.get(message.msg_id) !== job) return;
-        this.#log({ msg: "job did not settle after its deadline; fencing it", msg_id: message.msg_id });
+        if (this.#jobs.get(message.msg_id) !== job) return;
+        this.#log({
+          msg: "job did not settle after its deadline; fencing it, slot held until it returns",
+          msg_id: message.msg_id
+        });
         job.fence();
-        this.#releaseJob(job);
-      }, DEADLINE_SETTLE_MS);
+        job.stopHeartbeat();
+      }, this.#config.deadlineSettleMs);
     }, this.#config.jobDeadlineSeconds * 1000);
 
     this.#heartbeat(job).catch((e) => {
@@ -477,27 +518,52 @@ export class HandoutSyncWorker {
   /**
    * Renews the job's VT every heartbeat until the job releases its slot. A renewal that returns
    * no row means the message left the queue under us: abort the job and fence it, since whoever
-   * removed the message owns what happens next. A failed renewal is only logged; the next one may
-   * land, and if none does the message becomes visible, which the row guards tolerate (§6.4).
+   * removed the message owns what happens next. A renewal that fails or times out is counted and
+   * retried at the next beat, unless the VT would lapse before that beat could land: then the
+   * message is about to become visible to another reader, and this job is fenced and aborted
+   * (`vt_lapsing`) rather than run alongside its own redelivery.
    */
   async #heartbeat(job: RunningJob): Promise<void> {
     const msgId = job.message.msg_id;
+    const beatMs = this.#config.heartbeatSeconds * 1000;
+    const vtMs = this.#config.visibilityTimeoutSeconds * 1000;
+    // The read set the VT; each renewal moves it out again.
+    let vtExpiresAt = Date.now() + vtMs;
     while (!job.heartbeatSignal.aborted) {
-      await sleep(this.#config.heartbeatSeconds * 1000, job.heartbeatSignal);
+      await sleep(beatMs, job.heartbeatSignal);
       if (job.heartbeatSignal.aborted) return;
-      const { data, error } = await this.#admin.schema("pgmq_public").rpc("set_vt", {
-        queue_name: HANDOUT_SYNC_QUEUE,
-        message_id: msgId,
-        vt_offset_seconds: this.#config.visibilityTimeoutSeconds
-      });
+      const sentAt = Date.now();
+      let rows: PgmqMessageRecord[] | null = null;
+      let failure: string | null = null;
+      try {
+        const { data, error } = await this.#admin
+          .schema("pgmq_public")
+          .rpc("set_vt", {
+            queue_name: HANDOUT_SYNC_QUEUE,
+            message_id: msgId,
+            vt_offset_seconds: this.#config.visibilityTimeoutSeconds
+          })
+          .abortSignal(AbortSignal.timeout(this.#config.rpcTimeoutMs));
+        if (error) failure = error.message || error.code || "set_vt failed";
+        else rows = (data ?? []) as unknown as PgmqMessageRecord[];
+      } catch (e) {
+        failure = e instanceof Error ? e.message : String(e);
+      }
       if (job.heartbeatSignal.aborted) return;
-      if (error) {
+      if (failure !== null) {
         this.metrics.heartbeat("error");
-        this.#log({ msg: "heartbeat failed", msg_id: msgId, error: error.message });
+        this.#log({ msg: "heartbeat failed", msg_id: msgId, error: failure });
+        // The next beat starts beatMs from now and may itself take rpcTimeoutMs.
+        if (Date.now() + beatMs + this.#config.rpcTimeoutMs >= vtExpiresAt) {
+          this.#log({ msg: "visibility timeout lapsing without a renewal; fencing the job", msg_id: msgId });
+          job.fence();
+          job.abort("vt_lapsing");
+          job.stopHeartbeat();
+          return;
+        }
         continue;
       }
-      const rows = (data ?? []) as unknown as PgmqMessageRecord[];
-      if (rows.length === 0) {
+      if (rows!.length === 0) {
         this.metrics.heartbeat("lost");
         this.#log({ msg: "message no longer in the queue; aborting its job", msg_id: msgId });
         job.fence();
@@ -505,8 +571,9 @@ export class HandoutSyncWorker {
         job.stopHeartbeat();
         return;
       }
+      vtExpiresAt = sentAt + vtMs;
       this.metrics.heartbeat("ok");
-      this.#log({ msg: "heartbeat", msg_id: msgId, vt: rows[0].vt });
+      this.#log({ msg: "heartbeat", msg_id: msgId, vt: rows![0].vt });
     }
   }
 
@@ -530,7 +597,12 @@ export class HandoutSyncWorker {
     this.#log({ msg: "job finished", msg_id: message.msg_id, ok, fenced: job.fenced, aborted: job.abortReason });
     // `false` means processEnvelope already requeued, dead-lettered or left the message; only
     // `true` is ours to archive. A fenced client refuses the archive anyway.
-    if (ok && !job.fenced) await archiveMessage(client, message.msg_id, scope, HANDOUT_SYNC_QUEUE);
+    if (ok && !job.fenced) {
+      // No renewal may start (or land) once the archive does: a set_vt that finds the message
+      // archived reads as "lost" and would relabel a finished job aborted.
+      job.stopHeartbeat();
+      await archiveMessage(client, message.msg_id, scope, HANDOUT_SYNC_QUEUE);
+    }
     return ok ? "ok" : "failed";
   }
 
@@ -543,12 +615,22 @@ export class HandoutSyncWorker {
   async #runShadow(job: RunningJob, client: SupabaseClient<Database>, scope: Sentry.Scope): Promise<string> {
     const { message } = job;
     const envelope = message.message;
-    const args = envelope.args as SyncRepoToHandoutArgs;
+    const args = (envelope?.args ?? {}) as Partial<SyncRepoToHandoutArgs>;
     scope.setTag("shadow", "true");
+    // A copy that cannot be recorded (the row needs repository_id and to_sha) or that is not a
+    // sync is refused up front: archived and counted, never retried.
+    if (
+      envelope?.method !== "sync_repo_to_handout" ||
+      typeof args.repository_id !== "number" ||
+      typeof args.to_sha !== "string"
+    ) {
+      this.metrics.shadow("rejected");
+      this.#log({ msg: "malformed shadow message; archived without a prediction", msg_id: message.msg_id });
+      await this.#archiveShadow(job, client, scope);
+      return "rejected";
+    }
     let prediction: ShadowPrediction;
-    if (envelope.method !== "sync_repo_to_handout") {
-      prediction = shadowError(`a shadow copy of ${envelope.method} has nothing to predict`);
-    } else if (args.sync_strategy === "fork_merge_upstream") {
+    if (args.sync_strategy === "fork_merge_upstream") {
       // The REST job merges the fork's upstream through GitHub and opens no template PR, so there
       // is no git-built tree to compare it with.
       prediction = shadowError("skipped: fork_merge_upstream");
@@ -559,8 +641,8 @@ export class HandoutSyncWorker {
       );
     } else {
       prediction = await planRepositoryToHandoutGit({
-        repositoryFullName: args.repository_full_name,
-        templateRepo: args.template_repo,
+        repositoryFullName: String(args.repository_full_name),
+        templateRepo: String(args.template_repo),
         fromSha: args.from_sha ?? null,
         toSha: args.to_sha,
         syncedRepoSha: args.synced_repo_sha ?? null,
@@ -582,11 +664,29 @@ export class HandoutSyncWorker {
       },
       { onConflict: "msg_id", ignoreDuplicates: true }
     );
-    // Not archived: the message redelivers and the insert is tried again.
-    if (error) throw error;
+    if (error) {
+      this.metrics.shadow("record_failed");
+      // Below the cap, not archived: the message redelivers and the insert is tried again. Past
+      // it, archived anyway, so a prediction that can never be stored does not bounce forever.
+      if (message.read_ct <= this.#config.maxReadCount) throw error;
+      this.#log({
+        msg: "shadow prediction could not be recorded; past the read cap, archiving it anyway",
+        msg_id: message.msg_id,
+        error: error.message
+      });
+      await this.#archiveShadow(job, client, scope);
+      return "record_failed";
+    }
+    this.metrics.shadow("recorded");
     this.#log({ msg: "shadow recorded", msg_id: message.msg_id, error: prediction.error });
-    if (!job.fenced) await archiveMessage(client, message.msg_id, scope, HANDOUT_SYNC_QUEUE);
+    await this.#archiveShadow(job, client, scope);
     return "recorded";
+  }
+
+  async #archiveShadow(job: RunningJob, client: SupabaseClient<Database>, scope: Sentry.Scope): Promise<void> {
+    if (job.fenced) return;
+    job.stopHeartbeat();
+    await archiveMessage(client, job.message.msg_id, scope, HANDOUT_SYNC_QUEUE);
   }
 
   /**
@@ -632,6 +732,13 @@ export class HandoutSyncWorker {
       this.#evicting = false;
     }
   }
+}
+
+/** An Error's message, or a PostgREST error object's, for a log line. */
+function describeError(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
+  return String(e);
 }
 
 function shadowError(error: string): ShadowPrediction {

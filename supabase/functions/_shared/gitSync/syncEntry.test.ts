@@ -1130,7 +1130,7 @@ gitTest("runtime.signalFor: an aborted job signal stops the job before git runs,
     assertEquals(asked, ["123"], "keyed by the jobId the handler passes, the msg_id");
     assertEquals(result.success, false);
     assertEquals(result.terminal_reason, undefined);
-    assertMatch(String(result.error), /deadline/);
+    assertEquals(result.redeliver_kind, "deadline_exceeded");
     assert(!h.timeline.includes("git push"));
     assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), null);
   });
@@ -1255,4 +1255,68 @@ gitTest("a local git failure is marked for redelivery; a network failure is not"
       assertEquals([result.success, result.terminal_reason, result.redeliver_kind], [false, undefined, kind], stderr);
     });
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Aborts reach REST (WP5 review, item 2)
+// ---------------------------------------------------------------------------------------------
+
+/** A harness whose job signal is a controller the test fires. */
+function abortableHarness(w: World) {
+  const h = harness(w);
+  const controller = new AbortController();
+  const runtime = h.deps.runtime();
+  h.deps.runtime = () => ({ ...runtime, signalFor: () => controller.signal });
+  return { ...h, controller };
+}
+
+gitTest("an abort right after the push creates no PR and merges nothing, and is redelivered", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = abortableHarness(w);
+    const base = h.deps.engineContext!;
+    h.deps.engineContext = {
+      ...base,
+      testOnly: {
+        ...base.testOnly,
+        afterPhase: (phase) => {
+          if (phase === "push") h.controller.abort(new Error("handout sync job 123 aborted: deadline"));
+          return Promise.resolve();
+        }
+      }
+    };
+    const result = await h.run();
+    assert(h.timeline.includes("git push"), "the push itself ran");
+    assertEquals([result.success, result.redeliver_kind], [false, "deadline_exceeded"]);
+    assertMatch(String(result.error), /aborted: deadline/);
+    const writes = h.gh.calls.filter((c) => !c.route.startsWith("GET "));
+    assertEquals(writes, [], "no POST, PATCH or PUT after the abort");
+  });
+});
+
+gitTest("an abort during the wait before the merge stops the merge", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = abortableHarness(w);
+    // The wait never ends on its own; only the abort ends it.
+    h.deps.sleep = () => {
+      h.controller.abort(new Error("handout sync job 123 aborted: shutdown"));
+      return new Promise(() => {});
+    };
+    const result = await h.run({ waitBeforeMerge: 60_000 });
+    assertEquals([result.success, result.redeliver_kind], [false, "deadline_exceeded"]);
+    assertEquals(h.gh.calls.filter((c) => c.route.startsWith("POST ")).length, 1, "the PR was opened before the abort");
+    assertEquals(h.gh.calls.filter((c) => c.route.startsWith("PUT ")).length, 0, "and not merged after it");
+  });
+});
+
+gitTest("an aborted job's octokit refuses requests it has not sent yet", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = abortableHarness(w);
+    h.controller.abort(new Error("handout sync job 123 aborted: lost"));
+    const result = await h.run();
+    assertEquals([result.success, result.redeliver_kind], [false, "deadline_exceeded"]);
+    assertEquals(h.gh.calls, [], "not even the size check reached GitHub");
+  });
 });

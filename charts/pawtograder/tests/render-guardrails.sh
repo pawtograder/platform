@@ -993,6 +993,32 @@ assert_rendered_lacks "cilium mode renders no plain NetworkPolicy beside it" "$H
   "kind: NetworkPolicy" --set handoutSyncWorker.enabled=true \
   --set handoutSyncWorker.networkPolicy.cilium.enabled=true
 
+# --allow-net (WP5 review item 7): the chart, not the image, grants the worker's
+# JavaScript its network access, host by host. In a cluster whose CNI does not
+# enforce NetworkPolicy this list is the only limit on that side.
+assert_rendered_contains "worker args grant --allow-net host by host" "$HSW_T" \
+  '"--allow-net=t-pawtograder-kong:8000,api.github.com:443,0.0.0.0:9464"' "${HSW[@]}"
+assert_rendered_lacks "worker args never grant a bare --allow-net" "$HSW_T" '"--allow-net"' "${HSW[@]}"
+assert_rendered_contains "worker --allow-net derives the internal Redis host" "$HSW_T" \
+  ',pawtograder-redis:6379' "${HSW[@]}" --set redis.provider=internal
+assert_rendered_contains "worker --allow-net carries the Sentry and extra hosts" "$HSW_T" \
+  ',o1.ingest.sentry.io:443,example.org:8443"' "${HSW[@]}" \
+  --set handoutSyncWorker.allowNet.sentry=o1.ingest.sentry.io:443 \
+  --set 'handoutSyncWorker.allowNet.extraHosts={example.org:8443}'
+assert_refused "worker refuses an --allow-net entry that is not host:port" \
+  'handoutSyncWorker.allowNet: "*" is not host:port' \
+  "${HSW[@]}" --set 'handoutSyncWorker.allowNet.extraHosts={*}'
+HSW_DOCKERFILE="$CHART/images/handout-sync-worker/Dockerfile"
+if awk '/^ENTRYPOINT/,/\]$/' "$HSW_DOCKERFILE" | grep -q -- '--allow-net'; then
+  echo "FAIL [worker image grants no --allow-net of its own]: the ENTRYPOINT in $HSW_DOCKERFILE has one"
+  FAILED=1
+elif ! grep -qx 'CMD \[\]' "$HSW_DOCKERFILE"; then
+  echo "FAIL [worker image grants no --allow-net of its own]: CMD is not empty, so the image starts without the chart's args"
+  FAILED=1
+else
+  echo "ok   [worker image grants no --allow-net of its own]"
+fi
+
 # The generic aging rule must exclude handout_sync, or one stuck sync pages twice.
 assert_rendered_contains "handout_sync has its own aging rule" templates/prometheus-rules.yaml \
   'queue="handout_sync"}[15m])) * 60 < -0.5' \

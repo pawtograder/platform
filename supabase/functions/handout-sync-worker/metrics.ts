@@ -20,13 +20,14 @@
  * | `pawtograder_handout_sync_jobs_total` | counter | `kind` (sync, shadow), `outcome` |
  * | `pawtograder_handout_sync_job_duration_seconds` | histogram | `kind` |
  * | `pawtograder_handout_sync_heartbeats_total` | counter | `result` (ok, error, lost) |
+ * | `pawtograder_handout_sync_shadow_messages_total` | counter | `result` (recorded, record_failed, rejected) |
  * | `pawtograder_handout_sync_git_calls_total` | counter | `op`, `result` (ok, failed, killed) |
  * | `pawtograder_handout_sync_git_duration_seconds` | histogram | `op` |
  * | `pawtograder_handout_sync_work_bytes` | gauge | |
  * | `pawtograder_handout_sync_work_limit_bytes` | gauge | |
  *
  * `outcome` is `ok` (archived), `failed` (processEnvelope returned false: requeued, dead-lettered
- * or left for redelivery), `recorded` (a shadow prediction), `error` (the job threw), or
+ * or left for redelivery), `error` (the job threw), or
  * `aborted_deadline`, `aborted_lost`, `aborted_shutdown` when the worker aborted it.
  */
 import type { GitLogEntry } from "../_shared/gitSync/runGit.ts";
@@ -91,6 +92,7 @@ export class WorkerMetrics {
   readonly #jobs = new Counter();
   readonly #jobDuration = new Histogram(JOB_BUCKETS);
   readonly #heartbeats = new Counter();
+  readonly #shadow = new Counter();
   readonly #gitCalls = new Counter();
   readonly #gitDuration = new Histogram(GIT_BUCKETS);
 
@@ -101,6 +103,10 @@ export class WorkerMetrics {
 
   heartbeat(result: "ok" | "error" | "lost"): void {
     this.#heartbeats.inc(`result="${result}"`);
+  }
+
+  shadow(result: "recorded" | "record_failed" | "rejected"): void {
+    this.#shadow.inc(`result="${result}"`);
   }
 
   gitCall(entry: GitLogEntry): void {
@@ -137,6 +143,12 @@ export class WorkerMetrics {
       "counter",
       "Visibility-timeout renewals, by result",
       this.#heartbeats.render(`${p}_heartbeats_total`)
+    );
+    block(
+      `${p}_shadow_messages_total`,
+      "counter",
+      "Shadow copies handled, by result",
+      this.#shadow.render(`${p}_shadow_messages_total`)
     );
     block(
       `${p}_git_calls_total`,

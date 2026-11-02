@@ -59,7 +59,7 @@ import {
   type SyncJobContext,
   withSyncJob
 } from "./engine.ts";
-import { type GitFailureKind, GitSyncError, GitSyncTerminalError } from "./errors.ts";
+import { type GitFailureKind, GitSyncError, GitSyncRetryableError, GitSyncTerminalError } from "./errors.ts";
 import type { GitIdentity, GitLogger, RemoteConfig } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 import { validateRepoFullName, validateSha } from "./validate.ts";
@@ -353,7 +353,10 @@ export async function syncRepositoryToHandoutGit(
     });
     if (!("kind" in outcome)) return outcome;
 
-    // 5. The pull request, under both limiters and nothing else.
+    // 5. The pull request, under both limiters and nothing else. Not once the job is aborted: the
+    // pushed branch is harmless on its own, and a PR or merge after the worker gave up on the job
+    // would race the redelivery that replaces it.
+    throwIfAborted(ctx.signal, "before the pull request");
     return await deps.syncLimiter(org).schedule(() =>
       deps.contentLimiter(org).schedule(() =>
         deliverPullRequest({
@@ -366,6 +369,7 @@ export async function syncRepositoryToHandoutGit(
           autoMerge,
           waitBeforeMerge,
           sleep: deps.sleep,
+          signal: ctx.signal,
           scope
         })
       )
@@ -409,6 +413,58 @@ export const REDELIVERY_KINDS: ReadonlySet<GitFailureKind> = new Set<GitFailureK
   "git_failed",
   "timeout"
 ]);
+
+// ---------------------------------------------------------------------------------------------
+// Aborts reach REST too
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The job's abort, as the engine sees it at the deadline: a retryable `deadline_exceeded`, which
+ * the handler retries by redelivery (`REDELIVERY_KINDS`). The signal's reason says which abort
+ * (deadline, lost message, shutdown).
+ */
+function abortError(signal: AbortSignal, where: string): GitSyncRetryableError {
+  const why = signal.reason instanceof Error ? signal.reason.message : String(signal.reason ?? "aborted");
+  return new GitSyncRetryableError(`handout sync stopped ${where}: ${why}`, "deadline_exceeded");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, where: string): void {
+  if (signal?.aborted) throw abortError(signal, where);
+}
+
+/** `sleep(ms)`, ended early by the abort. */
+async function abortableSleep(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  if (!signal) return await sleep(ms);
+  let onAbort = () => {};
+  const aborted = new Promise<void>((resolve) => {
+    onAbort = () => resolve();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([sleep(ms), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * The job's octokit, refusing every request once the job's signal has fired: the worker aborts a
+ * job when it gives up on it (deadline, lost message, shutdown), and from then on the job must not
+ * write to GitHub, the same way its database client is fenced. A request already in flight
+ * finishes.
+ */
+function abortableOctokit(octokit: GitSyncOctokit, signal: AbortSignal | undefined): GitSyncOctokit {
+  if (!signal) return octokit;
+  const request = ((route: string, params?: Record<string, unknown>) => {
+    if (signal.aborted) return Promise.reject(abortError(signal, `before ${route}`));
+    return octokit.request(route as never, params as never);
+  }) as unknown as GitSyncOctokit["request"];
+  return { request };
+}
 
 /** What `prepareGitJob` hands to the git work: validated names, the student octokit, the context. */
 interface PreparedGitJob {
@@ -479,10 +535,11 @@ async function prepareGitJob(
     TEMPLATE_TOKEN_PERMISSIONS,
     scope
   );
-  const templateOctokit = deps.octokitForToken(templateToken, scope);
+  const signal = runtime.signalFor?.(String(jobId));
+  const templateOctokit = abortableOctokit(deps.octokitForToken(templateToken, scope), signal);
   await assertRepoWithinSizeLimit(templateOctokit, template, runtime.maxRepoKib, scope);
   const { token } = await deps.getScopedToken(org, [repoName], studentPermissions, scope);
-  const octokit = deps.octokitForToken(token, scope);
+  const octokit = abortableOctokit(deps.octokitForToken(token, scope), signal);
   await assertRepoWithinSizeLimit(octokit, repo, runtime.maxRepoKib, scope);
   const identity = await resolveBotIdentity(octokit, deps, scope);
 
@@ -492,7 +549,7 @@ async function prepareGitJob(
     templateCache: runtime.templateCache,
     remote: runtime.remote,
     maxMergeBytes: runtime.maxMergeBytes,
-    signal: runtime.signalFor?.(String(jobId)),
+    signal,
     gitLog: runtime.gitLog,
     token,
     templateToken,
@@ -887,9 +944,11 @@ async function deliverPullRequest(args: {
   autoMerge: boolean;
   waitBeforeMerge: number;
   sleep: (ms: number) => Promise<void>;
+  signal?: AbortSignal;
   scope?: Sentry.Scope;
 }): Promise<SyncResult> {
-  const { octokit, repo, pushed, fromSha, toSha, syncedRepoSha, autoMerge, waitBeforeMerge, sleep, scope } = args;
+  const { octokit, repo, pushed, fromSha, toSha, syncedRepoSha, autoMerge, waitBeforeMerge, sleep, signal, scope } =
+    args;
   const { branch, commit, unresolved } = pushed.plan;
   const unresolvedPaths = unresolved.length > 0 ? unresolved.map((f) => f.path) : undefined;
 
@@ -992,8 +1051,10 @@ async function deliverPullRequest(args: {
   let merged = false;
   let mergeSha: string | undefined;
   if (effectiveAutoMerge) {
-    // Wait for GitHub to update mergeable state.
-    await sleep(waitBeforeMerge);
+    // Wait for GitHub to update mergeable state. The wait ends early on an abort, and nothing
+    // is merged after one.
+    await abortableSleep(sleep, waitBeforeMerge, signal);
+    throwIfAborted(signal, "before the merge");
     const result = await attemptAutoMerge(octokit, repo, prNumber, commit, scope);
     merged = result.merged;
     mergeSha = result.mergeSha;

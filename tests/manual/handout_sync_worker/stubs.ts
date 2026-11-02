@@ -18,6 +18,12 @@ export function harnessRemote(fixtureRoot: string): RemoteConfig {
 export function harnessGitDeps(fixtureRoot: string, ctrl: string): Partial<GitSyncDeps> {
   const remotesDir = `${fixtureRoot}/remotes`;
 
+  const exists = (path: string) =>
+    Deno.lstat(path).then(
+      () => true,
+      () => false
+    );
+
   /** Appends one JSON line to a control-dir log the test reads back. */
   async function record(file: string, value: unknown): Promise<void> {
     await Deno.writeTextFile(`${ctrl}/${file}`, JSON.stringify(value) + "\n", { append: true });
@@ -75,6 +81,8 @@ export function harnessGitDeps(fixtureRoot: string, ctrl: string): Partial<GitSy
           return { data: (await loadPrs()).filter((p) => p.repo === fullName && p.head.ref === branch).reverse() };
         }
         case "POST /repos/{owner}/{repo}/pulls": {
+          // A request GitHub is slow to answer: in flight until `ctrl/hang-pr-create` is removed.
+          while (await exists(`${ctrl}/hang-pr-create`)) await new Promise((r) => setTimeout(r, 200));
           const prs = await loadPrs();
           const branch = String(params.head);
           const sha = await git(["--git-dir", gitDir, "rev-parse", `refs/heads/${branch}`]);

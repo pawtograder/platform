@@ -90,6 +90,24 @@ the edge-functions pod follows from those two facts:
 {{- fail (printf "handoutSyncWorker.maxRepoKib=%v x 2 does not fit in the %d%% of workSizeLimit (%s) left above the cache eviction mark. A student repo and a template both at the ceiling would fill /work, and the kubelet would evict the pod with every other job on it. Raise workSizeLimit or lower maxRepoKib." $w.maxRepoKib (sub 100 $evict) $workLimit) -}}
 {{- end -}}
 
+{{- /* --allow-net for the worker's JavaScript (values: handoutSyncWorker.allowNet). */ -}}
+{{- $allowNet := list (printf "%s:%v" (include "pawtograder.kong.host" .) .Values.kong.service.port) "api.github.com:443" (printf "0.0.0.0:%v" $w.metricsPort) -}}
+{{- $redisProvider := .Values.redis.provider | default "external" -}}
+{{- $redisHost := $w.allowNet.redis | default "" -}}
+{{- if and (not $redisHost) (eq $redisProvider "internal") -}}
+{{- $redisHost = printf "pawtograder-redis:%v" (.Values.redis.internal.service.port | default 6379) -}}
+{{- else if and (not $redisHost) (eq $redisProvider "shared") -}}
+{{- $redisHost = "redis.pawtograder-shared-redis.svc.cluster.local:6379" -}}
+{{- end -}}
+{{- with $redisHost }}{{ $allowNet = append $allowNet . }}{{ end -}}
+{{- with $w.allowNet.sentry }}{{ $allowNet = append $allowNet . }}{{ end -}}
+{{- range $w.allowNet.extraHosts }}{{ $allowNet = append $allowNet . }}{{ end -}}
+{{- range $h := $allowNet -}}
+{{- if not (regexMatch "^[A-Za-z0-9.-]+:[0-9]+$" (toString $h)) -}}
+{{- fail (printf "handoutSyncWorker.allowNet: %q is not host:port. Each entry becomes one item of deno's --allow-net list, and a bare host, a scheme, a wildcard or a comma would widen or break it." (toString $h)) -}}
+{{- end -}}
+{{- end -}}
+
 {{- $secretFor := dict
       "github" ($w.secretSources.github | default .Values.secrets.names.edgeFunctions)
       "sentry" ($w.secretSources.sentry | default .Values.secrets.names.edgeFunctions)
@@ -164,10 +182,15 @@ spec:
         - name: worker
           image: {{ include "pawtograder.image" (dict "ctx" . "image" $image) }}
           imagePullPolicy: {{ $w.image.pullPolicy }}
-          # The image's ENTRYPOINT carries the `deno run` permission flags
-          # (no -A; --allow-write=/work,/tmp, V8 heap capped); see
-          # the Dockerfile. The chart deliberately does not override it, so the
-          # flags have one source.
+          # The image's ENTRYPOINT carries every `deno run` flag except
+          # --allow-net (no -A; see the Dockerfile). --allow-net and the script
+          # come from here, narrowed to the hosts this release's JavaScript
+          # reaches (handoutSyncWorker.allowNet). The image's CMD is empty, so
+          # without these args deno exits instead of starting a worker with
+          # wider network access.
+          args:
+            - {{ printf "--allow-net=%s" (join "," $allowNet) | quote }}
+            - /app/functions/handout-sync-worker/main.ts
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001

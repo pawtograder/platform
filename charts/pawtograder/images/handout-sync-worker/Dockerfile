@@ -171,12 +171,14 @@ EXPOSE 9464
 
 # Permissions, flag by flag (no -A). Measured against main.ts in WP5 (read-only
 # root, --cap-drop ALL, a scratch Supabase stack):
-#   --allow-net            Kong (PostgREST), Redis, api.github.com, github.com and
-#                          the Sentry DSN host. Not narrowed by host here because
-#                          the Kong and Redis hosts depend on the release and the
-#                          Redis host lives in a Secret; the pod's egress policy
-#                          is the enforcement point (spec §8.5). Also binds the
-#                          metrics port.
+#   --allow-net            NOT HERE. The chart renders it into the container args
+#                          with the hosts this release's JavaScript reaches: Kong,
+#                          Redis, api.github.com:443, the Sentry host and the
+#                          metrics listener (handoutSyncWorker.allowNet). In a
+#                          cluster whose CNI does not enforce NetworkPolicy it is
+#                          the only network limit on the JavaScript side; git is a
+#                          separate process and is bounded by the egress policy
+#                          alone (spec §8.5).
 #   --allow-env            processEnvelope's dependencies read their own variables
 #                          (Sentry, octokit, supabase-js) and an allowlist here
 #                          would turn a library upgrade into a startup crash. The
@@ -214,10 +216,14 @@ EXPOSE 9464
 ENTRYPOINT ["/tini", "--", "deno", "run", \
   "--cached-only", "--frozen", "--lock=/app/deno.lock", "--no-code-cache", \
   "--v8-flags=--max-old-space-size=384", \
-  "--allow-net", \
   "--allow-env", \
   "--allow-run", \
   "--allow-read=/app,/work,/tmp", \
   "--allow-write=/work,/tmp", \
   "--allow-sys=hostname,osRelease"]
-CMD ["/app/functions/handout-sync-worker/main.ts"]
+# Empty on purpose: the chart passes --allow-net=<hosts> and the script. Run by
+# hand, pass both:
+#   docker run ... <image> --allow-net=<host:port,...> /app/functions/handout-sync-worker/main.ts
+# With no args deno exits ("missing script") rather than starting a worker with
+# a network grant nobody chose.
+CMD []

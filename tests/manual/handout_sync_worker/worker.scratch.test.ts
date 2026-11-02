@@ -571,6 +571,7 @@ Deno.test(
       assertEquals(after.sync_data.status, "in_progress");
       assertEquals(after.sync_data, before.sync_data);
       assertEquals(events(w, "shutdown grace over; aborting job without archiving it").length, 1);
+      assertEquals(await circuitTrace(), { breakers: 0, errors: 0 }, "an aborted job opens no circuit");
     } finally {
       await stopWorker(w);
       await tearDown(c);
@@ -632,6 +633,14 @@ async function redeliveryCase(
     assertEquals((await queued("handout_sync")).length, 0);
     assertEquals(await circuitTrace(), { breakers: 0, errors: 0 });
     assertEquals(events(w, "job started").length, 2, "one attempt, then the capped redelivery");
+    // The dead-letter note is merged into the attempt's note: the kind and its error survive.
+    const after = JSON.parse(await repoRow(s.id));
+    assertEquals([after.sync_data.status, after.sync_data.error_kind], ["error", expectKind]);
+    assertEquals(after.sync_data.dead_letter_queue, "handout_sync_dlq");
+    assert(
+      String(after.sync_data.last_sync_error).includes(`Last failure (${expectKind})`),
+      after.sync_data.last_sync_error
+    );
   } finally {
     await stopWorker(w);
     await tearDown(c);
@@ -954,5 +963,279 @@ Deno.test(
       "false,false"
     );
     await resetDb();
+  }
+);
+
+// ---------------------------------------------------------------------------------------------
+// Round C (WP5 review): guarded dead-letter write, REST after an abort, timeouts, shadow edges
+// ---------------------------------------------------------------------------------------------
+
+Deno.test(
+  "a dead-lettered revision does not overwrite the newer revision that landed meanwhile",
+  NO_SANITIZE,
+  async () => {
+    const name = "org/student-dlq-race";
+    const c = await setUp([name], { recorded: false });
+    const s = c.students.get(name)!;
+    await Deno.writeTextFile(`${c.ctrl}/push-fail`, "fatal: unable to write new index file: No space left on device\n");
+    const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+    await sql(`update pgmq.q_handout_sync set read_ct = 4 where msg_id = ${msgId}`);
+    const w = await startWorker(c, { HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 10, HANDOUT_SYNC_HEARTBEAT_SECONDS: 2 });
+    try {
+      // Attempt 5 fails locally and leaves its note.
+      await waitFor("the fifth attempt to finish", 60_000, async () => events(w, "job finished").length === 1);
+      assertEquals(JSON.parse(await repoRow(s.id)).sync_data.error_kind, "disk_full");
+      // Meanwhile a newer revision H3 landed through its own pull request, as the handler records it.
+      const H3 = await c.template.commitOn("main", { ...AFTER, "src/Third.java": "class Third {}\n" });
+      await sql(`update public.repositories set synced_handout_sha = '${H3}', desired_handout_sha = '${H3}',
+      synced_repo_sha = '${s.S}', sync_data = '{"pr_number": 9, "pr_state": "merged", "merge_sha": "${s.S}",
+      "branch_name": "sync-to-${H3.slice(0, 7)}", "last_sync_attempt": "2026-11-02T00:00:00Z"}'::jsonb where id = ${s.id}`);
+      const landed = await repoRow(s.id);
+      // Attempt 6 is over the cap: dead-lettered, and the row is left exactly as H3 wrote it.
+      await waitFor(
+        "the redelivery to dead-letter",
+        60_000,
+        async () => (await queued("handout_sync_dlq")).length === 1
+      );
+      assertEquals(await repoRow(s.id), landed, "H3's sync_data survives H2's dead-letter step");
+    } finally {
+      await stopWorker(w);
+      await tearDown(c);
+    }
+  }
+);
+
+Deno.test(
+  "a deleted message mid-job (lost): fenced, git killed, nothing archived or written",
+  NO_SANITIZE,
+  async () => {
+    const name = "org/student-lost";
+    const c = await setUp([name], { recorded: false });
+    const s = c.students.get(name)!;
+    await Deno.writeTextFile(`${c.ctrl}/slow-push`, "");
+    const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+    const w = await startWorker(c, { HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 6, HANDOUT_SYNC_HEARTBEAT_SECONDS: 2 });
+    try {
+      await waitFor("the push to start", 60_000, () => pushStarted(c));
+      const before = await repoRow(s.id);
+      // Cancelled under the job, as an assignment delete does.
+      await sql(`select pgmq.delete('handout_sync', ${msgId}::bigint)`);
+      await waitFor("the job to finish", 30_000, async () => events(w, "job finished").length === 1);
+      assertEquals(events(w, "message no longer in the queue; aborting its job").length, 1);
+      assertEquals(events(w, "job finished")[0].aborted, "lost");
+      assertEquals(await processesUnder(c.fx.root), [], "git killed");
+      assertEquals(await repoRow(s.id), before, "the fenced job wrote nothing");
+      assertEquals([(await queued("handout_sync")).length, (await archived("handout_sync")).length], [0, 0]);
+      assertEquals(await circuitTrace(), { breakers: 0, errors: 0 });
+      assertEquals(await s.repo.ref(`refs/heads/sync-to-${c.H.slice(0, 7)}`), null);
+    } finally {
+      await stopWorker(w);
+      await tearDown(c);
+    }
+  }
+);
+
+Deno.test(
+  "deadline-settle: a job stuck in REST is fenced, keeps its slot, then the redelivery converges",
+  NO_SANITIZE,
+  async () => {
+    const name = "org/student-settle";
+    const c = await setUp([name], { recorded: false });
+    const s = c.students.get(name)!;
+    await Deno.writeTextFile(`${c.ctrl}/hang-pr-create`, "");
+    const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+    const w = await startWorker(c, {
+      HANDOUT_SYNC_CONCURRENCY: 1,
+      HANDOUT_SYNC_JOB_DEADLINE_SECONDS: 5,
+      WP5_DEADLINE_SETTLE_MS: 3000,
+      HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 6,
+      HANDOUT_SYNC_HEARTBEAT_SECONDS: 2
+    });
+    try {
+      const settle = "job did not settle after its deadline; fencing it, slot held until it returns";
+      await waitFor("the settle fence", 30_000, async () => events(w, settle).length === 1);
+      // Renewals stopped, so the message is visible again within one VT; with the only slot still
+      // held by the stuck job, this worker must not read it a second time.
+      await new Promise((r) => setTimeout(r, 9000));
+      const [q] = await queued("handout_sync", `msg_id = ${msgId}`);
+      assertEquals(q.read_ct, 1, "concurrency 1 is not exceeded while the stuck job holds its slot");
+      assert(new Date(q.vt).getTime() <= Date.now(), "and the message is visible again");
+      const rowWhileStuck = await repoRow(s.id);
+      // GitHub answers the stuck request, so the stuck job's PR exists. Every write it then tries is
+      // refused by the fence, and only after it returns does the slot free up for the redelivery.
+      // Reads are held off meanwhile, so the row checked below is the stuck job's doing alone.
+      await Deno.writeTextFile(`${c.ctrl}/hang-read`, "");
+      await Deno.remove(`${c.ctrl}/hang-pr-create`);
+      await waitFor("the stuck job to return", 90_000, async () => events(w, "job finished").length === 1);
+      assertEquals(events(w, "job finished")[0].aborted, "deadline");
+      assertEquals(events(w, "job finished")[0].fenced, true);
+      assertEquals(await repoRow(s.id), rowWhileStuck, "the fenced job wrote nothing after it returned");
+      assertEquals(await circuitTrace(), { breakers: 0, errors: 0 }, "and opened no circuit");
+      await Deno.remove(`${c.ctrl}/hang-read`);
+      await waitFor("the redelivery to be archived", 60_000, async () => (await archived("handout_sync")).length === 1);
+      assertEquals((await archived("handout_sync"))[0].read_ct, 2);
+      const rest = (await Deno.readTextFile(`${c.ctrl}/rest.jsonl`))
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l).route);
+      assertEquals(rest.filter((r) => r.startsWith("POST ")).length, 1, "the redelivery reused the stuck job's PR");
+      // With no recorded handout revision the sync leaves files to the student, so the PR stays open.
+      const row = JSON.parse(await repoRow(s.id));
+      assertEquals([row.sync_data.pr_state, row.sync_data.pr_number], ["open", 1]);
+    } finally {
+      await stopWorker(w);
+      await tearDown(c);
+    }
+  }
+);
+
+Deno.test(
+  "redeliver_kind losing the write race retires the job (retireStaleSync), no note, no circuit",
+  NO_SANITIZE,
+  async () => {
+    const name = "org/student-race";
+    const c = await setUp([name], { recorded: false });
+    const s = c.students.get(name)!;
+    await Deno.writeTextFile(`${c.ctrl}/slow-push`, "");
+    await Deno.writeTextFile(`${c.ctrl}/push-fail`, "fatal: unable to write new index file: No space left on device\n");
+    const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+    const w = await startWorker(c, {});
+    try {
+      await waitFor("the push to start", 60_000, () => pushStarted(c));
+      // A newer revision was queued while this one ran: the row now waits for something else.
+      const H3 = await c.template.commitOn("main", { ...AFTER, "src/Third.java": "class Third {}\n" });
+      await sql(`update public.repositories set desired_handout_sha = '${H3}' where id = ${s.id}`);
+      await Deno.remove(`${c.ctrl}/slow-push`);
+      await waitFor("the job to be retired", 60_000, async () => (await archived("handout_sync")).length === 1);
+      assertEquals((await archived("handout_sync"))[0].msg_id, msgId);
+      assertEquals((await queued("handout_sync")).length, 0, "superseded, so not requeued");
+      const row = JSON.parse(await repoRow(s.id));
+      assertEquals(row.sync_data.status, "in_progress", "the lost write left no error note");
+      assertEquals(row.sync_data.error_kind, undefined);
+      assertEquals(await circuitTrace(), { breakers: 0, errors: 0 });
+    } finally {
+      await stopWorker(w);
+      await tearDown(c);
+    }
+  }
+);
+
+Deno.test("a hung set_vt times out; once the VT would lapse the job is fenced and aborted", NO_SANITIZE, async () => {
+  const name = "org/student-hang-vt";
+  const c = await setUp([name], { recorded: false });
+  const s = c.students.get(name)!;
+  await Deno.writeTextFile(`${c.ctrl}/slow-push`, "");
+  const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+  // VT 8 s, heartbeat 2 s: the queue-call timeout is 3 s.
+  const w = await startWorker(c, { HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 8, HANDOUT_SYNC_HEARTBEAT_SECONDS: 2 });
+  try {
+    await waitFor("the push to start", 60_000, () => pushStarted(c));
+    const before = await repoRow(s.id);
+    await Deno.writeTextFile(`${c.ctrl}/hang-set-vt`, "");
+    const lapse = "visibility timeout lapsing without a renewal; fencing the job";
+    await waitFor("the VT-lapse fence", 30_000, async () => events(w, lapse).length === 1);
+    await waitFor("the job to finish", 30_000, async () => events(w, "job finished").length === 1);
+    assert(events(w, "heartbeat failed").length >= 1, "the hung renewal timed out");
+    assertEquals(events(w, "job finished")[0].aborted, "vt_lapsing");
+    assertEquals(await processesUnder(c.fx.root), [], "git killed");
+    assertEquals(await repoRow(s.id), before, "the fenced job wrote nothing");
+    assertEquals((await archived("handout_sync")).length, 0);
+    const metrics = (await rawScrape(w.port, false)).body;
+    assert(/pawtograder_handout_sync_heartbeats_total\{result="error"\} [1-9]/.test(metrics), metrics);
+    assert(metrics.includes('outcome="aborted_vt_lapsing"} 1'), "counted as aborted_vt_lapsing");
+    // With renewals back, the redelivery runs to the end.
+    await Deno.remove(`${c.ctrl}/hang-set-vt`);
+    await Deno.remove(`${c.ctrl}/slow-push`);
+    await waitFor("the redelivery to be archived", 60_000, async () => (await archived("handout_sync")).length === 1);
+    assertEquals((await archived("handout_sync"))[0].msg_id, msgId);
+  } finally {
+    await stopWorker(w);
+    await tearDown(c);
+  }
+});
+
+Deno.test("a hung queue read times out and the loop keeps turning (/healthz stays 200)", NO_SANITIZE, async () => {
+  const c = await setUp([]);
+  await Deno.writeTextFile(`${c.ctrl}/hang-read`, "");
+  const w = await startWorker(c, { HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 6, HANDOUT_SYNC_HEARTBEAT_SECONDS: 2 });
+  try {
+    await waitFor("two timed-out reads", 30_000, async () => events(w, "queue read failed").length >= 2);
+    const r = await fetch(`http://127.0.0.1:${w.port}/healthz`);
+    assertEquals(r.status, 200, await r.text());
+  } finally {
+    await stopWorker(w);
+    await tearDown(c);
+  }
+});
+
+Deno.test("a finished job is not relabelled by a renewal racing its archive", NO_SANITIZE, async () => {
+  const name = "org/student-archive-race";
+  const c = await setUp([name], { recorded: false });
+  const s = c.students.get(name)!;
+  // The archive lands at once and its answer takes 4 s, across two heartbeats.
+  await Deno.writeTextFile(`${c.ctrl}/slow-archive`, "4");
+  await send("handout_sync", envelope(s.id, name, null, c.H));
+  const w = await startWorker(c, { HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 4, HANDOUT_SYNC_HEARTBEAT_SECONDS: 1 });
+  try {
+    await waitFor("the job to finish", 60_000, async () =>
+      (await rawScrape(w.port, false)).body.includes("jobs_total{")
+    );
+    const metrics = (await rawScrape(w.port, false)).body;
+    assert(metrics.includes('pawtograder_handout_sync_jobs_total{kind="sync",outcome="ok"} 1'), metrics);
+    assertEquals(events(w, "message no longer in the queue; aborting its job").length, 0);
+  } finally {
+    await stopWorker(w);
+    await tearDown(c);
+  }
+});
+
+Deno.test(
+  "shadow edges: a malformed copy is archived unrecorded; an unrecordable one is archived past the cap",
+  NO_SANITIZE,
+  async () => {
+    const name = "org/student-shadow-edges";
+    const c = await setUp([name]);
+    const s = c.students.get(name)!;
+    const bad = await send("handout_sync", {
+      method: "sync_repo_to_handout",
+      args: { repository_id: "x" },
+      shadow: true
+    });
+    const w = await startWorker(c, {});
+    try {
+      await waitFor(
+        "the malformed copy to be archived",
+        30_000,
+        async () => (await archived("handout_sync")).length === 1
+      );
+      assertEquals((await archived("handout_sync"))[0].msg_id, bad);
+      assertEquals(Number(await sql(`select count(*) from public.handout_sync_shadow_results`)), 0);
+      assert((await rawScrape(w.port, false)).body.includes('shadow_messages_total{result="rejected"} 1'));
+
+      // The results table refuses the insert. Below the cap the message stays for another try;
+      // over it, it is archived anyway.
+      await sql(`revoke insert on public.handout_sync_shadow_results from service_role`);
+      const shadow = envelope(s.id, name, c.F, c.H, { shadow: true });
+      Object.assign(shadow.args, { synced_repo_sha: s.S });
+      const early = await send("handout_sync", shadow);
+      await waitFor(
+        "the failed record",
+        30_000,
+        async () => events(w, "job finished").length + events(w, "job threw").length >= 1
+      );
+      await new Promise((r) => setTimeout(r, 500));
+      assertEquals((await queued("handout_sync", `msg_id = ${early}`)).length, 1, "below the cap: left for redelivery");
+      await sql(`update pgmq.q_handout_sync set read_ct = 5, vt = now() where msg_id = ${early}`);
+      await waitFor(
+        "the over-cap copy to be archived",
+        30_000,
+        async () => (await archived("handout_sync", `msg_id = ${early}`)).length === 1
+      );
+      assert((await rawScrape(w.port, false)).body.includes('shadow_messages_total{result="record_failed"} 2'));
+    } finally {
+      await sql(`grant insert on public.handout_sync_shadow_results to service_role`);
+      await stopWorker(w);
+      await tearDown(c);
+    }
   }
 );

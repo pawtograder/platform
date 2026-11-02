@@ -1933,6 +1933,25 @@ handoutSyncWorker:
   # INJECT_DLQ_FAILURE are refused: together they make processEnvelope() fail
   # messages on purpose.
   extraEnv: []
+  # Deno's --allow-net for the worker's JavaScript, rendered into the container
+  # args. The image's CMD is empty on purpose, so the worker does not start
+  # without the list the chart renders. The chart always includes Kong (the
+  # SUPABASE_URL host and port), api.github.com:443 and the metrics listener
+  # (0.0.0.0:metricsPort). git is a separate process and is not affected: the
+  # pod's egress policy is what bounds it (spec §8.5). Each entry is host:port.
+  allowNet:
+    # The Redis host REDIS_URL names. Empty derives it for provider=internal
+    # (pawtograder-redis:<redis.internal.service.port>) and provider=shared
+    # (redis.pawtograder-shared-redis.svc.cluster.local:6379, the host
+    # examples/shared-redis serves). With provider=external, set it to the host
+    # the install's REDIS_URL or UPSTASH_REDIS_REST_URL points at (an Upstash
+    # REST host is <host>:443), or the worker's Redis requests are refused.
+    redis: ""
+    # The Sentry DSN's ingest host, e.g. o123.ingest.us.sentry.io:443. Empty
+    # means the worker's Sentry events are refused and dropped.
+    sentry: ""
+    # Anything else the worker's JavaScript must reach, host:port each.
+    extraHosts: []
   # The worker's own NetworkPolicy (spec §8.5). Egress: DNS, Kong, Redis, and
   # HTTPS to public addresses (GitHub), nothing else. Ingress: the metrics port
   # from networkPolicy.monitoringNamespaceSelector when monitoring.enabled,

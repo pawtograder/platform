@@ -898,6 +898,83 @@ async function fetchIntendedTeamUsernames(
   return (data ?? []).filter((u): u is string => Boolean(u));
 }
 
+/**
+ * Records a dead-lettered `handout_sync` message on its repository row, for the worker's read cap.
+ *
+ * On this queue the cap is the normal end of a sync that keeps failing locally: each attempt left
+ * a guarded error note (`redeliver_kind`) and the message came back by VT. So the row may by now
+ * belong to someone else, and the write is a compare-and-swap like `applyRepositoryUpdate`'s:
+ *
+ * - only while the row still waits for this message's revision (`desired_handout_sha = to_sha`)
+ *   and has not reached it, so a newer revision that landed meanwhile keeps its state;
+ * - only while `sync_data` is this message's own (its msg_id marker) or nobody's, and unchanged
+ *   since it was read;
+ * - MERGED into the existing `sync_data`, so the carried pull request, `error_kind` and the last
+ *   attempt's error survive.
+ *
+ * A row that fails any of these is left alone. That is the point: the message being
+ * dead-lettered describes a state the row has already left.
+ */
+async function recordHandoutSyncDeadLetter(
+  adminSupabase: SupabaseClient<Database>,
+  args: SyncRepoToHandoutArgs,
+  meta: { msg_id: number; read_ct?: number; queue_name?: string },
+  scope: Sentry.Scope
+): Promise<boolean> {
+  const { data: row, error } = await adminSupabase
+    .from("repositories")
+    .select("synced_handout_sha, desired_handout_sha, sync_data")
+    .eq("id", args.repository_id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!row) return false;
+  const prior = (row.sync_data ?? {}) as Record<string, unknown>;
+  const priorMsgId = prior.msg_id === undefined || prior.msg_id === null ? null : String(prior.msg_id);
+  const priorAttempt = typeof prior.last_sync_attempt === "string" ? prior.last_sync_attempt : null;
+  if (
+    row.desired_handout_sha !== args.to_sha ||
+    row.synced_handout_sha === args.to_sha ||
+    (priorMsgId !== null && priorMsgId !== String(meta.msg_id))
+  ) {
+    scope.setTag("dead_letter_row_write", "skipped_row_moved_on");
+    return false;
+  }
+  const dlq = deadLetterQueueFor(meta.queue_name);
+  const errorKind = typeof prior.error_kind === "string" ? prior.error_kind : null;
+  const lastError = typeof prior.last_sync_error === "string" ? prior.last_sync_error : null;
+  const lastSyncError = errorKind
+    ? `The git sync failed on ${meta.read_ct} reads in a row and was sent to ${dlq}. Last failure (${errorKind}): ${lastError ?? errorKind}`
+    : `The git sync was read ${meta.read_ct} times without finishing (the worker stopped mid-job each time, for example killed or out of memory) and was sent to ${dlq}.`;
+  let guarded = adminSupabase
+    .from("repositories")
+    .update({
+      sync_data: {
+        ...prior,
+        status: "error",
+        last_sync_error: lastSyncError,
+        last_sync_attempt: new Date().toISOString(),
+        msg_id: meta.msg_id,
+        dead_letter_queue: dlq
+      }
+    })
+    .eq("id", args.repository_id)
+    .eq("desired_handout_sha", args.to_sha);
+  guarded =
+    row.synced_handout_sha === null
+      ? guarded.is("synced_handout_sha", null)
+      : guarded.eq("synced_handout_sha", row.synced_handout_sha);
+  guarded = priorMsgId === null ? guarded.is("sync_data->>msg_id", null) : guarded.eq("sync_data->>msg_id", priorMsgId);
+  guarded =
+    priorAttempt === null
+      ? guarded.is("sync_data->>last_sync_attempt", null)
+      : guarded.eq("sync_data->>last_sync_attempt", priorAttempt);
+  const { data, error: updateError } = await guarded.select("id");
+  if (updateError) throw updateError;
+  const applied = (data?.length ?? 0) > 0;
+  scope.setTag("dead_letter_row_write", applied ? "applied" : "lost_race");
+  return applied;
+}
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
@@ -941,18 +1018,42 @@ export async function processEnvelope(
     return false;
   }
 
+  // The handout-sync worker's read cap (spec §3.1: `read_ct > HANDOUT_SYNC_MAX_READ_COUNT`). Its
+  // own branch, so the edge path below stays exactly as it was: on this queue the cap is also the
+  // normal end of a sync that keeps failing locally (redeliver_kind), and its row write is guarded
+  // and merged (recordHandoutSyncDeadLetter) rather than replacing sync_data.
+  if (
+    queueName === HANDOUT_SYNC_QUEUE &&
+    meta.max_read_ct !== undefined &&
+    typeof meta.read_ct === "number" &&
+    meta.read_ct > meta.max_read_ct
+  ) {
+    const error = new Error(
+      `pgmq read_ct=${meta.read_ct} is over the cap of ${meta.max_read_ct} reads; dead-lettering to ${deadLetterQueueFor(queueName)}`
+    );
+    scope.setTag("poison_message", "true");
+    Sentry.captureException(error, scope);
+    if (envelope.method === "sync_repo_to_handout") {
+      try {
+        await recordHandoutSyncDeadLetter(adminSupabase, envelope.args as SyncRepoToHandoutArgs, meta, scope);
+      } catch (e) {
+        Sentry.captureException(e, scope);
+      }
+    }
+    const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+    if (dlqSuccess) {
+      await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+    }
+    return false;
+  }
   // Poison-pill protection: if this message has been read too many times without
   // ever being archived or successfully requeued, send it to the DLQ so it stops
   // monopolizing worker capacity. This catches the "isolate dies mid-handler"
   // failure mode where neither the success path (which archives) nor the failure
   // path (which writes sync_data + throws) ever runs to completion.
-  const readCapExceeded =
-    typeof meta.read_ct === "number" &&
-    (meta.max_read_ct !== undefined ? meta.read_ct > meta.max_read_ct : meta.read_ct >= PGMQ_MAX_READ_CT);
-  if (readCapExceeded) {
-    const cap = meta.max_read_ct !== undefined ? `> ${meta.max_read_ct}` : `>= ${PGMQ_MAX_READ_CT}`;
+  if (typeof meta.read_ct === "number" && meta.read_ct >= PGMQ_MAX_READ_CT) {
     const error = new Error(
-      `pgmq read_ct=${meta.read_ct} reached the cap (${cap}) without archive; DLQing as poison message`
+      `pgmq read_ct=${meta.read_ct} exceeded max=${PGMQ_MAX_READ_CT} without archive — DLQing as poison message`
     );
     scope.setTag("poison_message", "true");
     Sentry.captureException(error, scope);
@@ -965,10 +1066,7 @@ export async function processEnvelope(
           .update({
             sync_data: {
               status: "error",
-              last_sync_error:
-                queueName === HANDOUT_SYNC_QUEUE
-                  ? `Sync kept failing without leaving a trace (the handout-sync worker was killed mid-job each time, for example out of memory or a lost pod). Message was sent to ${deadLetterQueueFor(queueName)} after ${meta.read_ct} attempts.`
-                  : `Sync handler kept failing without leaving a trace (likely Edge Function memory limit). Message was sent to the dead-letter queue after ${meta.read_ct} attempts.`,
+              last_sync_error: `Sync handler kept failing without leaving a trace (likely Edge Function memory limit). Message was sent to the dead-letter queue after ${meta.read_ct} attempts.`,
               last_sync_attempt: new Date().toISOString(),
               msg_id: meta.msg_id
             }
