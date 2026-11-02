@@ -17,9 +17,10 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * whatever its age, so a page that mounted a second ago can be an hour old. A new payload, from
  * this refresh or any other, brings a new `renderedAt` and restarts the count.
  *
- * `renderedAt` is on the server's clock. Taking the earlier of it and the browser clock keeps a
- * server clock that runs ahead from holding a refresh off. Keeping the later of that and the last
- * refresh this hook sent means a browser clock that runs ahead costs at most one extra refresh.
+ * `renderedAt` is on the server's clock. Taking the earlier of it and the browser clock means a
+ * server clock that runs ahead can hold a refresh off by at most that gap, and never past a minute
+ * after mount. Keeping the later of that and the last refresh this hook sent means a browser clock
+ * that runs ahead costs at most one extra refresh.
  */
 export function useRefreshWhenShown(
   renderedAt: number,
