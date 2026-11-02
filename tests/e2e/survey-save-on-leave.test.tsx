@@ -62,6 +62,93 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
   };
 
+  // Records every write the page makes to localStorage, sessionStorage, IndexedDB, the Cache API
+  // and document.cookie, across reloads, so a test can check that no answer was kept in the browser.
+  const recordBrowserStorageWrites = async (page: Page) => {
+    const writes: string[] = [];
+    await page.exposeFunction("__recordBrowserStorageWrite", (entry: string) => {
+      writes.push(entry);
+    });
+    await page.addInitScript(() => {
+      const record = (kind: string, detail: unknown) => {
+        let text: string;
+        try {
+          text = typeof detail === "string" ? detail : JSON.stringify(detail);
+        } catch {
+          text = String(detail);
+        }
+        void (window as unknown as { __recordBrowserStorageWrite: (entry: string) => Promise<void> })
+          .__recordBrowserStorageWrite(`${kind} ${text}`)
+          .catch(() => {});
+      };
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        record(this === window.sessionStorage ? "sessionStorage" : "localStorage", `${key}=${value}`);
+        return setItem.call(this, key, value);
+      };
+      const open = IDBFactory.prototype.open;
+      IDBFactory.prototype.open = function (name: string, version?: number) {
+        record("indexedDB.open", name);
+        return version === undefined ? open.call(this, name) : open.call(this, name, version);
+      };
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        record("indexedDB.put", value);
+        return put.call(this, value, key);
+      };
+      const add = IDBObjectStore.prototype.add;
+      IDBObjectStore.prototype.add = function (value: unknown, key?: IDBValidKey) {
+        record("indexedDB.add", value);
+        return add.call(this, value, key);
+      };
+      if (typeof CacheStorage !== "undefined") {
+        const cacheOpen = CacheStorage.prototype.open;
+        CacheStorage.prototype.open = function (cacheName: string) {
+          record("caches.open", cacheName);
+          return cacheOpen.call(this, cacheName);
+        };
+      }
+      const cookie = Object.getOwnPropertyDescriptor(Document.prototype, "cookie");
+      if (cookie?.get && cookie.set) {
+        const { get, set } = cookie;
+        Object.defineProperty(Document.prototype, "cookie", {
+          configurable: true,
+          get() {
+            return get.call(this);
+          },
+          set(value: string) {
+            record("cookie", value);
+            set.call(this, value);
+          }
+        });
+      }
+    });
+    return writes;
+  };
+
+  test("an answer typed right before a reload is stored and shown after the reload", async ({ page }) => {
+    const survey = await seedSurvey("Fast Reload Survey");
+    await loginAsUser(page, student, course);
+    const storageWrites = await recordBrowserStorageWrites(page);
+    await page.clock.install();
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeEditable();
+
+    // Stop the page's timers, so the 1 s autosave debounce cannot fire before the reload.
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    await input.fill("Typed right before reload");
+    await page.reload();
+    await page.clock.resume();
+
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Typed right before reload", is_submitted: false });
+    await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Typed right before reload");
+    expect(storageWrites.filter((write) => write.includes("Typed right before reload"))).toEqual([]);
+  });
+
   // Holds the first draft write forever: the request is sent but never gets a response.
   const neverAnswerFirstWrite = async (page: Page) => {
     let writes = 0;
