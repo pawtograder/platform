@@ -49,8 +49,10 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   idle: "fg.muted",
   saving: "fg.muted",
   saved: "fg.muted",
-  retrying: "fg.warning",
-  offline: "fg.warning",
+  // fg.warning is orange.600, about 3.6:1 on white: below AA for small text. orange.fg is
+  // orange.700 in light mode and orange.300 in dark.
+  retrying: "orange.fg",
+  offline: "orange.fg",
   failed: "fg.error"
 };
 // The project the browser Supabase client talks to (utils/supabase/client.ts), for the keepalive
