@@ -1,12 +1,20 @@
 /**
  * Duplicate question names in a SurveyJS definition (#1005).
  *
- * SurveyJS saves each answer under its question's `name`, so two questions with the same name
- * share one answer: picking an answer in one clears the other, a required question can be left
- * empty, and the response shows one value in both places. This module finds those collisions so
- * the builder, the save paths and the publish menu can refuse to publish them.
+ * SurveyJS saves each answer under a key taken from its question, so two questions with the same
+ * key share one answer: picking an answer in one clears the other, a required question can be
+ * left empty, and the response shows one value in both places. This module finds those
+ * collisions so the builder, the save paths and the publish menu can refuse to publish them.
  * `supabase/migrations/20261029120000_surveys_unique_question_names.sql` applies the same rule
  * in the database; keep the two walks in step.
+ *
+ * The key is the one survey-core 2.3 uses (Question.getValueName):
+ * - a question's `valueName`, when it is a non-empty string, exactly as written;
+ * - otherwise its `name`, cleaned the way SurveyJS cleans it on load (Question.getValidName):
+ *   trimmed, the first "|" dropped, trimmed again, every "{" and "}" dropped, then any leading
+ *   "#"s dropped. So "{q1}", "#q1", "q|1" and " q1 " are all saved as "q1".
+ * HTML and image elements hold no answer (QuestionNonValue), so their names are not counted.
+ * SurveyJS also turns a number or `true` valueName into a key; both walks ignore those.
  *
  * Scopes follow SurveyJS's data model:
  * - Questions on every page and inside (static) panels share the survey's scope.
@@ -33,6 +41,10 @@ export type QuestionNameLocation = {
    * question's 1-based position among the elements of the innermost one.
    */
   inside?: { panels: HoldingPanel[]; question: number };
+  /** The answer is saved under the question's valueName rather than its name. */
+  byValueName?: true;
+  /** The name as written, when SurveyJS saves it as something else (braces, "#" or "|" dropped). */
+  writtenName?: string;
 };
 
 export type DuplicateQuestionName = {
@@ -61,14 +73,33 @@ export function parseSurveyJson(raw: unknown): JsonObject | null {
   return isObject(value) ? value : null;
 }
 
-/** SurveyJS trims question names on load, so " q1" and "q1" are the same key. */
-function normalizeName(name: unknown): string | null {
+/** A name as the instructor wrote it, trimmed. Names panels in the message. */
+function writtenName(name: unknown): string | null {
   if (typeof name === "string") {
     const trimmed = name.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
   if (typeof name === "number" && Number.isFinite(name)) return String(name);
   return null;
+}
+
+/** survey-core's element types that hold no answer. */
+const NON_VALUE_TYPES = new Set(["html", "image"]);
+
+type AnswerKey = { key: string; note: Pick<QuestionNameLocation, "byValueName" | "writtenName"> };
+
+/** The key SurveyJS saves this element's answer under, or null when it holds no answer. */
+function answerKey(el: JsonObject, type: string): AnswerKey | null {
+  if (NON_VALUE_TYPES.has(type)) return null;
+  if (typeof el.valueName === "string" && el.valueName.length > 0) {
+    return { key: el.valueName, note: { byValueName: true } };
+  }
+  if (typeof el.name === "number" && Number.isFinite(el.name)) return { key: String(el.name), note: {} };
+  if (typeof el.name !== "string") return null;
+  const key = el.name.trim().replace("|", "").trim().replace(/[{}]+/g, "").replace(/^#+/, "");
+  if (key.length === 0) return null;
+  const written = el.name.trim();
+  return { key, note: written === key ? {} : { writtenName: written } };
 }
 
 function elementList(container: JsonObject, key: "elements" | "templateElements"): unknown[] | null {
@@ -106,13 +137,13 @@ function walk(elements: unknown[], scope: number, at: Position, state: WalkState
     // A panel (or anything else that only groups elements) holds no answer of its own.
     if (type === "panel" || (nested && type !== "paneldynamic")) {
       const children = elementList(el, "elements");
-      const panels = [...at.panels, { name: normalizeName(el.name), repeating: false }];
+      const panels = [...at.panels, { name: writtenName(el.name), repeating: false }];
       if (children) walk(children, scope, { page: at.page, row, panels }, state);
       return;
     }
 
-    const name = normalizeName(el.name);
-    if (name) state.entries.push({ scope, name, location });
+    const key = answerKey(el, type);
+    if (key) state.entries.push({ scope, name: key.key, location: { ...location, ...key.note } });
 
     const template = Array.isArray(el.templateElements)
       ? el.templateElements
@@ -121,7 +152,7 @@ function walk(elements: unknown[], scope: number, at: Position, state: WalkState
         : null;
     if (template) {
       state.nextScope += 1;
-      const panels = [...at.panels, { name, repeating: true }];
+      const panels = [...at.panels, { name: writtenName(el.name), repeating: true }];
       walk(template, state.nextScope, { page: at.page, row, panels }, state);
     }
   });
@@ -180,6 +211,13 @@ export function describeQuestionLocation(loc: QuestionNameLocation): string {
   return `question ${loc.inside.question} of ${panels} (${row})`;
 }
 
+/** How a question's name relates to the key its answer is saved under, when that is not plain. */
+function keyNote(loc: QuestionNameLocation, key: string): string {
+  if (loc.byValueName) return " (as its valueName)";
+  if (loc.writtenName !== undefined) return ` (named "${loc.writtenName}", saved as "${key}")`;
+  return "";
+}
+
 function joinWithAnd(parts: string[]): string {
   if (parts.length <= 1) return parts.join("");
   if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
@@ -192,7 +230,8 @@ function joinWithAnd(parts: string[]): string {
  */
 export function formatDuplicateQuestionNames(duplicates: DuplicateQuestionName[]): string {
   const groups = duplicates.map(
-    (d) => `"${d.name}" is used by ${joinWithAnd(d.locations.map(describeQuestionLocation))}`
+    (d) =>
+      `"${d.name}" is used by ${joinWithAnd(d.locations.map((loc) => describeQuestionLocation(loc) + keyNote(loc, d.name)))}`
   );
   const fix =
     duplicates.length === 1 && duplicates[0].locations.length === 2

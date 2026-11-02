@@ -1,7 +1,7 @@
 -- Refuse to publish a survey in which two questions share a name (#1005).
 --
--- SurveyJS saves each answer under its question's `name`, so two questions with the same name
--- share one answer: answering the second clears the first, a required question can be left
+-- SurveyJS saves each answer under a key taken from its question (its valueName, else its
+-- name), so two questions with the same key share one answer: answering the second clears the first, a required question can be left
 -- empty while the survey still completes, and the response shows one value in both places.
 -- The builder and the instructor form already refuse to publish such a survey
 -- (components/survey/questionNames.ts). This is the same rule for every other writer: the
@@ -20,9 +20,10 @@
 --   * questions on every page and inside panels share the survey's scope;
 --   * each dynamic panel's templateElements are a scope of their own (their answers are stored
 --     per panel, inside the dynamic panel's value);
---   * a panel's own name holds no answer and is not counted;
---   * names are compared after trimming whitespace the way JavaScript's trim() does (Unicode
---     spaces included), as SurveyJS trims them on load.
+--   * a panel's own name holds no answer and is not counted, and neither are HTML and image
+--     elements;
+--   * a question is keyed by its valueName when it has one, else by its name cleaned the way
+--     SurveyJS cleans it on load (see survey_question_answer_key).
 --
 -- Rollback: DROP TRIGGER IF EXISTS surveys_reject_duplicate_question_names ON public.surveys;
 
@@ -54,7 +55,51 @@ BEGIN
 END;
 $$;
 
--- Every question name in a list of SurveyJS elements, with the scope it is stored in.
+-- The key SurveyJS (survey-core 2.3) saves an element's answer under, or NULL when it holds
+-- none. Same rules as answerKey in components/survey/questionNames.ts:
+--   * HTML and image elements hold no answer;
+--   * a non-empty string valueName is the key, exactly as written (SurveyJS doesn't clean it);
+--   * otherwise the name, cleaned as Question.getValidName does: trimmed, the first "|"
+--     dropped, trimmed again, every "{" and "}" dropped, then any leading "#"s dropped.
+--     Trimming is JavaScript's trim(), so Unicode spaces count.
+CREATE OR REPLACE FUNCTION public.survey_question_answer_key(p_el jsonb)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = ''
+AS $$
+DECLARE
+  -- The characters JavaScript's trim() removes: ASCII whitespace plus the Unicode space
+  -- separators, line and paragraph separators and the byte order mark.
+  c_js_spaces CONSTANT text :=
+    E'\t\n\u000B\f\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF';
+  v_name text;
+BEGIN
+  IF lower(coalesce(p_el ->> 'type', '')) IN ('html', 'image') THEN
+    RETURN NULL;
+  END IF;
+
+  IF jsonb_typeof(p_el -> 'valueName') = 'string' AND p_el ->> 'valueName' <> '' THEN
+    RETURN p_el ->> 'valueName';
+  END IF;
+
+  CASE jsonb_typeof(p_el -> 'name')
+    WHEN 'number' THEN
+      RETURN p_el ->> 'name';
+    WHEN 'string' THEN
+      v_name := btrim(p_el ->> 'name', c_js_spaces);
+      v_name := regexp_replace(v_name, '[|]', '');
+      v_name := btrim(v_name, c_js_spaces);
+      v_name := regexp_replace(v_name, '[{}]+', '', 'g');
+      v_name := regexp_replace(v_name, '^#+', '');
+      RETURN nullif(v_name, '');
+    ELSE
+      RETURN NULL;
+  END CASE;
+END;
+$$;
+
+-- Every question's answer key in a list of SurveyJS elements, with the scope it is stored in.
 -- p_scope names the answer scope; p_path is the element's position, unique per element, and
 -- becomes the scope of a dynamic panel's template.
 CREATE OR REPLACE FUNCTION public.survey_question_name_entries(p_elements jsonb, p_scope text, p_path text)
@@ -89,18 +134,8 @@ BEGIN
       CONTINUE;
     END IF;
 
-    -- The characters JavaScript's trim() removes, which is what SurveyJS trims names with:
-    -- ASCII whitespace plus the Unicode space separators, line and paragraph separators and
-    -- the byte order mark.
-    v_name := CASE jsonb_typeof(v_el -> 'name')
-      WHEN 'string' THEN btrim(
-        v_el ->> 'name',
-        E'\t\n\u000B\f\r                  　﻿'
-      )
-      WHEN 'number' THEN v_el ->> 'name'
-      ELSE NULL
-    END;
-    IF v_name IS NOT NULL AND v_name <> '' THEN
+    v_name := public.survey_question_answer_key(v_el);
+    IF v_name IS NOT NULL THEN
       scope := p_scope;
       name := v_name;
       RETURN NEXT;
@@ -224,6 +259,7 @@ CREATE TRIGGER surveys_reject_duplicate_question_names
 -- EXECUTE for authenticated by default (20261015120000). Instructors publish as authenticated,
 -- so the pure helpers it calls are granted to them; they read only their argument.
 GRANT EXECUTE ON FUNCTION public.survey_json_unwrapped(jsonb) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.survey_question_answer_key(jsonb) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.survey_question_name_entries(jsonb, text, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.survey_duplicate_question_names(jsonb) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.surveys_reject_duplicate_question_names() TO service_role;
