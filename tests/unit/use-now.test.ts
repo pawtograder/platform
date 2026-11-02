@@ -218,6 +218,17 @@ describe("useRefreshWhenShown", () => {
     expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes a minute after mount when the server clock is 10 minutes ahead of the browser", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD + 10 * 60_000));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("never refreshes on hide, or on the interval alone", () => {
     renderHook(() => useRefreshWhenShown(PAGE_LOAD));
 
