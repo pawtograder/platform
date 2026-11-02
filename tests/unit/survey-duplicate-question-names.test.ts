@@ -26,8 +26,8 @@ describe("findDuplicateQuestionNames", () => {
       {
         name: "question_1",
         locations: [
-          { page: 1, question: 1, dynamicPanel: undefined },
-          { page: 2, question: 1, dynamicPanel: undefined }
+          { page: 1, question: 1 },
+          { page: 2, question: 1 }
         ]
       }
     ]);
@@ -43,7 +43,7 @@ describe("findDuplicateQuestionNames", () => {
     expect(findDuplicateQuestionNames(json)).toEqual([]);
   });
 
-  it("looks inside panels and nested panels, numbering questions in reading order", () => {
+  it("looks inside panels and nested panels, and says which panel holds the question", () => {
     const json = {
       pages: [
         {
@@ -62,8 +62,19 @@ describe("findDuplicateQuestionNames", () => {
       {
         name: "intro",
         locations: [
-          { page: 1, question: 1, dynamicPanel: undefined },
-          { page: 1, question: 3, dynamicPanel: undefined }
+          { page: 1, question: 1 },
+          // The panel "group" is the page's second row; "intro" is the first element of "inner" inside it.
+          {
+            page: 1,
+            question: 2,
+            inside: {
+              panels: [
+                { name: "group", repeating: false },
+                { name: "inner", repeating: false }
+              ],
+              question: 1
+            }
+          }
         ]
       }
     ]);
@@ -108,8 +119,18 @@ describe("findDuplicateQuestionNames", () => {
       {
         name: "role",
         locations: [
-          { page: 1, question: 1, dynamicPanel: "members" },
-          { page: 1, question: 2, dynamicPanel: "members" }
+          { page: 1, question: 1, inside: { panels: [{ name: "members", repeating: true }], question: 1 } },
+          {
+            page: 1,
+            question: 1,
+            inside: {
+              panels: [
+                { name: "members", repeating: true },
+                { name: "p", repeating: false }
+              ],
+              question: 1
+            }
+          }
         ]
       }
     ]);
@@ -128,8 +149,32 @@ describe("findDuplicateQuestionNames", () => {
       {
         name: "a",
         locations: [
-          { page: null, question: 1, dynamicPanel: undefined },
-          { page: null, question: 2, dynamicPanel: undefined }
+          { page: null, question: 1 },
+          { page: null, question: 2 }
+        ]
+      }
+    ]);
+  });
+
+  it("numbers a question by its row in the Visual Builder, where a panel or HTML block is one row", () => {
+    const json = {
+      pages: [
+        {
+          elements: [
+            { type: "panel", name: "group", elements: [q("a"), q("b")] },
+            { type: "html", html: "<p>Instructions</p>" },
+            q("c"),
+            q("c")
+          ]
+        }
+      ]
+    };
+    expect(findDuplicateQuestionNames(json)).toEqual([
+      {
+        name: "c",
+        locations: [
+          { page: 1, question: 3 },
+          { page: 1, question: 4 }
         ]
       }
     ]);
@@ -173,7 +218,36 @@ describe("duplicateQuestionNamesMessage", () => {
       ]
     };
     expect(duplicateQuestionNamesMessage(json)).toBe(
-      'Each question needs its own name, because answers are saved under it. "a" is used by page 1, question 1; page 1, question 2; and page 1, question 3. "b" is used by question 1 of the repeating panel "team" on page 1 and question 2 of the repeating panel "team" on page 1. Rename the repeats so that no two questions share a name.'
+      'Each question needs its own name, because answers are saved under it. "a" is used by page 1, question 1; page 1, question 2; and page 1, question 3. "b" is used by question 1 of the repeating panel "team" (page 1, question 5) and question 2 of the repeating panel "team" (page 1, question 5). Rename the repeats so that no two questions share a name.'
+    );
+  });
+
+  it("numbers questions after a panel the way the builder lists the rows", () => {
+    const json = {
+      pages: [{ elements: [{ type: "panel", name: "group", elements: [q("a"), q("b")] }, q("c"), q("c")] }]
+    };
+    expect(duplicateQuestionNamesMessage(json)).toBe(
+      'Each question needs its own name, because answers are saved under it. "c" is used by page 1, question 2 and page 1, question 3. Rename one of them.'
+    );
+  });
+
+  it("says which panel holds a question inside one", () => {
+    const json = {
+      pages: [
+        {
+          elements: [
+            q("intro"),
+            {
+              type: "panel",
+              name: "group",
+              elements: [q("x"), { type: "panel", name: "inner", elements: [q("intro")] }]
+            }
+          ]
+        }
+      ]
+    };
+    expect(duplicateQuestionNamesMessage(json)).toBe(
+      'Each question needs its own name, because answers are saved under it. "intro" is used by page 1, question 1 and question 1 of the panel "inner" in the panel "group" (page 1, question 2). Rename one of them.'
     );
   });
 
