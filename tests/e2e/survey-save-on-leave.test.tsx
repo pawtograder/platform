@@ -268,6 +268,42 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       .toEqual({ q1: "Answer behind a stuck save", is_submitted: true });
   });
 
+  test("an answer typed while an earlier save is still on its way is stored when the student reloads", async ({
+    page,
+    browserName
+  }) => {
+    test.skip(browserName !== "chromium", "Holds the first save with the Chrome DevTools Protocol");
+    const survey = await seedSurvey("Reload Behind Slow Save Survey");
+    await loginAsUser(page, student, course);
+    // The first save has to stay unanswered through the reload. A page.route would also hold up
+    // the keepalive request sent while the page unloads (see the fast-reload test), and removing
+    // it releases the held request. So hold that one request with the DevTools Protocol and let
+    // every other request through.
+    await page.unrouteAll({ behavior: "wait" });
+    const cdp = await page.context().newCDPSession(page);
+    let writes = 0;
+    cdp.on("Fetch.requestPaused", (event) => {
+      if (event.request.method === "POST" && ++writes === 1) return;
+      void cdp.send("Fetch.continueRequest", { requestId: event.requestId }).catch(() => {});
+    });
+    await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*/rest/v1/survey_responses*" }] });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("First answer");
+    await expect.poll(() => writes, { timeout: 10_000 }).toBe(1);
+    // The first save is still waiting for the server when the student types more and reloads.
+    await input.fill("Typed while the first save was on its way");
+    await page.reload();
+
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Typed while the first save was on its way", is_submitted: false });
+    await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue(
+      "Typed while the first save was on its way"
+    );
+  });
+
   // The submit upsert reaches the server, but its response never comes back to the page.
   const loseTheSubmitResponse = async (page: Page) => {
     await page.route("**/rest/v1/survey_responses*", async (route) => {

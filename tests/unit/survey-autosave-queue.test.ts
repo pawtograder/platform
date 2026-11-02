@@ -41,7 +41,7 @@ function fakeServer() {
 
 // Lets promise callbacks run between timer steps.
 const settle = async () => {
-  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
 };
 
 beforeEach(() => {
@@ -209,7 +209,64 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes).toHaveLength(1);
   });
 
-  test("a flush on leave asks for keepalive, and does not overtake a request in flight", async () => {
+  test("a flush on leave asks for keepalive", () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("typed before leaving");
+    queue.flush({ keepalive: true });
+    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([["typed before leaving", true]]);
+  });
+
+  test("a flush on leave sends the newest answers at once, even behind a request in flight", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("older");
+    jest.advanceTimersByTime(1_000);
+    queue.schedule("typed before leaving");
+    // An unloading page never sees the older request finish, so waiting for it would lose this.
+    queue.flush({ keepalive: true });
+    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([
+      ["older", false],
+      ["typed before leaving", true]
+    ]);
+
+    // The page stayed open (a tab switch). The two requests could reach the database in either
+    // order, so once both are done the newest answers go out once more, last.
+    server.writes[0].done.resolve();
+    await settle();
+    expect(server.writes).toHaveLength(2);
+    server.writes[1].done.resolve();
+    await settle();
+    expect(server.writes.map((write) => write.value)).toEqual([
+      "older",
+      "typed before leaving",
+      "typed before leaving"
+    ]);
+    expect(queue.getStatus()).toBe("saving");
+    server.writes[2].done.resolve();
+    await settle();
+    expect(queue.getStatus()).toBe("saved");
+
+    // Later edits on a page that stayed open go out as ordinary requests again.
+    queue.schedule("back on the page");
+    jest.advanceTimersByTime(1_000);
+    expect(server.writes[3]).toMatchObject({ value: "back on the page", keepalive: false });
+  });
+
+  test("a second flush on leave does not resend what a keepalive request already carries", () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("typed before leaving");
+    // A reload fires both pagehide and visibilitychange.
+    queue.flush({ keepalive: true });
+    queue.flush({ keepalive: true });
+    expect(server.writes).toHaveLength(1);
+  });
+
+  test("whenIdle also waits for the request sent on leave", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
 
@@ -217,21 +274,32 @@ describe("SurveyAutosaveQueue", () => {
     jest.advanceTimersByTime(1_000);
     queue.schedule("typed before leaving");
     queue.flush({ keepalive: true });
-    expect(server.writes.map((write) => write.value)).toEqual(["older"]);
+    queue.pause();
+    let idle = false;
+    void queue.whenIdle().then(() => {
+      idle = true;
+    });
 
     server.writes[0].done.resolve();
     await settle();
-    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([
-      ["older", false],
-      ["typed before leaving", true]
-    ]);
-
-    // Later edits on a page that stayed open go out as ordinary requests again.
+    expect(idle).toBe(false);
     server.writes[1].done.resolve();
     await settle();
-    queue.schedule("back on the page");
+    expect(idle).toBe(true);
+    // Paused for Complete: the repeat waits, and Complete's own upsert carries the newest answers.
+    expect(server.writes).toHaveLength(2);
+  });
+
+  test("a flush on leave while Complete is under way sends nothing", () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("older");
     jest.advanceTimersByTime(1_000);
-    expect(server.writes[2]).toMatchObject({ value: "back on the page", keepalive: false });
+    queue.schedule("typed before Complete");
+    queue.pause();
+    queue.flush({ keepalive: true });
+    expect(server.writes).toHaveLength(1);
   });
 
   test("a flush with nothing pending sends nothing", () => {
