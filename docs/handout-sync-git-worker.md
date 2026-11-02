@@ -172,10 +172,25 @@ the patch", is an artifact of the API and is dropped (§6.5).
 | `D` | `removed` | from numstat | false | false |
 | `T` (type change) | `modified` | **true** | false | false |
 
-- Entries with mode `160000` (gitlinks) are dropped and logged. The current path only ever emits
-  blob modes, so this matches today.
-- `patchDeletesFile` is always false. It exists only because GitHub's compare sometimes reports a
-  deletion as a `+0,0` modify, and `git diff-tree` reports deletions as `D`.
+- Entries with mode `160000` (gitlinks) are dropped and logged. Today a gitlink bump would reach
+  `createBranchAndCommit` as a "Subproject commit" patch and most likely fail the sync, so a
+  gitlink-only update becoming `no_changes` is a deliberate change, not parity. A `T` between a
+  blob and a gitlink keeps the blob side (a file becoming a submodule is `D`, the reverse is
+  `A`).
+- Unlike the compare API, which returns at most 300 files per response and was called without
+  pagination, the tree diff sees every path.
+- `patchDeletesFile` is true for an `M` whose new blob is the empty blob
+  (`e69de29bb2d1d6434b8b29ae775ad8c2e48c5391`) and whose old blob is not. Today's
+  `patchDeletesEntireFile` fires on GitHub's `+0,0` patch, which covers both a disguised
+  deletion and a genuine truncation to zero bytes. `git diff-tree` reports real deletions as
+  `D`, so only the truncation case remains, and it keeps today's decisions: a no-op when the
+  student deleted the file, a skip when they edited it, and the empty blob written otherwise.
+- A mode-only change (`M` with the same old and new blob) has `hasPatch = false`. Otherwise a
+  student's edited copy would "merge" to their own blob and their own mode, silently dropping
+  the handout's mode change. Today GitHub reports such an entry with no patch, so it is skipped
+  and listed.
+- Paths are decoded with `ignoreBOM: true`. A path beginning with U+FEFF is a different path
+  from the one without it.
 - `--no-renames` turns a rename into `D` + `A`, so each side is classified independently. Today
   compare reports `renamed`, and the code handles it inconsistently. This is an improvement.
 - An empty diff returns `{ success: true, no_changes: true }`, as today.
@@ -278,7 +293,7 @@ The branch is `B = sync-to-${H:0:7}`, and `X` is its head from `ls-remote` (§5.
 | absent | `git push --force-with-lease=refs/heads/$B: $R_URL $COMMIT:refs/heads/$B` (an empty lease means "must not exist") |
 | `== COMMIT` | Skip the push. This is a retry of a job that already pushed. |
 | `== S` | `git push --force-with-lease=refs/heads/$B:$S …` |
-| other | `assertSyncBranchSafeToReset(R, B, S)` (REST compare, unchanged), then `git push --force-with-lease=refs/heads/$B:$X …` |
+| other | `confirmResetSafe({ head: X, base: S })`, which compares `S...X` over REST for exactly that `X` and returns the sha it approved. The engine pushes `--force-with-lease=refs/heads/$B:$X …` only if the approved sha equals `X` |
 
 - `--force-with-lease` is a real server-side compare-and-swap. It replaces
   `updateRefWithExpectedHead`, `assertBranchStillAt` and the PATCH and delete+create fallbacks.
@@ -317,7 +332,15 @@ Every step is either read-only, content-addressed, or a compare-and-swap:
 - The merge is already idempotent.
 
 So a retry from scratch after a crash at any point converges, and no progress needs to be
-persisted. `sync_data.phase` (`fetch | classify | push | pr | merge`) is written only for
+persisted.
+
+One input is not a pure function of the repository state: a `merge-file` that times out or is
+killed leaves its file to the student on that attempt, and a retry may merge it. The two
+attempts then build different commits. That is still safe. The retry finds the earlier attempt's
+commit on the branch, which is ours, and resets it under the lease after the safety check. The
+merge size cap is deterministic and does not cause this. With `S` null (the head stands in), a
+retry after `main` moved also builds a different commit, for the same reason and with the same
+outcome. `sync_data.phase` (`fetch | classify | push | pr | merge`) is written only for
 observability.
 
 ### 6.2 Matched pair
