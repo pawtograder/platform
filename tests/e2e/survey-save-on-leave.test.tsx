@@ -19,6 +19,7 @@ const ONE_QUESTION_JSON = {
 
 const OFFLINE_STATUS = "You're offline. Your answers will save when you reconnect.";
 const SAVED_STATUS = "All changes saved";
+const UNSAVABLE_STATUS = "Your saved answers didn't load, so changes can't be saved. Reload the page to try again.";
 
 test.describe("Survey answers survive leaving the page and losing the network", () => {
   let course: Course;
@@ -529,6 +530,30 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await expect(input).toHaveValue("Never submitted");
     await expect(input).toBeEditable();
     expect(await storedResponse(survey.id)).toEqual({ q1: "Never submitted", is_submitted: false });
+  });
+
+  test("when the saved answers can't be loaded, the page says new answers can't be saved", async ({ page }) => {
+    const survey = await seedSurvey("Unreadable Response Survey");
+    await loginAsUser(page, student, course);
+    // Loading the student's response fails. The page can't tell a draft from a submitted response
+    // then, so it saves nothing, and the student has to be told.
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const request = route.request();
+      if (request.method() !== "GET" || !request.url().includes(`survey_id=eq.${survey.id}`)) return route.fallback();
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "XX000", message: "internal error", details: null, hint: null })
+      });
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeEditable();
+    await input.fill("Typed when the saved answers didn't load");
+
+    await expect(page.getByRole("status").filter({ hasText: UNSAVABLE_STATUS })).toBeVisible();
+    expect(await storedResponse(survey.id)).toBeNull();
   });
 
   test("the save status changes when a save starts and when it lands, not on every keystroke", async ({ page }) => {
