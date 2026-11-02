@@ -83,6 +83,29 @@ describe("survey title (issue #1002)", () => {
     expect(screen.queryByText(DB_TITLE)).not.toBeInTheDocument();
   });
 
+  it("SurveyComponent shows braces in the database title as typed", () => {
+    // SurveyJS replaces "{q1}" in its own strings with the answer to q1. The database
+    // title is plain text, and the survey list shows it as typed.
+    const dbTitle = "Week {q1} check-in";
+    render(<SurveyComponent surveyJson={builderJson()} title={dbTitle} initialData={{ q1: "Going well" }} />);
+
+    expect(screen.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
+    expect(screen.getByRole("heading", { level: 1, name: dbTitle })).toBeInTheDocument();
+    expect(screen.queryByText(/Week Going well check-in/)).not.toBeInTheDocument();
+  });
+
+  it("SurveyComponent still fills in placeholders in a JSON title once the database title is gone", () => {
+    // A placeholder an author put in the JSON title is SurveyJS's feature and keeps working.
+    const json = { ...builderJson(), title: "Check-in for {q1}" };
+    const { rerender } = render(
+      <SurveyComponent surveyJson={json} title="Week {q1} check-in" initialData={{ q1: "Going well" }} />
+    );
+
+    rerender(<SurveyComponent surveyJson={json} initialData={{ q1: "Going well" }} />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Check-in for Going well" })).toBeInTheDocument();
+  });
+
   it("SurveyComponent shows the title as plain text where the caller has the heading", () => {
     // The Student Preview dialog's own h2 already names the survey. The preview still
     // shows the title the way students see it, but an h1 inside the dialog would sit
