@@ -62,6 +62,9 @@ export default function SurveyTakingPage() {
   const responseStateKeyRef = useRef<string | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
+  // Number of the newest autosave added to the chain. A queued autosave with a lower number skips
+  // its upsert: the newer one sends every answer as of a later edit.
+  const latestAutosaveRef = useRef(0);
   // Fires the pending autosave immediately. Held in a ref so the unmount
   // cleanup can flush rather than merely cancel: `textUpdateMode = "onTyping"`
   // restarts the debounce on every keystroke, so a student who navigates away
@@ -289,6 +292,7 @@ export default function SurveyTakingPage() {
         autosaveTimerRef.current = null;
         flushAutosaveRef.current = null;
         if (isSubmittingRef.current) return;
+        const autosaveNumber = ++latestAutosaveRef.current;
         // Chained on the previous save so writes reach the server in the order they were made:
         // a slow older upsert landing after a newer one would put the older answers back.
         // autosaveInFlightRef is the tail of the chain, which is what Complete waits on.
@@ -297,6 +301,9 @@ export default function SurveyTakingPage() {
             // Rechecked when the save's turn comes: Complete may have started, or the response
             // may have been submitted, while this one waited behind a slow save.
             if (isSubmittingRef.current) return;
+            // A newer save was queued while this one waited, and its upsert would replace this
+            // one's straight away.
+            if (autosaveNumber !== latestAutosaveRef.current) return;
             if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
             return saveResponseToDb(surveyData, false);
           })
