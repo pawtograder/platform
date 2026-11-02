@@ -13,6 +13,7 @@
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@^1";
 import type { SyncResult } from "../GitHubSyncHelpers.ts";
 import type { GitSyncDeps, SolutionRepos, SyncRepositoryToHandoutGitParams } from "./syncEntry.ts";
+import { withSyncJob } from "./engine.ts";
 import { TemplateCache } from "./templateCache.ts";
 import { GitFixture, R, shouldSkipRealGit, type Snapshot, T, text, world, type World } from "./testFixtures.ts";
 
@@ -24,7 +25,8 @@ const {
   handoutSyncEngineFor,
   resetBotIdentityForTesting,
   SYNC_TOKEN_PERMISSIONS,
-  syncRepositoryToHandoutGit
+  syncRepositoryToHandoutGit,
+  TEMPLATE_TOKEN_PERMISSIONS
 } = await import("./syncEntry.ts");
 const { renderSyncPullRequestBody, syncPullRequestTitle } = await import("../GitHubSyncHelpers.ts");
 const { requestScopedInstallationToken, getScopedInstallationToken } = await import("../GitHubWrapper.ts");
@@ -35,7 +37,10 @@ function gitTest(name: string, fn: () => Promise<void>): void {
   Deno.test({ name, ignore: SKIP, sanitizeResources: false, sanitizeOps: false, fn });
 }
 
+/** The student token: the student repo, with write. */
 const TOKEN = "ghs_testtoken0123456789";
+/** The template token: the template repo, read only, from the template org's installation. */
+const TEMPLATE_TOKEN = "ghs_templatetoken9876543210";
 const APP_SLUG = "pawtograder-test";
 const BOT_ID = 4242;
 const MERGE_SHA = "c0ffee0000000000000000000000000000000001";
@@ -53,7 +58,7 @@ interface FakePr {
   head: { sha: string; ref: string };
 }
 
-type Call = { route: string; params: Record<string, unknown> };
+type Call = { route: string; params: Record<string, unknown>; token?: string };
 
 function httpError(status: number, message: string): Error {
   return Object.assign(new Error(message), { status });
@@ -63,6 +68,9 @@ function httpError(status: number, message: string): Error {
  * The GitHub REST API as far as the git path calls it. Reads the student's fixture remote for
  * branch heads, so a PR's head is the commit the engine really pushed. Any other route throws,
  * which is how a test notices a call the contract does not allow (such as re-reading the branch).
+ *
+ * It also enforces token scope the way GitHub does: the student token reaches only the student
+ * repo and the template token only the template repo, so a call made with the wrong one fails.
  */
 class FakeGitHub {
   calls: Call[] = [];
@@ -79,10 +87,15 @@ class FakeGitHub {
     private readonly timeline: string[]
   ) {}
 
-  request = async (route: string, params: Record<string, unknown>): Promise<{ data: unknown }> => {
-    this.calls.push({ route, params });
+  request = async (route: string, params: Record<string, unknown>, token?: string): Promise<{ data: unknown }> => {
+    this.calls.push({ route, params, token });
     this.timeline.push(`rest ${route}`);
     const full = `${params.owner}/${params.repo}`;
+    if (params.owner !== undefined) {
+      const reachable =
+        token === TOKEN ? this.w.input.repoFullName : token === TEMPLATE_TOKEN ? this.w.input.templateRepo : "";
+      if (full !== reachable) throw httpError(404, `Not Found (token cannot see ${full})`);
+    }
     switch (route) {
       case "GET /repos/{owner}/{repo}":
         return { data: { size: this.sizes.get(full) ?? 100 } };
@@ -195,11 +208,14 @@ function harness(
     getScopedToken: (org, repositories, permissions) => {
       timeline.push("token");
       tokenRequests.push({ org, repositories: [...repositories], permissions });
-      return Promise.resolve({ token: TOKEN, expiresAt: "2026-11-02T01:00:00Z" });
+      // Read-only means the template request; everything else is the student's.
+      const token = permissions.contents === "read" && !permissions.pull_requests ? TEMPLATE_TOKEN : TOKEN;
+      return Promise.resolve({ token, expiresAt: "2026-11-02T01:00:00Z" });
     },
     octokitForToken: (token) => {
       octokitTokens.push(token);
-      return gh as unknown as ReturnType<GitSyncDeps["octokitForToken"]>;
+      const octokit = { request: (route: string, params: Record<string, unknown>) => gh.request(route, params, token) };
+      return octokit as unknown as ReturnType<GitSyncDeps["octokitForToken"]>;
     },
     appSlug: () => Promise.resolve(APP_SLUG),
     loadSolutionRepos: () =>
@@ -227,8 +243,8 @@ function harness(
   const run = (overrides: Partial<SyncRepositoryToHandoutGitParams> = {}) =>
     syncRepositoryToHandoutGit(
       {
-        repositoryFullName: R,
-        templateRepo: T,
+        repositoryFullName: w.input.repoFullName,
+        templateRepo: w.input.templateRepo,
         fromSha: w.F,
         toSha: w.H,
         syncedRepoSha: w.S,
@@ -448,20 +464,141 @@ for (const branchDeletedOnMerge of [false, true]) {
 // §8.2 token, §5.8 branch safety, limiter
 // ---------------------------------------------------------------------------------------------
 
-gitTest("§8.2: the token names exactly the two repos and the three permissions, and drives every call", async () => {
+gitTest("§8.2: two tokens, the student repo with three write permissions and the template read-only", async () => {
   await GitFixture.with(async (fx) => {
     const w = await cleanWorld(fx);
     const h = harness(w);
-    await h.run();
+    assertEquals((await h.run()).merged, true);
     assertEquals(h.tokenRequests, [
       {
         org: "org",
-        repositories: ["student-a", "handout"],
+        repositories: ["student-a"],
         permissions: { contents: "write", pull_requests: "write", workflows: "write" }
-      }
+      },
+      { org: "org", repositories: ["handout"], permissions: { contents: "read" } }
     ]);
     assertEquals(SYNC_TOKEN_PERMISSIONS, { contents: "write", pull_requests: "write", workflows: "write" });
-    assertEquals(h.octokitTokens, [TOKEN]);
+    assertEquals(TEMPLATE_TOKEN_PERMISSIONS, { contents: "read" });
+    assertEquals(h.octokitTokens, [TOKEN, TEMPLATE_TOKEN]);
+    // The template token makes exactly one REST call, the template's size; the student token the rest.
+    const templateCalls = h.gh.calls.filter((c) => c.token === TEMPLATE_TOKEN);
+    assertEquals(
+      templateCalls.map((c) => [c.route, `${c.params.owner}/${c.params.repo}`]),
+      [["GET /repos/{owner}/{repo}", T]]
+    );
+    assert(h.gh.calls.filter((c) => c.token !== TEMPLATE_TOKEN).every((c) => c.token === TOKEN));
+  });
+});
+
+/**
+ * A git stand-in that appends `<header>\t<argv>` for every call to `log` and then runs the real
+ * git, where `<header>` is the `GIT_CONFIG_VALUE_0` runGit put in the child's environment.
+ */
+async function envSpyGit(fx: GitFixture, log: string): Promise<string> {
+  const which = await new Deno.Command("sh", { args: ["-c", "command -v git"] }).output();
+  const realGit = new TextDecoder().decode(which.stdout).trim();
+  assert(realGit.startsWith("/"), "found the real git");
+  const wrapper = `${fx.root}/git-env-spy`;
+  await Deno.writeTextFile(
+    wrapper,
+    [
+      "#!/bin/sh",
+      `printf '%s\\t%s\\n' "\${GIT_CONFIG_VALUE_0:-none}" "$*" >> '${log}'`,
+      `exec ${realGit} "$@"`,
+      ""
+    ].join("\n")
+  );
+  await Deno.chmod(wrapper, 0o755);
+  return wrapper;
+}
+
+/** The token inside an `AUTHORIZATION: basic …` header, or "none". */
+function tokenInHeader(header: string): string {
+  if (header === "none") return "none";
+  const basic = header.replace(/^AUTHORIZATION: basic /, "");
+  return atob(basic).replace(/^x-access-token:/, "");
+}
+
+gitTest("§8.2: template fetches carry only the template token, student-side git only the student token", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const log = `${fx.root}/git-env.log`;
+    const h = harness(w, { gitBinary: await envSpyGit(fx, log) });
+    assertEquals((await h.run()).merged, true);
+    const calls = (await Deno.readTextFile(log))
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const tab = line.indexOf("\t");
+        return { token: tokenInHeader(line.slice(0, tab)), argv: line.slice(tab + 1) };
+      });
+    const templateUrl = `file://${fx.remotePath(T)}`;
+    const studentUrl = `file://${fx.remotePath(R)}`;
+    const templateSide = calls.filter((c) => c.argv.includes(templateUrl) || c.argv.includes(fx.templatesDir));
+    const studentSide = calls.filter((c) => c.argv.includes(studentUrl) || c.argv.includes(fx.jobsDir));
+    assert(
+      templateSide.some((c) => c.argv.includes(templateUrl)),
+      "a template fetch ran"
+    );
+    assert(
+      studentSide.some((c) => c.argv.includes(studentUrl) && c.argv.includes(" push ")),
+      "a push ran"
+    );
+    for (const c of templateSide) assertEquals(c.token, TEMPLATE_TOKEN, `template-side call: ${c.argv}`);
+    for (const c of studentSide) assertEquals(c.token, TOKEN, `student-side call: ${c.argv}`);
+    assert(!templateSide.some((c) => studentSide.includes(c)), "no call names both sides");
+  });
+});
+
+gitTest("§8.2 engine: with no template token, template fetches carry no credential, not the student's", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const log = `${fx.root}/git-env.log`;
+    const ctx = fx.jobContext({ token: TOKEN });
+    ctx.testOnly = { git: { ...ctx.testOnly?.git, gitBinary: await envSpyGit(fx, log) } };
+    const plan = await withSyncJob(ctx, (job) => job.plan(w.input));
+    assertEquals(plan.kind, "commit");
+    const lines = (await Deno.readTextFile(log)).trim().split("\n");
+    const templateUrl = `file://${fx.remotePath(T)}`;
+    const fetches = lines.filter((l) => l.includes(templateUrl));
+    assert(fetches.length > 0, "a template fetch ran");
+    for (const l of fetches) assertEquals(tokenInHeader(l.slice(0, l.indexOf("\t"))), "none", l);
+    const student = lines.filter((l) => l.includes(`file://${fx.remotePath(R)}`));
+    assert(student.length > 0);
+    for (const l of student) assertEquals(tokenInHeader(l.slice(0, l.indexOf("\t"))), TOKEN, l);
+  });
+});
+
+gitTest("§8.2: a handout in another org syncs end to end with that org's installation", async () => {
+  await GitFixture.with(async (fx) => {
+    const otherT = "other-org/handout";
+    const template = await fx.createRepo(otherT);
+    const before: Snapshot = { "a.txt": "one\n" };
+    const F = await template.commitOn("main", before);
+    const H = await template.commitOn("main", { "a.txt": "two\n", "b.txt": "new\n" });
+    const student = await fx.createRepo(R);
+    const S = await student.commitOn("main", before);
+    const w: World = {
+      fx,
+      template,
+      student,
+      F,
+      H,
+      S,
+      input: { templateRepo: otherT, fromSha: F, toSha: H, syncedRepoSha: S, repoFullName: R }
+    };
+    const h = harness(w);
+    const result = await h.run();
+    assertEquals([result.success, result.merged, result.merge_sha], [true, true, MERGE_SHA]);
+    assertEquals(
+      h.tokenRequests.map((t) => [t.org, t.repositories, t.permissions]),
+      [
+        ["org", ["student-a"], SYNC_TOKEN_PERMISSIONS],
+        ["other-org", ["handout"], { contents: "read" }]
+      ]
+    );
+    const commit = (await student.ref(`refs/heads/${branchFor(w)}`))!;
+    assertEquals(await student.show(commit, "b.txt"), "new\n");
   });
 });
 
@@ -717,15 +854,6 @@ gitTest("§5.3: a non-UTF-8 handout path is terminal non_utf8_path", async () =>
   });
 });
 
-gitTest("a template in another org is terminal before a token is minted", async () => {
-  await GitFixture.with(async (fx) => {
-    const w = await cleanWorld(fx);
-    const h = harness(w);
-    assertTerminal(await h.run({ templateRepo: "other-org/handout" }), "template_in_other_org");
-    assertEquals(h.tokenRequests, []);
-  });
-});
-
 gitTest("a failure never puts the token or the params object in the result", async () => {
   await GitFixture.with(async (fx) => {
     const w = await cleanWorld(fx);
@@ -733,5 +861,6 @@ gitTest("a failure never puts the token or the params object in the result", asy
     h.gh.sizes.set(R, 2);
     const result = await h.run();
     assert(!JSON.stringify(result).includes(TOKEN));
+    assert(!JSON.stringify(result).includes(TEMPLATE_TOKEN));
   });
 });

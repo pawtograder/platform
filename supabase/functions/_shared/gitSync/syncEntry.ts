@@ -6,15 +6,17 @@
  * `handout_sync` queue, and branches on the result exactly as it does today. Everything that
  * reaches the repository's content is git (`engine.ts`). What is left over REST is metadata: two
  * repo-size reads, the branch-safety compare, the pull request lookup, creation and merge, and the
- * App's bot account.
+ * App's bot account. Every one of those goes to the student repo with the student token, except
+ * the template's size read, which uses the template token.
  *
  * Order of a job:
  *
  * 1. Validate the names and SHAs. Nothing has been asked of GitHub yet.
  * 2. Refuse a template that is the assignment's grader repo or the class's solution template
  *    (§8.3), from the database.
- * 3. Mint an installation token scoped to the two repositories (§8.2), and read both repos'
- *    sizes with it (§8.4).
+ * 3. Mint two installation tokens (§8.2): a student token for the student repo that can write,
+ *    and a template token from the template org's installation that can only read the template.
+ *    Read both repos' sizes, each with its own token (§8.4).
  * 4. Plan, and push with a compare-and-swap (§5.8). The job directory is gone before step 5.
  * 5. Find or open the pull request and merge it (§5.9). Only this step runs under the per-org
  *    limiters; the git work holds neither.
@@ -75,12 +77,18 @@ export const DEFAULT_MAX_REPO_KIB = 2 * 1024 * 1024;
  */
 export const UNFETCHABLE_TERMINAL_RETRY_COUNT = 5;
 
-/** Exactly what a sync job's token may do (§8.2). `workflows` is needed to push `grade.yml`. */
+/**
+ * Exactly what a sync job's student token may do (§8.2). `workflows` is needed to push `grade.yml`.
+ * Scoped to the student repo alone.
+ */
 export const SYNC_TOKEN_PERMISSIONS = {
   contents: "write",
   pull_requests: "write",
   workflows: "write"
 } as const satisfies github.InstallationTokenPermissions;
+
+/** What a sync job's template token may do: read the template repo, and nothing else. */
+export const TEMPLATE_TOKEN_PERMISSIONS = { contents: "read" } as const satisfies github.InstallationTokenPermissions;
 
 export interface SyncRepositoryToHandoutGitParams {
   repositoryFullName: string;
@@ -117,6 +125,12 @@ let configuredRuntime: HandoutSyncGitRuntime | undefined;
 /**
  * Sets the runtime the git path uses. The worker (WP5) calls this once at startup; without it the
  * first job builds one from the environment (`HANDOUT_SYNC_WORK_DIR`, default `/work`).
+ *
+ * The job deadline (§3.1) is not part of this yet. `processEnvelope` cannot carry an
+ * `AbortSignal`, so the worker needs a per-job signal provider here, keyed by job id: for example
+ * a `signalFor(jobId: string): AbortSignal | undefined` field that the worker answers from the
+ * `AbortController` it created for that message, and that `syncRepositoryToHandoutGit` passes to
+ * the engine as `SyncJobContext.signal`. The job id is `msg-<pgmq msg_id>` (see `jobIdFor`).
  */
 export function configureHandoutSyncGit(runtime: HandoutSyncGitRuntime): void {
   configuredRuntime = runtime;
@@ -284,16 +298,6 @@ export async function syncRepositoryToHandoutGit(
     if (syncedRepoSha !== null) validateSha(syncedRepoSha, "synced repo sha");
     const [org, repoName] = repo.split("/");
     const [templateOrg, templateName] = template.split("/");
-    // One token has to reach both repositories, and a token belongs to one installation, which
-    // belongs to one org. Every handout this codebase creates lives in the class's org, next to
-    // the student repos; an assignment that inherits another assignment's handout can break that.
-    if (org.toLowerCase() !== templateOrg.toLowerCase()) {
-      throw new TerminalSyncError(
-        `Cannot sync ${repo} from ${template}: the handout is in a different GitHub organization, and the ` +
-          `git sync's access token covers one organization's installation.`,
-        "template_in_other_org"
-      );
-    }
 
     // 2. The template must not be the grader (§8.3).
     const solution = await deps.loadSolutionRepos(adminSupabase, repositoryId);
@@ -311,18 +315,22 @@ export async function syncRepositoryToHandoutGit(
       }
     }
 
-    // 3. A token for these two repositories only, and their sizes (§8.2, §8.4).
-    const { token } = await deps.getScopedToken(
-      org,
-      Array.from(new Set([repoName, templateName])),
-      SYNC_TOKEN_PERMISSIONS,
+    // 3. Two tokens, one per side, and both repos' sizes (§8.2, §8.4). Separate even when both
+    // repos are in one org, so the student token never reaches the template. The template token
+    // comes from the template org's installation, so a handout an assignment inherited from
+    // another org's class still syncs.
+    const { token } = await deps.getScopedToken(org, [repoName], SYNC_TOKEN_PERMISSIONS, scope);
+    const { token: templateToken } = await deps.getScopedToken(
+      templateOrg,
+      [templateName],
+      TEMPLATE_TOKEN_PERMISSIONS,
       scope
     );
     const octokit = deps.octokitForToken(token, scope);
+    const templateOctokit = deps.octokitForToken(templateToken, scope);
     const runtime = deps.runtime();
-    for (const fullName of [repo, template]) {
-      await assertRepoWithinSizeLimit(octokit, fullName, runtime.maxRepoKib, scope);
-    }
+    await assertRepoWithinSizeLimit(octokit, repo, runtime.maxRepoKib, scope);
+    await assertRepoWithinSizeLimit(templateOctokit, template, runtime.maxRepoKib, scope);
     const identity = await resolveBotIdentity(octokit, deps, scope);
 
     // 4. The git work. No limiter is held here.
@@ -333,6 +341,7 @@ export async function syncRepositoryToHandoutGit(
       remote: runtime.remote,
       maxMergeBytes: runtime.maxMergeBytes,
       token,
+      templateToken,
       identity,
       ...deps.engineContext
     };
