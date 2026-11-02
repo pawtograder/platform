@@ -43,7 +43,7 @@ const AUTOSAVE_STATUS_TEXT: Record<AutosaveStatus, string> = {
   saving: "Saving…",
   saved: "All changes saved",
   retrying: "Not saved yet. Retrying…",
-  offline: "You're offline. Your answers will save when you reconnect.",
+  offline: "You're offline. Keep this page open and your answers will save when you reconnect.",
   failed: "Your latest answers aren't saved."
 };
 const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
@@ -133,7 +133,7 @@ function submitFailureAlert(error: unknown, outcome: SubmitOutcome): SubmitAlert
  */
 function submitFailureMessage(error: unknown, online: boolean): string {
   if (!online) {
-    return "You're offline. Your answers are still here and will save as a draft when you reconnect. Then press Complete again.";
+    return "You're offline. Your answers are still here. Keep this page open and they will save as a draft when you reconnect. Then press Complete again.";
   }
   if (error instanceof SaveTimeoutError) return `The server took too long to respond. ${PRESS_COMPLETE_AGAIN}`;
   const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : "";
