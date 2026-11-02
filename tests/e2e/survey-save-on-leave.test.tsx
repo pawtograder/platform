@@ -209,6 +209,9 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await expect(input).toHaveValue("Answer before going offline");
     await expect(input).toBeEditable();
     await expect(page.getByRole("alert").filter({ hasText: "Your survey wasn't submitted" })).toBeVisible();
+    // SurveyJS's own "Submitting your answers…" notice goes with the thank-you screen. Checked once,
+    // not waited for: SurveyJS hides it by itself 2 s after showing it.
+    expect(await page.getByRole("alert").filter({ hasText: "Submitting your answers…" }).isVisible()).toBe(false);
 
     // The answers keep autosaving as a draft while the student is back in the form.
     await input.fill("Changed after the failed Complete");
