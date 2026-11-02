@@ -82,6 +82,19 @@ describe("useNow", () => {
     expect(result.current).toBe(PAGE_LOAD + 5 * 60_000 + NOW_TICK_MS);
   });
 
+  it("keeps the browser clock when a refresh brings a server time that is behind it", () => {
+    const { result, rerender } = renderHook(({ t }) => useNow(t), { initialProps: { t: PAGE_LOAD } });
+
+    act(() => {
+      jest.advanceTimersByTime(NOW_TICK_MS);
+    });
+    expect(result.current).toBe(PAGE_LOAD + NOW_TICK_MS);
+
+    // router.refresh() renders the component again with the new payload's server time.
+    rerender({ t: PAGE_LOAD - 60_000 });
+    expect(result.current).toBe(PAGE_LOAD + NOW_TICK_MS);
+  });
+
   it("leaves no timer running after unmount", () => {
     const { unmount } = renderHook(() => useNow(PAGE_LOAD));
     unmount();
