@@ -56,6 +56,33 @@ describe("survey title (issue #1002)", () => {
     expect(screen.getByRole("heading", { name: JSON_TITLE })).toBeInTheDocument();
   });
 
+  it("SurveyComponent shows the JSON title again when the database title is taken away", () => {
+    // `title` is optional: without it the JSON title shows. Dropping it after a real
+    // title must not leave the old database title on screen.
+    const json = builderJson();
+    const { rerender } = render(<SurveyComponent surveyJson={json} title={DB_TITLE} />);
+
+    rerender(<SurveyComponent surveyJson={json} title="" />);
+
+    expect(screen.getByRole("heading", { level: 1, name: JSON_TITLE })).toBeInTheDocument();
+    expect(screen.queryByText(DB_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("SurveyComponent restores a per-locale JSON title when the database title is taken away", () => {
+    const json = {
+      ...builderJson(),
+      locale: "de",
+      title: { default: JSON_TITLE, de: "Umfragename" }
+    };
+    const { rerender } = render(<SurveyComponent surveyJson={json} title={DB_TITLE} />);
+    expect(screen.getByRole("heading", { level: 1, name: DB_TITLE })).toBeInTheDocument();
+
+    rerender(<SurveyComponent surveyJson={json} />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Umfragename" })).toBeInTheDocument();
+    expect(screen.queryByText(DB_TITLE)).not.toBeInTheDocument();
+  });
+
   it("SurveyComponent shows the title as plain text where the caller has the heading", () => {
     // The Student Preview dialog's own h2 already names the survey. The preview still
     // shows the title the way students see it, but an h1 inside the dialog would sit
