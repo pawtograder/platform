@@ -16,11 +16,15 @@ export type SurveyResponseUpsert = Pick<
 >;
 
 /**
- * Browsers refuse a keepalive request once the keepalive bodies in flight pass 64 KiB. A larger
- * body goes out as an ordinary request instead: it may be cancelled by the unload, but a refused
- * keepalive would never be sent at all.
+ * Browsers cap the bodies of all keepalive requests a page has in flight at 64 KiB together, and
+ * reject a keepalive request that would pass that. These requests stay within 60 KiB together: one
+ * that would pass it goes out as an ordinary request instead. That one may be canceled by the
+ * unload, but a rejected keepalive request is never sent at all.
  */
 export const KEEPALIVE_BODY_LIMIT_BYTES = 60 * 1024;
+
+/** Body bytes of the keepalive requests sent from here that haven't finished yet. */
+let keepaliveBytesInFlight = 0;
 
 export class SurveyResponseWriteError extends Error {
   readonly status: number;
@@ -46,25 +50,33 @@ export async function upsertSurveyResponseWithKeepalive(args: {
   signal?: AbortSignal;
 }): Promise<void> {
   const body = JSON.stringify(args.row);
-  const response = await fetch(`${args.supabaseUrl}/rest/v1/survey_responses?on_conflict=survey_id,profile_id`, {
-    method: "POST",
-    headers: {
-      apikey: args.anonKey,
-      Authorization: `Bearer ${args.accessToken}`,
-      "Content-Type": "application/json",
-      Prefer: "resolution=merge-duplicates,return=minimal"
-    },
-    body,
-    keepalive: new TextEncoder().encode(body).length <= KEEPALIVE_BODY_LIMIT_BYTES,
-    signal: args.signal
-  });
-  if (!response.ok) {
-    let errorBody = {};
-    try {
-      errorBody = await response.json();
-    } catch {
-      // Not a PostgREST error body; the status alone has to do.
+  const bodyBytes = new TextEncoder().encode(body).length;
+  const keepalive = keepaliveBytesInFlight + bodyBytes <= KEEPALIVE_BODY_LIMIT_BYTES;
+  if (keepalive) keepaliveBytesInFlight += bodyBytes;
+  try {
+    const response = await fetch(`${args.supabaseUrl}/rest/v1/survey_responses?on_conflict=survey_id,profile_id`, {
+      method: "POST",
+      headers: {
+        apikey: args.anonKey,
+        Authorization: `Bearer ${args.accessToken}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal"
+      },
+      body,
+      keepalive,
+      signal: args.signal
+    });
+    if (!response.ok) {
+      let errorBody = {};
+      try {
+        errorBody = await response.json();
+      } catch {
+        // Not a PostgREST error body; the status alone has to do.
+      }
+      throw new SurveyResponseWriteError(response.status, errorBody);
     }
-    throw new SurveyResponseWriteError(response.status, errorBody);
+  } finally {
+    // Freed once the reply has arrived, or the request has failed.
+    if (keepalive) keepaliveBytesInFlight -= bodyBytes;
   }
 }
