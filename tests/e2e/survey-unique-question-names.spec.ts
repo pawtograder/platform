@@ -108,6 +108,52 @@ test.describe("survey builder: duplicate question names", () => {
     }
   });
 
+  test("editing a published survey, the copy doesn't suggest saving it as a draft", async ({ page }) => {
+    // Saving a published survey as a draft would take it away from students.
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.private_profile_id,
+        assigned_to_all: true,
+        allow_response_editing: false,
+        json: JSON.stringify({
+          pages: [
+            {
+              name: "page1",
+              elements: [
+                { type: "text", name: "question_1", title: "First" },
+                { type: "text", name: "question_2", title: "Second" }
+              ]
+            }
+          ]
+        }),
+        version: 1,
+        status: "published",
+        title: "Published, then edited",
+        description: "#1005"
+      })
+      .select("id")
+      .single();
+    if (error || !survey) throw new Error(`Failed to seed a published survey: ${error?.message}`);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${survey.id}/edit`);
+    await page.getByRole("button", { name: /Open Visual Builder/i }).click();
+    await page.getByPlaceholder("Short Text question").nth(1).fill("question_1");
+
+    const summary = page.getByTestId("survey-builder-duplicate-names");
+    await expect(summary).toContainText('"question_1" is used by page 1, question 1 and page 1, question 2.');
+    await expect(summary).toContainText(
+      "The published survey keeps its current questions until every question has its own name."
+    );
+    await expect(summary).not.toContainText("draft");
+
+    await page.getByRole("button", { name: /Use This Survey/i }).click();
+    const note = page.locator("#survey-publish-blocked");
+    await expect(note).toHaveText("Two questions share a name. Rename one under Survey Questions.");
+  });
+
   test("a question added on a new page gets a name no other question uses", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/surveys/new`);
