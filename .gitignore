@@ -14,6 +14,8 @@ dist
 
 # testing
 /coverage
+# git fixture repos from supabase/functions/_shared/gitSync tests
+/.test-tmp/
 
 # next.js
 /.next/
