@@ -61,8 +61,69 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+/** The Postgres error code PostgREST returned, or undefined when the error didn't come from the database. */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error) || !error.code) return undefined;
+  return String(error.code);
+}
+
+// What the database answers when an upsert would change a submitted response the student may not
+// change: the trigger that keeps it submitted (check_violation) or, on a survey without editing,
+// the update policy (insufficient_privilege).
+const REFUSED_AS_SUBMITTED_CODES = new Set(["23514", "42501"]);
+
 /**
- * What a failed Complete tells the student. A network failure reaches us from supabase-js as
+ * Whether the response row has to be read to learn where a failed Complete left it. Only an error
+ * the database returned says the upsert was rolled back. A timeout, a dropped connection or a
+ * gateway's error page can arrive after it committed, and a refusal because the row is already
+ * submitted may mean an earlier attempt got through.
+ */
+function submitOutcomeNeedsReadBack(error: unknown): boolean {
+  const code = errorCode(error);
+  return !code || REFUSED_AS_SUBMITTED_CODES.has(code);
+}
+
+/** Whether a stored row shows that a submit carrying `sentData` landed: submitted, with those answers. */
+function holdsSubmission(row: SurveyResponse | null | undefined, sentData: ResponseData): row is SurveyResponse {
+  return Boolean(row?.is_submitted) && isSameResponseData(row?.response, sentData);
+}
+
+const NOT_SUBMITTED_TITLE = "Your survey wasn't submitted";
+const MAYBE_SUBMITTED_TITLE = "Your survey may not have been submitted";
+const PRESS_COMPLETE_AGAIN = "Your answers are still here. Press Complete to try again.";
+
+type SubmitAlert = {
+  title: string;
+  message: string;
+  /** Move focus to the alert. Set when Complete fails, not when a later check only updates the text. */
+  focus: boolean;
+};
+
+/**
+ * What the alert says after a failed Complete. `failed`: the submit did not land. `unknown`: it may
+ * have, and the row couldn't be read to find out. `unknown-until-online`: it may have, and the row
+ * is read once the browser is back online.
+ */
+type SubmitOutcome = "failed" | "unknown" | "unknown-until-online";
+
+const COULD_NOT_CHECK = `The page couldn't reach the server to check. ${PRESS_COMPLETE_AGAIN}`;
+
+/** The alert a failed Complete shows, with the focus moved to it. */
+function submitFailureAlert(error: unknown, outcome: SubmitOutcome): SubmitAlert {
+  if (outcome === "unknown-until-online") {
+    return {
+      title: MAYBE_SUBMITTED_TITLE,
+      message:
+        "The connection dropped before the server replied. Your answers are still here. Keep this page open, and it will check when you reconnect.",
+      focus: true
+    };
+  }
+  if (outcome === "unknown") return { title: MAYBE_SUBMITTED_TITLE, message: COULD_NOT_CHECK, focus: true };
+  return { title: NOT_SUBMITTED_TITLE, message: submitFailureMessage(error, navigator.onLine), focus: true };
+}
+
+/**
+ * Why a Complete that did not land failed. A network failure reaches us from supabase-js as
  * `{ message: "TypeError: Failed to fetch", details: <stack trace> }`, which
  * getStudentFacingErrorMessage would show as the stack trace, so those are named here.
  */
@@ -70,12 +131,12 @@ function submitFailureMessage(error: unknown, online: boolean): string {
   if (!online) {
     return "You're offline. Your answers are still here and will save as a draft when you reconnect. Then press Complete again.";
   }
-  const retry = "Your answers are still here. Press Complete to try again.";
-  if (error instanceof SaveTimeoutError) return `The server took too long to respond. ${retry}`;
+  if (error instanceof SaveTimeoutError) return `The server took too long to respond. ${PRESS_COMPLETE_AGAIN}`;
   const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : "";
-  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-  if (!code && /^(TypeError|AbortError)\b/.test(message)) return `The server couldn't be reached. ${retry}`;
-  return `${getStudentFacingErrorMessage(error)} ${retry}`;
+  if (!errorCode(error) && /^(TypeError|AbortError)\b/.test(message)) {
+    return `The server couldn't be reached. ${PRESS_COMPLETE_AGAIN}`;
+  }
+  return `${getStudentFacingErrorMessage(error)} ${PRESS_COMPLETE_AGAIN}`;
 }
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
@@ -104,8 +165,12 @@ export default function SurveyTakingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
   // Why the last Complete failed, shown above the form until the next attempt.
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<SubmitAlert | null>(null);
   const submitErrorRef = useRef<HTMLDivElement | null>(null);
+  // The response turned out to be submitted after the page loaded it as a draft: a Complete whose
+  // reply was lost, or a submit from another tab. On a survey that allows editing the form keeps the
+  // student's answers, so this, not existingResponse, says it is submitted.
+  const [submittedSinceLoad, setSubmittedSinceLoad] = useState(false);
 
   // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
   // that can race the Complete upsert: an autosave carrying is_submitted:false
@@ -130,6 +195,11 @@ export default function SurveyTakingPage() {
   // The student's access token, kept current so the request sent while the page unloads does not
   // have to wait for the Supabase client to read it.
   const accessTokenRef = useRef<string | null>(null);
+  // A Complete failed offline after it may have reached the database. The autosave queue stays
+  // paused until the row has been read, once the browser is back online: a draft sent first would
+  // only be refused.
+  const submitCheckPendingRef = useRef(false);
+  const checkSubmitOnReconnectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     const queue = new SurveyAutosaveQueue<ResponseData>({
@@ -146,9 +216,12 @@ export default function SurveyTakingPage() {
     });
     autosaveQueueRef.current = queue;
 
-    const retryOnReconnect = () => queue.retryNow();
+    const onReconnect = () => {
+      void checkSubmitOnReconnectRef.current();
+      queue.retryNow();
+    };
     const noteOffline = () => queue.noteOffline();
-    window.addEventListener("online", retryOnReconnect);
+    window.addEventListener("online", onReconnect);
     window.addEventListener("offline", noteOffline);
 
     // `textUpdateMode = "onTyping"` restarts the debounce on every keystroke, so a student who
@@ -164,7 +237,7 @@ export default function SurveyTakingPage() {
     return () => {
       window.removeEventListener("pagehide", flushOnLeave);
       document.removeEventListener("visibilitychange", flushWhenHidden);
-      window.removeEventListener("online", retryOnReconnect);
+      window.removeEventListener("online", onReconnect);
       window.removeEventListener("offline", noteOffline);
       // Flush rather than merely cancel when the student navigates away inside the app. That
       // request still goes out, but nothing is retried once the page is gone.
@@ -215,6 +288,7 @@ export default function SurveyTakingPage() {
     if (responseStateKeyRef.current !== responseKey) {
       responseStateKeyRef.current = responseKey;
       responseStateRef.current = "unknown";
+      setSubmittedSinceLoad(false);
     }
 
     let cancelled = false;
@@ -327,31 +401,46 @@ export default function SurveyTakingPage() {
     [buildResponseRow, controller.client]
   );
 
-  // Whether a submit that ran out of time reached the database anyway, with only its response lost:
-  // the row is submitted and holds the answers that were sent. submitted_at can't tell, because on
-  // a first submit the database stamps it with the server's clock, not this browser's.
-  const submitLandedDespiteTimeout = useCallback(
-    async (submittedData: ResponseData) => {
-      if (!surveyId || !private_profile_id) return false;
-      try {
-        const { data, error } = await runWithTimeout(
-          async (signal) =>
-            controller.client
-              .from("survey_responses")
-              .select("is_submitted, response")
-              .eq("survey_id", surveyId)
-              .eq("profile_id", private_profile_id)
-              .abortSignal(signal)
-              .maybeSingle(),
-          SAVE_TIMEOUT_MS
-        );
-        if (error || !data?.is_submitted) return false;
-        return isSameResponseData(data.response, submittedData);
-      } catch {
-        return false;
-      }
+  // The student's response row as stored now: null when there is none, undefined when it can't be
+  // read. Read when a save's reply (or the lack of one) doesn't say where the row stands.
+  const readStoredResponse = useCallback(async (): Promise<SurveyResponse | null | undefined> => {
+    if (!surveyId || !private_profile_id) return undefined;
+    try {
+      const { data, error } = await runWithTimeout(
+        async (signal) =>
+          controller.client
+            .from("survey_responses")
+            .select("*")
+            .eq("survey_id", surveyId)
+            .eq("profile_id", private_profile_id)
+            .abortSignal(signal)
+            .maybeSingle(),
+        SAVE_TIMEOUT_MS
+      );
+      return error ? undefined : data;
+    } catch {
+      return undefined;
+    }
+  }, [surveyId, private_profile_id, controller.client]);
+
+  // The server holds a submitted response that this page took for a draft: a Complete whose reply
+  // was lost, or a submit from another tab. Show it as submitted, as a reload would.
+  const showSubmittedResponse = useCallback(
+    (row: SurveyResponse) => {
+      responseStateRef.current = "submitted";
+      setSubmitError(null);
+      setSubmittedSinceLoad(true);
+      // Without editing the form locks and shows what was submitted. With editing it keeps the
+      // student's answers, which are newer than the row; handing it the row would overwrite them
+      // the next time it turns read-only.
+      if (!allowResponseEditing) setExistingResponse(row);
+      toaster.create({
+        title: "Survey Submitted",
+        description: "Your survey has been submitted.",
+        type: "success"
+      });
     },
-    [surveyId, private_profile_id, controller.client]
+    [allowResponseEditing]
   );
 
   const handleSurveyComplete = useCallback(
@@ -375,17 +464,35 @@ export default function SurveyTakingPage() {
       const autosaveQueue = autosaveQueueRef.current;
       autosaveQueue?.pause();
       let submitted = false;
+      // Assigned in the catch below. The cast keeps TypeScript from narrowing it to "failed" in finally.
+      let outcome = "failed" as SubmitOutcome;
       try {
         await autosaveQueue?.whenIdle();
+        // Offline, the browser doesn't send the request at all.
+        const sentOnline = navigator.onLine;
         try {
           await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
         } catch (error) {
-          // Giving up on the request does not undo it: the upsert may have landed and only the
-          // response been lost. Reporting that as a failure would send the student back to a form
-          // whose row is already submitted.
-          if (!(error instanceof SaveTimeoutError) || !(await submitLandedDespiteTimeout(surveyData))) throw error;
+          // A failed request is not a failed submit: the upsert may have committed and only the
+          // reply been lost. Reporting that as a failure would send the student back to a form
+          // whose row is already submitted, and the draft autosave after it would be refused.
+          if (!submitOutcomeNeedsReadBack(error)) throw error;
+          if (!navigator.onLine) {
+            // The row can't be read until the network is back. A submit sent online, or an
+            // earlier one not yet checked, may have got through.
+            if (sentOnline || submitCheckPendingRef.current) outcome = "unknown-until-online";
+            throw error;
+          }
+          // submitted_at can't tell: on a first submit the database stamps it with the server's
+          // clock, not this browser's. The answers can.
+          const row = await readStoredResponse();
+          if (!holdsSubmission(row, surveyData)) {
+            if (row === undefined) outcome = "unknown";
+            throw error;
+          }
         }
         submitted = true;
+        submitCheckPendingRef.current = false;
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
         responseStateRef.current = "submitted";
@@ -407,26 +514,51 @@ export default function SurveyTakingPage() {
         // and press Complete again. clear(false, false) keeps the data and the current page.
         options?.clearSaveMessages();
         surveyModel.clear(false, false);
-        setSubmitError(submitFailureMessage(error, navigator.onLine));
+        setSubmitError(submitFailureAlert(error, outcome));
       } finally {
         setIsSubmitting(false);
         isSubmittingRef.current = false;
-        autosaveQueue?.resume();
-        if (!submitted) {
-          // The answers were not submitted, so they go back to being saved as a draft. Offline,
-          // the queue holds them until the browser reconnects.
-          autosaveQueue?.schedule(surveyModel.data);
-          autosaveQueue?.flush();
+        // The answers were not submitted, so they go back to being saved as a draft. Offline, the
+        // queue holds them until the browser reconnects.
+        if (!submitted) autosaveQueue?.schedule(surveyModel.data);
+        if (outcome === "unknown-until-online") {
+          // The queue stays paused until checkSubmitOnReconnect has read the row.
+          submitCheckPendingRef.current = true;
+          if (navigator.onLine) void checkSubmitOnReconnectRef.current();
+        } else {
+          autosaveQueue?.resume();
+          if (!submitted) autosaveQueue?.flush();
         }
       }
     },
-    [private_profile_id, surveyId, course_id, router, saveResponseToDb, submitLandedDespiteTimeout]
+    [private_profile_id, surveyId, course_id, router, saveResponseToDb, readStoredResponse]
   );
+
+  // Back online after a Complete that may have landed while offline: read the row before any draft
+  // goes out. If it is submitted, show that; otherwise the answers go back to autosaving.
+  checkSubmitOnReconnectRef.current = async () => {
+    if (!submitCheckPendingRef.current || isSubmittingRef.current) return;
+    submitCheckPendingRef.current = false;
+    const row = await readStoredResponse();
+    // A new Complete started meanwhile. It decides, and resumes the queue when it ends.
+    if (isSubmittingRef.current) return;
+    if (row?.is_submitted) {
+      showSubmittedResponse(row);
+    } else {
+      setSubmitError(
+        row === undefined
+          ? { title: MAYBE_SUBMITTED_TITLE, message: COULD_NOT_CHECK, focus: false }
+          : { title: NOT_SUBMITTED_TITLE, message: PRESS_COMPLETE_AGAIN, focus: false }
+      );
+    }
+    autosaveQueueRef.current?.resume();
+    autosaveQueueRef.current?.flush();
+  };
 
   // The failed form is re-rendered from scratch, so focus would otherwise fall back to the page.
   // Moving it to the alert puts keyboard and screen-reader users next to the form they return to.
   useEffect(() => {
-    if (submitError) submitErrorRef.current?.focus();
+    if (submitError?.focus) submitErrorRef.current?.focus();
   }, [submitError]);
 
   const canAutosave = useCallback(
@@ -440,7 +572,7 @@ export default function SurveyTakingPage() {
     [allowResponseEditing]
   );
   canAutosaveRef.current = canAutosave;
-  saveDraftRef.current = async (responseData, { signal, keepalive }) => {
+  const sendDraft = async (responseData: ResponseData, { signal, keepalive }: SaveAttempt) => {
     const accessToken = accessTokenRef.current;
     if (keepalive && accessToken && SUPABASE_URL && SUPABASE_ANON_KEY) {
       const row = buildResponseRow(responseData, false);
@@ -455,6 +587,22 @@ export default function SurveyTakingPage() {
       return;
     }
     await saveResponseToDb(responseData, false, signal);
+  };
+  saveDraftRef.current = async (responseData, attempt) => {
+    try {
+      await sendDraft(responseData, attempt);
+    } catch (error) {
+      // The database refuses a draft over a submitted response. If the row is submitted, it was
+      // submitted where this page couldn't see it, so show that instead of retrying a request that
+      // can only be refused again.
+      const code = errorCode(error);
+      if (!code || !REFUSED_AS_SUBMITTED_CODES.has(code)) throw error;
+      const row = await readStoredResponse();
+      if (!row?.is_submitted) throw error;
+      showSubmittedResponse(row);
+      // A survey that allows editing still takes the edit, now as a change to the submitted response.
+      if (canAutosaveRef.current()) await sendDraft(responseData, attempt);
+    }
   };
 
   const handleValueChanged = useCallback(
@@ -520,9 +668,10 @@ export default function SurveyTakingPage() {
 
   // Check if survey is read-only (submitted and editing not allowed). An instructor
   // viewing as a student is also read-only and must not submit/overwrite the student's response.
-  const surveyAlreadySubmitted = existingResponse?.is_submitted && !survey.allow_response_editing;
+  const responseIsSubmitted = Boolean(existingResponse?.is_submitted) || submittedSinceLoad;
+  const surveyAlreadySubmitted = responseIsSubmitted && !survey.allow_response_editing;
   const isReadOnly = isSurveyResponseReadOnly({
-    responseIsSubmitted: Boolean(existingResponse?.is_submitted),
+    responseIsSubmitted,
     allowResponseEditing: survey.allow_response_editing,
     isViewingAsStudent
   });
@@ -560,7 +709,7 @@ export default function SurveyTakingPage() {
             </Box>
           )}
 
-          {existingResponse?.is_submitted && survey.allow_response_editing && (
+          {responseIsSubmitted && survey.allow_response_editing && (
             <Box
               colorPalette="green"
               bg="green.subtle"
@@ -593,8 +742,8 @@ export default function SurveyTakingPage() {
         )}
 
         {submitError && (
-          <Alert ref={submitErrorRef} tabIndex={-1} role="alert" status="error" title="Your survey wasn't submitted">
-            {submitError}
+          <Alert ref={submitErrorRef} tabIndex={-1} role="alert" status="error" title={submitError.title}>
+            {submitError.message}
           </Alert>
         )}
 

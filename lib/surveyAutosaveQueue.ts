@@ -168,7 +168,10 @@ export class SurveyAutosaveQueue<T> {
     if (this.latest) this.setStatus("offline");
   }
 
-  /** Stops starting requests (Complete is under way). A request already in flight carries on. */
+  /**
+   * Stops starting requests: Complete is under way, or the page is waiting to learn whether one
+   * landed. A request already in flight carries on.
+   */
   pause(): void {
     this.paused = true;
     this.clearTimers();
