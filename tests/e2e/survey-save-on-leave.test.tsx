@@ -15,6 +15,9 @@ const ONE_QUESTION_JSON = {
   pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
 };
 
+const OFFLINE_STATUS = "You're offline. Your answers will save when you reconnect.";
+const SAVED_STATUS = "All changes saved";
+
 test.describe("Survey answers survive leaving the page and losing the network", () => {
   let course: Course;
   let student: User;
@@ -147,6 +150,36 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       .toEqual({ q1: "Typed right before reload", is_submitted: false });
     await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Typed right before reload");
     expect(storageWrites.filter((write) => write.includes("Typed right before reload"))).toEqual([]);
+  });
+
+  test("an answer given offline is saved after reconnecting, and the page says which", async ({ page }) => {
+    const survey = await seedSurvey("Offline Answer Survey");
+    await loginAsUser(page, student, course);
+    const storageWrites = await recordBrowserStorageWrites(page);
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeEditable();
+    // Set on this document only: a reload would clear it.
+    await page.evaluate(() => {
+      (window as unknown as { __sameDocument?: boolean }).__sameDocument = true;
+    });
+
+    await page.context().setOffline(true);
+    await input.fill("Answered while offline");
+    await expect(page.getByRole("status").filter({ hasText: OFFLINE_STATUS })).toBeVisible();
+    expect(await storedResponse(survey.id)).toBeNull();
+
+    await page.context().setOffline(false);
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 15_000 })
+      .toEqual({ q1: "Answered while offline", is_submitted: false });
+    await expect(page.getByRole("status").filter({ hasText: SAVED_STATUS })).toBeVisible();
+    await expect(page.getByText(OFFLINE_STATUS)).toHaveCount(0);
+    // Saved without a reload: the marker set on this document is still there.
+    const sameDocument = await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument);
+    expect(sameDocument).toBe(true);
+    expect(storageWrites.filter((write) => write.includes("Answered while offline"))).toEqual([]);
   });
 
   // Holds the first draft write forever: the request is sent but never gets a response.
