@@ -556,7 +556,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
-  await assertJobTokenMatchesRepository(adminSupabase, decoded);
+  await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
 
   const org = repository.split("/")[0];
   scope?.setTag("org", org);

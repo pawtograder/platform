@@ -1436,7 +1436,8 @@ export async function validateOIDCTokenOrAllowE2E(
  */
 export async function assertJobTokenMatchesRepository(
   supabase: SupabaseClient<Database>,
-  token: { repository: string; provider: JobTokenProvider }
+  token: { repository: string; provider: JobTokenProvider },
+  scope?: Sentry.Scope
 ): Promise<void> {
   const { data, error } = await supabase
     .from("repositories")
@@ -1444,6 +1445,8 @@ export async function assertJobTokenMatchesRepository(
     .eq("repository", token.repository)
     .maybeSingle();
   if (error) {
+    // Both callers mute UserVisibleError, so report the outage here.
+    Sentry.captureException(error, scope);
     throw new UserVisibleError(`Failed to query repositories: ${error.message}`);
   }
   const repositoryProvider = data?.git_provider ?? "github";

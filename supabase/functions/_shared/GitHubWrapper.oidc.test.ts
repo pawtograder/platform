@@ -309,8 +309,8 @@ function repositoriesClient(row: { git_provider: string } | null, error: { messa
   const asked: unknown[] = [];
   const query = {
     select: () => query,
-    eq: (_column: string, value: unknown) => {
-      asked.push(value);
+    eq: (column: string, value: unknown) => {
+      asked.push([column, value]);
       return query;
     },
     maybeSingle: () => Promise.resolve({ data: row, error })
@@ -340,7 +340,7 @@ Deno.test(
         assertInstanceOf(err, JobTokenRejectedError);
         assertEquals(err.reason, "provider");
       }
-      assertEquals(asked, ["demo-class/hw1-student1"]);
+      assertEquals(asked, [["repository", "demo-class/hw1-student1"]]);
     }
   }
 );

@@ -484,7 +484,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
-  await assertJobTokenMatchesRepository(adminSupabase, decoded);
   const { repository, sha, run_id, run_attempt } = decoded;
   scope?.setTag("repository", repository);
   scope?.setTag("sha", sha);
@@ -492,6 +491,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   scope?.setTag("run_attempt", run_attempt);
   // One click from any event this request reports to the run that caused it.
   attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
+  await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
   scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
   let assignment_id: number | null = null;
