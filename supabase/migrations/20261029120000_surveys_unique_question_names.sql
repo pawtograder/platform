@@ -1,8 +1,9 @@
 -- Refuse to publish a survey in which two questions share a name (#1005).
 --
 -- SurveyJS saves each answer under a key taken from its question (its valueName, else its
--- name), so two questions with the same key share one answer: answering the second clears the first, a required question can be left
--- empty while the survey still completes, and the response shows one value in both places.
+-- name), so two questions with the same key share one answer: answering the second clears the
+-- first, a required question can be left empty while the survey still completes, and the
+-- response shows one value in both places.
 -- The builder and the instructor form already refuse to publish such a survey
 -- (components/survey/questionNames.ts). This is the same rule for every other writer: the
 -- surveys table's Publish menu, the CLI's `surveys copy` and `assignments copy`, and any
@@ -14,6 +15,10 @@
 -- this migration exist, and instructors still need to close them, move their dates or change
 -- their settings; refusing those updates would strand them. Closing (status -> 'closed') never
 -- fires, and neither do drafts, so an instructor can save work in progress and fix it later.
+-- Reopening (closed -> published) is a publish and is checked: a survey closed with duplicate
+-- names from before this migration can't be reopened until they are renamed. Renaming is
+-- allowed while it is closed. Answers already given stay under the shared key, so in those
+-- responses the renamed question shows as unanswered.
 --
 -- Scopes match SurveyJS's data model, and the walk matches findDuplicateQuestionNames in
 -- components/survey/questionNames.ts:
@@ -221,6 +226,8 @@ BEGIN
   -- Already published and the questions are unchanged: a date, setting or title edit on a
   -- survey that was published before this check existed. Compare the unwrapped definitions so
   -- that re-saving the same questions as a string instead of an object is not a change.
+  -- This exempts only published -> published. A closed survey being reopened is checked like
+  -- any other publish, so one closed with duplicate names must have them renamed first.
   IF TG_OP = 'UPDATE'
      AND OLD.status = 'published'::public.survey_status
      AND public.survey_json_unwrapped(NEW.json) IS NOT DISTINCT FROM public.survey_json_unwrapped(OLD.json) THEN
