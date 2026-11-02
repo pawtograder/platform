@@ -26,7 +26,8 @@ function sortIncompleteSurveysForBanner(surveys: SurveyToComplete[], now: number
 /**
  * The student dashboard's "Surveys to complete" cards. A client component so the countdown,
  * the Overdue state and the order follow the clock while the dashboard stays open; the server
- * renders it once with `renderedAt`, its own time, which `useNow` starts from.
+ * renders it once with `renderedAt`, its own time, which `useNow` starts from and the refresh
+ * throttle counts from.
  *
  * Which surveys are listed is still decided by the server: `surveys_select_students` hides a
  * survey until its `available_at`, so one that opens later is never in `surveys`. It arrives
@@ -42,7 +43,7 @@ export default function SurveysToComplete({
   renderedAt: number;
 }) {
   const now = useNow(renderedAt);
-  useRefreshWhenShown();
+  useRefreshWhenShown(renderedAt);
 
   if (surveys.length === 0) {
     return null;

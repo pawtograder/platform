@@ -91,7 +91,7 @@ describe("useNow", () => {
 
 describe("useRefreshWhenShown", () => {
   it("does not refresh a tab shown again within a minute of loading", () => {
-    renderHook(() => useRefreshWhenShown());
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
 
     setVisibility("hidden");
     act(() => {
@@ -103,7 +103,7 @@ describe("useRefreshWhenShown", () => {
   });
 
   it("refreshes when shown a minute or more after the last fetch, at most once a minute", () => {
-    renderHook(() => useRefreshWhenShown());
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
 
     setVisibility("hidden");
     act(() => {
@@ -162,8 +162,51 @@ describe("useRefreshWhenShown", () => {
     expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("restarts the minute when a new payload arrives", () => {
+    const { rerender } = renderHook(({ renderedAt }) => useRefreshWhenShown(renderedAt), {
+      initialProps: { renderedAt: PAGE_LOAD }
+    });
+
+    // Something else refreshed the page 50 s after load.
+    act(() => {
+      jest.advanceTimersByTime(50_000);
+    });
+    rerender({ renderedAt: PAGE_LOAD + 50_000 });
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(20_000);
+    });
+    setVisibility("visible");
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
+  });
+
+  it("costs at most one extra refresh when the browser clock is 10 minutes ahead of the server", () => {
+    const skew = 10 * 60_000;
+    const { rerender } = renderHook(({ renderedAt }) => useRefreshWhenShown(renderedAt), {
+      initialProps: { renderedAt: PAGE_LOAD - skew }
+    });
+
+    // At mount this looks like a page rendered 10 minutes ago, so the first show refreshes.
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+
+    // The refresh's payload arrives a second later with the server's time, still 10 minutes behind.
+    act(() => {
+      jest.advanceTimersByTime(1_000);
+    });
+    rerender({ renderedAt: Date.now() - skew });
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(30_000);
+    });
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("never refreshes on hide, or on the interval alone", () => {
-    renderHook(() => useRefreshWhenShown());
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
 
     act(() => {
       jest.advanceTimersByTime(10 * 60_000);
@@ -174,7 +217,7 @@ describe("useRefreshWhenShown", () => {
   });
 
   it("stops listening after unmount", () => {
-    const { unmount } = renderHook(() => useRefreshWhenShown());
+    const { unmount } = renderHook(() => useRefreshWhenShown(PAGE_LOAD));
     unmount();
 
     setVisibility("hidden");
