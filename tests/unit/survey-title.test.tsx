@@ -68,6 +68,16 @@ describe("survey title (issue #1002)", () => {
     expect(screen.queryByText(DB_TITLE)).not.toBeInTheDocument();
   });
 
+  it("SurveyComponent shows no title when the database title is taken away and the JSON has none", () => {
+    const json = { pages: builderJson().pages };
+    const { rerender } = render(<SurveyComponent surveyJson={json} title={DB_TITLE} />);
+
+    rerender(<SurveyComponent surveyJson={json} title="" />);
+
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+    expect(screen.queryByText(DB_TITLE)).not.toBeInTheDocument();
+  });
+
   it("SurveyComponent restores a per-locale JSON title when the database title is taken away", () => {
     const json = {
       ...builderJson(),
