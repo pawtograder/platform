@@ -142,6 +142,11 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     // Stop the page's timers, so the 1 s autosave debounce cannot fire before the reload.
     await page.clock.pauseAt(new Date(Date.now() + 1000));
     await input.fill("Typed right before reload");
+    // The shared fixture routes avatar images, and any page.route puts every request through
+    // Playwright's interception. A keepalive request sent while the page unloads then sits paused
+    // until the page closes, which a browser without a test harness doesn't do. Drop the routes so
+    // the reload behaves like a real one.
+    await page.unrouteAll({ behavior: "wait" });
     await page.reload();
     await page.clock.resume();
 
