@@ -19,6 +19,7 @@
  * submitted state, and the original submission time survives.
  */
 import {
+  isSameResponseData,
   isSurveyResponseReadOnly,
   NO_ROWS_ERROR_CODE,
   resolveResponseWriteFlags,
@@ -180,5 +181,24 @@ describe("loading a submitted response and then editing it (the reported data lo
     expect(result.readOnly).toBe(false);
     expect(result.rowStaysSubmitted).toBe(false);
     expect(result.editPersisted).toBe(true);
+  });
+});
+
+describe("isSameResponseData (reading back a Complete that timed out)", () => {
+  test("matches the answers stored as jsonb, whatever order the keys come back in", () => {
+    const sent = { q1: "First", q2: ["b", "a"], q3: { rows: { r2: 2, r1: 1 } } };
+    const stored = JSON.parse('{"q3": {"rows": {"r1": 1, "r2": 2}}, "q2": ["b", "a"], "q1": "First"}');
+    expect(isSameResponseData(stored, sent)).toBe(true);
+  });
+
+  test("ignores answers the browser holds as undefined, which the upsert never sent", () => {
+    expect(isSameResponseData({ q1: "First" }, { q1: "First", q2: undefined })).toBe(true);
+  });
+
+  test("tells different answers apart", () => {
+    expect(isSameResponseData({ q1: "Draft" }, { q1: "Submitted" })).toBe(false);
+    expect(isSameResponseData({ q2: ["a", "b"] }, { q2: ["b", "a"] })).toBe(false);
+    expect(isSameResponseData({ q1: "First" }, { q1: "First", q2: "Second" })).toBe(false);
+    expect(isSameResponseData(null, { q1: "First" })).toBe(false);
   });
 });
