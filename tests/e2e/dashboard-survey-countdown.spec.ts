@@ -143,7 +143,9 @@ test.describe("Student dashboard survey countdown", () => {
     expect(refreshes).toHaveLength(2);
   });
 
-  test("the countdown hydrates from the server's time and then follows the browser clock", async ({ page }) => {
+  test("the dashboard loads without hydration errors, then the countdown follows the browser clock", async ({
+    page
+  }) => {
     const hydrationErrors: string[] = [];
     page.on("console", (message) => {
       if (message.type() === "error" && HYDRATION_ERROR.test(message.text())) {
@@ -161,8 +163,9 @@ test.describe("Student dashboard survey countdown", () => {
     await seedPublishedSurvey("Hydration Survey", dueAt);
 
     // The server renders "Due in 5 minutes"; the browser's clock is already past the deadline,
-    // as it would be for a dashboard restored from the router cache. A first client render that
-    // read the browser clock would not match the server HTML.
+    // as it is for a dashboard restored from the router cache. CourseControllerProvider renders a
+    // spinner on the server, so today the cards are not in the server HTML and are first rendered
+    // on the client; the hydration check guards the page as a whole.
     await page.clock.install({ time: dueAt + 5 * 60_000 });
     await page.goto(`/course/${course.id}`);
     const surveys = surveysToComplete(page);
