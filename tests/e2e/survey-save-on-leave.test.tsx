@@ -267,4 +267,27 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       .poll(() => storedResponse(survey.id))
       .toEqual({ q1: "Answer behind a stuck save", is_submitted: true });
   });
+
+  test("a Complete that reaches the database but gets no answer back is reported as submitted", async ({ page }) => {
+    // The page gives up on the submit after its 10 s limit, then has to find out what happened.
+    test.setTimeout(90_000);
+    const survey = await seedSurvey("Lost Answer Complete Survey");
+    await loginAsUser(page, student, course);
+    // The submit reaches the server, but its response never comes back to the page.
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
+      if (route.request().method() !== "POST" || !body?.is_submitted) return route.fallback();
+      await route.fetch();
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Submitted, answer lost");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Submitted, answer lost", is_submitted: false });
+    await page.getByRole("button", { name: "Complete" }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 30_000 });
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted, answer lost", is_submitted: true });
+  });
 });
