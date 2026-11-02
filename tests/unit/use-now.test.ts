@@ -129,6 +129,39 @@ describe("useRefreshWhenShown", () => {
     expect(mockRouter.refresh).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes once when a dashboard rendered 10 minutes ago is shown again, even right after it mounts", () => {
+    // Back restores the dashboard from the router cache whatever its age, so the data on screen
+    // can be much older than the component.
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD - 10 * 60_000));
+
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+
+    // The refresh restarts the throttle.
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("throttles a dashboard rendered 30 s ago until a minute after it was rendered", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD - 30_000));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS - 30_000 - 1);
+    });
+    setVisibility("visible");
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("never refreshes on hide, or on the interval alone", () => {
     renderHook(() => useRefreshWhenShown());
 
