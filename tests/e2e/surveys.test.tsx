@@ -701,8 +701,11 @@ test.describe("Surveys Page", () => {
     // rendered view of the survey must use it instead.
     const dbTitle = "Week 3 Check-in";
     const jsonTitle = "Survey Name";
+    const dbDescription = "Weekly reflection for the team project.";
+    const jsonDescription = "Answer for the week you just finished.";
     const surveyJson = {
       title: jsonTitle,
+      description: jsonDescription,
       pages: [
         {
           name: "page1",
@@ -713,6 +716,7 @@ test.describe("Surveys Page", () => {
 
     const published = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
       title: dbTitle,
+      description: dbDescription,
       status: "published",
       json: surveyJson
     });
@@ -760,13 +764,16 @@ test.describe("Surveys Page", () => {
     await page.getByRole("button", { name: "Close Preview" }).click();
 
     // Instructor's view of a single response: the page heading names the survey,
-    // and the rendered response does not repeat it.
+    // and the rendered response does not repeat it. The database description and the
+    // JSON description differ here, so each shows once.
     await page.goto(`/course/${course.id}/manage/surveys/${published.survey_id}/responses/${response.id}`);
     const responseView = page.locator(".sd-root-modern");
     await expect(responseView.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
     await expect(page.getByRole("heading", { name: dbTitle })).toBeVisible();
     await expect(responseView.getByText(dbTitle)).toHaveCount(0);
     await expect(page.getByText(jsonTitle)).toHaveCount(0);
+    await expect(page.getByText(dbDescription, { exact: true })).toHaveCount(1);
+    await expect(page.getByText(jsonDescription, { exact: true })).toHaveCount(1);
   });
 
   test("instructor can apply filters on responses", async ({ page }) => {
