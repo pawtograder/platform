@@ -15,7 +15,9 @@
  * A snapshot whose request failed is kept and retried with capped exponential backoff, a few times. Then the queue
  * waits for the next edit or for {@link SurveyAutosaveQueue.retryNow} (the page calls it on the
  * browser's `online` event). While the browser is offline it does not count down retries at all:
- * it waits for `online`. The answers are only ever kept in memory and in the database.
+ * it waits for `online`. A save that throws {@link SaveRefusedError} is not retried: the server will
+ * refuse those answers however often they are sent. The answers are only ever kept in memory and in
+ * the database.
  */
 
 export type SaveAttempt = {
@@ -34,8 +36,10 @@ export type SaveAttempt = {
  * - `retrying`: a save failed and another attempt is scheduled or running.
  * - `offline`: a save failed while the browser is offline; the next attempt goes out on `online`.
  * - `failed`: the retries are used up; the next edit or {@link SurveyAutosaveQueue.retryNow} tries again.
+ * - `refused`: the server refused the newest answers for good ({@link SaveRefusedError}); the next edit
+ *   tries again.
  */
-export type AutosaveStatus = "idle" | "saving" | "saved" | "retrying" | "offline" | "failed";
+export type AutosaveStatus = "idle" | "saving" | "saved" | "retrying" | "offline" | "failed" | "refused";
 
 export type RetryPolicy = {
   /** Delay before the first retry. Each later retry waits twice as long as the one before. */
@@ -67,6 +71,21 @@ export class SaveTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`The save did not finish within ${timeoutMs} ms.`);
     this.name = "SaveTimeoutError";
+  }
+}
+
+/**
+ * Thrown by `save` when the server refused the answers and would refuse them again however often
+ * they are sent. The queue drops that snapshot instead of retrying it.
+ */
+export class SaveRefusedError extends Error {
+  /** The error the server returned. */
+  readonly reason: unknown;
+
+  constructor(reason: unknown) {
+    super("The server refused the save, and would refuse it again.");
+    this.name = "SaveRefusedError";
+    this.reason = reason;
   }
 }
 
@@ -294,7 +313,7 @@ export class SurveyAutosaveQueue<T> {
       this.options.timeoutMs
     ).then(
       () => this.succeeded(snapshot.version),
-      (error) => this.failed(error)
+      (error) => this.failed(error, snapshot.version)
     );
     this.inFlight = {
       version: snapshot.version,
@@ -318,8 +337,19 @@ export class SurveyAutosaveQueue<T> {
     }
   }
 
-  private failed(error: unknown): void {
+  private failed(error: unknown, version: number): void {
     this.options.onError?.(error);
+    if (error instanceof SaveRefusedError) {
+      // Sending this snapshot again would be refused again. A newer one, if any, still goes out.
+      if (this.latest?.version === version) {
+        this.latest = null;
+        this.keepaliveRequested = false;
+      }
+      this.failures = 0;
+      this.unresolvedFailure = false;
+      this.setStatus("refused");
+      return;
+    }
     // The snapshot stays in `latest` (or a newer one has replaced it), so a retry sends the newest.
     this.failures += 1;
     this.unresolvedFailure = true;

@@ -22,6 +22,7 @@ import {
 } from "@/lib/surveyResponseState";
 import {
   runWithTimeout,
+  SaveRefusedError,
   SaveTimeoutError,
   SurveyAutosaveQueue,
   type AutosaveStatus,
@@ -44,7 +45,8 @@ const AUTOSAVE_STATUS_TEXT: Record<AutosaveStatus, string> = {
   saved: "All changes saved",
   retrying: "Not saved yet. Retrying…",
   offline: "You're offline. Keep this page open and your answers will save when you reconnect.",
-  failed: "Your latest answers aren't saved."
+  failed: "Your latest answers aren't saved.",
+  refused: "This survey no longer accepts changes, so your latest answers aren't saved."
 };
 const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   idle: "fg.muted",
@@ -54,7 +56,8 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   // orange.700 in light mode and orange.300 in dark.
   retrying: "orange.fg",
   offline: "orange.fg",
-  failed: "fg.error"
+  failed: "fg.error",
+  refused: "fg.error"
 };
 // Shown in the same status region, in the `failed` color, after an edit the page can't save because
 // the student's saved response didn't load.
@@ -72,8 +75,9 @@ function errorCode(error: unknown): string | undefined {
 }
 
 // What the database answers when an upsert would change a submitted response the student may not
-// change: the trigger that keeps it submitted (check_violation) or, on a survey without editing,
-// the update policy (insufficient_privilege).
+// change: the trigger that keeps it submitted (check_violation) or the write policies
+// (insufficient_privilege). Those refuse a change to a submitted response on a survey without
+// editing, and any write on a survey that is closed, unpublished or not assigned to the student.
 const REFUSED_AS_SUBMITTED_CODES = new Set(["23514", "42501"]);
 
 /**
@@ -595,22 +599,31 @@ export default function SurveyTakingPage() {
     }
     await saveResponseToDb(responseData, false, signal);
   };
-  saveDraftRef.current = async (responseData, attempt) => {
+  const saveDraft = async (responseData: ResponseData, attempt: SaveAttempt): Promise<void> => {
+    // Whether these answers go out as a draft, or as a change to a response the page knows is
+    // submitted.
+    const sentAsDraft = responseStateRef.current !== "submitted";
     try {
       await sendDraft(responseData, attempt);
     } catch (error) {
+      const code = errorCode(error);
+      if (!code || !REFUSED_AS_SUBMITTED_CODES.has(code)) throw error;
+      // The page knew the response was submitted, so the survey itself refused the change: it was
+      // closed, unpublished or unassigned, or editing was turned off, since the page loaded.
+      // Sending it again would only be refused again.
+      if (!sentAsDraft) throw new SaveRefusedError(error);
       // The database refuses a draft over a submitted response. If the row is submitted, it was
       // submitted where this page couldn't see it, so show that instead of retrying a request that
       // can only be refused again.
-      const code = errorCode(error);
-      if (!code || !REFUSED_AS_SUBMITTED_CODES.has(code)) throw error;
       const row = await readStoredResponse();
       if (!row?.is_submitted) throw error;
       showSubmittedResponse(row);
-      // A survey that allows editing still takes the edit, now as a change to the submitted response.
-      if (canAutosaveRef.current()) await sendDraft(responseData, attempt);
+      // A survey that allows editing still takes the edit, now as a change to the submitted
+      // response. responseStateRef now says submitted, so a refusal of that ends above.
+      if (canAutosaveRef.current()) await saveDraft(responseData, attempt);
     }
   };
+  saveDraftRef.current = saveDraft;
 
   const handleValueChanged = useCallback(
     (surveyModel: Model, options?: ValueChangedEvent) => {

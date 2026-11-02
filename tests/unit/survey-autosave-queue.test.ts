@@ -9,6 +9,7 @@
 import {
   retryDelayMs,
   runWithTimeout,
+  SaveRefusedError,
   SaveTimeoutError,
   SurveyAutosaveQueue,
   type AutosaveStatus,
@@ -359,6 +360,45 @@ describe("SurveyAutosaveQueue", () => {
     // The debounce for the newer edit is still running, so it, not the retry, sends next.
     jest.advanceTimersByTime(1_000);
     expect(server.writes.map((write) => write.value)).toEqual(["first", "first and second"]);
+  });
+
+  test("does not retry a save the server refused for good, and tries again on the next edit", async () => {
+    const server = fakeServer();
+    const statuses: AutosaveStatus[] = [];
+    const queue = makeQueue(server.save, () => true, { onStatusChange: (status) => statuses.push(status) });
+
+    queue.schedule("answer");
+    jest.advanceTimersByTime(1_000);
+    server.writes[0].done.reject(new SaveRefusedError({ code: "42501" }));
+    await settle();
+    expect(queue.getStatus()).toBe("refused");
+    expect(queue.hasUnsavedChanges()).toBe(false);
+    jest.advanceTimersByTime(60_000);
+    queue.retryNow();
+    expect(server.writes).toHaveLength(1);
+
+    queue.schedule("answer, edited");
+    jest.advanceTimersByTime(1_000);
+    expect(server.writes.map((write) => write.value)).toEqual(["answer", "answer, edited"]);
+    server.writes[1].done.resolve();
+    await settle();
+    expect(statuses).toEqual(["saving", "refused", "saving", "saved"]);
+  });
+
+  test("a newer edit waiting behind a refused save still goes out", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("first");
+    jest.advanceTimersByTime(1_000);
+    queue.schedule("first and second");
+    jest.advanceTimersByTime(1_000);
+    server.writes[0].done.reject(new SaveRefusedError({ code: "42501" }));
+    await settle();
+    expect(server.writes.map((write) => write.value)).toEqual(["first", "first and second"]);
+    server.writes[1].done.resolve();
+    await settle();
+    expect(queue.getStatus()).toBe("saved");
   });
 
   test("offline, it waits for retryNow instead of counting down retries", async () => {
