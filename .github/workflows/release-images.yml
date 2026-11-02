@@ -1,9 +1,10 @@
 name: Release images
 
-# Builds and pushes the three OCI images that the Helm chart consumes:
-#   - web              (Next.js)
-#   - edge-functions   (Deno runtime + supabase/functions/)
-#   - migrations       (postgres-client + supabase/migrations/)
+# Builds and pushes the OCI images that the Helm chart consumes, including:
+#   - web                  (Next.js)
+#   - edge-functions       (Deno runtime + supabase/functions/)
+#   - migrations           (postgres-client + supabase/migrations/)
+#   - handout-sync-worker  (Deno + git; skipped until its entrypoint exists)
 # and publishes the chart itself as an OCI artifact.
 #
 # Triggers:
@@ -389,6 +390,100 @@ jobs:
             docker buildx imagetools create \
               --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${t} \
               ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.version }}
+          done
+
+  # Deno + pinned git for the handout-sync-worker Deployment
+  # (docs/handout-sync-git-worker.md §3.1). Built from the same commit as
+  # edge-functions because the worker imports processEnvelope() and _shared/;
+  # the chart defaults its tag to edgeFunctions.image.tag for the same reason.
+  #
+  # The image's entrypoint is supabase/functions/handout-sync-worker/main.ts
+  # (WP5 of docs/handout-sync-git-build-plan.md), and the Dockerfile refuses to
+  # build without it. On a commit that predates it, every step after the check
+  # is skipped and the job succeeds.
+  #
+  # Deliberately NOT in deploy-staging's or publish-chart's `needs`. This build
+  # fetches from the Alpine mirror and from esm.sh/jsr/npm, and a flaky fetch
+  # here must not block an unrelated deploy or chart release. The price is that
+  # a deploy can reference a handout-sync-worker tag that was never pushed; with
+  # handoutSyncWorker.enabled that shows up as an ImagePullBackOff on the worker
+  # alone (values.yaml says so).
+  build-handout-sync-worker:
+    needs: meta
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check for the worker entrypoint
+        id: entry
+        run: |
+          if [ -f supabase/functions/handout-sync-worker/main.ts ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::supabase/functions/handout-sync-worker/main.ts is not in this commit; skipping the handout-sync-worker image"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.entry.outputs.present == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.entry.outputs.present == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # git is installed with a version floor, not an exact revision, so which
+      # git a build gets depends on the day. Build the `git` stage alone, read
+      # the package it installed, and pass that into the final build as the
+      # org.pawtograder.git-version label.
+      #
+      # Both builds pass --no-cache-filter git, so neither can take that layer
+      # from the gha cache: every release reinstalls git from the Alpine branch
+      # as it is that day, which is how a git security fix reaches the image.
+      # The cost is a window of seconds between the two installs; a git
+      # published inside it would leave the label one patch behind the image.
+      # /usr/share/pawtograder/git-version in the image is always exact.
+      - name: Resolve the git version the image will carry
+        id: gitver
+        if: steps.entry.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          docker buildx build --load --target git \
+            --no-cache-filter git \
+            --cache-from type=gha,scope=handout-sync-worker \
+            -f charts/pawtograder/images/handout-sync-worker/Dockerfile \
+            -t handout-sync-worker-git:local .
+          v="$(docker run --rm --entrypoint cat handout-sync-worker-git:local /usr/share/pawtograder/git-version)"
+          echo "resolved git package: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push handout-sync-worker image
+        if: steps.entry.outputs.present == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/handout-sync-worker/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/handout-sync-worker:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+            GIT_RESOLVED_VERSION=${{ steps.gitver.outputs.version }}
+          cache-from: type=gha,scope=handout-sync-worker
+          cache-to: type=gha,scope=handout-sync-worker,mode=max
+          no-cache-filters: git
+
+      - name: Tag additional refs
+        if: steps.entry.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/handout-sync-worker:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/handout-sync-worker:${{ needs.meta.outputs.version }}
           done
 
   build-migrations:

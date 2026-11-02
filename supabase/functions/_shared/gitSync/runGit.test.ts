@@ -1356,6 +1356,7 @@ function assertHardened(argv: string[], gitDir: string): void {
     "pack.threads=1",
     "pack.windowMemory=64m",
     "core.packedGitLimit=128m",
+    "core.deltaBaseCacheAllowance=32m",
     "core.bigFileThreshold=16m",
     "http.lowSpeedLimit=1000",
     "http.lowSpeedTime=60"

@@ -53,13 +53,14 @@ import {
   type CommitPlan,
   HandoutBaseUnfetchableError,
   HandoutRevisionUnfetchableError,
+  planHandoutSync,
   type SyncAnalysis,
   type SyncJob,
   type SyncJobContext,
   withSyncJob
 } from "./engine.ts";
-import { GitSyncError, GitSyncTerminalError } from "./errors.ts";
-import type { GitIdentity, RemoteConfig } from "./runGit.ts";
+import { type GitFailureKind, GitSyncError, GitSyncRetryableError, GitSyncTerminalError } from "./errors.ts";
+import type { GitIdentity, GitLogger, RemoteConfig } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 import { validateRepoFullName, validateSha } from "./validate.ts";
 
@@ -122,22 +123,34 @@ export interface HandoutSyncGitRuntime {
   remote?: RemoteConfig;
   maxMergeBytes?: number;
   maxRepoKib: number;
+  /**
+   * The job's deadline signal (§3.1), keyed by the `jobId` the handler passes in, which is the
+   * pgmq msg_id as a string. `processEnvelope` cannot carry an `AbortSignal`, so the worker
+   * answers this from the `AbortController` it created for that message, and the engine kills
+   * the job's git children when it fires. Undefined means no deadline.
+   */
+  signalFor?: (jobId: string) => AbortSignal | undefined;
+  /** Every git call's log entry. The worker counts them for `/metrics`; unset, runGit logs them. */
+  gitLog?: GitLogger;
 }
 
 let configuredRuntime: HandoutSyncGitRuntime | undefined;
+let configuredTestDeps: Partial<GitSyncDeps> | undefined;
 
 /**
- * Sets the runtime the git path uses. The worker (WP5) calls this once at startup; without it the
+ * Sets the runtime the git path uses. The worker calls this once at startup; without it the
  * first job builds one from the environment (`HANDOUT_SYNC_WORK_DIR`, default `/work`).
  *
- * The job deadline (§3.1) is not part of this yet. `processEnvelope` cannot carry an
- * `AbortSignal`, so the worker needs a per-job signal provider here, keyed by job id: for example
- * a `signalFor(jobId: string): AbortSignal | undefined` field that the worker answers from the
- * `AbortController` it created for that message, and that `syncRepositoryToHandoutGit` passes to
- * the engine as `SyncJobContext.signal`. The job id is `msg-<pgmq msg_id>` (see `jobIdFor`).
+ * `testOnly.deps` replaces parts of `defaultGitSyncDeps()` for every later call that does not
+ * pass its own deps, which is how a worker started by a test reaches stubbed GitHub REST through
+ * `processEnvelope`. The worker's production entry point never passes it.
  */
-export function configureHandoutSyncGit(runtime: HandoutSyncGitRuntime): void {
+export function configureHandoutSyncGit(
+  runtime: HandoutSyncGitRuntime,
+  opts: { testOnly?: { deps?: Partial<GitSyncDeps> } } = {}
+): void {
   configuredRuntime = runtime;
+  configuredTestDeps = opts.testOnly?.deps;
 }
 
 function positiveIntFromEnv(name: string, fallback: number): number {
@@ -228,7 +241,7 @@ export async function loadSolutionRepos(
 }
 
 export function defaultGitSyncDeps(): GitSyncDeps {
-  return {
+  const deps: GitSyncDeps = {
     runtime: runtimeFromEnv,
     getScopedToken: github.getScopedInstallationToken,
     octokitForToken: github.octokitForInstallationToken,
@@ -241,6 +254,7 @@ export function defaultGitSyncDeps(): GitSyncDeps {
       Sentry.captureException(error, scope);
     }
   };
+  return configuredTestDeps ? { ...deps, ...configuredTestDeps } : deps;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -264,11 +278,9 @@ export async function syncRepositoryToHandoutGit(
     fromSha,
     toSha,
     syncedRepoSha,
-    adminSupabase,
     autoMerge = true,
     waitBeforeMerge = 2000,
     scope,
-    repositoryId,
     retryCount,
     jobId
   } = params;
@@ -294,62 +306,8 @@ export async function syncRepositoryToHandoutGit(
   scope?.setTag("sync_engine", "git");
 
   try {
-    // 1. Inputs. `InvalidSyncInputError` is a `GitSyncTerminalError`, mapped below.
-    const repo = validateRepoFullName(repositoryFullName, "repository");
-    const template = validateRepoFullName(templateRepo, "template repo");
-    validateSha(toSha, "to sha");
-    if (fromSha !== null) validateSha(fromSha, "from sha");
-    if (syncedRepoSha !== null) validateSha(syncedRepoSha, "synced repo sha");
-    const [org, repoName] = repo.split("/");
-    const [templateOrg, templateName] = template.split("/");
-
-    // 2. The template must not be the grader (§8.3).
-    const solution = await deps.loadSolutionRepos(adminSupabase, repositoryId);
-    for (const [column, candidate] of [
-      ["autograder.grader_repo", solution.graderRepo],
-      ["solution_template_repo", solution.solutionTemplateRepo]
-    ] as const) {
-      if (candidate && candidate.toLowerCase() === template.toLowerCase()) {
-        throw new TerminalSyncError(
-          `Refusing to sync ${repo} from ${template}: it is this assignment's ${column}, and syncing it ` +
-            `would push the solution and hidden tests into the student's repository. Set the assignment's ` +
-            `handout repository to the handout, not the grader.`,
-          "template_is_solution_repo"
-        );
-      }
-    }
-
-    // 3. Two tokens, one per side, and both repos' sizes (§8.2, §8.4). Separate even when both
-    // repos are in one org, so the student token never reaches the template. The template token
-    // comes from the template org's installation, so a handout an assignment inherited from
-    // another org's class still syncs. The read-only template side goes first: a template that
-    // is too large stops the job before a token that can write to the student repo exists.
-    const runtime = deps.runtime();
-    const { token: templateToken } = await deps.getScopedToken(
-      templateOrg,
-      [templateName],
-      TEMPLATE_TOKEN_PERMISSIONS,
-      scope
-    );
-    const templateOctokit = deps.octokitForToken(templateToken, scope);
-    await assertRepoWithinSizeLimit(templateOctokit, template, runtime.maxRepoKib, scope);
-    const { token } = await deps.getScopedToken(org, [repoName], SYNC_TOKEN_PERMISSIONS, scope);
-    const octokit = deps.octokitForToken(token, scope);
-    await assertRepoWithinSizeLimit(octokit, repo, runtime.maxRepoKib, scope);
-    const identity = await resolveBotIdentity(octokit, deps, scope);
-
+    const { repo, template, org, octokit, ctx } = await prepareGitJob(params, SYNC_TOKEN_PERMISSIONS, deps, scope);
     // 4. The git work. No limiter is held here.
-    const ctx: SyncJobContext = {
-      jobId: jobIdFor(jobId),
-      jobsDir: runtime.jobsDir,
-      templateCache: runtime.templateCache,
-      remote: runtime.remote,
-      maxMergeBytes: runtime.maxMergeBytes,
-      token,
-      templateToken,
-      identity,
-      ...deps.engineContext
-    };
     const outcome = await withSyncJob(ctx, async (job): Promise<SyncResult | Pushed> => {
       const plan = await job.plan({ templateRepo: template, fromSha, toSha, syncedRepoSha, repoFullName: repo });
       for (const [tag, value] of Object.entries(plan.analysis.tags)) scope?.setTag(tag, value);
@@ -395,7 +353,10 @@ export async function syncRepositoryToHandoutGit(
     });
     if (!("kind" in outcome)) return outcome;
 
-    // 5. The pull request, under both limiters and nothing else.
+    // 5. The pull request, under both limiters and nothing else. Not once the job is aborted: the
+    // pushed branch is harmless on its own, and a PR or merge after the worker gave up on the job
+    // would race the redelivery that replaces it.
+    throwIfAborted(ctx.signal, "before the pull request");
     return await deps.syncLimiter(org).schedule(() =>
       deps.contentLimiter(org).schedule(() =>
         deliverPullRequest({
@@ -408,6 +369,7 @@ export async function syncRepositoryToHandoutGit(
           autoMerge,
           waitBeforeMerge,
           sleep: deps.sleep,
+          signal: ctx.signal,
           scope
         })
       )
@@ -420,10 +382,249 @@ export async function syncRepositoryToHandoutGit(
     console.trace(error);
     if (error instanceof TerminalSyncError) scope?.setTag("terminal_sync_reason", error.reason);
     deps.captureException(error, scope);
+    const redeliver =
+      error instanceof GitSyncError && error.retryable && REDELIVERY_KINDS.has(error.kind) ? error.kind : undefined;
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
-      terminal_reason: error instanceof TerminalSyncError ? error.reason : undefined
+      terminal_reason: error instanceof TerminalSyncError ? error.reason : undefined,
+      redeliver_kind: redeliver
+    };
+  }
+}
+
+/**
+ * Retryable engine failures that say nothing about GitHub's health, so they must not reach the
+ * handler's generic error path, whose requeue opens the org's `sync_repo_to_handout` circuit. The
+ * handler records the kind on the row and the message comes back after one visibility timeout;
+ * the worker's read cap (`HANDOUT_SYNC_MAX_READ_COUNT`) dead-letters one that keeps failing.
+ *
+ * Not listed, so they keep the generic path: `network`, `auth_failed` and `remote_repo_not_found`,
+ * which are about GitHub or the installation, and `unfetchable`, which `toSyncError` turns
+ * terminal after five retries counted by `retry_count`.
+ */
+export const REDELIVERY_KINDS: ReadonlySet<GitFailureKind> = new Set<GitFailureKind>([
+  "deadline_exceeded",
+  "disk_full",
+  "lease_rejected",
+  "reset_check_mismatch",
+  "spawn_failed",
+  "output_cap_exceeded",
+  "git_failed",
+  "timeout"
+]);
+
+// ---------------------------------------------------------------------------------------------
+// Aborts reach REST too
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The job's abort, as the engine sees it at the deadline: a retryable `deadline_exceeded`, which
+ * the handler retries by redelivery (`REDELIVERY_KINDS`). The signal's reason says which abort
+ * (deadline, lost message, shutdown).
+ */
+function abortError(signal: AbortSignal, where: string): GitSyncRetryableError {
+  const why = signal.reason instanceof Error ? signal.reason.message : String(signal.reason ?? "aborted");
+  return new GitSyncRetryableError(`handout sync stopped ${where}: ${why}`, "deadline_exceeded");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, where: string): void {
+  if (signal?.aborted) throw abortError(signal, where);
+}
+
+/** `sleep(ms)`, ended early by the abort. */
+async function abortableSleep(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  if (!signal) return await sleep(ms);
+  let onAbort = () => {};
+  const aborted = new Promise<void>((resolve) => {
+    onAbort = () => resolve();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([sleep(ms), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * The job's octokit, refusing every request once the job's signal has fired: the worker aborts a
+ * job when it gives up on it (deadline, lost message, shutdown), and from then on the job must not
+ * write to GitHub, the same way its database client is fenced. A request already in flight
+ * finishes.
+ */
+function abortableOctokit(octokit: GitSyncOctokit, signal: AbortSignal | undefined): GitSyncOctokit {
+  if (!signal) return octokit;
+  const request = ((route: string, params?: Record<string, unknown>) => {
+    if (signal.aborted) return Promise.reject(abortError(signal, `before ${route}`));
+    return octokit.request(route as never, params as never);
+  }) as unknown as GitSyncOctokit["request"];
+  return { request };
+}
+
+/** What `prepareGitJob` hands to the git work: validated names, the student octokit, the context. */
+interface PreparedGitJob {
+  repo: string;
+  template: string;
+  org: string;
+  octokit: GitSyncOctokit;
+  ctx: SyncJobContext;
+}
+
+/**
+ * Steps 1 to 3 of a job, shared by the sync and by the shadow plan: validate, refuse a grader
+ * template, mint both tokens, check both sizes and resolve the bot identity. `studentPermissions`
+ * is the only difference between the two callers. Throws; the callers map the error.
+ */
+async function prepareGitJob(
+  params: Pick<
+    SyncRepositoryToHandoutGitParams,
+    | "repositoryFullName"
+    | "templateRepo"
+    | "fromSha"
+    | "toSha"
+    | "syncedRepoSha"
+    | "adminSupabase"
+    | "repositoryId"
+    | "jobId"
+  >,
+  studentPermissions: github.InstallationTokenPermissions,
+  deps: GitSyncDeps,
+  scope?: Sentry.Scope
+): Promise<PreparedGitJob> {
+  const { repositoryFullName, templateRepo, fromSha, toSha, syncedRepoSha, adminSupabase, repositoryId, jobId } =
+    params;
+  // 1. Inputs. `InvalidSyncInputError` is a `GitSyncTerminalError`, mapped by the caller.
+  const repo = validateRepoFullName(repositoryFullName, "repository");
+  const template = validateRepoFullName(templateRepo, "template repo");
+  validateSha(toSha, "to sha");
+  if (fromSha !== null) validateSha(fromSha, "from sha");
+  if (syncedRepoSha !== null) validateSha(syncedRepoSha, "synced repo sha");
+  const [org, repoName] = repo.split("/");
+  const [templateOrg, templateName] = template.split("/");
+
+  // 2. The template must not be the grader (§8.3).
+  const solution = await deps.loadSolutionRepos(adminSupabase, repositoryId);
+  for (const [column, candidate] of [
+    ["autograder.grader_repo", solution.graderRepo],
+    ["solution_template_repo", solution.solutionTemplateRepo]
+  ] as const) {
+    if (candidate && candidate.toLowerCase() === template.toLowerCase()) {
+      throw new TerminalSyncError(
+        `Refusing to sync ${repo} from ${template}: it is this assignment's ${column}, and syncing it ` +
+          `would push the solution and hidden tests into the student's repository. Set the assignment's ` +
+          `handout repository to the handout, not the grader.`,
+        "template_is_solution_repo"
+      );
+    }
+  }
+
+  // 3. Two tokens, one per side, and both repos' sizes (§8.2, §8.4). Separate even when both
+  // repos are in one org, so the student token never reaches the template. The template token
+  // comes from the template org's installation, so a handout an assignment inherited from
+  // another org's class still syncs. The read-only template side goes first: a template that
+  // is too large stops the job before a token that can write to the student repo exists.
+  const runtime = deps.runtime();
+  const { token: templateToken } = await deps.getScopedToken(
+    templateOrg,
+    [templateName],
+    TEMPLATE_TOKEN_PERMISSIONS,
+    scope
+  );
+  const signal = runtime.signalFor?.(String(jobId));
+  const templateOctokit = abortableOctokit(deps.octokitForToken(templateToken, scope), signal);
+  await assertRepoWithinSizeLimit(templateOctokit, template, runtime.maxRepoKib, scope);
+  const { token } = await deps.getScopedToken(org, [repoName], studentPermissions, scope);
+  const octokit = abortableOctokit(deps.octokitForToken(token, scope), signal);
+  await assertRepoWithinSizeLimit(octokit, repo, runtime.maxRepoKib, scope);
+  const identity = await resolveBotIdentity(octokit, deps, scope);
+
+  const ctx: SyncJobContext = {
+    jobId: jobIdFor(jobId),
+    jobsDir: runtime.jobsDir,
+    templateCache: runtime.templateCache,
+    remote: runtime.remote,
+    maxMergeBytes: runtime.maxMergeBytes,
+    signal,
+    gitLog: runtime.gitLog,
+    token,
+    templateToken,
+    identity,
+    ...deps.engineContext
+  };
+  return { repo, template, org, octokit, ctx };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shadow mode (build plan S2)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What a shadow job may do with the student repo: read it. The plan fetches and builds objects in
+ * the job's own repo and never pushes, so the token cannot write even if a bug tried.
+ */
+export const SHADOW_STUDENT_TOKEN_PERMISSIONS = {
+  contents: "read"
+} as const satisfies github.InstallationTokenPermissions;
+
+/** One `handout_sync_shadow_results` prediction, before the worker adds the message's ids. */
+export interface ShadowPrediction {
+  /**
+   * The tree the sync commit would have, or null when there would be no commit: `no_changes` (and
+   * `unresolved` empty) or every file left to the student (`unresolved` non-empty).
+   */
+  predicted_tree: string | null;
+  /** The commit's parent, the baseline `S` the engine resolved, or null when there would be no commit. */
+  predicted_commit_parent: string | null;
+  /** Files the engine would leave to the student. Empty for `no_changes`; null after an error. */
+  unresolved: Array<{ path: string; reason: string }> | null;
+  /** Set when the plan failed, with the `terminal_reason` prefixed when it was terminal. */
+  error: string | null;
+}
+
+/**
+ * Plan-only twin of `syncRepositoryToHandoutGit` for a message marked `shadow` (build plan S2):
+ * the same pre-checks and the same plan, with read-only tokens, then nothing. No push, no pull
+ * request, no REST write and no database write; the worker records the prediction.
+ *
+ * Never throws: a failure is the prediction's `error`, because a shadow run is an observation and
+ * is not retried.
+ */
+export async function planRepositoryToHandoutGit(
+  params: Omit<SyncRepositoryToHandoutGitParams, "autoMerge" | "waitBeforeMerge" | "diffStrategy">,
+  deps: GitSyncDeps = defaultGitSyncDeps()
+): Promise<ShadowPrediction> {
+  const { fromSha, toSha, syncedRepoSha, scope, retryCount } = params;
+  scope?.setTag("sync_operation", "shadow_plan");
+  scope?.setTag("sync_engine", "git");
+  try {
+    const { repo, template, ctx } = await prepareGitJob(params, SHADOW_STUDENT_TOKEN_PERMISSIONS, deps, scope);
+    const plan = await planHandoutSync(
+      { templateRepo: template, fromSha, toSha, syncedRepoSha, repoFullName: repo },
+      ctx
+    );
+    const unresolved = (plan.kind === "no_changes" ? [] : plan.unresolved).map((f) => ({
+      path: f.path,
+      reason: f.reason
+    }));
+    return {
+      predicted_tree: plan.kind === "commit" ? plan.tree : null,
+      predicted_commit_parent: plan.kind === "commit" ? plan.parent : null,
+      unresolved,
+      error: null
+    };
+  } catch (caught) {
+    const error = toSyncError(caught, retryCount);
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      predicted_tree: null,
+      predicted_commit_parent: null,
+      unresolved: null,
+      error: error instanceof TerminalSyncError ? `${error.reason}: ${message}` : message
     };
   }
 }
@@ -743,9 +944,11 @@ async function deliverPullRequest(args: {
   autoMerge: boolean;
   waitBeforeMerge: number;
   sleep: (ms: number) => Promise<void>;
+  signal?: AbortSignal;
   scope?: Sentry.Scope;
 }): Promise<SyncResult> {
-  const { octokit, repo, pushed, fromSha, toSha, syncedRepoSha, autoMerge, waitBeforeMerge, sleep, scope } = args;
+  const { octokit, repo, pushed, fromSha, toSha, syncedRepoSha, autoMerge, waitBeforeMerge, sleep, signal, scope } =
+    args;
   const { branch, commit, unresolved } = pushed.plan;
   const unresolvedPaths = unresolved.length > 0 ? unresolved.map((f) => f.path) : undefined;
 
@@ -848,8 +1051,10 @@ async function deliverPullRequest(args: {
   let merged = false;
   let mergeSha: string | undefined;
   if (effectiveAutoMerge) {
-    // Wait for GitHub to update mergeable state.
-    await sleep(waitBeforeMerge);
+    // Wait for GitHub to update mergeable state. The wait ends early on an abort, and nothing
+    // is merged after one.
+    await abortableSleep(sleep, waitBeforeMerge, signal);
+    throwIfAborted(signal, "before the merge");
     const result = await attemptAutoMerge(octokit, repo, prNumber, commit, scope);
     merged = result.merged;
     mergeSha = result.mergeSha;

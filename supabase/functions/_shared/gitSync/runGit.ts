@@ -432,9 +432,16 @@ function hardeningFlags(protocol: RemoteConfig["protocol"], safeDirectory: strin
     `protocol.${protocol}.allow=always`,
     "core.fsmonitor=false",
     `safe.directory=${safeDirectory}`,
+    // Memory per git child (§3.1). The budget, worst case, is roughly the sum of these:
+    // packedGitLimit (128m of mmapped pack windows) + windowMemory (64m of delta search, with
+    // one thread) + deltaBaseCacheAllowance (32m of inflated delta bases) + one blob under
+    // bigFileThreshold (16m; larger blobs are streamed, not deltified). About 240 MiB, and a sync
+    // runs one git child at a time, so two jobs on a 1 Gi pod stay well under the limit beside
+    // the Deno heap (capped at 384 MiB in the image).
     "pack.threads=1",
     "pack.windowMemory=64m",
     "core.packedGitLimit=128m",
+    "core.deltaBaseCacheAllowance=32m",
     "core.bigFileThreshold=16m",
     "http.lowSpeedLimit=1000",
     "http.lowSpeedTime=60",

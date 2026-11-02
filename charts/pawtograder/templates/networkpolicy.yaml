@@ -51,6 +51,15 @@ metadata:
     {{- include "pawtograder.labels" . | nindent 4 }}
 spec:
   podSelector:
+    {{- if .Values.handoutSyncWorker.enabled }}
+    # The handout sync worker carries its own ingress policy
+    # (handout-sync-worker-networkpolicy.yaml). Policies are a union, so
+    # selecting it here would reopen every one of its ports to the release.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [handout-sync-worker]
+    {{- end }}
     matchLabels:
       {{- include "pawtograder.selectorLabels" . | nindent 6 }}
   policyTypes: ["Ingress"]
@@ -99,6 +108,14 @@ metadata:
     {{- include "pawtograder.labels" . | nindent 4 }}
 spec:
   podSelector:
+    {{- if .Values.handoutSyncWorker.enabled }}
+    # Same exclusion as allow-same-release: the worker's own policy admits the
+    # monitoring namespace on its metrics port only.
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [handout-sync-worker]
+    {{- end }}
     matchLabels:
       {{- include "pawtograder.selectorLabels" . | nindent 6 }}
   policyTypes: ["Ingress"]

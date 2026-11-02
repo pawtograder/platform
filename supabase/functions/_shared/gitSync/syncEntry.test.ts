@@ -23,6 +23,9 @@ Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRIN
 const {
   DEFAULT_MAX_REPO_KIB,
   handoutSyncEngineFor,
+  planRepositoryToHandoutGit,
+  REDELIVERY_KINDS,
+  SHADOW_STUDENT_TOKEN_PERMISSIONS,
   resetBotIdentityForTesting,
   SYNC_TOKEN_PERMISSIONS,
   syncRepositoryToHandoutGit,
@@ -1107,5 +1110,213 @@ gitTest("a failure never puts the token or the params object in the result", asy
     const result = await h.run();
     assert(!JSON.stringify(result).includes(TOKEN));
     assert(!JSON.stringify(result).includes(TEMPLATE_TOKEN));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Worker seams: the per-job deadline signal and the shadow plan (build plan WP5)
+// ---------------------------------------------------------------------------------------------
+
+gitTest("runtime.signalFor: an aborted job signal stops the job before git runs, as retryable", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    const asked: string[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    const runtime = h.deps.runtime();
+    h.deps.runtime = () => ({ ...runtime, signalFor: (jobId) => (asked.push(jobId), controller.signal) });
+    const result = await h.run();
+    assertEquals(asked, ["123"], "keyed by the jobId the handler passes, the msg_id");
+    assertEquals(result.success, false);
+    assertEquals(result.terminal_reason, undefined);
+    assertEquals(result.redeliver_kind, "deadline_exceeded");
+    assert(!h.timeline.includes("git push"));
+    assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), null);
+  });
+});
+
+/** A harness whose token stub tells the two sides apart by repo, since in shadow both are read-only. */
+function shadowHarness(w: World, opts: { solution?: SolutionRepos } = {}) {
+  const h = harness(w, opts);
+  h.deps.getScopedToken = (org, repositories, permissions) => {
+    h.tokenRequests.push({ org, repositories: [...repositories], permissions });
+    const token = `${org}/${repositories[0]}` === w.input.templateRepo ? TEMPLATE_TOKEN : TOKEN;
+    return Promise.resolve({ token, expiresAt: "2026-11-02T01:00:00Z" });
+  };
+  const plan = () =>
+    planRepositoryToHandoutGit(
+      {
+        repositoryFullName: w.input.repoFullName,
+        templateRepo: w.input.templateRepo,
+        fromSha: w.F,
+        toSha: w.H,
+        syncedRepoSha: w.S,
+        adminSupabase: {} as SyncRepositoryToHandoutGitParams["adminSupabase"],
+        repositoryId: 1,
+        retryCount: 0,
+        jobId: "77"
+      },
+      h.deps
+    );
+  return { ...h, plan };
+}
+
+gitTest("shadow plan: read-only tokens for both repos, the predicted tree, and no push or REST write", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const refsBefore = await w.student.refs();
+    const h = shadowHarness(w);
+    const prediction = await h.plan();
+
+    // What a real sync from the same inputs would build.
+    const expected = await withSyncJob(
+      fx.jobContext({
+        identity: { name: `${APP_SLUG}[bot]`, email: `${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com` }
+      }),
+      (job) => job.plan(w.input)
+    );
+    assertEquals(expected.kind, "commit");
+    assertEquals(prediction, {
+      predicted_tree: expected.kind === "commit" ? expected.tree : null,
+      predicted_commit_parent: w.S,
+      unresolved: [],
+      error: null
+    });
+    assertEquals(SHADOW_STUDENT_TOKEN_PERMISSIONS, { contents: "read" });
+    assertEquals(
+      h.tokenRequests.map((t) => [t.repositories[0], t.permissions]),
+      [
+        ["handout", { contents: "read" }],
+        ["student-a", { contents: "read" }]
+      ]
+    );
+    assert(!h.timeline.includes("git push"));
+    assertEquals(await w.student.refs(), refsBefore, "nothing reached the student remote");
+    assert(
+      h.gh.calls.every((c) => c.route.startsWith("GET ")),
+      `only reads: ${h.gh.calls.map((c) => c.route).join(", ")}`
+    );
+    assertEquals(await Array.fromAsync(Deno.readDir(fx.jobsDir)), [], "the job directory is gone");
+  });
+});
+
+gitTest("shadow plan: every file left to the student predicts no tree and lists them", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await blockedWorld(fx);
+    const prediction = await shadowHarness(w).plan();
+    assertEquals(prediction, {
+      predicted_tree: null,
+      predicted_commit_parent: null,
+      unresolved: [{ path: "a.txt", reason: "content_differs" }],
+      error: null
+    });
+  });
+});
+
+gitTest("shadow plan: a terminal refusal is the prediction's error, not a throw", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const prediction = await shadowHarness(w, { solution: { graderRepo: T, solutionTemplateRepo: null } }).plan();
+    assertEquals([prediction.predicted_tree, prediction.unresolved], [null, null]);
+    assertMatch(String(prediction.error), /^template_is_solution_repo: /);
+  });
+});
+
+/** A git stand-in that fails every push with `stderr`, and runs the real git otherwise. */
+async function failingPushGit(fx: GitFixture, stderr: string): Promise<string> {
+  const path = `${fx.root}/failing-push-git.sh`;
+  await Deno.writeTextFile(
+    path,
+    `#!/bin/sh\nfor a in "$@"; do if [ "$a" = push ]; then printf '%s\\n' '${stderr}' >&2; exit 128; fi; done\nexec /usr/bin/git "$@"\n`
+  );
+  await Deno.chmod(path, 0o755);
+  return path;
+}
+
+gitTest("a local git failure is marked for redelivery; a network failure is not", async () => {
+  assertEquals([...REDELIVERY_KINDS].sort(), [
+    "deadline_exceeded",
+    "disk_full",
+    "git_failed",
+    "lease_rejected",
+    "output_cap_exceeded",
+    "reset_check_mismatch",
+    "spawn_failed",
+    "timeout"
+  ]);
+  for (const [stderr, kind] of [
+    ["fatal: unable to write new index file: No space left on device", "disk_full"],
+    ["error: RPC failed; curl 56 Recv failure: Connection reset by peer", undefined]
+  ] as const) {
+    await GitFixture.with(async (fx) => {
+      const w = await cleanWorld(fx);
+      const result = await harness(w, { gitBinary: await failingPushGit(fx, stderr) }).run();
+      assertEquals([result.success, result.terminal_reason, result.redeliver_kind], [false, undefined, kind], stderr);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Aborts reach REST (WP5 review, item 2)
+// ---------------------------------------------------------------------------------------------
+
+/** A harness whose job signal is a controller the test fires. */
+function abortableHarness(w: World) {
+  const h = harness(w);
+  const controller = new AbortController();
+  const runtime = h.deps.runtime();
+  h.deps.runtime = () => ({ ...runtime, signalFor: () => controller.signal });
+  return { ...h, controller };
+}
+
+gitTest("an abort right after the push creates no PR and merges nothing, and is redelivered", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = abortableHarness(w);
+    const base = h.deps.engineContext!;
+    h.deps.engineContext = {
+      ...base,
+      testOnly: {
+        ...base.testOnly,
+        afterPhase: (phase) => {
+          if (phase === "push") h.controller.abort(new Error("handout sync job 123 aborted: deadline"));
+          return Promise.resolve();
+        }
+      }
+    };
+    const result = await h.run();
+    assert(h.timeline.includes("git push"), "the push itself ran");
+    assertEquals([result.success, result.redeliver_kind], [false, "deadline_exceeded"]);
+    assertMatch(String(result.error), /aborted: deadline/);
+    const writes = h.gh.calls.filter((c) => !c.route.startsWith("GET "));
+    assertEquals(writes, [], "no POST, PATCH or PUT after the abort");
+  });
+});
+
+gitTest("an abort during the wait before the merge stops the merge", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = abortableHarness(w);
+    // The wait never ends on its own; only the abort ends it.
+    h.deps.sleep = () => {
+      h.controller.abort(new Error("handout sync job 123 aborted: shutdown"));
+      return new Promise(() => {});
+    };
+    const result = await h.run({ waitBeforeMerge: 60_000 });
+    assertEquals([result.success, result.redeliver_kind], [false, "deadline_exceeded"]);
+    assertEquals(h.gh.calls.filter((c) => c.route.startsWith("POST ")).length, 1, "the PR was opened before the abort");
+    assertEquals(h.gh.calls.filter((c) => c.route.startsWith("PUT ")).length, 0, "and not merged after it");
+  });
+});
+
+gitTest("an aborted job's octokit refuses requests it has not sent yet", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = abortableHarness(w);
+    h.controller.abort(new Error("handout sync job 123 aborted: lost"));
+    const result = await h.run();
+    assertEquals([result.success, result.redeliver_kind], [false, "deadline_exceeded"]);
+    assertEquals(h.gh.calls, [], "not even the size check reached GitHub");
   });
 });

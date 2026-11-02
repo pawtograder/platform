@@ -155,6 +155,10 @@ async function generatePrometheusMetrics(): Promise<Response> {
     const discordQueueCount = queueSizes?.[0]?.discord_queue_size || 0;
     const discordDlqQueueCount = queueSizes?.[0]?.discord_dlq_queue_size || 0;
     const notificationEmailsQueueCount = queueSizes?.[0]?.notification_emails_queue_size || 0;
+    // The git handout-sync worker's queue and its DLQ (20261102120000). Labelled series only: the
+    // chart's handout_sync alerts select on these, and nothing reads an unlabelled name for them.
+    const handoutSyncQueueCount = queueSizes?.[0]?.handout_sync_queue_size || 0;
+    const handoutSyncDlqQueueCount = queueSizes?.[0]?.handout_sync_dlq_queue_size || 0;
 
     // Oldest-message age per queue. Depth alone cannot tell a healthy busy queue from a stalled
     // one, and depth thresholds need retuning every term; age is scale-free.
@@ -172,7 +176,9 @@ async function generatePrometheusMetrics(): Promise<Response> {
       { queue: "discord_async_calls", seconds: queueSizes?.[0]?.discord_oldest_seconds || 0 },
       { queue: "discord_async_calls_dlq", seconds: queueSizes?.[0]?.discord_dlq_oldest_seconds || 0 },
       { queue: "async_calls_low_priority", seconds: queueSizes?.[0]?.async_low_priority_oldest_seconds || 0 },
-      { queue: "notification_emails", seconds: queueSizes?.[0]?.notification_emails_oldest_seconds || 0 }
+      { queue: "notification_emails", seconds: queueSizes?.[0]?.notification_emails_oldest_seconds || 0 },
+      { queue: "handout_sync", seconds: queueSizes?.[0]?.handout_sync_oldest_seconds || 0 },
+      { queue: "handout_sync_dlq", seconds: queueSizes?.[0]?.handout_sync_dlq_oldest_seconds || 0 }
     ];
 
     // Depth per queue, as a LABELLED series parallel to queueOldestSeconds above.
@@ -200,7 +206,9 @@ async function generatePrometheusMetrics(): Promise<Response> {
       { queue: "discord_async_calls", depth: discordQueueCount },
       { queue: "discord_async_calls_dlq", depth: discordDlqQueueCount },
       { queue: "async_calls_low_priority", depth: asyncLowPriorityQueueCount },
-      { queue: "notification_emails", depth: notificationEmailsQueueCount }
+      { queue: "notification_emails", depth: notificationEmailsQueueCount },
+      { queue: "handout_sync", depth: handoutSyncQueueCount },
+      { queue: "handout_sync_dlq", depth: handoutSyncDlqQueueCount }
     ];
 
     // Generate Prometheus metrics format
