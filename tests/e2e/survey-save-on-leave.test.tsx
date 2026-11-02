@@ -20,6 +20,7 @@ const ONE_QUESTION_JSON = {
 const OFFLINE_STATUS = "You're offline. Keep this page open and your answers will save when you reconnect.";
 const SAVED_STATUS = "All changes saved";
 const UNSAVABLE_STATUS = "Your saved answers didn't load, so changes can't be saved. Reload the page to try again.";
+const REFUSED_STATUS = "This survey no longer accepts changes, so your latest answers aren't saved.";
 
 test.describe("Survey answers survive leaving the page and losing the network", () => {
   let course: Course;
@@ -504,6 +505,76 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await expect(page.getByRole("status").filter({ hasText: SAVED_STATUS })).toBeVisible();
     await expect(page.getByText("You can edit your response since editing is allowed for this survey.")).toBeVisible();
     await expect(input).toBeEditable();
+  });
+
+  test("an edit to a submitted response on a survey closed since the page loaded says the survey no longer accepts changes", async ({
+    page
+  }) => {
+    const survey = await seedSurvey("Closed After Submit Survey", { allowResponseEditing: true });
+    const { error: seedError } = await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student.private_profile_id,
+      response: { q1: "Submitted answer" },
+      is_submitted: true
+    });
+    if (seedError) throw new Error(`Failed to seed the response: ${seedError.message}`);
+    await loginAsUser(page, student, course);
+    let responseWrites = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().includes("/rest/v1/survey_responses")) responseWrites += 1;
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toHaveValue("Submitted answer");
+    await expect(input).toBeEditable();
+    // Every text the save status shows, in order, and every toast, as a screen reader would hear them.
+    await page.evaluate(
+      (statusTexts) => {
+        const seen = { statuses: [] as string[], toasts: [] as string[] };
+        (window as unknown as { __seen: typeof seen }).__seen = seen;
+        const toastsSeen = new WeakSet<Element>();
+        new MutationObserver(() => {
+          const shown = Array.from(document.querySelectorAll('[role="status"]'))
+            .map((element) => element.textContent ?? "")
+            .find((text) => statusTexts.includes(text));
+          if (shown && seen.statuses[seen.statuses.length - 1] !== shown) seen.statuses.push(shown);
+          for (const toast of document.querySelectorAll('[data-scope="toast"][data-part="root"]')) {
+            if (toastsSeen.has(toast) || !toast.textContent) continue;
+            toastsSeen.add(toast);
+            seen.toasts.push(toast.textContent);
+          }
+        }).observe(document.body, { subtree: true, childList: true, characterData: true });
+      },
+      [
+        "Saving…",
+        SAVED_STATUS,
+        OFFLINE_STATUS,
+        "Not saved yet. Retrying…",
+        "Your latest answers aren't saved.",
+        REFUSED_STATUS
+      ]
+    );
+    const seenSoFar = () =>
+      page.evaluate(() => (window as unknown as { __seen: { statuses: string[]; toasts: string[] } }).__seen);
+
+    // The instructor closes the survey while the student has it open. The page still shows it and
+    // lets the student type, but the database refuses any change to the response now.
+    const { error: closeError } = await supabase.from("surveys").update({ status: "closed" }).eq("id", survey.id);
+    if (closeError) throw new Error(`Failed to close the survey: ${closeError.message}`);
+    await input.fill("Edited after the survey closed");
+
+    // A refusal and running out of retries both end with the answers not saved.
+    await expect(page.getByRole("status").filter({ hasText: "answers aren't saved." })).toBeVisible({
+      timeout: 30_000
+    });
+    expect(await seenSoFar()).toEqual({ statuses: ["Saving…", REFUSED_STATUS], toasts: [] });
+    // Sending the same answers again would only be refused again, so nothing more goes out.
+    await page.waitForTimeout(2_500);
+    expect(await seenSoFar()).toEqual({ statuses: ["Saving…", REFUSED_STATUS], toasts: [] });
+    expect(responseWrites).toBe(1);
+    await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
   });
 
   test("a Complete that never gets an answer and never reached the database keeps the form", async ({ page }) => {
