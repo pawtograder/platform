@@ -13,6 +13,8 @@
 export type SaveAttempt = {
   /** Aborted when the attempt runs past `timeoutMs`. */
   signal: AbortSignal;
+  /** The page is being hidden or unloaded: send the write so that it outlives the page. */
+  keepalive: boolean;
 };
 
 export type SurveyAutosaveQueueOptions<T> = {
@@ -65,6 +67,8 @@ export class SurveyAutosaveQueue<T> {
   private inFlight: Promise<void> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private paused = false;
+  /** Set by a flush on leave; the next write that starts carries it. */
+  private keepaliveRequested = false;
 
   constructor(options: SurveyAutosaveQueueOptions<T>) {
     this.options = options;
@@ -81,8 +85,13 @@ export class SurveyAutosaveQueue<T> {
     }, this.options.debounceMs);
   }
 
-  /** Sends the pending snapshot now instead of at the end of the debounce. */
-  flush(): void {
+  /**
+   * Sends the pending snapshot now instead of at the end of the debounce. With `keepalive` (the
+   * page is being hidden or unloaded) the write is asked to outlive the page. A write already in
+   * flight is not overtaken: the pending snapshot follows it, still with `keepalive`.
+   */
+  flush(options: { keepalive?: boolean } = {}): void {
+    if (options.keepalive && this.latest) this.keepaliveRequested = true;
     this.clearDebounce();
     this.run();
   }
@@ -100,6 +109,7 @@ export class SurveyAutosaveQueue<T> {
   /** Forgets the pending snapshot. After a successful Complete it is older than what was submitted. */
   discardPending(): void {
     this.latest = null;
+    this.keepaliveRequested = false;
     this.clearDebounce();
   }
 
@@ -125,14 +135,23 @@ export class SurveyAutosaveQueue<T> {
     if (this.paused || this.inFlight || !this.latest) return;
     if (!this.options.canSave()) {
       this.latest = null;
+      this.keepaliveRequested = false;
       return;
     }
     const snapshot = this.latest;
-    const write = runWithTimeout((signal) => this.options.save(snapshot.value, { signal }), this.options.timeoutMs)
+    const keepalive = this.keepaliveRequested;
+    this.keepaliveRequested = false;
+    const write = runWithTimeout(
+      (signal) => this.options.save(snapshot.value, { signal, keepalive }),
+      this.options.timeoutMs
+    )
       .catch((error) => this.options.onError?.(error))
       .finally(() => {
         // A failed write is dropped like a successful one; only a newer snapshot is still owed.
-        if (this.latest?.version === snapshot.version) this.latest = null;
+        if (this.latest?.version === snapshot.version) {
+          this.latest = null;
+          this.keepaliveRequested = false;
+        }
         this.inFlight = null;
         // A newer snapshot that arrived while this one was on the wire goes next, unless the
         // student is still typing and its debounce will send it.

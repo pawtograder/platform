@@ -18,12 +18,17 @@ import {
   shouldAutosaveResponse,
   type LoadedResponseState
 } from "@/lib/surveyResponseState";
-import { runWithTimeout, SurveyAutosaveQueue } from "@/lib/surveyAutosaveQueue";
+import { runWithTimeout, SurveyAutosaveQueue, type SaveAttempt } from "@/lib/surveyAutosaveQueue";
+import { upsertSurveyResponseWithKeepalive, type SurveyResponseUpsert } from "@/lib/surveyResponseKeepalive";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 // Upper bound on one write, autosave or Complete. A survey upsert normally takes well under a
 // second; past this the request is cancelled, so it cannot hold up the saves queued behind it.
 const SAVE_TIMEOUT_MS = 10_000;
+// The project the browser Supabase client talks to (utils/supabase/client.ts), for the keepalive
+// write sent while the page unloads.
+const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -68,12 +73,15 @@ export default function SurveyTakingPage() {
   // land after a newer one. Complete pauses it and waits for the write in flight.
   const autosaveQueueRef = useRef<SurveyAutosaveQueue<ResponseData> | null>(null);
   // The queue outlives renders, so it reads the current save function and guards through refs.
-  const saveDraftRef = useRef<(responseData: ResponseData, signal: AbortSignal) => Promise<void>>(async () => {});
+  const saveDraftRef = useRef<(responseData: ResponseData, attempt: SaveAttempt) => Promise<void>>(async () => {});
   const canAutosaveRef = useRef<() => boolean>(() => false);
+  // The student's access token, kept current so the write sent while the page unloads does not have
+  // to wait for the Supabase client to read it.
+  const accessTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     const queue = new SurveyAutosaveQueue<ResponseData>({
-      save: (responseData, { signal }) => saveDraftRef.current(responseData, signal),
+      save: (responseData, attempt) => saveDraftRef.current(responseData, attempt),
       canSave: () => canAutosaveRef.current(),
       debounceMs: AUTOSAVE_DEBOUNCE_MS,
       timeoutMs: SAVE_TIMEOUT_MS,
@@ -82,14 +90,34 @@ export default function SurveyTakingPage() {
       }
     });
     autosaveQueueRef.current = queue;
+
+    // `textUpdateMode = "onTyping"` restarts the debounce on every keystroke, so a student who
+    // leaves while typing has an unwritten answer waiting for it. A reload or a closed tab does not
+    // unmount React, so the page also flushes when it is hidden (tab switch, app switch on a phone,
+    // which may be the last chance) and on pagehide (reload, close, navigation).
+    const flushOnLeave = () => queue.flush({ keepalive: true });
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushOnLeave();
+    };
+    window.addEventListener("pagehide", flushOnLeave);
+    document.addEventListener("visibilitychange", flushWhenHidden);
     return () => {
-      // Flush rather than merely cancel: `textUpdateMode = "onTyping"` restarts the debounce on
-      // every keystroke, so a student who navigates away while typing has an unwritten answer
-      // waiting for it.
+      window.removeEventListener("pagehide", flushOnLeave);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      // Flush rather than merely cancel when the student navigates away inside the app.
       queue.flush();
       if (autosaveQueueRef.current === queue) autosaveQueueRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const {
+      data: { subscription }
+    } = controller.client.auth.onAuthStateChange((_event, session) => {
+      accessTokenRef.current = session?.access_token ?? null;
+    });
+    return () => subscription.unsubscribe();
+  }, [controller.client]);
 
   // Derived from the survey row rather than the row object itself: the row comes
   // from a TableController, so its identity changes on every realtime update or
@@ -184,24 +212,18 @@ export default function SurveyTakingPage() {
     }
   }, [isLoading, surveyMissing, course_id, router]);
 
-  // Save response helper using controller client
-  const saveResponseToDb = useCallback(
-    async (responseData: ResponseData, isSubmitted: boolean, signal: AbortSignal) => {
-      if (!surveyId || !private_profile_id) return;
+  // The row a write sends, or null when it must be skipped. An autosave never downgrades a
+  // submitted response: on an editable survey it persists the edit as still-submitted and omits
+  // submitted_at, so the upsert leaves the original submission time in place. A write against a
+  // row we could not read is dropped.
+  const buildResponseRow = useCallback(
+    (responseData: ResponseData, isSubmitted: boolean): SurveyResponseUpsert | null => {
+      if (!surveyId || !private_profile_id) return null;
 
-      // An autosave never downgrades a submitted response: on an editable survey it persists
-      // the edit as still-submitted and omits submitted_at, so the upsert leaves the original
-      // submission time in place. A write against a row we could not read is dropped.
       const flags = resolveResponseWriteFlags({ isSubmitted, loadedState: responseStateRef.current });
-      if (flags.skip) return;
+      if (flags.skip) return null;
 
-      const upsertData: {
-        survey_id: string;
-        profile_id: string;
-        response: ResponseData;
-        is_submitted: boolean;
-        submitted_at?: string;
-      } = {
+      const row: SurveyResponseUpsert = {
         survey_id: surveyId,
         profile_id: private_profile_id,
         response: responseData,
@@ -209,8 +231,19 @@ export default function SurveyTakingPage() {
       };
 
       if (flags.stampSubmittedAt) {
-        upsertData.submitted_at = new Date().toISOString();
+        row.submitted_at = new Date().toISOString();
       }
+
+      return row;
+    },
+    [surveyId, private_profile_id]
+  );
+
+  // Save response helper using controller client
+  const saveResponseToDb = useCallback(
+    async (responseData: ResponseData, isSubmitted: boolean, signal: AbortSignal) => {
+      const upsertData = buildResponseRow(responseData, isSubmitted);
+      if (!upsertData) return;
 
       const { data, error } = await controller.client
         .from("survey_responses")
@@ -227,7 +260,7 @@ export default function SurveyTakingPage() {
 
       return data;
     },
-    [surveyId, private_profile_id, controller.client]
+    [buildResponseRow, controller.client]
   );
 
   const handleSurveyComplete = useCallback(
@@ -292,7 +325,20 @@ export default function SurveyTakingPage() {
     [allowResponseEditing]
   );
   canAutosaveRef.current = canAutosave;
-  saveDraftRef.current = async (responseData, signal) => {
+  saveDraftRef.current = async (responseData, { signal, keepalive }) => {
+    const accessToken = accessTokenRef.current;
+    if (keepalive && accessToken && SUPABASE_URL && SUPABASE_ANON_KEY) {
+      const row = buildResponseRow(responseData, false);
+      if (!row) return;
+      await upsertSurveyResponseWithKeepalive({
+        supabaseUrl: SUPABASE_URL,
+        anonKey: SUPABASE_ANON_KEY,
+        accessToken,
+        row,
+        signal
+      });
+      return;
+    }
     await saveResponseToDb(responseData, false, signal);
   };
 

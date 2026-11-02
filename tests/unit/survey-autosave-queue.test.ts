@@ -5,7 +5,7 @@
  * the newest answers, and no single write can block the ones behind it (or Complete, which waits
  * for the queue) for longer than its time limit.
  */
-import { runWithTimeout, SaveTimeoutError, SurveyAutosaveQueue } from "@/lib/surveyAutosaveQueue";
+import { runWithTimeout, SaveTimeoutError, SurveyAutosaveQueue, type SaveAttempt } from "@/lib/surveyAutosaveQueue";
 
 type Deferred = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
 
@@ -21,10 +21,10 @@ function deferred(): Deferred {
 
 /** A fake transport: each write waits until the test settles it. */
 function fakeServer() {
-  const writes: { value: string; signal: AbortSignal; done: Deferred }[] = [];
-  const save = jest.fn((value: string, { signal }: { signal: AbortSignal }) => {
+  const writes: { value: string; signal: AbortSignal; keepalive: boolean; done: Deferred }[] = [];
+  const save = jest.fn((value: string, { signal, keepalive }: SaveAttempt) => {
     const done = deferred();
-    writes.push({ value, signal, done });
+    writes.push({ value, signal, keepalive, done });
     return done.promise;
   });
   return { writes, save };
@@ -70,7 +70,7 @@ describe("runWithTimeout", () => {
 });
 
 describe("SurveyAutosaveQueue", () => {
-  const makeQueue = (save: (value: string, attempt: { signal: AbortSignal }) => Promise<void>, canSave = () => true) =>
+  const makeQueue = (save: (value: string, attempt: SaveAttempt) => Promise<void>, canSave = () => true) =>
     new SurveyAutosaveQueue<string>({ save, canSave, debounceMs: 1_000, timeoutMs: 10_000 });
 
   test("writes only the last of a burst of edits, after the debounce", async () => {
@@ -186,8 +186,40 @@ describe("SurveyAutosaveQueue", () => {
 
     queue.schedule("typed");
     queue.flush();
-    expect(server.writes.map((write) => write.value)).toEqual(["typed"]);
+    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([["typed", false]]);
     jest.advanceTimersByTime(1_000);
     expect(server.writes).toHaveLength(1);
+  });
+
+  test("a flush on leave asks for keepalive, and does not overtake a write in flight", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("older");
+    jest.advanceTimersByTime(1_000);
+    queue.schedule("typed before leaving");
+    queue.flush({ keepalive: true });
+    expect(server.writes.map((write) => write.value)).toEqual(["older"]);
+
+    server.writes[0].done.resolve();
+    await settle();
+    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([
+      ["older", false],
+      ["typed before leaving", true]
+    ]);
+
+    // Later edits on a page that stayed open go out as ordinary writes again.
+    server.writes[1].done.resolve();
+    await settle();
+    queue.schedule("back on the page");
+    jest.advanceTimersByTime(1_000);
+    expect(server.writes[2]).toMatchObject({ value: "back on the page", keepalive: false });
+  });
+
+  test("a flush with nothing pending sends nothing", () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+    queue.flush({ keepalive: true });
+    expect(server.save).not.toHaveBeenCalled();
   });
 });
