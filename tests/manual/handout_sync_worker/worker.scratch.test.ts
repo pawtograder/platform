@@ -809,3 +809,150 @@ Deno.test("a shadow copy of a fork_merge_upstream sync is skipped, recorded and 
     await tearDown(c);
   }
 });
+
+/**
+ * A scrape the way Prometheus makes it: raw HTTP/1.1 with `Accept-Encoding: gzip`, the body
+ * decoded according to the response's own Content-Encoding and transfer framing. fetch() would
+ * hide both (it negotiates and decompresses by itself), and curl without `--compressed` never asks
+ * for gzip, so neither can catch a server that labels a plain body gzip or the reverse.
+ */
+async function rawScrape(port: number, acceptGzip: boolean): Promise<{ headers: Map<string, string>; body: string }> {
+  const conn = await Deno.connect({ hostname: "127.0.0.1", port });
+  const request =
+    `GET /metrics HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUser-Agent: Prometheus/3.1.0\r\n` +
+    `Accept: text/plain;version=0.0.4\r\n${acceptGzip ? "Accept-Encoding: gzip\r\n" : ""}Connection: close\r\n\r\n`;
+  await conn.write(new TextEncoder().encode(request));
+  const chunks: Uint8Array[] = [];
+  for await (const c of conn.readable) chunks.push(c);
+  const raw = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let o = 0;
+  for (const c of chunks) {
+    raw.set(c, o);
+    o += c.length;
+  }
+  const split = raw.findIndex((_, i) => raw[i] === 13 && raw[i + 1] === 10 && raw[i + 2] === 13 && raw[i + 3] === 10);
+  const head = new TextDecoder().decode(raw.slice(0, split)).split("\r\n");
+  assert(head[0].startsWith("HTTP/1.1 200"), head[0]);
+  const headers = new Map(
+    head.slice(1).map((l) => [l.slice(0, l.indexOf(":")).toLowerCase(), l.slice(l.indexOf(":") + 1).trim()])
+  );
+  let body = raw.slice(split + 4);
+  if (headers.get("transfer-encoding") === "chunked") {
+    const parts: Uint8Array[] = [];
+    let i = 0;
+    while (true) {
+      const eol = body.findIndex((_, j) => j >= i && body[j] === 13 && body[j + 1] === 10);
+      const size = parseInt(new TextDecoder().decode(body.slice(i, eol)), 16);
+      if (size === 0) break;
+      parts.push(body.slice(eol + 2, eol + 2 + size));
+      i = eol + 2 + size + 2;
+    }
+    body = new Uint8Array(parts.reduce((n, c) => n + c.length, 0));
+    let k = 0;
+    for (const part of parts) {
+      body.set(part, k);
+      k += part.length;
+    }
+  }
+  if (headers.get("content-encoding") === "gzip") {
+    const stream = new Blob([body]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return { headers, body: await new Response(stream).text() };
+  }
+  return { headers, body: new TextDecoder().decode(body) };
+}
+
+Deno.test(
+  "/metrics answers a gzip-sending scraper with a valid gzip body of the worker's series",
+  NO_SANITIZE,
+  async () => {
+    const name = "org/student-metrics";
+    const c = await setUp([name]);
+    const s = c.students.get(name)!;
+    await send("handout_sync", envelope(s.id, name, c.F, c.H));
+    const w = await startWorker(c, { HANDOUT_SYNC_WORK_LIMIT_BYTES: 20 * 1024 ** 3 });
+    try {
+      await waitFor("the message to be archived", 60_000, async () => (await archived("handout_sync")).length === 1);
+      // The /work size is filled in by a background walk the first scrape starts.
+      await rawScrape(w.port, true);
+      await new Promise((r) => setTimeout(r, 1000));
+      const gz = await rawScrape(w.port, true);
+      assertEquals(gz.headers.get("content-encoding"), "gzip", "a gzip-asking scraper gets gzip");
+      const plain = await rawScrape(w.port, false);
+      assertEquals(plain.headers.get("content-encoding"), undefined, "and a plain one gets plain text");
+      for (const body of [gz.body, plain.body]) {
+        for (const series of [
+          'pawtograder_handout_sync_jobs_total{kind="sync",outcome="ok"} 1',
+          "pawtograder_handout_sync_up 1",
+          "pawtograder_handout_sync_concurrency 2",
+          "pawtograder_handout_sync_jobs_in_flight 0",
+          `pawtograder_handout_sync_work_limit_bytes ${20 * 1024 ** 3}`,
+          'pawtograder_handout_sync_job_duration_seconds_count{kind="sync"} 1',
+          'pawtograder_handout_sync_git_calls_total{op="push",result="ok"} 1'
+        ]) {
+          assert(body.includes(series), `missing ${series}`);
+        }
+        const work = /^pawtograder_handout_sync_work_bytes (\d+)$/m.exec(body);
+        assert(work && Number(work[1]) > 0, "the template cache under /work is measured");
+      }
+      // The exposition parses, if a container runtime can run promtool.
+      const docker = await new Deno.Command("docker", { args: ["version"], stdout: "null", stderr: "null" })
+        .output()
+        .catch(() => null);
+      if (docker?.success) {
+        const child = new Deno.Command("docker", {
+          args: ["run", "--rm", "-i", "--entrypoint", "promtool", "prom/prometheus:v3.1.0", "check", "metrics"],
+          stdin: "piped",
+          stdout: "piped",
+          stderr: "piped"
+        }).spawn();
+        const writer = child.stdin.getWriter();
+        await writer.write(new TextEncoder().encode(gz.body));
+        await writer.close();
+        const out = await child.output();
+        const text = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
+        assert(out.success, `promtool check metrics: ${text}`);
+        console.log(`promtool check metrics: ok${text.trim() ? ` (${text.trim()})` : ""}`);
+      }
+    } finally {
+      await stopWorker(w);
+      await tearDown(c);
+    }
+  }
+);
+
+Deno.test(
+  "get_async_queue_sizes reports handout_sync and handout_sync_dlq, service_role only",
+  NO_SANITIZE,
+  async () => {
+    await resetDb();
+    await send("handout_sync", { method: "sync_repo_to_handout", args: {} });
+    await send("handout_sync_dlq", { method: "sync_repo_to_handout", args: {} });
+    await send("handout_sync_dlq", { method: "sync_repo_to_handout", args: {} });
+    // Backdate one message so its age is measurable.
+    await sql(`update pgmq.q_handout_sync_dlq set enqueued_at = now() - interval '600 seconds'`);
+    const res = await fetch(`${API_URL}/rest/v1/rpc/get_async_queue_sizes`, {
+      method: "POST",
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: "{}"
+    });
+    assertEquals(res.status, 200);
+    const [row] = await res.json();
+    assertEquals([row.handout_sync_queue_size, row.handout_sync_dlq_queue_size], [1, 2]);
+    assert(row.handout_sync_oldest_seconds >= 0 && row.handout_sync_oldest_seconds < 60, JSON.stringify(row));
+    assert(row.handout_sync_dlq_oldest_seconds >= 600, JSON.stringify(row));
+    // The columns that were there before are still there.
+    for (const k of ["async_queue_size", "dlq_queue_size", "notification_emails_oldest_seconds"]) assert(k in row, k);
+    assertEquals(
+      await sql(
+        `select has_function_privilege('anon', 'public.get_async_queue_sizes()', 'execute')::text || ',' ||
+              has_function_privilege('authenticated', 'public.get_async_queue_sizes()', 'execute')::text`
+      ),
+      "false,false"
+    );
+    await resetDb();
+  }
+);

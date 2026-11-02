@@ -23,7 +23,8 @@
  * - Shadow copies (`envelope.shadow`, build plan S2) never reach `processEnvelope`. They run the
  *   plan only, with read-only tokens, and record the prediction in `handout_sync_shadow_results`.
  * - `/healthz` on `HANDOUT_SYNC_METRICS_PORT`: whether the poll loop is still turning, not whether
- *   any job is making progress, so a 14-minute push is not "unhealthy".
+ *   any job is making progress, so a 14-minute push is not "unhealthy". `/metrics` on the same
+ *   port: the `pawtograder_handout_sync_*` series listed in `metrics.ts`.
  *
  * FENCING. `processEnvelope` cannot be cancelled, and its error path requeues and archives. A job
  * this process gives up on (shutdown, a lost message, a job that outlives its deadline) must
@@ -49,6 +50,7 @@ import {
 } from "../_shared/gitSync/syncEntry.ts";
 import { directorySizeBytes, TemplateCache } from "../_shared/gitSync/templateCache.ts";
 import { archiveMessage, processEnvelope } from "../github-async-worker/index.ts";
+import { WorkerMetrics } from "./metrics.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Configuration
@@ -79,7 +81,7 @@ export interface WorkerConfig {
   maxRepoKib: number;
   /** `HANDOUT_SYNC_MAX_MERGE_BYTES` (§5.5). */
   maxMergeBytes: number;
-  /** `HANDOUT_SYNC_METRICS_PORT`: `/healthz` (and, later, `/metrics`). */
+  /** `HANDOUT_SYNC_METRICS_PORT`: `/healthz` and `/metrics`. */
   metricsPort: number;
   /** How long the loop sleeps when the queue is empty or every slot is busy. Not an env knob. */
   idlePollMs: number;
@@ -100,6 +102,9 @@ export const DEADLINE_SETTLE_MS = 30_000;
  * terminationGracePeriodSeconds (300), so the kubelet's SIGKILL lands after the cleanup, not in it.
  */
 export const SHUTDOWN_ABORT_SETTLE_MS = 15_000;
+
+/** How stale the `/work` size on `/metrics` may get. Two scrapes at the chart's 30 s interval. */
+const WORK_BYTES_REFRESH_MS = 60_000;
 
 /** `/healthz` fails once the loop has not turned for this long. */
 const HEALTH_STALE_MS = 60_000;
@@ -258,6 +263,9 @@ export class HandoutSyncWorker {
   #lastTickMs = 0;
   #started = false;
   #evicting = false;
+  readonly metrics = new WorkerMetrics();
+  #workBytes: number | null = null;
+  #workBytesAtMs = 0;
 
   constructor(
     config: WorkerConfig,
@@ -286,6 +294,29 @@ export class HandoutSyncWorker {
 
   #log(event: WorkerEvent): void {
     console.log(JSON.stringify({ component: "handout-sync-worker", ...event }));
+  }
+
+  /**
+   * `/metrics`. The size of `/work` is a directory walk, so it is refreshed in the background at
+   * most every WORK_BYTES_REFRESH_MS and the scrape reports the last value; it is absent until the
+   * first walk finishes.
+   */
+  renderMetrics(): string {
+    if (Date.now() - this.#workBytesAtMs > WORK_BYTES_REFRESH_MS) {
+      this.#workBytesAtMs = Date.now();
+      directorySizeBytes(this.#config.workDir).then(
+        (bytes) => (this.#workBytes = bytes),
+        (e) => this.#log({ msg: "work dir size failed", error: e instanceof Error ? e.message : String(e) })
+      );
+    }
+    return this.metrics.render({
+      draining: this.#stop.signal.aborted,
+      concurrency: this.#config.concurrency,
+      inFlight: this.#jobs.size,
+      lastTickMs: this.#lastTickMs,
+      workBytes: this.#workBytes,
+      workLimitBytes: this.#config.workLimitBytes
+    });
   }
 
   /** `/healthz`: started, not stopping, and the loop has turned recently. */
@@ -318,7 +349,12 @@ export class HandoutSyncWorker {
         remote: this.testOnly.remote,
         maxMergeBytes: this.#config.maxMergeBytes,
         maxRepoKib: this.#config.maxRepoKib,
-        signalFor: (jobId) => this.#jobs.get(Number(jobId))?.controller.signal
+        signalFor: (jobId) => this.#jobs.get(Number(jobId))?.controller.signal,
+        // runGit's own line per call, plus the per-op counters on /metrics.
+        gitLog: (entry) => {
+          this.metrics.gitCall(entry);
+          console.log(JSON.stringify({ msg: "git", ...entry }));
+        }
       },
       { testOnly: this.testOnly.gitDeps ? { deps: this.testOnly.gitDeps } : undefined }
     );
@@ -410,10 +446,20 @@ export class HandoutSyncWorker {
     const scope = this.#scope.clone();
     scope.setTag("msg_id", String(message.msg_id));
     scope.setTag("read_ct", String(message.read_ct));
+    const startedAt = performance.now();
     job.settled = (shadow ? this.#runShadow(job, client, scope) : this.#runEnvelope(job, client, scope))
-      .catch((e) => {
+      .catch((e): string => {
         this.#log({ msg: "job threw", msg_id: message.msg_id, error: e instanceof Error ? e.message : String(e) });
         Sentry.captureException(e, scope);
+        return "error";
+      })
+      .then((outcome) => {
+        const seconds = (performance.now() - startedAt) / 1000;
+        this.metrics.jobFinished(
+          shadow ? "shadow" : "sync",
+          job.abortReason ? `aborted_${job.abortReason}` : outcome,
+          seconds
+        );
       })
       .finally(() => {
         clearTimeout(deadline);
@@ -446,22 +492,26 @@ export class HandoutSyncWorker {
       });
       if (job.heartbeatSignal.aborted) return;
       if (error) {
+        this.metrics.heartbeat("error");
         this.#log({ msg: "heartbeat failed", msg_id: msgId, error: error.message });
         continue;
       }
       const rows = (data ?? []) as unknown as PgmqMessageRecord[];
       if (rows.length === 0) {
+        this.metrics.heartbeat("lost");
         this.#log({ msg: "message no longer in the queue; aborting its job", msg_id: msgId });
         job.fence();
         job.abort("lost");
         job.stopHeartbeat();
         return;
       }
+      this.metrics.heartbeat("ok");
       this.#log({ msg: "heartbeat", msg_id: msgId, vt: rows[0].vt });
     }
   }
 
-  async #runEnvelope(job: RunningJob, client: SupabaseClient<Database>, scope: Sentry.Scope): Promise<void> {
+  /** Returns the job's `outcome` label for `/metrics`. */
+  async #runEnvelope(job: RunningJob, client: SupabaseClient<Database>, scope: Sentry.Scope): Promise<string> {
     const { message } = job;
     const envelope = message.message;
     const ok = await processEnvelope(
@@ -481,6 +531,7 @@ export class HandoutSyncWorker {
     // `false` means processEnvelope already requeued, dead-lettered or left the message; only
     // `true` is ours to archive. A fenced client refuses the archive anyway.
     if (ok && !job.fenced) await archiveMessage(client, message.msg_id, scope, HANDOUT_SYNC_QUEUE);
+    return ok ? "ok" : "failed";
   }
 
   /**
@@ -489,7 +540,7 @@ export class HandoutSyncWorker {
    * archive adds no second row. A failed plan is recorded as the prediction's error and archived,
    * not retried: shadow runs observe the REST path and must not pile up behind it.
    */
-  async #runShadow(job: RunningJob, client: SupabaseClient<Database>, scope: Sentry.Scope): Promise<void> {
+  async #runShadow(job: RunningJob, client: SupabaseClient<Database>, scope: Sentry.Scope): Promise<string> {
     const { message } = job;
     const envelope = message.message;
     const args = envelope.args as SyncRepoToHandoutArgs;
@@ -535,6 +586,7 @@ export class HandoutSyncWorker {
     if (error) throw error;
     this.#log({ msg: "shadow recorded", msg_id: message.msg_id, error: prediction.error });
     if (!job.fenced) await archiveMessage(client, message.msg_id, scope, HANDOUT_SYNC_QUEUE);
+    return "recorded";
   }
 
   /**
@@ -604,6 +656,23 @@ export async function runWorker(config: WorkerConfig, testOnly: WorkerTestHooks 
     if (pathname === "/healthz") {
       const { ok, reason } = worker.healthy();
       return new Response(`${reason}\n`, { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } });
+    }
+    if (pathname === "/metrics") {
+      // Prometheus sends Accept-Encoding: gzip. Deno.serve did not compress this response on its
+      // own (measured, Deno 2.9.5), so it is done here, with Content-Encoding set to match. A
+      // body labelled gzip that is not, or the reverse, fails the scrape with "gzip: invalid
+      // header" while curl, which does not ask for gzip, sees nothing wrong.
+      const body = worker.renderMetrics();
+      const headers: Record<string, string> = {
+        "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+        "Cache-Control": "no-store",
+        Vary: "Accept-Encoding"
+      };
+      if (/\bgzip\b/i.test(req.headers.get("accept-encoding") ?? "")) {
+        const gzipped = new Blob([body]).stream().pipeThrough(new CompressionStream("gzip"));
+        return new Response(gzipped, { headers: { ...headers, "Content-Encoding": "gzip" } });
+      }
+      return new Response(body, { headers });
     }
     return new Response("not found\n", { status: 404 });
   });

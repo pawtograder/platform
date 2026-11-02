@@ -92,10 +92,8 @@ RUN set -eux; \
 
 FROM git AS runtime
 
-# The worker's entrypoint, relative to supabase/functions/. PLACEHOLDER until
-# WP5 lands: handout-sync-worker/main.ts does not exist yet, and the build fails
-# on purpose while it is missing (see the cache step below). release-images.yml
-# skips this build until the file exists.
+# The worker's entrypoint, relative to supabase/functions/. The build fails on
+# purpose if it is missing (see the cache step below).
 ARG WORKER_ENTRYPOINT=handout-sync-worker/main.ts
 
 ENV WORKER_ENTRYPOINT=${WORKER_ENTRYPOINT}
@@ -171,7 +169,8 @@ LABEL org.opencontainers.image.source="https://github.com/pawtograder/platform" 
 # Metrics and /healthz. The chart's handoutSyncWorker.metricsPort must match.
 EXPOSE 9464
 
-# Permissions, flag by flag (no -A):
+# Permissions, flag by flag (no -A). Measured against main.ts in WP5 (read-only
+# root, --cap-drop ALL, a scratch Supabase stack):
 #   --allow-net            Kong (PostgREST), Redis, api.github.com, github.com and
 #                          the Sentry DSN host. Not narrowed by host here because
 #                          the Kong and Redis hosts depend on the release and the
@@ -183,20 +182,42 @@ EXPOSE 9464
 #                          would turn a library upgrade into a startup crash. The
 #                          chart is what limits WHICH variables exist: the pod gets
 #                          only the keys the worker reads, not the edge Secret.
-#   --allow-run=git        the only subprocess. runGit() spawns with clearEnv.
-#   --allow-read/-write    /work (template cache and per-job bare repos) and /tmp.
-#                          Module loading from /app and DENO_DIR needs no grant.
-#   --allow-sys=hostname   Sentry tags events with the host name.
+#   --allow-run            UNSCOPED, deliberately. runGit() spawns only git, but it
+#                          kills a timed-out or aborted git by process GROUP
+#                          (Deno.kill(-pid)), so no git-remote-https outlives its
+#                          job holding the token, and Deno allows signalling a pid
+#                          only with full run permission: with --allow-run=git the
+#                          startup probe (assertChildProcessGroups) fails with
+#                          "Requires run access". What JS could start is bounded by
+#                          the image instead: the shell and busybox are removed
+#                          below, so git, its helpers, deno and tini are all there
+#                          is.
+#   --allow-read           /app as well as /work and /tmp: Sentry's ContextLines
+#                          integration reads the worker's own source for the lines
+#                          around a stack frame, and without /app every event
+#                          arrives with no source context (checked with a local
+#                          DSN sink). /app holds only the bundled code.
+#   --allow-write          /work (template cache and per-job bare repos) and /tmp.
+#   --allow-sys            hostname (Sentry's server_name) and osRelease (Sentry's
+#                          os.version). Nothing else in the graph asks.
+#   --v8-flags             --max-old-space-size=384 (MiB). The container limit is
+#                          1 Gi and git children count against it: two jobs, each
+#                          with pack.windowMemory 64m and core.packedGitLimit 128m
+#                          per child (spec §3.1), plus Deno's own non-heap memory.
+#                          The JS heap holds metadata only (paths, oids), so 384
+#                          MiB is generous for it and keeps a heap leak from being
+#                          what the cgroup OOM killer finds; V8 fails the process
+#                          with a heap OOM first, which restarts it cleanly.
 #   --cached-only --frozen no module fetch at runtime; see the cache step above.
 #   --no-code-cache        the root filesystem is read-only, so V8's code cache
 #                          under DENO_DIR cannot be written.
-# WP5 may need to adjust these. Keep the list explicit when it does.
 ENTRYPOINT ["/tini", "--", "deno", "run", \
   "--cached-only", "--frozen", "--lock=/app/deno.lock", "--no-code-cache", \
+  "--v8-flags=--max-old-space-size=384", \
   "--allow-net", \
   "--allow-env", \
-  "--allow-run=git", \
-  "--allow-read=/work,/tmp", \
+  "--allow-run", \
+  "--allow-read=/app,/work,/tmp", \
   "--allow-write=/work,/tmp", \
-  "--allow-sys=hostname"]
+  "--allow-sys=hostname,osRelease"]
 CMD ["/app/functions/handout-sync-worker/main.ts"]

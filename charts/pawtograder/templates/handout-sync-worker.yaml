@@ -165,7 +165,7 @@ spec:
           image: {{ include "pawtograder.image" (dict "ctx" . "image" $image) }}
           imagePullPolicy: {{ $w.image.pullPolicy }}
           # The image's ENTRYPOINT carries the `deno run` permission flags
-          # (--allow-run=git, --allow-read/--allow-write=/work,/tmp, no -A); see
+          # (no -A; --allow-write=/work,/tmp, V8 heap capped); see
           # the Dockerfile. The chart deliberately does not override it, so the
           # flags have one source.
           securityContext:

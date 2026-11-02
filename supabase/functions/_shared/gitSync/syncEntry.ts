@@ -60,7 +60,7 @@ import {
   withSyncJob
 } from "./engine.ts";
 import { type GitFailureKind, GitSyncError, GitSyncTerminalError } from "./errors.ts";
-import type { GitIdentity, RemoteConfig } from "./runGit.ts";
+import type { GitIdentity, GitLogger, RemoteConfig } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 import { validateRepoFullName, validateSha } from "./validate.ts";
 
@@ -130,6 +130,8 @@ export interface HandoutSyncGitRuntime {
    * the job's git children when it fires. Undefined means no deadline.
    */
   signalFor?: (jobId: string) => AbortSignal | undefined;
+  /** Every git call's log entry. The worker counts them for `/metrics`; unset, runGit logs them. */
+  gitLog?: GitLogger;
 }
 
 let configuredRuntime: HandoutSyncGitRuntime | undefined;
@@ -491,6 +493,7 @@ async function prepareGitJob(
     remote: runtime.remote,
     maxMergeBytes: runtime.maxMergeBytes,
     signal: runtime.signalFor?.(String(jobId)),
+    gitLog: runtime.gitLog,
     token,
     templateToken,
     identity,

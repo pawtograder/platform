@@ -33,7 +33,7 @@ const config: WorkerConfig = {
   shutdownGraceSeconds: num("HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS", 240),
   maxReadCount: num("HANDOUT_SYNC_MAX_READ_COUNT", 5),
   workDir: `${fixtureRoot}/work`,
-  workLimitBytes: 0,
+  workLimitBytes: num("HANDOUT_SYNC_WORK_LIMIT_BYTES", 0),
   workEvictPercent: 70,
   maxRepoKib: 2 * 1024 * 1024,
   maxMergeBytes: 8 * 1024 * 1024,

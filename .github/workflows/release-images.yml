@@ -397,10 +397,10 @@ jobs:
   # edge-functions because the worker imports processEnvelope() and _shared/;
   # the chart defaults its tag to edgeFunctions.image.tag for the same reason.
   #
-  # The image's entrypoint, supabase/functions/handout-sync-worker/main.ts,
-  # lands in a later change (WP5 of docs/handout-sync-git-build-plan.md) and the
-  # Dockerfile refuses to build without it. Until then every step after the
-  # check is skipped and the job succeeds.
+  # The image's entrypoint is supabase/functions/handout-sync-worker/main.ts
+  # (WP5 of docs/handout-sync-git-build-plan.md), and the Dockerfile refuses to
+  # build without it. On a commit that predates it, every step after the check
+  # is skipped and the job succeeds.
   #
   # Deliberately NOT in deploy-staging's or publish-chart's `needs`. This build
   # fetches from the Alpine mirror and from esm.sh/jsr/npm, and a flaky fetch

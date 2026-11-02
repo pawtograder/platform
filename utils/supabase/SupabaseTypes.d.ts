@@ -13177,6 +13177,10 @@ export type Database = {
           gradebook_row_recalculate_dlq_queue_size: number;
           gradebook_row_recalculate_oldest_seconds: number;
           gradebook_row_recalculate_queue_size: number;
+          handout_sync_dlq_oldest_seconds: number;
+          handout_sync_dlq_queue_size: number;
+          handout_sync_oldest_seconds: number;
+          handout_sync_queue_size: number;
           notification_emails_oldest_seconds: number;
           notification_emails_queue_size: number;
         }[];
