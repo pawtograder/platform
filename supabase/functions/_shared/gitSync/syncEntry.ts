@@ -14,12 +14,16 @@
  * 1. Validate the names and SHAs. Nothing has been asked of GitHub yet.
  * 2. Refuse a template that is the assignment's grader repo or the class's solution template
  *    (§8.3), from the database.
- * 3. Mint two installation tokens (§8.2): a student token for the student repo that can write,
- *    and a template token from the template org's installation that can only read the template.
- *    Read both repos' sizes, each with its own token (§8.4).
- * 4. Plan, and push with a compare-and-swap (§5.8). The job directory is gone before step 5.
+ * 3. Mint two installation tokens (§8.2): first a template token from the template org's
+ *    installation that can only read the template, then a student token for the student repo
+ *    that can write. Read each repo's size with its own token (§8.4), the template's before the
+ *    student token exists.
+ * 4. Plan. Before pushing, return early if a PR on the branch was already merged at this commit,
+ *    or if main already holds the handout's content at every path the update touches. Otherwise
+ *    push with a compare-and-swap (§5.8). The job directory is gone before step 5.
  * 5. Find or open the pull request and merge it (§5.9). Only this step runs under the per-org
- *    limiters; the git work holds neither.
+ *    limiters; the git work holds neither. The step 4 PR lookup is a single read and runs
+ *    without them.
  *
  * Failures come back as `SyncResult`, never as a throw, as they do from the REST function:
  * `success: false` with `terminal_reason` for a `TerminalSyncError`, and without it for anything
@@ -54,7 +58,7 @@ import {
   type SyncJobContext,
   withSyncJob
 } from "./engine.ts";
-import { GitSyncTerminalError } from "./errors.ts";
+import { GitSyncError, GitSyncTerminalError } from "./errors.ts";
 import type { GitIdentity, RemoteConfig } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 import { validateRepoFullName, validateSha } from "./validate.ts";
@@ -318,19 +322,20 @@ export async function syncRepositoryToHandoutGit(
     // 3. Two tokens, one per side, and both repos' sizes (§8.2, §8.4). Separate even when both
     // repos are in one org, so the student token never reaches the template. The template token
     // comes from the template org's installation, so a handout an assignment inherited from
-    // another org's class still syncs.
-    const { token } = await deps.getScopedToken(org, [repoName], SYNC_TOKEN_PERMISSIONS, scope);
+    // another org's class still syncs. The read-only template side goes first: a template that
+    // is too large stops the job before a token that can write to the student repo exists.
+    const runtime = deps.runtime();
     const { token: templateToken } = await deps.getScopedToken(
       templateOrg,
       [templateName],
       TEMPLATE_TOKEN_PERMISSIONS,
       scope
     );
-    const octokit = deps.octokitForToken(token, scope);
     const templateOctokit = deps.octokitForToken(templateToken, scope);
-    const runtime = deps.runtime();
-    await assertRepoWithinSizeLimit(octokit, repo, runtime.maxRepoKib, scope);
     await assertRepoWithinSizeLimit(templateOctokit, template, runtime.maxRepoKib, scope);
+    const { token } = await deps.getScopedToken(org, [repoName], SYNC_TOKEN_PERMISSIONS, scope);
+    const octokit = deps.octokitForToken(token, scope);
+    await assertRepoWithinSizeLimit(octokit, repo, runtime.maxRepoKib, scope);
     const identity = await resolveBotIdentity(octokit, deps, scope);
 
     // 4. The git work. No limiter is held here.
@@ -359,6 +364,29 @@ export async function syncRepositoryToHandoutGit(
         );
       }
       scope?.setTag("sync_commit", plan.commit);
+
+      // A crash-after-merge retry rebuilds the same commit. Report the merge before pushing:
+      // pushing first would recreate a branch GitHub auto-deleted on merge (§5.9).
+      const mergedOurs = await findMergedSyncPullRequest(octokit, repo, plan.branch, plan.commit);
+      if (mergedOurs) return mergedResult(mergedOurs, repo, plan.commit, scope);
+
+      // REST's `isRepoAlreadyInSync`: someone already brought every path this update touches to
+      // the handout's content at the head of main. Opening a PR would merge an empty diff, so this
+      // is an ordinary no_changes, with the head the decision was read from. The paths left to
+      // the student count too: recording the revision as delivered while one of them still
+      // differs would lose the only record that it was not.
+      const touched = [...plan.changedFiles, ...plan.unresolved.map((f) => f.path)];
+      const current = await job.classifyPathsAgainstHead(plan.analysis, touched);
+      if (current.stillDiffering.size === 0) {
+        scope?.setTag("already_in_sync", "true");
+        scope?.addBreadcrumb({
+          message: `Repository ${repo} already holds the handout's content at ${toSha.substring(0, 7)}`,
+          category: "sync",
+          level: "info"
+        });
+        return { success: true, no_changes: true, repo_head_sha: current.headSha };
+      }
+
       const pushed = await job.push(plan, {
         confirmResetSafe: ({ head, base }) => confirmResetSafe(octokit, repo, plan.branch, base, head, scope)
       });
@@ -385,6 +413,9 @@ export async function syncRepositoryToHandoutGit(
       )
     );
   } catch (caught) {
+    // Every engine failure's kind, retryable or not, so `disk_full`, `auth_failed` and
+    // `lease_rejected` can be told apart in Sentry and metrics (§7).
+    if (caught instanceof GitSyncError) scope?.setTag("sync_git_error_kind", caught.kind);
     const error = toSyncError(caught, retryCount);
     console.trace(error);
     if (error instanceof TerminalSyncError) scope?.setTag("terminal_sync_reason", error.reason);
@@ -614,6 +645,44 @@ async function listSyncPullRequests(
   return data as SyncPullRequest[];
 }
 
+/**
+ * Merged, and merged at `commit`. A PR closed without merging is not one, even at the same head:
+ * as on the REST path, that falls through to opening a new PR.
+ */
+function isMergedAt(pr: SyncPullRequest, commit: string): boolean {
+  return pr.merged_at !== null && pr.head.sha === commit;
+}
+
+/** The PR on `branchName` that was merged at `commit`, if any. */
+async function findMergedSyncPullRequest(
+  octokit: GitSyncOctokit,
+  repoFullName: string,
+  branchName: string,
+  commit: string
+): Promise<SyncPullRequest | undefined> {
+  return (await listSyncPullRequests(octokit, repoFullName, branchName)).find((pr) => isMergedAt(pr, commit));
+}
+
+/**
+ * The result for a PR already merged at this job's commit: a retry of a job that merged and died
+ * before the row was written. It carries `merge_sha` so the handler moves both halves of the
+ * baseline pair.
+ */
+function mergedResult(pr: SyncPullRequest, repo: string, commit: string, scope?: Sentry.Scope): SyncResult {
+  scope?.addBreadcrumb({
+    message: `Found already-merged PR #${pr.number} for ${repo} at ${commit.substring(0, 7)}`,
+    category: "sync",
+    level: "info"
+  });
+  return {
+    success: true,
+    pr_number: pr.number,
+    pr_url: pr.html_url,
+    merged: true,
+    merge_sha: pr.merge_commit_sha || undefined
+  };
+}
+
 /** `attemptAutoMerge` with the merge pinned to `expectedHead`, the commit this job pushed. */
 async function attemptAutoMerge(
   octokit: GitSyncOctokit,
@@ -680,25 +749,11 @@ async function deliverPullRequest(args: {
   const { branch, commit, unresolved } = pushed.plan;
   const unresolvedPaths = unresolved.length > 0 ? unresolved.map((f) => f.path) : undefined;
 
-  // §5.9: the lookup comes before creation. A merged PR whose head is this very commit is a retry
-  // of a job that merged and then died before the row was written: report the merge, with its
-  // sha, so the handler moves both halves of the baseline pair.
+  // §5.9: the lookup comes before creation, again after the push, for a merge that landed while
+  // this job was pushing.
   const existing = await listSyncPullRequests(octokit, repo, branch);
-  const mergedOurs = existing.find((pr) => pr.merged_at !== null && pr.head.sha === commit);
-  if (mergedOurs) {
-    scope?.addBreadcrumb({
-      message: `Found already-merged PR #${mergedOurs.number} for ${repo} at ${commit.substring(0, 7)}`,
-      category: "sync",
-      level: "info"
-    });
-    return {
-      success: true,
-      pr_number: mergedOurs.number,
-      pr_url: mergedOurs.html_url,
-      merged: true,
-      merge_sha: mergedOurs.merge_commit_sha || undefined
-    };
-  }
+  const mergedOurs = existing.find((pr) => isMergedAt(pr, commit));
+  if (mergedOurs) return mergedResult(mergedOurs, repo, commit, scope);
 
   const effectiveAutoMerge = resolveAutoMerge(autoMerge, unresolved);
   scope?.setTag("unresolved_file_count", String(unresolved.length));
@@ -714,6 +769,27 @@ async function deliverPullRequest(args: {
     console.log(`[sync] ${repo}: holding PR open, ${unresolved.length} file(s) left to the student`);
   }
 
+  const [owner, name] = repo.split("/");
+  const body = renderSyncPullRequestBody({
+    toSha,
+    fromSha,
+    baselineSha: pushed.analysis.baselineSha,
+    baselineWasRecorded: !!syncedRepoSha,
+    changedFiles: pushed.analysis.files.map((f) => f.change),
+    unresolved,
+    effectiveAutoMerge
+  });
+  // A reused PR was opened by an earlier attempt, whose body may describe a different set of
+  // files or say it will be auto-merged when this attempt will not. Rewrite it to this attempt's.
+  const refreshBody = async (prNumber: number) => {
+    await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
+      owner,
+      repo: name,
+      pull_number: prNumber,
+      body
+    });
+  };
+
   let prNumber: number;
   let prUrl: string;
   const open = existing.find((pr) => pr.state === "open");
@@ -722,17 +798,8 @@ async function deliverPullRequest(args: {
     scope?.addBreadcrumb({ message: `Reusing open PR #${open.number} for ${repo}`, category: "sync", level: "info" });
     prNumber = open.number;
     prUrl = open.html_url;
+    await refreshBody(prNumber);
   } else {
-    const [owner, name] = repo.split("/");
-    const body = renderSyncPullRequestBody({
-      toSha,
-      fromSha,
-      baselineSha: pushed.analysis.baselineSha,
-      baselineWasRecorded: !!syncedRepoSha,
-      changedFiles: pushed.analysis.files.map((f) => f.change),
-      unresolved,
-      effectiveAutoMerge
-    });
     try {
       const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
         owner,
@@ -753,7 +820,10 @@ async function deliverPullRequest(args: {
           level: "info"
         });
         await deleteSyncBranch(octokit, repo, branch);
-        return { success: true, no_changes: true };
+        // GitHub refuses because this commit is already in main's history, so it is the commit
+        // that delivered the update and the baseline to record with it. Not the head of main,
+        // which may hold later student commits that must stay outside the baseline (§6.2).
+        return { success: true, no_changes: true, repo_head_sha: commit };
       }
       if (!errorMessage.includes("A pull request already exists") && !errorMessage.includes("already exists for")) {
         throw error;
@@ -765,20 +835,13 @@ async function deliverPullRequest(args: {
         level: "info"
       });
       const again = await listSyncPullRequests(octokit, repo, branch);
-      const mergedNow = again.find((pr) => pr.merged_at !== null && pr.head.sha === commit);
-      if (mergedNow) {
-        return {
-          success: true,
-          pr_number: mergedNow.number,
-          pr_url: mergedNow.html_url,
-          merged: true,
-          merge_sha: mergedNow.merge_commit_sha || undefined
-        };
-      }
+      const mergedNow = again.find((pr) => isMergedAt(pr, commit));
+      if (mergedNow) return mergedResult(mergedNow, repo, commit, scope);
       const openNow = again.find((pr) => pr.state === "open");
       if (!openNow) throw error;
       prNumber = openNow.number;
       prUrl = openNow.html_url;
+      await refreshBody(prNumber);
     }
   }
 
