@@ -776,62 +776,74 @@ test.describe("Surveys Page", () => {
     expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
   });
 
-  // Each debounced autosave is its own upsert. Holding the first one back makes a later write
-  // reach the server before it; the writes must still land in the order the student made them.
-  const holdFirstResponseWrite = async (page: Page, holdMs: number) => {
+  // Each debounced autosave is its own upsert. The first one is held back until the test calls
+  // release(), so later autosaves queue behind it. With abortFirst the held request then fails as if
+  // the connection dropped. writesInServerOrder lists every request in the order it went out.
+  const holdFirstResponseWrite = async (page: Page, { abortFirst = false } = {}) => {
     const writesInServerOrder: { is_submitted: boolean; q1?: string }[] = [];
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
     let writesSeen = 0;
     await page.route("**/rest/v1/survey_responses*", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       writesSeen += 1;
-      if (writesSeen === 1) await new Promise((resolve) => setTimeout(resolve, holdMs));
+      const isFirst = writesSeen === 1;
+      if (isFirst) await released;
       const body = route.request().postDataJSON() as { is_submitted: boolean; response: { q1?: string } };
       writesInServerOrder.push({ is_submitted: body.is_submitted, q1: body.response.q1 });
+      if (isFirst && abortFirst) return route.abort("failed");
       await route.continue();
     });
-    return writesInServerOrder;
+    return { writesInServerOrder, release };
   };
   const isResponseWrite = (request: Request) =>
     request.method() === "POST" && request.url().includes("/rest/v1/survey_responses");
 
-  test("a slow autosave does not overwrite a newer answer", async ({ page }) => {
-    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-      title: "Slow Autosave Survey",
-      status: "published",
-      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+  // Each edit made while a slow autosave is in flight queues another autosave behind it, and each
+  // one sends the whole response. Only the newest queued one needs to go out, after the slow one,
+  // and a slow one that fails must not hold it up.
+  for (const slowAutosave of ["succeeds", "fails"] as const) {
+    test(`only the newest autosave queued behind a slow one is sent (slow autosave ${slowAutosave})`, async ({
+      page
+    }) => {
+      const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+        title: "Slow Autosave Survey",
+        status: "published",
+        json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+      });
+
+      await loginAsUser(page, studentA, course);
+      const { writesInServerOrder, release } = await holdFirstResponseWrite(page, {
+        abortFirst: slowAutosave === "fails"
+      });
+
+      await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+      const input = page.getByRole("textbox", { name: "Question 1" });
+      const firstWrite = page.waitForRequest(isResponseWrite);
+      await input.fill("Older answer");
+      await firstWrite;
+      // Past the 1 s debounce after each edit, so each edit queues its own autosave behind the held one.
+      await input.fill("Middle answer");
+      await page.waitForTimeout(1500);
+      await input.fill("Newer answer");
+      await page.waitForTimeout(1500);
+      release();
+
+      await expect
+        .poll(() => storedResponse(survey.id), { timeout: 15_000 })
+        .toEqual({ q1: "Newer answer", is_submitted: false });
+      expect(writesInServerOrder).toEqual([
+        { is_submitted: false, q1: "Older answer" },
+        { is_submitted: false, q1: "Newer answer" }
+      ]);
+
+      await page.reload();
+      await expect(input).toHaveValue("Newer answer");
+      await expect(input).toBeEditable();
     });
-
-    await loginAsUser(page, studentA, course);
-    await holdFirstResponseWrite(page, 4000);
-    let finishedWrites = 0;
-    page.on("requestfinished", (request) => {
-      if (isResponseWrite(request)) finishedWrites += 1;
-    });
-
-    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
-    const input = page.getByRole("textbox", { name: "Question 1" });
-    const firstWrite = page.waitForRequest(isResponseWrite);
-    await input.fill("Older answer");
-    await firstWrite;
-    await input.fill("Newer answer");
-
-    await expect.poll(() => finishedWrites, { timeout: 15_000 }).toBe(2);
-    const { data, error } = await supabase
-      .from("survey_responses")
-      .select("response, is_submitted")
-      .eq("survey_id", survey.id)
-      .eq("profile_id", studentA.private_profile_id)
-      .single();
-    if (error) throw new Error(error.message);
-    expect({ q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted }).toEqual({
-      q1: "Newer answer",
-      is_submitted: false
-    });
-
-    await page.reload();
-    await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Newer answer");
-    await expect(input).toBeEditable();
-  });
+  }
 
   test("no draft autosave reaches the server after Complete", async ({ page }) => {
     // Editing on, so RLS lets a late draft write through to the survey_response_no_unsubmit
@@ -844,35 +856,33 @@ test.describe("Surveys Page", () => {
     });
 
     await loginAsUser(page, studentA, course);
-    const writesInServerOrder = await holdFirstResponseWrite(page, 4000);
+    const { writesInServerOrder, release } = await holdFirstResponseWrite(page);
 
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
     const input = page.getByRole("textbox", { name: "Question 1" });
     const firstWrite = page.waitForRequest(isResponseWrite);
     await input.fill("Older answer");
     await firstWrite;
-    await input.fill("Final answer");
-    // Past the 1 s debounce, so the second autosave has been queued before Complete.
+    // Past the 1 s debounce after each edit, so two more drafts are queued before Complete.
+    await input.fill("Middle answer");
     await page.waitForTimeout(1500);
-    await page.getByRole("button", { name: "Complete" }).click();
+    await input.fill("Final answer");
+    await page.waitForTimeout(1500);
+    const completeButton = page.getByRole("button", { name: "Complete" });
+    await completeButton.click();
+    // SurveyJS removes the button once it has completed, so Complete is now waiting on the held request.
+    await expect(completeButton).toHaveCount(0);
+    release();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
 
-    // Outlast the held write, so a draft queued behind it has had its chance to go out.
-    await page.waitForTimeout(4000);
-    const { data, error } = await supabase
-      .from("survey_responses")
-      .select("response, is_submitted")
-      .eq("survey_id", survey.id)
-      .eq("profile_id", studentA.private_profile_id)
-      .single();
-    if (error) throw new Error(error.message);
-    expect({ q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted }).toEqual({
-      q1: "Final answer",
-      is_submitted: true
-    });
-    const lastSubmit = writesInServerOrder.findLastIndex((write) => write.is_submitted);
-    expect(lastSubmit).toBeGreaterThanOrEqual(0);
-    expect(writesInServerOrder.slice(lastSubmit + 1)).toEqual([]);
+    // Past the debounce again, so a draft left in the debounce timer at Complete would have gone out.
+    await page.waitForTimeout(1500);
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Final answer", is_submitted: true });
+    // Only the held draft and the submission go out. The drafts queued behind the held one are dropped.
+    expect(writesInServerOrder).toEqual([
+      { is_submitted: false, q1: "Older answer" },
+      { is_submitted: true, q1: "Final answer" }
+    ]);
   });
 
   test("survey questions read before their answer options (WCAG 1.3.2)", async ({ page }) => {
