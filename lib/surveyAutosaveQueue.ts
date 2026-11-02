@@ -47,7 +47,7 @@ export type RetryPolicy = {
 };
 
 export type SurveyAutosaveQueueOptions<T> = {
-  /** Saves one snapshot. Should pass `signal` on to fetch, so a timed-out request is cancelled. */
+  /** Saves one snapshot. Should pass `signal` on to fetch, so a timed-out request is canceled. */
   save: (value: T, attempt: SaveAttempt) => Promise<void>;
   /**
    * Checked when a snapshot's turn comes, not when it is scheduled: Complete may have started, or

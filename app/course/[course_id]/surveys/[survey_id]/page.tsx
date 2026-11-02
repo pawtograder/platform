@@ -32,7 +32,7 @@ import { upsertSurveyResponseWithKeepalive, type SurveyResponseUpsert } from "@/
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 // Upper bound on one save request, autosave or Complete. A survey upsert normally takes well under
-// a second; past this the request is cancelled, so it cannot hold up the saves queued behind it.
+// a second; past this the request is canceled, so it cannot hold up the saves queued behind it.
 const SAVE_TIMEOUT_MS = 10_000;
 // A failed autosave is retried after 1, 2, 4 and 8 s, then waits for the next edit or for the
 // browser to come back online.
