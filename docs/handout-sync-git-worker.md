@@ -391,9 +391,9 @@ protects the branch.
 | Condition | Class | Result |
 |---|---|---|
 | Network or 5xx from GitHub, `git` exit with `RPC failed` / `early EOF` | retryable | throw; redelivered after VT |
-| Push lease rejected | retryable | throw |
-| `ENOSPC` on `/work` | retryable | throw; evict the template cache; alert on the `disk_full` tag |
-| Job deadline hit | retryable | kill children, throw |
+| Push lease rejected | retryable, by redelivery | see below |
+| `ENOSPC` on `/work` | retryable, by redelivery | evict the template cache; alert on the `disk_full` tag |
+| Job deadline hit | retryable, by redelivery | kill children; see below |
 | `H` unfetchable after 5 retries | terminal `handout_revision_missing` | `sync_blocked_at` set |
 | Push `GH001` | terminal `file_too_large` | names the path |
 | Student repo has no `main` | terminal `student_repo_has_no_main` | §5.2 |
@@ -410,6 +410,19 @@ protects the branch.
 
 Terminal errors flow through the existing `TerminalSyncError` → `terminal_reason` path, so the
 handler records them without pausing the org.
+
+Two retry paths exist, and which one a failure takes depends on whether it says anything about
+GitHub's health:
+
+- **The generic path** (throw → org circuit → `requeueWithDelay`) is kept for `network`,
+  `auth_failed` and `remote_repo_not_found`. These are GitHub-health signals, so pausing the
+  org's syncs is the right response, as it is for the REST path today.
+- **Redelivery** is used for every failure local to one job: `deadline_exceeded`, `disk_full`,
+  `lease_rejected`, `reset_check_mismatch`, `spawn_failed`, `output_cap_exceeded`, `git_failed`
+  and `timeout`. The git path returns `SyncResult.redeliver_kind`. The handler writes one
+  guarded `sync_data` error note and returns without archiving, and the message comes back
+  after one VT. The read cap then dead-letters a job that keeps failing. One slow or oversized
+  repository must not pause handout delivery for its whole org.
 
 ## 8. Security
 
