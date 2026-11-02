@@ -524,6 +524,9 @@ export default function SurveyTakingPage() {
         // Back to the form, on the same page and with the answers, so the student can see them
         // and press Complete again. clear(false, false) keeps the data and the current page.
         options?.clearSaveMessages();
+        // clearSaveMessages doesn't hide the notice "Submitting your answers…", which would stay
+        // beside the alert until SurveyJS's 2 s timer hid it.
+        surveyModel.notifier.active = false;
         surveyModel.clear(false, false);
         setSubmitError(submitFailureAlert(error, outcome));
       } finally {
