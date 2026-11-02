@@ -425,7 +425,7 @@ test.describe("Surveys Page", () => {
     expect(Array.isArray(parsed.pages[0].elements)).toBe(true);
   });
 
-  test("response editing checkbox is labelled and described", async ({ page }) => {
+  test("response editing checkbox is labeled and described", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/surveys/new`);
 
