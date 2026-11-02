@@ -326,6 +326,33 @@ export default function SurveyTakingPage() {
     [buildResponseRow, controller.client]
   );
 
+  // Whether a submit that ran out of time reached the database anyway, with only its response lost.
+  // buildResponseRow stamps submitted_at from this browser's clock when the submit starts, so a row
+  // submitted at or after `startedAt` can only come from that submit.
+  const submitLandedDespiteTimeout = useCallback(
+    async (startedAt: number) => {
+      if (!surveyId || !private_profile_id) return false;
+      try {
+        const { data, error } = await runWithTimeout(
+          async (signal) =>
+            controller.client
+              .from("survey_responses")
+              .select("is_submitted, submitted_at")
+              .eq("survey_id", surveyId)
+              .eq("profile_id", private_profile_id)
+              .abortSignal(signal)
+              .maybeSingle(),
+          SAVE_TIMEOUT_MS
+        );
+        if (error || !data?.is_submitted || !data.submitted_at) return false;
+        return new Date(data.submitted_at).getTime() >= startedAt;
+      } catch {
+        return false;
+      }
+    },
+    [surveyId, private_profile_id, controller.client]
+  );
+
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model, options?: CompleteEvent) => {
       if (!private_profile_id || !surveyId) {
@@ -349,7 +376,15 @@ export default function SurveyTakingPage() {
       let submitted = false;
       try {
         await autosaveQueue?.whenIdle();
-        await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
+        const startedAt = Date.now();
+        try {
+          await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
+        } catch (error) {
+          // Giving up on the request does not undo it: the upsert may have landed and only the
+          // response been lost. Reporting that as a failure would send the student back to a form
+          // whose row is already submitted.
+          if (!(error instanceof SaveTimeoutError) || !(await submitLandedDespiteTimeout(startedAt))) throw error;
+        }
         submitted = true;
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
@@ -385,7 +420,7 @@ export default function SurveyTakingPage() {
         }
       }
     },
-    [private_profile_id, surveyId, course_id, router, saveResponseToDb]
+    [private_profile_id, surveyId, course_id, router, saveResponseToDb, submitLandedDespiteTimeout]
   );
 
   // The failed form is re-rendered from scratch, so focus would otherwise fall back to the page.
