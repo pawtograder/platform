@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
+import { Box, Heading, Text, VStack, Button, HStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { toaster } from "@/components/ui/toaster";
@@ -18,13 +18,39 @@ import {
   shouldAutosaveResponse,
   type LoadedResponseState
 } from "@/lib/surveyResponseState";
-import { runWithTimeout, SurveyAutosaveQueue, type SaveAttempt } from "@/lib/surveyAutosaveQueue";
+import {
+  runWithTimeout,
+  SurveyAutosaveQueue,
+  type AutosaveStatus,
+  type RetryPolicy,
+  type SaveAttempt
+} from "@/lib/surveyAutosaveQueue";
 import { upsertSurveyResponseWithKeepalive, type SurveyResponseUpsert } from "@/lib/surveyResponseKeepalive";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 // Upper bound on one write, autosave or Complete. A survey upsert normally takes well under a
 // second; past this the request is cancelled, so it cannot hold up the saves queued behind it.
 const SAVE_TIMEOUT_MS = 10_000;
+// A failed autosave is retried after 1, 2, 4 and 8 s, then waits for the next edit or for the
+// browser to come back online.
+const AUTOSAVE_RETRY: RetryPolicy = { baseDelayMs: 1000, maxDelayMs: 8000, maxRetries: 4 };
+
+const AUTOSAVE_STATUS_TEXT: Record<AutosaveStatus, string> = {
+  idle: "",
+  saving: "Saving…",
+  saved: "All changes saved",
+  retrying: "Not saved yet. Retrying…",
+  offline: "You're offline. Your answers will save when you reconnect.",
+  failed: "Your latest answers aren't saved."
+};
+const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
+  idle: "fg.muted",
+  saving: "fg.muted",
+  saved: "fg.muted",
+  retrying: "fg.warning",
+  offline: "fg.warning",
+  failed: "fg.error"
+};
 // The project the browser Supabase client talks to (utils/supabase/client.ts), for the keepalive
 // write sent while the page unloads.
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -54,6 +80,7 @@ export default function SurveyTakingPage() {
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
 
   // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
   // that can race the Complete upsert: an autosave carrying is_submitted:false
@@ -85,11 +112,19 @@ export default function SurveyTakingPage() {
       canSave: () => canAutosaveRef.current(),
       debounceMs: AUTOSAVE_DEBOUNCE_MS,
       timeoutMs: SAVE_TIMEOUT_MS,
+      retry: AUTOSAVE_RETRY,
+      isOnline: () => navigator.onLine,
+      onStatusChange: setAutosaveStatus,
       onError: (error) => {
         console.error("Error auto-saving response:", error);
       }
     });
     autosaveQueueRef.current = queue;
+
+    const retryOnReconnect = () => queue.retryNow();
+    const noteOffline = () => queue.noteOffline();
+    window.addEventListener("online", retryOnReconnect);
+    window.addEventListener("offline", noteOffline);
 
     // `textUpdateMode = "onTyping"` restarts the debounce on every keystroke, so a student who
     // leaves while typing has an unwritten answer waiting for it. A reload or a closed tab does not
@@ -104,8 +139,12 @@ export default function SurveyTakingPage() {
     return () => {
       window.removeEventListener("pagehide", flushOnLeave);
       document.removeEventListener("visibilitychange", flushWhenHidden);
-      // Flush rather than merely cancel when the student navigates away inside the app.
+      window.removeEventListener("online", retryOnReconnect);
+      window.removeEventListener("offline", noteOffline);
+      // Flush rather than merely cancel when the student navigates away inside the app. That
+      // write still goes out, but nothing is retried once the page is gone.
       queue.flush();
+      queue.dispose();
       if (autosaveQueueRef.current === queue) autosaveQueueRef.current = null;
     };
   }, []);
@@ -460,6 +499,22 @@ export default function SurveyTakingPage() {
             </Box>
           )}
         </VStack>
+
+        {/* Autosave status. A polite live region: its text changes when a save starts, lands or
+            fails, not on every keystroke. Kept in the DOM, even while empty, so a screen reader
+            is already watching it when the first message arrives. */}
+        {!isReadOnly && (
+          <HStack gap={3} minH={6} justify="flex-end">
+            <Text role="status" aria-live="polite" fontSize="sm" color={AUTOSAVE_STATUS_COLOR[autosaveStatus]}>
+              {AUTOSAVE_STATUS_TEXT[autosaveStatus]}
+            </Text>
+            {autosaveStatus === "failed" && (
+              <Button size="xs" variant="outline" onClick={() => autosaveQueueRef.current?.retryNow()}>
+                Try again
+              </Button>
+            )}
+          </HStack>
+        )}
 
         {/* Survey */}
         <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>

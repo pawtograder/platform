@@ -3,9 +3,18 @@
  *
  * What it must guarantee: writes reach the server one at a time and in order, every write carries
  * the newest answers, and no single write can block the ones behind it (or Complete, which waits
- * for the queue) for longer than its time limit.
+ * for the queue) for longer than its time limit. A failed write is retried with capped backoff, a
+ * few times, and while offline it waits for the network instead; the status says which.
  */
-import { runWithTimeout, SaveTimeoutError, SurveyAutosaveQueue, type SaveAttempt } from "@/lib/surveyAutosaveQueue";
+import {
+  retryDelayMs,
+  runWithTimeout,
+  SaveTimeoutError,
+  SurveyAutosaveQueue,
+  type AutosaveStatus,
+  type SaveAttempt,
+  type SurveyAutosaveQueueOptions
+} from "@/lib/surveyAutosaveQueue";
 
 type Deferred = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
 
@@ -69,9 +78,22 @@ describe("runWithTimeout", () => {
   });
 });
 
+const retry = { baseDelayMs: 1_000, maxDelayMs: 8_000, maxRetries: 4 };
+
+describe("retryDelayMs", () => {
+  test("doubles from the base delay and stops at the cap", () => {
+    expect([1, 2, 3, 4, 5, 6].map((attempt) => retryDelayMs(attempt, retry))).toEqual([
+      1_000, 2_000, 4_000, 8_000, 8_000, 8_000
+    ]);
+  });
+});
+
 describe("SurveyAutosaveQueue", () => {
-  const makeQueue = (save: (value: string, attempt: SaveAttempt) => Promise<void>, canSave = () => true) =>
-    new SurveyAutosaveQueue<string>({ save, canSave, debounceMs: 1_000, timeoutMs: 10_000 });
+  const makeQueue = (
+    save: (value: string, attempt: SaveAttempt) => Promise<void>,
+    canSave = () => true,
+    overrides: Partial<SurveyAutosaveQueueOptions<string>> = {}
+  ) => new SurveyAutosaveQueue<string>({ save, canSave, debounceMs: 1_000, timeoutMs: 10_000, retry, ...overrides });
 
   test("writes only the last of a burst of edits, after the debounce", async () => {
     const server = fakeServer();
@@ -122,13 +144,7 @@ describe("SurveyAutosaveQueue", () => {
   test("gives up on a write that never settles and sends the newer snapshot", async () => {
     const server = fakeServer();
     const onError = jest.fn();
-    const queue = new SurveyAutosaveQueue<string>({
-      save: server.save,
-      canSave: () => true,
-      debounceMs: 1_000,
-      timeoutMs: 10_000,
-      onError
-    });
+    const queue = makeQueue(server.save, () => true, { onError });
 
     queue.schedule("stuck");
     jest.advanceTimersByTime(1_000);
@@ -140,6 +156,8 @@ describe("SurveyAutosaveQueue", () => {
     await settle();
     expect(server.writes[0].signal.aborted).toBe(true);
     expect(onError).toHaveBeenCalledWith(expect.any(SaveTimeoutError));
+    // The timeout counts as a failure, so the newer snapshot goes out after the first retry delay.
+    jest.advanceTimersByTime(1_000);
     expect(server.writes.map((write) => write.value)).toEqual(["stuck", "next"]);
   });
 
@@ -221,5 +239,117 @@ describe("SurveyAutosaveQueue", () => {
     const queue = makeQueue(server.save);
     queue.flush({ keepalive: true });
     expect(server.save).not.toHaveBeenCalled();
+  });
+
+  test("retries a failed write with growing delays, then waits for the next edit", async () => {
+    const server = fakeServer();
+    const statuses: AutosaveStatus[] = [];
+    const queue = makeQueue(server.save, () => true, { onStatusChange: (status) => statuses.push(status) });
+    const failLatest = async () => {
+      server.writes[server.writes.length - 1].done.reject(new Error("HTTP 503"));
+      await settle();
+    };
+
+    queue.schedule("answer");
+    jest.advanceTimersByTime(1_000);
+    await failLatest();
+    // Retries 1 to 4 wait 1, 2, 4 and 8 s.
+    for (const delay of [1_000, 2_000, 4_000, 8_000]) {
+      jest.advanceTimersByTime(delay - 1);
+      const sent = server.writes.length;
+      jest.advanceTimersByTime(1);
+      expect(server.writes).toHaveLength(sent + 1);
+      await failLatest();
+    }
+    expect(server.writes).toHaveLength(5);
+    expect(queue.getStatus()).toBe("failed");
+
+    // Out of retries: nothing more goes out on its own.
+    jest.advanceTimersByTime(60_000);
+    expect(server.writes).toHaveLength(5);
+
+    // The next edit tries again, and a success clears the warning.
+    queue.schedule("answer, edited");
+    expect(queue.getStatus()).toBe("retrying");
+    jest.advanceTimersByTime(1_000);
+    expect(server.writes[5].value).toBe("answer, edited");
+    server.writes[5].done.resolve();
+    await settle();
+    expect(queue.getStatus()).toBe("saved");
+    expect(statuses).toEqual(["saving", "retrying", "failed", "retrying", "saved"]);
+  });
+
+  test("a retry sends the newest answers, not the snapshot that failed", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("first");
+    jest.advanceTimersByTime(1_000);
+    queue.schedule("first and second");
+    server.writes[0].done.reject(new Error("HTTP 503"));
+    await settle();
+    // The debounce for the newer edit is still running, so it, not the retry, sends next.
+    jest.advanceTimersByTime(1_000);
+    expect(server.writes.map((write) => write.value)).toEqual(["first", "first and second"]);
+  });
+
+  test("offline, it waits for retryNow instead of counting down retries", async () => {
+    const server = fakeServer();
+    let online = true;
+    const statuses: AutosaveStatus[] = [];
+    const queue = makeQueue(server.save, () => true, {
+      isOnline: () => online,
+      onStatusChange: (status) => statuses.push(status)
+    });
+
+    online = false;
+    queue.noteOffline();
+    expect(statuses).toEqual([]);
+    queue.schedule("typed offline");
+    expect(queue.getStatus()).toBe("offline");
+    jest.advanceTimersByTime(1_000);
+    server.writes[0].done.reject(new TypeError("Failed to fetch"));
+    await settle();
+    // More edits while offline keep the same status instead of flickering through "saving".
+    queue.schedule("typed offline, more");
+    jest.advanceTimersByTime(1_000);
+    server.writes[1].done.reject(new TypeError("Failed to fetch"));
+    await settle();
+    jest.advanceTimersByTime(120_000);
+    expect(server.writes).toHaveLength(2);
+    expect(statuses).toEqual(["offline"]);
+
+    online = true;
+    queue.retryNow();
+    expect(server.writes.map((write) => write.value)).toEqual([
+      "typed offline",
+      "typed offline, more",
+      "typed offline, more"
+    ]);
+    server.writes[2].done.resolve();
+    await settle();
+    expect(statuses).toEqual(["offline", "retrying", "saved"]);
+  });
+
+  test("reports offline when the network drops with answers still unsaved", () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+    queue.noteOffline();
+    expect(queue.getStatus()).toBe("idle");
+    queue.schedule("typed");
+    queue.noteOffline();
+    expect(queue.getStatus()).toBe("offline");
+  });
+
+  test("does not retry once disposed", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+    queue.schedule("typed");
+    queue.flush();
+    queue.dispose();
+    server.writes[0].done.reject(new Error("HTTP 503"));
+    await settle();
+    jest.advanceTimersByTime(60_000);
+    expect(server.writes).toHaveLength(1);
   });
 });
