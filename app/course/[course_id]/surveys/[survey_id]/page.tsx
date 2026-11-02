@@ -3,12 +3,13 @@
 import { Box, Heading, Text, VStack, Button, HStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
+import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import dynamic from "next/dynamic";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { SurveyResponse, ResponseData } from "@/types/survey";
-import { Model, ValueChangedEvent } from "survey-core";
+import { CompleteEvent, Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import {
@@ -20,6 +21,7 @@ import {
 } from "@/lib/surveyResponseState";
 import {
   runWithTimeout,
+  SaveTimeoutError,
   SurveyAutosaveQueue,
   type AutosaveStatus,
   type RetryPolicy,
@@ -56,6 +58,23 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+/**
+ * What a failed Complete tells the student. A network failure reaches us from supabase-js as
+ * `{ message: "TypeError: Failed to fetch", details: <stack trace> }`, which
+ * getStudentFacingErrorMessage would show as the stack trace, so those are named here.
+ */
+function submitFailureMessage(error: unknown, online: boolean): string {
+  if (!online) {
+    return "You're offline. Your answers are still here and will save as a draft when you reconnect. Then press Complete again.";
+  }
+  const retry = "Your answers are still here. Press Complete to try again.";
+  if (error instanceof SaveTimeoutError) return `The server took too long to respond. ${retry}`;
+  const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : "";
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  if (!code && /^(TypeError|AbortError)\b/.test(message)) return `The server couldn't be reached. ${retry}`;
+  return `${getStudentFacingErrorMessage(error)} ${retry}`;
+}
+
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
   loading: () => (
@@ -81,6 +100,9 @@ export default function SurveyTakingPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
+  // Why the last Complete failed, shown above the form until the next attempt.
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const submitErrorRef = useRef<HTMLDivElement | null>(null);
 
   // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
   // that can race the Complete upsert: an autosave carrying is_submitted:false
@@ -303,7 +325,7 @@ export default function SurveyTakingPage() {
   );
 
   const handleSurveyComplete = useCallback(
-    async (surveyModel: Model) => {
+    async (surveyModel: Model, options?: CompleteEvent) => {
       if (!private_profile_id || !surveyId) {
         console.error("Cannot submit survey: Missing profile_id or survey");
         return;
@@ -313,19 +335,26 @@ export default function SurveyTakingPage() {
       const surveyData = surveyModel.data;
 
       setIsSubmitting(true);
+      setSubmitError(null);
       isSubmittingRef.current = true;
+      // SurveyJS has already switched to its completed page. Say the answers are on their way
+      // rather than leaving the thank-you text to claim they arrived.
+      options?.showSaveInProgress("Submitting your answers…");
       // Stop the autosave queue and wait out the write in flight, so the submit upsert is the
       // last write. The wait is bounded: every write gives up after SAVE_TIMEOUT_MS.
       const autosaveQueue = autosaveQueueRef.current;
       autosaveQueue?.pause();
+      let submitted = false;
       try {
         await autosaveQueue?.whenIdle();
         await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
+        submitted = true;
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
         responseStateRef.current = "submitted";
         // The submit carried the newest answers; a draft snapshot taken before it must not follow.
         autosaveQueue?.discardPending();
+        options?.showSaveSuccess("Your survey has been submitted.");
 
         toaster.create({
           title: "Survey Submitted",
@@ -337,21 +366,31 @@ export default function SurveyTakingPage() {
         router.push(`/course/${course_id}/surveys`);
       } catch (error) {
         console.error("Error submitting survey:", error);
-
-        const errorMessage = getStudentFacingErrorMessage(error);
-        toaster.create({
-          title: "Submission Failed",
-          description: `${errorMessage} Please try again.`,
-          type: "error"
-        });
+        // Back to the form, on the same page and with the answers, so the student can see them
+        // and press Complete again. clear(false, false) keeps the data and the current page.
+        options?.clearSaveMessages();
+        surveyModel.clear(false, false);
+        setSubmitError(submitFailureMessage(error, navigator.onLine));
       } finally {
         setIsSubmitting(false);
         isSubmittingRef.current = false;
         autosaveQueue?.resume();
+        if (!submitted) {
+          // The answers were not submitted, so they go back to being saved as a draft. Offline,
+          // the queue holds them until the browser reconnects.
+          autosaveQueue?.schedule(surveyModel.data);
+          autosaveQueue?.flush();
+        }
       }
     },
     [private_profile_id, surveyId, course_id, router, saveResponseToDb]
   );
+
+  // The failed form is re-rendered from scratch, so focus would otherwise fall back to the page.
+  // Moving it to the alert puts keyboard and screen-reader users next to the form they return to.
+  useEffect(() => {
+    if (submitError) submitErrorRef.current?.focus();
+  }, [submitError]);
 
   const canAutosave = useCallback(
     () =>
@@ -514,6 +553,12 @@ export default function SurveyTakingPage() {
               </Button>
             )}
           </HStack>
+        )}
+
+        {submitError && (
+          <Alert ref={submitErrorRef} tabIndex={-1} role="alert" status="error" title="Your survey wasn't submitted">
+            {submitError}
+          </Alert>
         )}
 
         {/* Survey */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Model, ValueChangedEvent } from "survey-core";
+import { CompleteEvent, Model, ValueChangedEvent } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
@@ -12,7 +12,7 @@ interface SurveyComponentProps {
   surveyJson: Json;
   isPopup?: boolean;
   isExpanded?: boolean;
-  onComplete?: (survey: Model) => void;
+  onComplete?: (survey: Model, options: CompleteEvent) => void;
   onValueChanged?: (survey: Model, options: ValueChangedEvent) => void;
   initialData?: Json;
   readOnly?: boolean;
