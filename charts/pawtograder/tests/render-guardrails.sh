@@ -1002,8 +1002,8 @@ assert_rendered_contains "handout_sync has its own aging rule" templates/prometh
 MON=(--set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps)
 
 # (1) "443 outside the cluster" must not mean "443 to the LAN". The clusterCIDRs
-# are only the pod/service ranges; Ceph RGW, haproxy fronts and the OpenBao or
-# Proxmox UIs live on private addresses outside them. These are hardcoded in the
+# are only the pod/service ranges; the network around a self-hosted cluster
+# usually sits on private addresses outside them. These are hardcoded in the
 # template, so no values file can drop one.
 for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8; do
   assert_rendered_contains "plain egress 443 rule always excepts $cidr" "$HSW_NP" \

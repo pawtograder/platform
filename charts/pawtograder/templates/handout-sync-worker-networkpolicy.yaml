@@ -12,9 +12,9 @@ reach exactly:
   GitHub  HTTPS, port 443
 
 and on 443 only to PUBLIC addresses. "Outside the cluster" is not enough: the
-clusterCIDRs are the pod and service ranges, and the LAN around the cluster
-(Ceph RGW, haproxy fronts, OpenBao and Proxmox UIs) is on private addresses
-outside them. So every RFC 1918, CGNAT, link-local and loopback range is
+clusterCIDRs are the pod and service ranges, and a self-hosted cluster's
+surrounding network (object storage, load balancers, admin UIs) usually sits on
+private addresses outside them. So every RFC 1918, CGNAT, link-local and loopback range is
 excepted from the 443 rule by the template itself, not by values, and a values
 file cannot remove one. Anything private the worker genuinely needs (an
 in-cluster Sentry) goes in extraEgress, where review sees it.
