@@ -23,6 +23,8 @@ Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRIN
 const {
   DEFAULT_MAX_REPO_KIB,
   handoutSyncEngineFor,
+  planRepositoryToHandoutGit,
+  SHADOW_STUDENT_TOKEN_PERMISSIONS,
   resetBotIdentityForTesting,
   SYNC_TOKEN_PERMISSIONS,
   syncRepositoryToHandoutGit,
@@ -1107,5 +1109,115 @@ gitTest("a failure never puts the token or the params object in the result", asy
     const result = await h.run();
     assert(!JSON.stringify(result).includes(TOKEN));
     assert(!JSON.stringify(result).includes(TEMPLATE_TOKEN));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Worker seams: the per-job deadline signal and the shadow plan (build plan WP5)
+// ---------------------------------------------------------------------------------------------
+
+gitTest("runtime.signalFor: an aborted job signal stops the job before git runs, as retryable", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    const asked: string[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    const runtime = h.deps.runtime();
+    h.deps.runtime = () => ({ ...runtime, signalFor: (jobId) => (asked.push(jobId), controller.signal) });
+    const result = await h.run();
+    assertEquals(asked, ["123"], "keyed by the jobId the handler passes, the msg_id");
+    assertEquals(result.success, false);
+    assertEquals(result.terminal_reason, undefined);
+    assertMatch(String(result.error), /deadline/);
+    assert(!h.timeline.includes("git push"));
+    assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), null);
+  });
+});
+
+/** A harness whose token stub tells the two sides apart by repo, since in shadow both are read-only. */
+function shadowHarness(w: World, opts: { solution?: SolutionRepos } = {}) {
+  const h = harness(w, opts);
+  h.deps.getScopedToken = (org, repositories, permissions) => {
+    h.tokenRequests.push({ org, repositories: [...repositories], permissions });
+    const token = `${org}/${repositories[0]}` === w.input.templateRepo ? TEMPLATE_TOKEN : TOKEN;
+    return Promise.resolve({ token, expiresAt: "2026-11-02T01:00:00Z" });
+  };
+  const plan = () =>
+    planRepositoryToHandoutGit(
+      {
+        repositoryFullName: w.input.repoFullName,
+        templateRepo: w.input.templateRepo,
+        fromSha: w.F,
+        toSha: w.H,
+        syncedRepoSha: w.S,
+        adminSupabase: {} as SyncRepositoryToHandoutGitParams["adminSupabase"],
+        repositoryId: 1,
+        retryCount: 0,
+        jobId: "77"
+      },
+      h.deps
+    );
+  return { ...h, plan };
+}
+
+gitTest("shadow plan: read-only tokens for both repos, the predicted tree, and no push or REST write", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const refsBefore = await w.student.refs();
+    const h = shadowHarness(w);
+    const prediction = await h.plan();
+
+    // What a real sync from the same inputs would build.
+    const expected = await withSyncJob(
+      fx.jobContext({
+        identity: { name: `${APP_SLUG}[bot]`, email: `${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com` }
+      }),
+      (job) => job.plan(w.input)
+    );
+    assertEquals(expected.kind, "commit");
+    assertEquals(prediction, {
+      predicted_tree: expected.kind === "commit" ? expected.tree : null,
+      predicted_commit_parent: w.S,
+      unresolved: [],
+      error: null
+    });
+    assertEquals(SHADOW_STUDENT_TOKEN_PERMISSIONS, { contents: "read" });
+    assertEquals(
+      h.tokenRequests.map((t) => [t.repositories[0], t.permissions]),
+      [
+        ["handout", { contents: "read" }],
+        ["student-a", { contents: "read" }]
+      ]
+    );
+    assert(!h.timeline.includes("git push"));
+    assertEquals(await w.student.refs(), refsBefore, "nothing reached the student remote");
+    assert(
+      h.gh.calls.every((c) => c.route.startsWith("GET ")),
+      `only reads: ${h.gh.calls.map((c) => c.route).join(", ")}`
+    );
+    assertEquals(await Array.fromAsync(Deno.readDir(fx.jobsDir)), [], "the job directory is gone");
+  });
+});
+
+gitTest("shadow plan: every file left to the student predicts no tree and lists them", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await blockedWorld(fx);
+    const prediction = await shadowHarness(w).plan();
+    assertEquals(prediction, {
+      predicted_tree: null,
+      predicted_commit_parent: null,
+      unresolved: [{ path: "a.txt", reason: "content_differs" }],
+      error: null
+    });
+  });
+});
+
+gitTest("shadow plan: a terminal refusal is the prediction's error, not a throw", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const prediction = await shadowHarness(w, { solution: { graderRepo: T, solutionTemplateRepo: null } }).plan();
+    assertEquals([prediction.predicted_tree, prediction.unresolved], [null, null]);
+    assertMatch(String(prediction.error), /^template_is_solution_repo: /);
   });
 });

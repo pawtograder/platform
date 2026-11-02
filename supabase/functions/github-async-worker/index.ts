@@ -35,7 +35,7 @@ import {
 } from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, TerminalSyncError } from "../_shared/GitHubSyncHelpers.ts";
-import { handoutSyncEngineFor, syncRepositoryToHandoutGit } from "../_shared/gitSync/syncEntry.ts";
+import { HANDOUT_SYNC_QUEUE, handoutSyncEngineFor, syncRepositoryToHandoutGit } from "../_shared/gitSync/syncEntry.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { shouldSendOrgInvitation, siblingInviteTeamSlugs } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -185,7 +185,7 @@ const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
  * Moves a processed message from the active queue to PGMQ archive.
  * Retries on transient failures. Returns false if the message could still be in the queue (will redeliver after VT).
  */
-async function archiveMessage(
+export async function archiveMessage(
   adminSupabase: SupabaseClient<Database>,
   msgId: number,
   scope: Sentry.Scope,
@@ -491,10 +491,19 @@ async function requeueWithDelay(
   return true;
 }
 
+/**
+ * The dead-letter queue for a message read from `queueName`. `handout_sync` has its own, so the
+ * git worker's poison messages stay with the worker that can replay them (migration
+ * 20261101120000). Every other queue, `async_calls_low_priority` included, keeps `async_calls_dlq`.
+ */
+export function deadLetterQueueFor(queueName: string | undefined): "async_calls_dlq" | "handout_sync_dlq" {
+  return queueName === HANDOUT_SYNC_QUEUE ? "handout_sync_dlq" : "async_calls_dlq";
+}
+
 async function sendToDeadLetterQueue(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
-  meta: { msg_id: number; enqueued_at: string },
+  meta: { msg_id: number; enqueued_at: string; queue_name?: string },
   error: unknown,
   scope: Sentry.Scope
 ): Promise<boolean> {
@@ -505,7 +514,7 @@ async function sendToDeadLetterQueue(
   // Send to DLQ queue
   try {
     const dlqResult = await adminSupabase.schema("pgmq_public").rpc("send", {
-      queue_name: "async_calls_dlq",
+      queue_name: deadLetterQueueFor(meta.queue_name),
       message: envelope as unknown as Json,
       sleep_seconds: 0
     });
@@ -892,7 +901,18 @@ async function fetchIntendedTeamUsernames(
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
-  meta: { msg_id: number; enqueued_at: string; read_ct?: number; queue_name?: string },
+  meta: {
+    msg_id: number;
+    enqueued_at: string;
+    read_ct?: number;
+    queue_name?: string;
+    /**
+     * The read cap for this queue: a message read more than this many times goes to the DLQ.
+     * The handout-sync worker passes HANDOUT_SYNC_MAX_READ_COUNT (spec §3.1: `read_ct > 5`).
+     * Unset keeps the edge worker's `read_ct >= PGMQ_MAX_READ_CT`.
+     */
+    max_read_ct?: number;
+  },
   _scope: Sentry.Scope
 ): Promise<boolean> {
   const queueName = meta.queue_name ?? "async_calls";
@@ -904,14 +924,35 @@ export async function processEnvelope(
   if (envelope.class_id) scope.setTag("class_id", String(envelope.class_id));
   if (envelope.debug_id) scope.setTag("debug_id", envelope.debug_id);
 
+  // A shadow copy (queue_repository_syncs with handout_sync_engine shadow=true) is a complete,
+  // valid sync envelope, sent alongside the real job so the git engine can predict it. Run here, it
+  // would be a second real sync of the same revision: the handout-sync worker routes these to a
+  // plan-only path and never calls this function with one. This backstop is for any other
+  // consumer that reads them: refuse, archive, write nothing.
+  if (envelope.shadow === true) {
+    console.warn(
+      `[shadow] processEnvelope refused shadow message msg_id=${meta.msg_id} queue=${queueName}; archiving without running it`
+    );
+    scope.setTag("shadow_message_refused", "true");
+    const s = scope.clone();
+    s.setLevel("warning");
+    Sentry.captureMessage("processEnvelope received a shadow message; refused and archived", s);
+    await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+    return false;
+  }
+
   // Poison-pill protection: if this message has been read too many times without
   // ever being archived or successfully requeued, send it to the DLQ so it stops
   // monopolizing worker capacity. This catches the "isolate dies mid-handler"
   // failure mode where neither the success path (which archives) nor the failure
   // path (which writes sync_data + throws) ever runs to completion.
-  if (typeof meta.read_ct === "number" && meta.read_ct >= PGMQ_MAX_READ_CT) {
+  const readCapExceeded =
+    typeof meta.read_ct === "number" &&
+    (meta.max_read_ct !== undefined ? meta.read_ct > meta.max_read_ct : meta.read_ct >= PGMQ_MAX_READ_CT);
+  if (readCapExceeded) {
+    const cap = meta.max_read_ct !== undefined ? `> ${meta.max_read_ct}` : `>= ${PGMQ_MAX_READ_CT}`;
     const error = new Error(
-      `pgmq read_ct=${meta.read_ct} exceeded max=${PGMQ_MAX_READ_CT} without archive — DLQing as poison message`
+      `pgmq read_ct=${meta.read_ct} reached the cap (${cap}) without archive; DLQing as poison message`
     );
     scope.setTag("poison_message", "true");
     Sentry.captureException(error, scope);
@@ -924,7 +965,10 @@ export async function processEnvelope(
           .update({
             sync_data: {
               status: "error",
-              last_sync_error: `Sync handler kept failing without leaving a trace (likely Edge Function memory limit). Message was sent to the dead-letter queue after ${meta.read_ct} attempts.`,
+              last_sync_error:
+                queueName === HANDOUT_SYNC_QUEUE
+                  ? `Sync kept failing without leaving a trace (the handout-sync worker was killed mid-job each time, for example out of memory or a lost pod). Message was sent to ${deadLetterQueueFor(queueName)} after ${meta.read_ct} attempts.`
+                  : `Sync handler kept failing without leaving a trace (likely Edge Function memory limit). Message was sent to the dead-letter queue after ${meta.read_ct} attempts.`,
               last_sync_attempt: new Date().toISOString(),
               msg_id: meta.msg_id
             }
