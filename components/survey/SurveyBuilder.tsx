@@ -91,9 +91,11 @@ type Props = {
   value?: string; // JSON string
   onChange: (json: string) => void;
   initialJson?: string;
+  /** The survey being edited is published, so saving it as a draft would hide it from students. */
+  isPublished?: boolean;
 };
 
-const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
+const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Props) => {
   // Object-form source of truth
   const [survey, setSurvey] = useState<BuilderSurvey>(() => safeFromJSON(value ?? initialJson));
 
@@ -399,8 +401,9 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
               <Text fontWeight="semibold">Two questions can&apos;t share a name</Text>
               <Text fontSize="sm">{formatDuplicateQuestionNames(duplicateNames)}</Text>
               <Text fontSize="sm" mt="1">
-                You can keep editing and save the survey as a draft, but it can&apos;t be published until every question
-                has its own name.
+                {isPublished
+                  ? "You can keep editing. The published survey keeps its current questions until every question has its own name."
+                  : "You can keep editing and save the survey as a draft, but it can't be published until every question has its own name."}
               </Text>
             </Box>
           )}

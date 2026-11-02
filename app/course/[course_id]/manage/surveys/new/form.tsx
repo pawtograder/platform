@@ -183,6 +183,9 @@ export default function SurveyForm({
 
   // Two questions with one name share one answer (#1005). Drafts may have them; publishing may not.
   const duplicateNamesMessage = useMemo(() => duplicateQuestionNamesMessage(currentJson), [currentJson]);
+  // Only the edit page of a published survey passes publishedJson. Saving that survey as a draft
+  // would hide it from students, so the advice below doesn't suggest it there.
+  const isPublishedSurvey = publishedJson !== undefined;
   const publishBlockedMessage = useMemo(
     () => publishBlockedByDuplicateNames({ json: currentJson, status: currentStatus, publishedJson }),
     [currentJson, currentStatus, publishedJson]
@@ -955,7 +958,9 @@ export default function SurveyForm({
                 </UIButton>
                 {publishBlockedMessage && (
                   <Text id="survey-publish-blocked" fontSize="sm" color="fg.error" maxW="xs">
-                    Two questions share a name. Rename one under Survey Questions, or save as a draft.
+                    {isPublishedSurvey
+                      ? "Two questions share a name. Rename one under Survey Questions."
+                      : "Two questions share a name. Rename one under Survey Questions, or save as a draft."}
                   </Text>
                 )}
                 <Button
@@ -1063,6 +1068,7 @@ export default function SurveyForm({
         isOpen={isBuilderOpen}
         onClose={() => setIsBuilderOpen(false)}
         initialJson={currentJson}
+        isPublished={isPublishedSurvey}
         onSave={(json) => setValue("json", json, { shouldDirty: true, shouldValidate: true })}
       />
 
