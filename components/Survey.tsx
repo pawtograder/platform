@@ -97,8 +97,12 @@ export default function SurveyComponent({
   // per-locale values included.
   useLayoutEffect(() => {
     if (title) {
+      // SurveyJS fills "{name}" in its strings with the answer to question `name`. The
+      // database title is plain text, so show it unprocessed, as the survey list does.
+      survey.locTitle.onGetTextCallback = (processed, unprocessed) => unprocessed ?? processed;
       survey.title = title;
     } else {
+      survey.locTitle.onGetTextCallback = (processed) => processed;
       survey.locTitle.setJson(JSON.parse(surveyJsonKey)?.title);
     }
   }, [survey, surveyJsonKey, title]);
