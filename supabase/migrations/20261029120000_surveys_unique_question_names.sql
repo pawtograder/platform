@@ -21,7 +21,8 @@
 --   * each dynamic panel's templateElements are a scope of their own (their answers are stored
 --     per panel, inside the dynamic panel's value);
 --   * a panel's own name holds no answer and is not counted;
---   * names are compared after trimming whitespace, as SurveyJS trims them on load.
+--   * names are compared after trimming whitespace the way JavaScript's trim() does (Unicode
+--     spaces included), as SurveyJS trims them on load.
 --
 -- Rollback: DROP TRIGGER IF EXISTS surveys_reject_duplicate_question_names ON public.surveys;
 
@@ -88,8 +89,14 @@ BEGIN
       CONTINUE;
     END IF;
 
+    -- The characters JavaScript's trim() removes, which is what SurveyJS trims names with:
+    -- ASCII whitespace plus the Unicode space separators, line and paragraph separators and
+    -- the byte order mark.
     v_name := CASE jsonb_typeof(v_el -> 'name')
-      WHEN 'string' THEN btrim(v_el ->> 'name', E' \t\n\r\f\v')
+      WHEN 'string' THEN btrim(
+        v_el ->> 'name',
+        E'\t\n\u000B\f\r                  　﻿'
+      )
       WHEN 'number' THEN v_el ->> 'name'
       ELSE NULL
     END;
