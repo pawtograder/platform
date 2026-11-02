@@ -82,7 +82,7 @@ let classId: number | undefined;
 /** One class and assignment for every case; one repository row per student repo. */
 async function seedRepository(
   fullName: string,
-  fromSha: string,
+  fromSha: string | null,
   syncedRepoSha: string,
   toSha: string
 ): Promise<number> {
@@ -104,7 +104,7 @@ async function seedRepository(
   return Number(
     await sql(`
     insert into public.repositories (assignment_id, class_id, repository, synced_handout_sha, synced_repo_sha, desired_handout_sha)
-      select a.id, a.class_id, '${fullName}', '${fromSha}', '${syncedRepoSha}', '${toSha}'
+      select a.id, a.class_id, '${fullName}', ${fromSha ? `'${fromSha}'` : "null"}, '${syncedRepoSha}', '${toSha}'
       from public.assignments a where a.class_id = ${classId} and a.slug = 'hw'
     returning id`)
   );
@@ -113,7 +113,7 @@ async function seedRepository(
 function envelope(
   repositoryId: number,
   fullName: string,
-  fromSha: string,
+  fromSha: string | null,
   toSha: string,
   extra: Record<string, unknown> = {}
 ) {
@@ -156,12 +156,18 @@ interface Case {
 const BEFORE = { "README.md": "handout v1\n", "src/Main.java": "class Main {}\n" };
 const AFTER = { "README.md": "handout v1\n", "src/Main.java": "class Main {}\n", "src/New.java": "class New {}\n" };
 
-async function setUp(students: string[]): Promise<Case> {
+/**
+ * `recorded: false` seeds rows with no `synced_handout_sha` and messages with no `from_sha`, so
+ * the handler's direction check answers "forward" without asking GitHub. The cases that time a
+ * deadline use it, so the deadline is not spent in octokit's retries of that request.
+ */
+async function setUp(students: string[], opts: { recorded?: boolean } = {}): Promise<Case> {
   await resetDb();
   const fx = await GitFixture.create("wp5-");
   const ctrl = `${fx.root}/ctrl`;
   await Deno.mkdir(ctrl, { recursive: true });
-  // Stalls a push while `slow-push` exists; records each push's start.
+  // Stalls a push while `slow-push` exists, fails it with the stderr in `push-fail` when that
+  // exists, and records each push's start.
   await Deno.writeTextFile(
     `${ctrl}/git-wrapper.sh`,
     `#!/bin/sh
@@ -169,6 +175,7 @@ for a in "$@"; do
   if [ "$a" = push ]; then
     echo "$$" >> "${ctrl}/push-started"
     while [ -f "${ctrl}/slow-push" ]; do sleep 1; done
+    if [ -f "${ctrl}/push-fail" ]; then cat "${ctrl}/push-fail" >&2; exit 128; fi
     break
   fi
 done
@@ -183,7 +190,7 @@ exec /usr/bin/git "$@"
   for (const name of students) {
     const repo = await fx.createRepo(name);
     const S = await repo.commitOn("main", BEFORE, { message: "Initial commit\n" });
-    map.set(name, { repo, S, id: await seedRepository(name, F, S, H) });
+    map.set(name, { repo, S, id: await seedRepository(name, opts.recorded === false ? null : F, S, H) });
   }
   return { fx, ctrl, template, F, H, students: map };
 }
@@ -571,35 +578,116 @@ Deno.test(
   }
 );
 
-Deno.test("a job past its deadline has its git children killed and is retried", NO_SANITIZE, async () => {
-  const name = "org/student-deadline";
-  const c = await setUp([name]);
+/** Rows of the two tables the generic error path writes when it opens a circuit. */
+async function circuitTrace(): Promise<{ breakers: number; errors: number }> {
+  return {
+    breakers: Number(await sql(`select count(*) from public.github_circuit_breakers`)),
+    errors: Number(await sql(`select count(*) from public.github_async_errors`))
+  };
+}
+
+/**
+ * A git failure that says nothing about GitHub's health (build plan WP5 review, item 4): the
+ * job records why on the row and leaves its message for redelivery. No requeue, no circuit, and
+ * the read cap dead-letters it. `fail` makes the push fail; `read_ct` starts at 4 so the first
+ * attempt is the fifth read and the redelivery the sixth, which the cap refuses.
+ */
+async function redeliveryCase(
+  name: string,
+  settings: Record<string, number>,
+  fail: (c: Case) => Promise<void>,
+  expectKind: string,
+  check: (c: Case) => Promise<void> = () => Promise.resolve()
+): Promise<void> {
+  const c = await setUp([name], { recorded: false });
   const s = c.students.get(name)!;
-  await Deno.writeTextFile(`${c.ctrl}/slow-push`, "");
-  const msgId = await send("handout_sync", envelope(s.id, name, c.F, c.H));
+  await fail(c);
+  const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+  await sql(`update pgmq.q_handout_sync set read_ct = 4 where msg_id = ${msgId}`);
   const w = await startWorker(c, {
-    // Long enough to reach the push: the handler's direction check spends ~14 s in octokit's
-    // retries before its (loopback-only) request to GitHub is reported as failed.
-    HANDOUT_SYNC_JOB_DEADLINE_SECONDS: 25,
-    HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 30,
-    HANDOUT_SYNC_HEARTBEAT_SECONDS: 5
+    HANDOUT_SYNC_VISIBILITY_TIMEOUT_SECONDS: 10,
+    HANDOUT_SYNC_HEARTBEAT_SECONDS: 2,
+    ...settings
   });
   try {
-    await waitFor("the push to start", 60_000, () => pushStarted(c));
-    assert((await processesUnder(c.fx.root)).length > 0, "the stalled push is running");
-    // processEnvelope's ordinary retry: the original is archived and a delayed copy is queued.
+    await waitFor("the first attempt to finish", 90_000, async () => events(w, "job finished").length === 1);
+    await check(c);
+    // Left in the queue, not archived and not replaced by a delayed copy.
+    assertEquals(
+      (await queued("handout_sync")).map((m) => [m.msg_id, m.read_ct]),
+      [[msgId, 5]]
+    );
+    assertEquals((await archived("handout_sync")).length, 0);
+    assertEquals(await circuitTrace(), { breakers: 0, errors: 0 }, "no circuit opened, no error counted");
+    const row = JSON.parse(await repoRow(s.id));
+    assertEquals([row.sync_data.status, row.sync_data.error_kind, row.sync_data.msg_id], ["error", expectKind, msgId]);
+    assertEquals(await s.repo.ref(`refs/heads/sync-to-${c.H.slice(0, 7)}`), null, "nothing was pushed");
+
+    // Redelivered after the VT as read 6, which the cap sends to handout_sync_dlq.
+    await waitFor("the redelivery to dead-letter", 60_000, async () => (await queued("handout_sync_dlq")).length === 1);
+    assertEquals(
+      (await archived("handout_sync")).map((m) => [m.msg_id, m.read_ct]),
+      [[msgId, 6]]
+    );
+    assertEquals((await queued("handout_sync")).length, 0);
+    assertEquals(await circuitTrace(), { breakers: 0, errors: 0 });
+    assertEquals(events(w, "job started").length, 2, "one attempt, then the capped redelivery");
+  } finally {
+    await stopWorker(w);
+    await tearDown(c);
+  }
+}
+
+Deno.test(
+  "a job past its deadline: git killed, error on the row, redelivered by VT, no circuit, capped",
+  NO_SANITIZE,
+  async () => {
+    await redeliveryCase(
+      "org/student-deadline",
+      { HANDOUT_SYNC_JOB_DEADLINE_SECONDS: 5 },
+      (c) => Deno.writeTextFile(`${c.ctrl}/slow-push`, ""),
+      "deadline_exceeded",
+      async (c) => {
+        assert(await pushStarted(c), "the deadline hit mid-push");
+        assertEquals(await processesUnder(c.fx.root), [], "no orphan git, and no sleeping push, remains");
+      }
+    );
+  }
+);
+
+Deno.test("a full disk: error on the row, redelivered by VT, no circuit, capped", NO_SANITIZE, async () => {
+  await redeliveryCase(
+    "org/student-enospc",
+    {},
+    (c) =>
+      Deno.writeTextFile(`${c.ctrl}/push-fail`, "fatal: unable to write new index file: No space left on device\n"),
+    "disk_full"
+  );
+});
+
+Deno.test("a network failure still takes the generic path: circuit opened, delayed requeue", NO_SANITIZE, async () => {
+  const name = "org/student-network";
+  const c = await setUp([name], { recorded: false });
+  const s = c.students.get(name)!;
+  await Deno.writeTextFile(
+    `${c.ctrl}/push-fail`,
+    "error: RPC failed; curl 56 Recv failure: Connection reset by peer\n"
+  );
+  const msgId = await send("handout_sync", envelope(s.id, name, null, c.H));
+  const w = await startWorker(c, {});
+  try {
     await waitFor("the job to fail and be requeued", 60_000, async () => (await archived("handout_sync")).length === 1);
-    assertEquals(await processesUnder(c.fx.root), [], "no orphan git, and no sleeping push, remains");
     assertEquals((await archived("handout_sync"))[0].msg_id, msgId);
     const q = await queued("handout_sync");
     assertEquals(q.length, 1);
     assertEquals(q[0].message.retry_count, 1);
     // processEnvelope's generic path: a 30 s delay behind the org/method circuit it just opened.
     assert(new Date(q[0].vt).getTime() > Date.now() + 15_000, "the retry is delayed");
+    const trace = await circuitTrace();
+    assert(trace.breakers > 0 && trace.errors > 0, `circuit opened and error counted: ${JSON.stringify(trace)}`);
     const row = JSON.parse(await repoRow(s.id));
     assertEquals(row.sync_data.status, "error");
-    assert(String(row.sync_data.last_sync_error).includes("deadline"), row.sync_data.last_sync_error);
-    assertEquals(await s.repo.ref(`refs/heads/sync-to-${c.H.slice(0, 7)}`), null, "nothing was pushed");
+    assertEquals(row.sync_data.error_kind, undefined);
   } finally {
     await stopWorker(w);
     await tearDown(c);
@@ -694,3 +782,30 @@ Deno.test(
     }
   }
 );
+
+Deno.test("a shadow copy of a fork_merge_upstream sync is skipped, recorded and archived", NO_SANITIZE, async () => {
+  const name = "org/student-shadow-fork";
+  const c = await setUp([name]);
+  const s = c.students.get(name)!;
+  const rowBefore = await repoRow(s.id);
+  const shadow = envelope(s.id, name, c.F, c.H, { shadow: true });
+  Object.assign(shadow.args, { synced_repo_sha: s.S, sync_strategy: "fork_merge_upstream" });
+  const msgId = await send("handout_sync", shadow);
+  const w = await startWorker(c, {});
+  try {
+    await waitFor(
+      "the shadow message to be archived",
+      60_000,
+      async () => (await archived("handout_sync")).length === 1
+    );
+    assertEquals(
+      await sqlJson(`select msg_id, predicted_tree, unresolved, error from public.handout_sync_shadow_results`),
+      [{ msg_id: msgId, predicted_tree: null, unresolved: null, error: "skipped: fork_merge_upstream" }]
+    );
+    assertEquals(await tokens(c), [], "nothing planned: no token minted");
+    assertEquals(await repoRow(s.id), rowBefore);
+  } finally {
+    await stopWorker(w);
+    await tearDown(c);
+  }
+});

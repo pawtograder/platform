@@ -59,7 +59,7 @@ import {
   type SyncJobContext,
   withSyncJob
 } from "./engine.ts";
-import { GitSyncError, GitSyncTerminalError } from "./errors.ts";
+import { type GitFailureKind, GitSyncError, GitSyncTerminalError } from "./errors.ts";
 import type { GitIdentity, RemoteConfig } from "./runGit.ts";
 import { TemplateCache } from "./templateCache.ts";
 import { validateRepoFullName, validateSha } from "./validate.ts";
@@ -376,13 +376,37 @@ export async function syncRepositoryToHandoutGit(
     console.trace(error);
     if (error instanceof TerminalSyncError) scope?.setTag("terminal_sync_reason", error.reason);
     deps.captureException(error, scope);
+    const redeliver =
+      error instanceof GitSyncError && error.retryable && REDELIVERY_KINDS.has(error.kind) ? error.kind : undefined;
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
-      terminal_reason: error instanceof TerminalSyncError ? error.reason : undefined
+      terminal_reason: error instanceof TerminalSyncError ? error.reason : undefined,
+      redeliver_kind: redeliver
     };
   }
 }
+
+/**
+ * Retryable engine failures that say nothing about GitHub's health, so they must not reach the
+ * handler's generic error path, whose requeue opens the org's `sync_repo_to_handout` circuit. The
+ * handler records the kind on the row and the message comes back after one visibility timeout;
+ * the worker's read cap (`HANDOUT_SYNC_MAX_READ_COUNT`) dead-letters one that keeps failing.
+ *
+ * Not listed, so they keep the generic path: `network`, `auth_failed` and `remote_repo_not_found`,
+ * which are about GitHub or the installation, and `unfetchable`, which `toSyncError` turns
+ * terminal after five retries counted by `retry_count`.
+ */
+export const REDELIVERY_KINDS: ReadonlySet<GitFailureKind> = new Set<GitFailureKind>([
+  "deadline_exceeded",
+  "disk_full",
+  "lease_rejected",
+  "reset_check_mismatch",
+  "spawn_failed",
+  "output_cap_exceeded",
+  "git_failed",
+  "timeout"
+]);
 
 /** What `prepareGitJob` hands to the git work: validated names, the student octokit, the context. */
 interface PreparedGitJob {

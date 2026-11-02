@@ -88,12 +88,18 @@ export interface WorkerConfig {
 /**
  * How long a job may keep its slot after its deadline fired. The abort kills git children at
  * once; this bounds the REST and database calls that run after them. Past it, the job is fenced
- * and its slot is freed, and its message comes back after one VT.
+ * and its slot is freed, and its message comes back after one VT. The heartbeat keeps running
+ * until then, so a job holds its message for at most the §3.1 deadline plus this.
  */
-const DEADLINE_SETTLE_MS = 30_000;
+export const DEADLINE_SETTLE_MS = 30_000;
 
-/** After SIGTERM's grace, how long to wait for aborted jobs to reap their git children. */
-const SHUTDOWN_ABORT_SETTLE_MS = 15_000;
+/**
+ * After SIGTERM's grace, how long to wait for aborted jobs to reap their git children: runGit's
+ * 2 s SIGTERM-to-SIGKILL escalation, its 2 s pipe drain, and the fenced error path's refused
+ * writes. Spec §3.1's budget: HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS (240) + this (15) stays under
+ * terminationGracePeriodSeconds (300), so the kubelet's SIGKILL lands after the cleanup, not in it.
+ */
+export const SHUTDOWN_ABORT_SETTLE_MS = 15_000;
 
 /** `/healthz` fails once the loop has not turned for this long. */
 const HEALTH_STALE_MS = 60_000;
@@ -491,6 +497,10 @@ export class HandoutSyncWorker {
     let prediction: ShadowPrediction;
     if (envelope.method !== "sync_repo_to_handout") {
       prediction = shadowError(`a shadow copy of ${envelope.method} has nothing to predict`);
+    } else if (args.sync_strategy === "fork_merge_upstream") {
+      // The REST job merges the fork's upstream through GitHub and opens no template PR, so there
+      // is no git-built tree to compare it with.
+      prediction = shadowError("skipped: fork_merge_upstream");
     } else if (message.read_ct > this.#config.maxReadCount) {
       prediction = shadowError(
         `read ${message.read_ct} times without finishing (cap ${this.#config.maxReadCount}); the worker was ` +

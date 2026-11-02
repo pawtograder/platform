@@ -2420,6 +2420,37 @@ export async function processEnvelope(
               });
               return true;
             }
+            // A git failure about this job alone (a deadline, a full disk, a lost lease): nothing
+            // here says GitHub is unhealthy, so it must not reach the generic path below, whose
+            // requeue opens the `<org>:sync_repo_to_handout` circuit and pauses handout delivery
+            // for the whole org over one slow repository. Record why on the row, guarded like
+            // every other write and keeping this message's marker, and return false WITHOUT
+            // archiving or requeueing: the message comes back after its visibility timeout, and
+            // the handout-sync worker's read cap dead-letters one that keeps failing. Only the git
+            // path sets redeliver_kind.
+            if (result.redeliver_kind) {
+              scope.setTag("sync_redeliver_kind", result.redeliver_kind);
+              const applied = await applyRepositoryUpdate(
+                {
+                  sync_data: {
+                    ...carriedPr,
+                    last_sync_attempt: new Date().toISOString(),
+                    last_sync_error: result.error ?? result.redeliver_kind,
+                    status: "error",
+                    error_kind: result.redeliver_kind,
+                    msg_id: meta.msg_id,
+                    from_sha,
+                    to_sha
+                  }
+                },
+                { requireOwnMarker: true }
+              );
+              if (!applied) return await retireStaleSync();
+              console.warn(
+                `[sync] ${repository_full_name}: ${result.redeliver_kind}; leaving msg_id=${meta.msg_id} for redelivery`
+              );
+              return false;
+            }
             throw new Error(result.error || "Sync failed");
           }
 

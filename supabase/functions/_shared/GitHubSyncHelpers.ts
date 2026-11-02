@@ -191,6 +191,15 @@ export interface SyncResult {
    * a stable code, not a message -- so the caller can branch per case.
    */
   terminal_reason?: string;
+  /**
+   * Set by the git path only, when the failure is about this job and says nothing about
+   * GitHub's health: a deadline, a full disk, a lost lease, a git child that failed locally
+   * (`REDELIVERY_KINDS` in gitSync/syncEntry.ts). The value is the engine's error kind. The
+   * handler records it on the row and leaves the message for pgmq to redeliver after its
+   * visibility timeout, instead of the generic path's requeue, which opens the org's
+   * `sync_repo_to_handout` circuit and so pauses every handout sync in the org over one repo.
+   */
+  redeliver_kind?: string;
 }
 
 // Redis client for caching. createRedis picks ioredis (REDIS_URL) or

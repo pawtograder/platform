@@ -24,6 +24,7 @@ const {
   DEFAULT_MAX_REPO_KIB,
   handoutSyncEngineFor,
   planRepositoryToHandoutGit,
+  REDELIVERY_KINDS,
   SHADOW_STUDENT_TOKEN_PERMISSIONS,
   resetBotIdentityForTesting,
   SYNC_TOKEN_PERMISSIONS,
@@ -1220,4 +1221,38 @@ gitTest("shadow plan: a terminal refusal is the prediction's error, not a throw"
     assertEquals([prediction.predicted_tree, prediction.unresolved], [null, null]);
     assertMatch(String(prediction.error), /^template_is_solution_repo: /);
   });
+});
+
+/** A git stand-in that fails every push with `stderr`, and runs the real git otherwise. */
+async function failingPushGit(fx: GitFixture, stderr: string): Promise<string> {
+  const path = `${fx.root}/failing-push-git.sh`;
+  await Deno.writeTextFile(
+    path,
+    `#!/bin/sh\nfor a in "$@"; do if [ "$a" = push ]; then printf '%s\\n' '${stderr}' >&2; exit 128; fi; done\nexec /usr/bin/git "$@"\n`
+  );
+  await Deno.chmod(path, 0o755);
+  return path;
+}
+
+gitTest("a local git failure is marked for redelivery; a network failure is not", async () => {
+  assertEquals([...REDELIVERY_KINDS].sort(), [
+    "deadline_exceeded",
+    "disk_full",
+    "git_failed",
+    "lease_rejected",
+    "output_cap_exceeded",
+    "reset_check_mismatch",
+    "spawn_failed",
+    "timeout"
+  ]);
+  for (const [stderr, kind] of [
+    ["fatal: unable to write new index file: No space left on device", "disk_full"],
+    ["error: RPC failed; curl 56 Recv failure: Connection reset by peer", undefined]
+  ] as const) {
+    await GitFixture.with(async (fx) => {
+      const w = await cleanWorld(fx);
+      const result = await harness(w, { gitBinary: await failingPushGit(fx, stderr) }).run();
+      assertEquals([result.success, result.terminal_reason, result.redeliver_kind], [false, undefined, kind], stderr);
+    });
+  }
 });
