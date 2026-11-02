@@ -18,8 +18,12 @@ import {
   shouldAutosaveResponse,
   type LoadedResponseState
 } from "@/lib/surveyResponseState";
+import { runWithTimeout, SurveyAutosaveQueue } from "@/lib/surveyAutosaveQueue";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
+// Upper bound on one write, autosave or Complete. A survey upsert normally takes well under a
+// second; past this the request is cancelled, so it cannot hold up the saves queued behind it.
+const SAVE_TIMEOUT_MS = 10_000;
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -60,21 +64,30 @@ export default function SurveyTakingPage() {
   // Which (survey, profile) pair responseStateRef describes, so a re-run of the loader effect
   // for the same response cannot silently discard what it learned.
   const responseStateKeyRef = useRef<string | null>(null);
-  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
-  // Fires the pending autosave immediately. Held in a ref so the unmount
-  // cleanup can flush rather than merely cancel: `textUpdateMode = "onTyping"`
-  // restarts the debounce on every keystroke, so a student who navigates away
-  // while typing has an unwritten answer sitting in the timer.
-  const flushAutosaveRef = useRef<(() => void) | null>(null);
+  // Holds the newest unsaved answers and writes them one at a time, so a slow older write can never
+  // land after a newer one. Complete pauses it and waits for the write in flight.
+  const autosaveQueueRef = useRef<SurveyAutosaveQueue<ResponseData> | null>(null);
+  // The queue outlives renders, so it reads the current save function and guards through refs.
+  const saveDraftRef = useRef<(responseData: ResponseData, signal: AbortSignal) => Promise<void>>(async () => {});
+  const canAutosaveRef = useRef<() => boolean>(() => false);
 
   useEffect(() => {
-    return () => {
-      if (autosaveTimerRef.current) {
-        clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
-        flushAutosaveRef.current?.();
+    const queue = new SurveyAutosaveQueue<ResponseData>({
+      save: (responseData, { signal }) => saveDraftRef.current(responseData, signal),
+      canSave: () => canAutosaveRef.current(),
+      debounceMs: AUTOSAVE_DEBOUNCE_MS,
+      timeoutMs: SAVE_TIMEOUT_MS,
+      onError: (error) => {
+        console.error("Error auto-saving response:", error);
       }
+    });
+    autosaveQueueRef.current = queue;
+    return () => {
+      // Flush rather than merely cancel: `textUpdateMode = "onTyping"` restarts the debounce on
+      // every keystroke, so a student who navigates away while typing has an unwritten answer
+      // waiting for it.
+      queue.flush();
+      if (autosaveQueueRef.current === queue) autosaveQueueRef.current = null;
     };
   }, []);
 
@@ -173,7 +186,7 @@ export default function SurveyTakingPage() {
 
   // Save response helper using controller client
   const saveResponseToDb = useCallback(
-    async (responseData: ResponseData, isSubmitted: boolean) => {
+    async (responseData: ResponseData, isSubmitted: boolean, signal: AbortSignal) => {
       if (!surveyId || !private_profile_id) return;
 
       // An autosave never downgrades a submitted response: on an editable survey it persists
@@ -205,6 +218,7 @@ export default function SurveyTakingPage() {
           onConflict: "survey_id,profile_id"
         })
         .select()
+        .abortSignal(signal)
         .single();
 
       if (error) {
@@ -228,22 +242,18 @@ export default function SurveyTakingPage() {
 
       setIsSubmitting(true);
       isSubmittingRef.current = true;
-      // Cancel any pending autosave and wait out the in-flight chain so the
-      // submit upsert is guaranteed to be the last write. Saves still queued in
-      // the chain see isSubmittingRef and skip.
-      if (autosaveTimerRef.current) {
-        clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
-      }
-      flushAutosaveRef.current = null;
+      // Stop the autosave queue and wait out the write in flight, so the submit upsert is the
+      // last write. The wait is bounded: every write gives up after SAVE_TIMEOUT_MS.
+      const autosaveQueue = autosaveQueueRef.current;
+      autosaveQueue?.pause();
       try {
-        if (autosaveInFlightRef.current) {
-          await autosaveInFlightRef.current.catch(() => {});
-        }
-        await saveResponseToDb(surveyData, true);
+        await autosaveQueue?.whenIdle();
+        await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
         responseStateRef.current = "submitted";
+        // The submit carried the newest answers; a draft snapshot taken before it must not follow.
+        autosaveQueue?.discardPending();
 
         toaster.create({
           title: "Survey Submitted",
@@ -265,56 +275,42 @@ export default function SurveyTakingPage() {
       } finally {
         setIsSubmitting(false);
         isSubmittingRef.current = false;
+        autosaveQueue?.resume();
       }
     },
     [private_profile_id, surveyId, course_id, router, saveResponseToDb]
   );
 
+  const canAutosave = useCallback(
+    () =>
+      // Rechecked when a save's turn comes: Complete may have started, or the response may have
+      // been submitted, while it waited behind a slow save.
+      !isSubmittingRef.current &&
+      shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing }) &&
+      // A row that could not be read gets no draft write at all (see resolveResponseWriteFlags).
+      !resolveResponseWriteFlags({ isSubmitted: false, loadedState: responseStateRef.current }).skip,
+    [allowResponseEditing]
+  );
+  canAutosaveRef.current = canAutosave;
+  saveDraftRef.current = async (responseData, signal) => {
+    await saveResponseToDb(responseData, false, signal);
+  };
+
   const handleValueChanged = useCallback(
     (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
       if (!private_profile_id || !surveyId) return;
-      if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
       // Only a submit in flight blocks autosave outright. An already-submitted response does
       // not: on an editable survey the student may still be changing answers, and
       // saveResponseToDb keeps that write in the submitted state rather than dropping it.
-      if (isSubmittingRef.current) return;
+      if (!canAutosave()) return;
 
-      // Extract only the survey data from the model, not the entire model object
-      const surveyData = surveyModel.data;
-
-      // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke
-      // and again on blur; only the trailing edit needs persisting.
-      const runAutosave = () => {
-        autosaveTimerRef.current = null;
-        flushAutosaveRef.current = null;
-        if (isSubmittingRef.current) return;
-        // Chained on the previous save so writes reach the server in the order they were made:
-        // a slow older upsert landing after a newer one would put the older answers back.
-        // autosaveInFlightRef is the tail of the chain, which is what Complete waits on.
-        const inFlight = (autosaveInFlightRef.current ?? Promise.resolve())
-          .then(() => {
-            // Rechecked when the save's turn comes: Complete may have started, or the response
-            // may have been submitted, while this one waited behind a slow save.
-            if (isSubmittingRef.current) return;
-            if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
-            return saveResponseToDb(surveyData, false);
-          })
-          .catch((error) => {
-            console.error("Error auto-saving response:", error);
-            // Don't show error toast for auto-save failures to avoid spam
-          });
-        autosaveInFlightRef.current = inFlight;
-        void inFlight.finally(() => {
-          if (autosaveInFlightRef.current === inFlight) autosaveInFlightRef.current = null;
-        });
-      };
-
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-      flushAutosaveRef.current = runAutosave;
-      autosaveTimerRef.current = setTimeout(runAutosave, AUTOSAVE_DEBOUNCE_MS);
+      // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke and again on blur;
+      // only the trailing edit needs persisting. Extract only the survey data from the model,
+      // not the entire model object.
+      autosaveQueueRef.current?.schedule(surveyModel.data);
     },
-    [private_profile_id, surveyId, allowResponseEditing, saveResponseToDb]
+    [private_profile_id, surveyId, canAutosave]
   );
 
   const handleBackToSurveys = useCallback(() => {
