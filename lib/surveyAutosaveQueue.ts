@@ -2,10 +2,12 @@
  * Debounced, serialized autosave for a student's survey response, used by
  * `app/course/[course_id]/surveys/[survey_id]/page.tsx`.
  *
- * It keeps one slot: the newest snapshot of the answers that the server has not confirmed. At most
- * one save request is in flight, so the answers reach the server in the order the student gave them,
- * and every request carries the newest snapshot, so an older snapshot is never sent after a newer
- * one.
+ * It keeps one slot: the newest snapshot of the answers that the server has not confirmed. One save
+ * request is in flight at a time, so the answers reach the server in the order the student gave
+ * them, and every request carries the newest snapshot, so an older snapshot is never sent after a
+ * newer one. The exception is the page being hidden or unloaded while a request is in flight: the
+ * newest snapshot then goes out at once, and again afterwards if the page is still there (see
+ * `sendAheadOnLeave`).
  *
  * Every request has a time limit. A request that never settles used to hold up the whole chain, and
  * Complete waits for that chain, so one stuck request blocked every later save and the submission.
@@ -95,12 +97,19 @@ export function retryDelayMs(retry: number, policy: RetryPolicy): number {
   return Math.min(policy.baseDelayMs * 2 ** (retry - 1), policy.maxDelayMs);
 }
 
+type SaveRequest = { done: Promise<void>; version: number; keepalive: boolean };
+
 export class SurveyAutosaveQueue<T> {
   private readonly options: SurveyAutosaveQueueOptions<T>;
   /** The newest snapshot the server has not confirmed, with the edit count it was taken at. */
   private latest: { value: T; version: number } | null = null;
   private version = 0;
-  private inFlight: Promise<void> | null = null;
+  private inFlight: SaveRequest | null = null;
+  /**
+   * A request {@link flush} sent on leave while `inFlight` was still running. Nothing else starts
+   * until both are done, and its success does not count as saved: see {@link sendAheadOnLeave}.
+   */
+  private sentOnLeave: SaveRequest | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** Failed attempts in a row since the last success, edit or retryNow(): what the backoff counts. */
@@ -137,14 +146,14 @@ export class SurveyAutosaveQueue<T> {
 
   /**
    * Sends the pending snapshot now instead of at the end of the debounce or retry delay. With
-   * `keepalive` (the page is being hidden or unloaded) the request is asked to outlive the page. A
-   * request already in flight is not overtaken: the pending snapshot follows it, still with
-   * `keepalive`.
+   * `keepalive` (the page is being hidden or unloaded) the request is asked to outlive the page,
+   * and it goes out even if a request is already in flight: see {@link sendAheadOnLeave}.
    */
   flush(options: { keepalive?: boolean } = {}): void {
     if (options.keepalive && this.latest) this.keepaliveRequested = true;
     this.clearTimers();
-    this.run();
+    if (options.keepalive && (this.inFlight || this.sentOnLeave)) this.sendAheadOnLeave();
+    else this.run();
   }
 
   /** The network is back, or the student asked: try the pending snapshot now, with fresh retries. */
@@ -198,7 +207,7 @@ export class SurveyAutosaveQueue<T> {
    * Call {@link pause} first if nothing new may start afterwards.
    */
   async whenIdle(): Promise<void> {
-    while (this.inFlight) await this.inFlight;
+    while (this.inFlight || this.sentOnLeave) await (this.inFlight ?? this.sentOnLeave)?.done;
   }
 
   private isOnline(): boolean {
@@ -231,8 +240,40 @@ export class SurveyAutosaveQueue<T> {
     this.retryTimer = null;
   }
 
+  /**
+   * The page is being hidden or unloaded while a request is in flight. An unloading page never
+   * sees that request finish, so the snapshot waiting behind it would never be sent. Send it now,
+   * with keepalive, unless a keepalive request in flight already carries it.
+   *
+   * The two requests may reach the database in either order, so this one does not count as
+   * saved. If the page stays open, the snapshot stays pending and goes out once more after both
+   * are done, which keeps the newest answers last.
+   */
+  private sendAheadOnLeave(): void {
+    const snapshot = this.latest;
+    if (this.paused || this.sentOnLeave || !snapshot) return;
+    if (this.inFlight?.keepalive && this.inFlight.version === snapshot.version) return;
+    // A refused snapshot is dropped by run() once nothing is in flight.
+    if (!this.options.canSave()) return;
+    const done = runWithTimeout(
+      (signal) => this.options.save(snapshot.value, { signal, keepalive: true }),
+      this.options.timeoutMs
+    ).then(
+      () => {},
+      (error) => this.options.onError?.(error)
+    );
+    this.sentOnLeave = {
+      version: snapshot.version,
+      keepalive: true,
+      done: done.finally(() => {
+        this.sentOnLeave = null;
+        this.afterWrite();
+      })
+    };
+  }
+
   private run(): void {
-    if (this.paused || this.inFlight || !this.latest) return;
+    if (this.paused || this.inFlight || this.sentOnLeave || !this.latest) return;
     if (!this.options.canSave()) {
       this.latest = null;
       this.keepaliveRequested = false;
@@ -252,10 +293,14 @@ export class SurveyAutosaveQueue<T> {
       () => this.succeeded(snapshot.version),
       (error) => this.failed(error)
     );
-    this.inFlight = write.finally(() => {
-      this.inFlight = null;
-      this.afterWrite();
-    });
+    this.inFlight = {
+      version: snapshot.version,
+      keepalive,
+      done: write.finally(() => {
+        this.inFlight = null;
+        this.afterWrite();
+      })
+    };
   }
 
   private succeeded(version: number): void {
@@ -279,6 +324,8 @@ export class SurveyAutosaveQueue<T> {
   }
 
   private afterWrite(): void {
+    // Called as each request finishes. Nothing new starts until both slots are free.
+    if (this.inFlight || this.sentOnLeave) return;
     if (this.paused || (this.disposed && this.unresolvedFailure)) return;
     if (!this.latest || this.debounceTimer) return;
     if (!this.unresolvedFailure) {
