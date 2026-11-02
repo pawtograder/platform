@@ -187,6 +187,40 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     expect(storageWrites.filter((write) => write.includes("Answered while offline"))).toEqual([]);
   });
 
+  test("a Complete that fails offline keeps the form, and succeeds once back online", async ({ page }) => {
+    const survey = await seedSurvey("Offline Complete Survey");
+    await loginAsUser(page, student, course);
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("Answer before going offline");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Answer before going offline", is_submitted: false });
+
+    await page.context().setOffline(true);
+    await page.getByRole("button", { name: "Complete" }).click();
+
+    // Back in the form with the answers, not on the thank-you screen, and told what happened.
+    await expect(input).toHaveValue("Answer before going offline");
+    await expect(input).toBeEditable();
+    await expect(page.getByRole("alert").filter({ hasText: "Your survey wasn't submitted" })).toBeVisible();
+
+    // The answers keep autosaving as a draft while the student is back in the form.
+    await input.fill("Changed after the failed Complete");
+    await expect(page.getByRole("status").filter({ hasText: OFFLINE_STATUS })).toBeVisible();
+    await page.context().setOffline(false);
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 15_000 })
+      .toEqual({ q1: "Changed after the failed Complete", is_submitted: false });
+
+    await page.getByRole("button", { name: "Complete" }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    await expect
+      .poll(() => storedResponse(survey.id))
+      .toEqual({ q1: "Changed after the failed Complete", is_submitted: true });
+  });
+
   // Holds the first draft write forever: the request is sent but never gets a response.
   const neverAnswerFirstWrite = async (page: Page) => {
     let writes = 0;
