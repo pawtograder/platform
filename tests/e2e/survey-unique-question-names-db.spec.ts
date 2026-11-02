@@ -316,6 +316,40 @@ test.describe("surveys whose questions share a name cannot be published", () => 
     expect((await readStored(id)).status).toBe("closed");
   });
 
+  test("a closed survey with duplicate names from before the check reopens only once they are renamed", async () => {
+    const id = await seedPublishedBeforeTheCheck("Closed before the check");
+    const { error: closeError } = await instructorClient
+      .from("surveys")
+      .update({ status: "closed" })
+      .eq("id", id)
+      .select("id");
+    expect(closeError, `closing must not be rejected: ${closeError?.message}`).toBeNull();
+
+    // Reopening is a publish like any other, so it is checked.
+    const { error: reopenError } = await instructorClient
+      .from("surveys")
+      .update({ status: "published" })
+      .eq("id", id)
+      .select("id");
+    expectDuplicateNameRejection(reopenError);
+    expect((await readStored(id)).status).toBe("closed");
+
+    // The questions of a closed survey may change, so the instructor can rename and reopen.
+    const { error: renameError } = await instructorClient
+      .from("surveys")
+      .update({ json: asFormWritesIt(UNIQUE_JSON) })
+      .eq("id", id)
+      .select("id");
+    expect(renameError, `renaming while closed must work: ${renameError?.message}`).toBeNull();
+    const { error: reopenFixedError } = await instructorClient
+      .from("surveys")
+      .update({ status: "published" })
+      .eq("id", id)
+      .select("id");
+    expect(reopenFixedError, `reopening with unique names must work: ${reopenFixedError?.message}`).toBeNull();
+    expect((await readStored(id)).status).toBe("published");
+  });
+
   test("copying a survey published with duplicates to another class, as the CLI does, is rejected", async () => {
     const id = await seedPublishedBeforeTheCheck("Copied by the CLI");
     const { data: source } = await supabase.from("surveys").select("*").eq("id", id).single();
