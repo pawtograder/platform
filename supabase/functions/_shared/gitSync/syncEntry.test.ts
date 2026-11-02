@@ -15,7 +15,7 @@ import type { SyncResult } from "../GitHubSyncHelpers.ts";
 import type { GitSyncDeps, SolutionRepos, SyncRepositoryToHandoutGitParams } from "./syncEntry.ts";
 import { withSyncJob } from "./engine.ts";
 import { TemplateCache } from "./templateCache.ts";
-import { GitFixture, R, shouldSkipRealGit, type Snapshot, T, text, world, type World } from "./testFixtures.ts";
+import { binary, GitFixture, R, shouldSkipRealGit, type Snapshot, T, text, world, type World } from "./testFixtures.ts";
 
 // GitHubWrapper, which syncEntry imports, builds a GitHub App at import time and needs a non-empty
 // private key. Nothing here authenticates. A static import would hoist above this line.
@@ -56,6 +56,7 @@ interface FakePr {
   merged_at: string | null;
   merge_commit_sha: string | null;
   head: { sha: string; ref: string };
+  body?: string;
 }
 
 type Call = { route: string; params: Record<string, unknown>; token?: string };
@@ -81,6 +82,14 @@ class FakeGitHub {
   compareCommits: unknown[] = [];
   /** Runs when a single PR is read, before the answer is built. Lets a test move the branch. */
   onGetPull?: (pr: FakePr) => Promise<void>;
+  /** Overrides `total_commits` in the compare answer, to model GitHub's 250-commit cap. */
+  compareTotal?: number;
+  /** Every PR create answers "No commits between", with no merged PR to explain it. */
+  noCommitsBetween = false;
+  /** The PR list fails with a 502. */
+  failList = false;
+  /** The next N PR lists answer empty, as if a concurrent job's PR were not visible yet. */
+  hiddenLists = 0;
 
   constructor(
     private readonly w: World,
@@ -102,9 +111,17 @@ class FakeGitHub {
       case "GET /users/{username}":
         return { data: { id: BOT_ID, login: params.username, type: "Bot" } };
       case "GET /repos/{owner}/{repo}/compare/{basehead}":
-        return { data: { total_commits: this.compareCommits.length, commits: this.compareCommits } };
+        return {
+          data: { total_commits: this.compareTotal ?? this.compareCommits.length, commits: this.compareCommits }
+        };
       case "GET /repos/{owner}/{repo}/pulls": {
+        if (this.failList) throw httpError(502, "Bad Gateway");
+        if (this.hiddenLists > 0) {
+          this.hiddenLists--;
+          return { data: [] };
+        }
         const branch = String(params.head).split(":")[1];
+        await this.followBranches();
         return {
           data: this.pulls
             .filter((p) => p.head.ref === branch)
@@ -116,6 +133,7 @@ class FakeGitHub {
         const branch = String(params.head);
         const head = await this.w.student.ref(`refs/heads/${branch}`);
         if (!head) throw httpError(422, "Validation Failed: head does not exist");
+        if (this.noCommitsBetween) throw httpError(422, `Validation Failed: No commits between main and ${branch}`);
         if (this.pulls.some((p) => p.head.ref === branch && p.state === "open")) {
           throw httpError(422, `Validation Failed: A pull request already exists for ${params.owner}:${branch}.`);
         }
@@ -129,13 +147,15 @@ class FakeGitHub {
           state: "open",
           merged_at: null,
           merge_commit_sha: null,
-          head: { sha: head, ref: branch }
+          head: { sha: head, ref: branch },
+          body: String(params.body)
         };
         this.pulls.push(pr);
         return { data: { number: pr.number, html_url: pr.html_url } };
       }
       case "GET /repos/{owner}/{repo}/pulls/{pull_number}": {
         const pr = this.pulls.find((p) => p.number === params.pull_number)!;
+        await this.followBranches();
         await this.onGetPull?.(pr);
         return { data: { number: pr.number, mergeable: this.mergeable, head: { sha: pr.head.sha } } };
       }
@@ -144,6 +164,11 @@ class FakeGitHub {
         if (params.sha !== pr.head.sha) throw httpError(409, "Head branch was modified");
         Object.assign(pr, { state: "closed", merged_at: "2026-11-02T00:00:00Z", merge_commit_sha: MERGE_SHA });
         return { data: { sha: MERGE_SHA, merged: true } };
+      }
+      case "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": {
+        const pr = this.pulls.find((p) => p.number === params.pull_number)!;
+        pr.body = String(params.body);
+        return { data: { number: pr.number } };
       }
       case "DELETE /repos/{owner}/{repo}/git/refs/{ref}":
         return { data: null };
@@ -154,6 +179,15 @@ class FakeGitHub {
 
   routes(): string[] {
     return this.calls.map((c) => c.route);
+  }
+
+  /** An open PR's head follows its branch, as on GitHub. */
+  private async followBranches(): Promise<void> {
+    for (const pr of this.pulls) {
+      if (pr.state !== "open") continue;
+      const head = await this.w.student.ref(`refs/heads/${pr.head.ref}`);
+      if (head) pr.head.sha = head;
+    }
   }
 }
 
@@ -234,6 +268,7 @@ function harness(
           gitBinary: opts.gitBinary,
           onSpawn: (argv) => {
             timeline.push("git");
+            if (argv.includes("push")) timeline.push("git push");
             if (held.sync > 0 || held.content > 0) spawnsUnderLimiter.push([...argv]);
           }
         }
@@ -398,9 +433,28 @@ gitTest("an open PR for the branch is reused, not recreated", async () => {
     h.gh.mergeable = false;
     const first = await h.run();
     assertEquals([first.pr_number, first.merged], [100, false]);
+    const rendered = h.gh.pulls[0].body;
+    h.gh.pulls[0].body = "an earlier attempt's body";
     const second = await h.run();
     assertEquals([second.pr_number, second.merged], [100, false]);
     assertEquals(h.gh.routes().filter((r) => r === "POST /repos/{owner}/{repo}/pulls").length, 1);
+    // The reused PR's body is rewritten to what this attempt renders.
+    assertEquals(h.gh.pulls[0].body, rendered);
+    assertEquals(h.gh.routes().filter((r) => r === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}").length, 1);
+  });
+});
+
+gitTest("a reused PR's body says what this attempt will do, not what the attempt that opened it would", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    h.gh.mergeable = false;
+    // The first attempt was told not to auto-merge, so its body says it will not be merged.
+    await h.run({ autoMerge: false });
+    assert(h.gh.pulls[0].body!.includes("It will NOT be merged automatically. Review it"));
+    const again = await h.run();
+    assertEquals([again.pr_number, again.merged], [100, false]);
+    assert(h.gh.pulls[0].body!.includes("It will be auto-merged if there are no conflicts."));
   });
 });
 
@@ -422,6 +476,144 @@ gitTest("the merge is pinned to the pushed commit: a student push before the mer
   });
 });
 
+gitTest("already in sync: main holds the handout's content at every touched path, so no push and no PR", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    // The student applied the handout's change by hand after the last sync.
+    const head = await w.student.commitOn(
+      "main",
+      { "a.txt": "two\n", "README.md": "readme\n", "img.bin": new Uint8Array([0, 1, 2, 3]) },
+      { message: "apply the handout by hand\n" }
+    );
+    const h = harness(w);
+    assertEquals(await h.run(), { success: true, no_changes: true, repo_head_sha: head });
+    assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), null, "nothing was pushed");
+    assert(!h.gh.routes().some((r) => r.startsWith("POST") || r.startsWith("PUT")), "no PR was opened");
+  });
+});
+
+gitTest("already in sync counts the files left to the student: one still differing means a PR", async () => {
+  await GitFixture.with(async (fx) => {
+    // A binary the student replaced is skipped outright, so it is not among the files the plan
+    // writes or merges; only the unresolved list names it.
+    const w = await world(fx, {
+      before: { "img.bin": binary(1), "b.txt": "bee\n" },
+      after: { "img.bin": binary(2), "b.txt": "bee2\n" },
+      student: (b) => ({ ...b, "img.bin": binary(3) })
+    });
+    // b.txt, the one file the sync writes, is already current at main; img.bin, left to the
+    // student, still is not.
+    await w.student.commitOn("main", { "img.bin": binary(3), "b.txt": "bee2\n" });
+    const h = harness(w);
+    const result = await h.run();
+    assertEquals([result.pr_number, result.merged, result.unresolved_paths], [100, false, ["img.bin"]]);
+  });
+});
+
+gitTest("'No commits between' with no merged PR reports no_changes with our commit as the head", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    h.gh.noCommitsBetween = true;
+    const result = await h.run();
+    const commit = await w.student.ref(`refs/heads/${branchFor(w)}`);
+    assert(commit && commit !== w.S);
+    assertEquals(result, { success: true, no_changes: true, repo_head_sha: commit });
+    assert(h.gh.routes().includes("DELETE /repos/{owner}/{repo}/git/refs/{ref}"), "the branch is cleaned up");
+  });
+});
+
+gitTest("'already exists' race: a PR another job opened after the lookup is found, refreshed and merged", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    h.gh.pulls.push({
+      number: 77,
+      html_url: `https://github.com/${R}/pull/77`,
+      state: "open",
+      merged_at: null,
+      merge_commit_sha: null,
+      head: { sha: w.S, ref: branchFor(w) },
+      body: "the other job's body"
+    });
+    // Both lookups (before the push and before the create) miss it.
+    h.gh.hiddenLists = 2;
+    const result = await h.run();
+    assertEquals([result.success, result.pr_number, result.merged, result.merge_sha], [true, 77, true, MERGE_SHA]);
+    assertEquals(h.gh.pulls.length, 1, "no second PR");
+    assert(h.gh.pulls[0].body!.startsWith("## Handout Update"), "the body was refreshed");
+  });
+});
+
+gitTest("a failed PR list is retryable and nothing is pushed", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    h.gh.failList = true;
+    const result = await h.run();
+    assertEquals([result.success, result.terminal_reason], [false, undefined]);
+    assert(result.error!.includes("Bad Gateway"));
+    assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), null);
+  });
+});
+
+gitTest("a PR closed without merging at our commit is not a merge: a new PR is opened, as REST does", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const h = harness(w);
+    h.gh.mergeable = false;
+    const first = await h.run();
+    assertEquals([first.pr_number, first.merged], [100, false]);
+    const commit = await w.student.ref(`refs/heads/${branchFor(w)}`);
+    // Someone closed it unmerged; its head is still our commit.
+    Object.assign(h.gh.pulls[0], { state: "closed" });
+    assertEquals(h.gh.pulls[0].head.sha, commit);
+    h.gh.mergeable = true;
+    const second = await h.run();
+    assertEquals([second.pr_number, second.merged, second.merge_sha], [101, true, MERGE_SHA]);
+  });
+});
+
+gitTest("sync_git_error_kind is tagged for every engine failure, terminal_sync_reason for terminals", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await cleanWorld(fx);
+    const spy = () => {
+      const tags: Record<string, string> = {};
+      const scope = { setTag: (k: string, v: string) => void (tags[k] = v), addBreadcrumb: () => {} };
+      return { tags, scope: scope as unknown as SyncRepositoryToHandoutGitParams["scope"] };
+    };
+
+    const retryable = spy();
+    await harness(w).run({ toSha: "e".repeat(40), retryCount: 1, scope: retryable.scope });
+    assertEquals(retryable.tags.sync_git_error_kind, "unfetchable");
+    assertEquals(retryable.tags.terminal_sync_reason, undefined);
+
+    const terminal = spy();
+    await harness(w).run({ toSha: "abc", scope: terminal.scope });
+    assertEquals(terminal.tags.sync_git_error_kind, "invalid_sync_input");
+    assertEquals(terminal.tags.terminal_sync_reason, "invalid_sync_input");
+
+    // A credential the remote refuses: git's own message, through a stand-in for the student fetch.
+    const which = await new Deno.Command("sh", { args: ["-c", "command -v git"] }).output();
+    const realGit = new TextDecoder().decode(which.stdout).trim();
+    const wrapper = `${fx.root}/git-auth-fail`;
+    await Deno.writeTextFile(
+      wrapper,
+      [
+        "#!/bin/sh",
+        `case "$*" in *student-a*) echo "fatal: Authentication failed for 'https://github.com/${R}.git/'" >&2; exit 128;; esac`,
+        `exec ${realGit} "$@"`,
+        ""
+      ].join("\n")
+    );
+    await Deno.chmod(wrapper, 0o755);
+    const auth = spy();
+    const result = await harness(w, { gitBinary: wrapper }).run({ scope: auth.scope });
+    assertEquals([result.success, result.terminal_reason], [false, undefined]);
+    assertEquals(auth.tags.sync_git_error_kind, "auth_failed");
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 // §5.9 matched pair
 // ---------------------------------------------------------------------------------------------
@@ -440,9 +632,13 @@ for (const branchDeletedOnMerge of [false, true]) {
         // GitHub merged it into main. The worker then died before writing the row.
         await w.student.setRef(
           "refs/heads/main",
-          await w.student.commit({}, { parents: [w.S, commit], message: "Merge pull request #100\n" })
+          await w.student.commit(
+            { "a.txt": "two\n", "README.md": "readme\n", "img.bin": new Uint8Array([0, 1, 2, 3]) },
+            { parents: [w.S, commit], message: "Merge pull request #100\n" }
+          )
         );
         if (branchDeletedOnMerge) await w.student.deleteRef(`refs/heads/${branchFor(w)}`);
+        const pushesBefore = h.timeline.filter((e) => e === "git push").length;
 
         const retry = await h.run({ retryCount: 1 });
         assertEquals(retry, {
@@ -454,7 +650,12 @@ for (const branchDeletedOnMerge of [false, true]) {
         });
         assertEquals(retry.no_changes, undefined);
         assertEquals(h.gh.routes().filter((r) => r === "POST /repos/{owner}/{repo}/pulls").length, 1);
-        assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), commit, "same commit, deterministically");
+        assertEquals(h.timeline.filter((e) => e === "git push").length, pushesBefore, "nothing was pushed");
+        assertEquals(
+          await w.student.ref(`refs/heads/${branchFor(w)}`),
+          branchDeletedOnMerge ? null : commit,
+          branchDeletedOnMerge ? "the auto-deleted branch is not recreated" : "the branch is untouched"
+        );
       });
     }
   );
@@ -469,17 +670,19 @@ gitTest("§8.2: two tokens, the student repo with three write permissions and th
     const w = await cleanWorld(fx);
     const h = harness(w);
     assertEquals((await h.run()).merged, true);
+    // The read-only template token first, so a template over the size limit stops the job before
+    // a token that can write to the student repo is minted.
     assertEquals(h.tokenRequests, [
+      { org: "org", repositories: ["handout"], permissions: { contents: "read" } },
       {
         org: "org",
         repositories: ["student-a"],
         permissions: { contents: "write", pull_requests: "write", workflows: "write" }
-      },
-      { org: "org", repositories: ["handout"], permissions: { contents: "read" } }
+      }
     ]);
     assertEquals(SYNC_TOKEN_PERMISSIONS, { contents: "write", pull_requests: "write", workflows: "write" });
     assertEquals(TEMPLATE_TOKEN_PERMISSIONS, { contents: "read" });
-    assertEquals(h.octokitTokens, [TOKEN, TEMPLATE_TOKEN]);
+    assertEquals(h.octokitTokens, [TEMPLATE_TOKEN, TOKEN]);
     // The template token makes exactly one REST call, the template's size; the student token the rest.
     const templateCalls = h.gh.calls.filter((c) => c.token === TEMPLATE_TOKEN);
     assertEquals(
@@ -593,8 +796,8 @@ gitTest("§8.2: a handout in another org syncs end to end with that org's instal
     assertEquals(
       h.tokenRequests.map((t) => [t.org, t.repositories, t.permissions]),
       [
-        ["org", ["student-a"], SYNC_TOKEN_PERMISSIONS],
-        ["other-org", ["handout"], { contents: "read" }]
+        ["other-org", ["handout"], { contents: "read" }],
+        ["org", ["student-a"], SYNC_TOKEN_PERMISSIONS]
       ]
     );
     const commit = (await student.ref(`refs/heads/${branchFor(w)}`))!;
@@ -680,9 +883,12 @@ gitTest("the limiters are held only for the PR calls, never during git", async (
     const end = h.timeline.lastIndexOf("content:end");
     assert(start >= 0 && inner > start, "both limiters are taken, the content limiter inside the sync limiter");
     assert(h.timeline.slice(0, start).includes("git"), "git ran before the limiters");
+    // Everything that creates, edits or merges a PR, and every PR read after the push. The one
+    // read before the push (the merged-PR check) runs without the limiters, between git calls.
+    const lastPush = h.timeline.lastIndexOf("git push");
     const prCalls = h.timeline
       .map((e, i) => [e, i] as const)
-      .filter(([e]) => e.startsWith("rest ") && (e.includes("/pulls") || e.includes("/merge")));
+      .filter(([e, i]) => e.startsWith("rest ") && (e.includes("/pulls") || e.includes("/merge")) && i > lastPush);
     assert(prCalls.length >= 3);
     for (const [e, i] of prCalls) assert(i > inner && i < end, `${e} ran outside the content limiter`);
   });
@@ -708,6 +914,13 @@ for (const which of ["student", "template"] as const) {
         h.gh.sizes.set(which === "student" ? R : T, 1001);
         assertTerminal(await h.run(), "repo_too_large");
         assert(!h.timeline.includes("git"), "nothing was fetched");
+        if (which === "template") {
+          assertEquals(
+            h.tokenRequests.map((t) => t.repositories),
+            [["handout"]],
+            "no student write token was minted"
+          );
+        }
       });
     }
   );
@@ -775,6 +988,38 @@ gitTest("§5.8: foreign commits on the sync branch are terminal sync_branch_not_
     assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), theirs, "their commit is still there");
   });
 });
+
+for (const [label, commits, total] of [
+  [
+    "a truncated compare (over GitHub's 250-commit cap)",
+    [
+      {
+        commit: { message: "Sync handout updates to 1234567", verification: { verified: false } },
+        author: { type: "Bot" },
+        committer: { login: `${APP_SLUG}[bot]`, type: "Bot" }
+      }
+    ],
+    300
+  ],
+  [
+    "an unattributed commit",
+    [{ commit: { message: "Sync handout updates to 1234567" }, author: null, committer: null }],
+    undefined
+  ]
+] as const) {
+  gitTest(`§5.8: ${label} on the sync branch is terminal sync_branch_not_ours`, async () => {
+    await GitFixture.with(async (fx) => {
+      const w = await cleanWorld(fx);
+      const there = await w.student.commit({ "a.txt": "x\n", "README.md": "readme\n" }, { parents: [w.S] });
+      await w.student.setRef(`refs/heads/${branchFor(w)}`, there);
+      const h = harness(w);
+      h.gh.compareCommits = [...commits];
+      h.gh.compareTotal = total;
+      assertTerminal(await h.run(), "sync_branch_not_ours");
+      assertEquals(await w.student.ref(`refs/heads/${branchFor(w)}`), there, "the branch is untouched");
+    });
+  });
+}
 
 for (const [label, missing, reason] of [
   ["H", "toSha", "handout_revision_missing"],
