@@ -208,7 +208,7 @@ function getRedisClient(): RedisClient | null {
 
 const syncLimiters = new Map<string, Bottleneck>();
 // Bottleneck limiter for sync operations - limit to 20 concurrent to avoid thrashing between multiple requests
-function getSyncLimiter(org: string): Bottleneck {
+export function getSyncLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = syncLimiters.get(key);
   if (existing) return existing;
@@ -2701,6 +2701,77 @@ export async function attemptAutoMerge(
   }
 }
 
+/** The sync pull request's title. Shared with the git path so the two cannot drift. */
+export function syncPullRequestTitle(toSha: string): string {
+  return `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
+}
+
+/** What `renderSyncPullRequestBody` needs to describe one sync. */
+export interface SyncPullRequestBodyInput {
+  toSha: string;
+  fromSha: string | null;
+  /** The commit the sync branch was built on. */
+  baselineSha: string;
+  /** False when the row recorded no `synced_repo_sha` and the current head stood in for it. */
+  baselineWasRecorded: boolean;
+  /** Every path the handout changed, in the order the PR lists them. */
+  changedFiles: ReadonlyArray<Pick<FileChange, "path" | "isBinary" | "status">>;
+  /** The files left to the student. */
+  unresolved: readonly UnresolvedFile[];
+  effectiveAutoMerge: boolean;
+}
+
+/**
+ * The sync pull request's body, as students read it.
+ *
+ * A pure function of its input, shared by `syncRepositoryToHandout` and the git path
+ * (`gitSync/syncEntry.ts`), so a student sees the same description whichever engine built the
+ * branch. Anything left to the student is reported in its own section, so the file lists
+ * describe what this PR actually carries rather than everything the instructor changed.
+ */
+export function renderSyncPullRequestBody(input: SyncPullRequestBodyInput): string {
+  const { toSha, fromSha, baselineSha, baselineWasRecorded, changedFiles, unresolved, effectiveAutoMerge } = input;
+  const unresolvedPaths = new Set(unresolved.map((f) => f.path));
+  const syncedFiles = changedFiles.filter((f) => !unresolvedPaths.has(f.path));
+  const textFiles = syncedFiles.filter((f) => !f.isBinary && f.status !== "removed");
+  const binaryFiles = syncedFiles.filter((f) => f.isBinary && f.status !== "removed");
+  const removedFiles = syncedFiles.filter((f) => f.status === "removed");
+
+  return `## Handout Update
+
+This pull request syncs the latest changes from the assignment template repository.
+
+**Triggered by:** Instructor
+**Template commit:** ${toSha}
+**Previous sync:** ${fromSha || "Initial sync"}
+**Base commit:** ${baselineSha.substring(0, 7)}
+
+### How This Works
+
+This PR uses a **3-way merge strategy** to preserve your work:
+- **Base**: ${
+    baselineWasRecorded
+      ? `The state of your repo at the last sync (${baselineSha.substring(0, 7)})`
+      : `Your repo as it stands now (${baselineSha.substring(0, 7)}), because no earlier sync was recorded for it`
+  }
+- **Changes**: Updates from the handout template
+- **Your Work**: Any commits you've made since the last sync
+
+GitHub will automatically merge these together. If you modified the same parts of files that the instructor updated, you'll see merge conflicts that need to be resolved.
+
+${renderUnresolvedSection(unresolved)}### Changed Files
+
+${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (replaced with the handout's version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
+---
+*This PR was automatically generated. ${
+    effectiveAutoMerge
+      ? "It will be auto-merged if there are no conflicts."
+      : unresolved.length > 0
+        ? "It will NOT be merged automatically, because some of the files the instructor changed are files you have edited. Review the list above, then merge when you are ready."
+        : "It will NOT be merged automatically. Review it, then merge when you are ready."
+  } If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
+}
+
 /**
  * Complete sync operation: compare files, create branch, commit, PR, and optionally auto-merge
  *
@@ -3155,50 +3226,16 @@ ${syncableFiles.map((f) => `- ${f.path}`).join("\n")}`;
         }
 
         // Create PR
-        const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
-
-        // Categorize files for better PR description. Anything left to the student is
-        // reported in its own section instead, so these lists describe what this PR
-        // actually carries rather than everything the instructor changed.
-        const unresolvedPaths = new Set(unresolved.map((f) => f.path));
-        const syncedFiles = changedFiles.filter((f) => !unresolvedPaths.has(f.path));
-        const textFiles = syncedFiles.filter((f) => !f.isBinary && f.status !== "removed");
-        const binaryFiles = syncedFiles.filter((f) => f.isBinary && f.status !== "removed");
-        const removedFiles = syncedFiles.filter((f) => f.status === "removed");
-
-        const prBody = `## Handout Update
-
-This pull request syncs the latest changes from the assignment template repository.
-
-**Triggered by:** Instructor
-**Template commit:** ${toSha}
-**Previous sync:** ${fromSha || "Initial sync"}
-**Base commit:** ${baselineSha.substring(0, 7)}
-
-### How This Works
-
-This PR uses a **3-way merge strategy** to preserve your work:
-- **Base**: ${
-          syncedRepoSha
-            ? `The state of your repo at the last sync (${baselineSha.substring(0, 7)})`
-            : `Your repo as it stands now (${baselineSha.substring(0, 7)}), because no earlier sync was recorded for it`
-        }
-- **Changes**: Updates from the handout template
-- **Your Work**: Any commits you've made since the last sync
-
-GitHub will automatically merge these together. If you modified the same parts of files that the instructor updated, you'll see merge conflicts that need to be resolved.
-
-${renderUnresolvedSection(unresolved)}### Changed Files
-
-${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${textFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${binaryFiles.length > 0 ? `**Binary files** (replaced with the handout's version):\n${binaryFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}${removedFiles.length > 0 ? `**Removed files**:\n${removedFiles.map((f) => `- \`${f.path}\``).join("\n")}\n\n` : ""}
----
-*This PR was automatically generated. ${
+        const prTitle = syncPullRequestTitle(toSha);
+        const prBody = renderSyncPullRequestBody({
+          toSha,
+          fromSha,
+          baselineSha,
+          baselineWasRecorded: !!syncedRepoSha,
+          changedFiles,
+          unresolved,
           effectiveAutoMerge
-            ? "It will be auto-merged if there are no conflicts."
-            : unresolved.length > 0
-              ? "It will NOT be merged automatically, because some of the files the instructor changed are files you have edited. Review the list above, then merge when you are ready."
-              : "It will NOT be merged automatically. Review it, then merge when you are ready."
-        } If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
+        });
 
         let prNumber: number;
         let prUrl: string;

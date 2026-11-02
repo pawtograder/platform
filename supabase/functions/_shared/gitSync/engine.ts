@@ -106,8 +106,18 @@ export interface SyncJobContext {
   templateCache: TemplateCache;
   /** Defaults to GitHub over https. Tests pass `file://` remotes (§9.1). */
   remote?: RemoteConfig;
-  /** Installation token for this job (§8.2). */
+  /**
+   * Installation token for the student side of this job (§8.2): the student fetch, `ls-remote`,
+   * the push and the job repo's local calls. Never sent to the template.
+   */
   token?: string;
+  /**
+   * Installation token for the template fetches into the template cache, from the template org's
+   * installation and scoped to the template repo with `contents: read`. A separate token keeps the
+   * student token, which can write, away from the template, and lets a handout in another org
+   * sync. Undefined means template fetches carry no credential; there is no fallback to `token`.
+   */
+  templateToken?: string;
   /** Fires at the job deadline and kills the running git child (§3.1). */
   signal?: AbortSignal;
   /** Author and committer of the sync commit (§5.7). */
@@ -443,7 +453,9 @@ class Job implements SyncJob {
     const cache = this.ctx.templateCache;
     this.releases.push(cache.acquire(templateRepo));
     const wanted = fromSha ? [toSha, fromSha] : [toSha];
-    const { outcomes, staleLocksRemoved } = await cache.ensureCommits(templateRepo, wanted, this.git);
+    // The template's own credential, never the student token (§8.2).
+    const templateGit: GitContext = { ...this.git, token: this.ctx.templateToken };
+    const { outcomes, staleLocksRemoved } = await cache.ensureCommits(templateRepo, wanted, templateGit);
     if (staleLocksRemoved.length > 0) {
       tags.template_cache_stale_locks = String(staleLocksRemoved.length);
       this.#log({ msg: "removed stale template cache locks", templateRepo, locks: staleLocksRemoved });

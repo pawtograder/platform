@@ -35,6 +35,7 @@ import {
 } from "../_shared/orgLeaseRun.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, TerminalSyncError } from "../_shared/GitHubSyncHelpers.ts";
+import { handoutSyncEngineFor, syncRepositoryToHandoutGit } from "../_shared/gitSync/syncEntry.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { shouldSendOrgInvitation, siblingInviteTeamSlugs } from "../_shared/orgInviteWindow.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -2276,7 +2277,7 @@ export async function processEnvelope(
           }
 
           // Use the shared sync helper
-          const result = await syncRepositoryToHandout({
+          const syncParams = {
             repositoryFullName: repository_full_name,
             templateRepo: template_repo,
             fromSha: currentSyncedHandoutSha,
@@ -2290,8 +2291,19 @@ export async function processEnvelope(
             // changed on the new side since the merge base, so a file the rewrite DROPPED, or a
             // change it reverted, is invisible and the sync finds nothing to do. Tree-to-tree
             // is the only diff that describes the state the repository now has to be in.
-            diffStrategy: direction === "rewritten" ? "rewritten" : "descendant"
-          });
+            diffStrategy: direction === "rewritten" ? ("rewritten" as const) : ("descendant" as const)
+          };
+          // The queue decides the engine (handout-sync-git-build-plan.md D3): the git worker reads
+          // `handout_sync`, and every other queue keeps the REST path. Same `SyncResult` either way.
+          const result =
+            handoutSyncEngineFor(meta.queue_name) === "git"
+              ? await syncRepositoryToHandoutGit({
+                  ...syncParams,
+                  repositoryId: repository_id,
+                  retryCount: envelope.retry_count ?? 0,
+                  jobId: String(meta.msg_id)
+                })
+              : await syncRepositoryToHandout(syncParams);
 
           if (!result.success) {
             // A TERMINAL failure is about this one repository and fails the same way on every
