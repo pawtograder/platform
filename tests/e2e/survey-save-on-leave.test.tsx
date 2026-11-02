@@ -38,12 +38,12 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await logMagicLinksOnFailure([student, instructor]);
   });
 
-  const seedSurvey = async (title: string) => {
+  const seedSurvey = async (title: string, { allowResponseEditing = false } = {}) => {
     const insert: TablesInsert<"surveys"> = {
       class_id: course.id,
       created_by: instructor.public_profile_id,
       assigned_to_all: true,
-      allow_response_editing: false,
+      allow_response_editing: allowResponseEditing,
       json: ONE_QUESTION_JSON,
       version: 1,
       status: "published",
@@ -387,6 +387,122 @@ test.describe("Survey answers survive leaving the page and losing the network", 
 
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 30_000 });
     expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted with a fast clock", is_submitted: true });
+  });
+
+  test("a Complete whose reply is lost to a dropped connection is reported as submitted", async ({ page }) => {
+    const survey = await seedSurvey("Dropped Connection Complete Survey");
+    await loginAsUser(page, student, course);
+    // The submit reaches the database, then the connection is reset before the reply gets back.
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
+      if (route.request().method() !== "POST" || !body?.is_submitted) return route.fallback();
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Submitted, then the connection dropped");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Submitted, then the connection dropped", is_submitted: false });
+    await page.getByRole("button", { name: "Complete" }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    expect(await storedResponse(survey.id)).toEqual({
+      q1: "Submitted, then the connection dropped",
+      is_submitted: true
+    });
+  });
+
+  test("a Complete whose reply is lost as the network drops shows as submitted once the network is back", async ({
+    page
+  }) => {
+    const survey = await seedSurvey("Network Drop Complete Survey");
+    await loginAsUser(page, student, course);
+    // The submit reaches the database, then the network goes down before the reply gets back.
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
+      if (route.request().method() !== "POST" || !body?.is_submitted) return route.fallback();
+      await route.fetch();
+      await page.context().setOffline(true);
+      await route.abort("internetdisconnected");
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("Submitted as the network dropped");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Submitted as the network dropped", is_submitted: false });
+    await page.getByRole("button", { name: "Complete" }).click();
+    // Offline, the page can't find out whether the submit got through, so it doesn't say either way.
+    const unsure = page.getByRole("alert").filter({ hasText: "Your survey may not have been submitted" });
+    await expect(unsure).toBeVisible();
+
+    await page.context().setOffline(false);
+    await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(input).not.toBeEditable();
+    await expect(unsure).toHaveCount(0);
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted as the network dropped", is_submitted: true });
+  });
+
+  // Opens the survey in a second tab of the same browser and submits it there.
+  const submitInAnotherTab = async (page: Page, surveyId: string, expectedAnswer: string) => {
+    const otherTab = await page.context().newPage();
+    await otherTab.goto(`/course/${course.id}/surveys/${surveyId}`);
+    await expect(otherTab.getByRole("textbox", { name: "Question 1" })).toHaveValue(expectedAnswer);
+    await otherTab.getByRole("button", { name: "Complete" }).click();
+    await expect(otherTab).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    await otherTab.close();
+  };
+
+  test("an answer typed after the survey was submitted in another tab shows the survey as submitted", async ({
+    page
+  }) => {
+    const survey = await seedSurvey("Submitted In Another Tab Survey");
+    await loginAsUser(page, student, course);
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("Answer from the first tab");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Answer from the first tab", is_submitted: false });
+    await submitInAnotherTab(page, survey.id, "Answer from the first tab");
+
+    // The first tab still shows the form. Editing it again can't change the submitted response.
+    await input.fill("Typed after the other tab submitted");
+    await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible({
+      timeout: 15_000
+    });
+    await expect(input).toHaveValue("Answer from the first tab");
+    await expect(input).not.toBeEditable();
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Answer from the first tab", is_submitted: true });
+  });
+
+  test("on a survey that allows editing, an answer typed after another tab submitted is saved into the submission", async ({
+    page
+  }) => {
+    const survey = await seedSurvey("Editable Submitted In Another Tab Survey", { allowResponseEditing: true });
+    await loginAsUser(page, student, course);
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await input.fill("Answer from the first tab");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Answer from the first tab", is_submitted: false });
+    await submitInAnotherTab(page, survey.id, "Answer from the first tab");
+
+    await input.fill("Edited after the other tab submitted");
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 15_000 })
+      .toEqual({ q1: "Edited after the other tab submitted", is_submitted: true });
+    await expect(page.getByRole("status").filter({ hasText: SAVED_STATUS })).toBeVisible();
+    await expect(page.getByText("You can edit your response since editing is allowed for this survey.")).toBeVisible();
+    await expect(input).toBeEditable();
   });
 
   test("a Complete that never gets an answer and never reached the database keeps the form", async ({ page }) => {
