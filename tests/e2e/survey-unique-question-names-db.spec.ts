@@ -88,7 +88,30 @@ const PARITY_FIXTURES: [string, object][] = [
   ["byte order mark", onePage(text("q1"), text("\ufeffq1"))],
   ["line separator", onePage(text("q1"), text("q1\u2028"))],
   ["next line is not trimmed", onePage(text("q1"), text("q1\u0085"))],
-  ["zero-width space is not trimmed", onePage(text("q1"), text("q1\u200b"))]
+  ["zero-width space is not trimmed", onePage(text("q1"), text("q1\u200b"))],
+  ["one name, two valueNames", onePage(text("a", { valueName: "first" }), text("a", { valueName: "second" }))],
+  ["two names, one valueName", onePage(text("a", { valueName: "shared" }), text("b", { valueName: "shared" }))],
+  ["a valueName equal to another's name", onePage(text("x"), text("y", { valueName: "x" }))],
+  ["a valueName is used as written", onePage(text("x"), text("y", { valueName: " x" }))],
+  ["an empty valueName falls back to the name", onePage(text("a", { valueName: "" }), text("a"))],
+  [
+    "HTML and image elements",
+    onePage(
+      { type: "html", name: "note", html: "<p>One</p>" },
+      { type: "HTML", name: "note", html: "<p>Two</p>" },
+      { type: "image", name: "logo" },
+      { type: "image", name: "logo" }
+    )
+  ],
+  ["an expression stores a value", onePage(text("total"), { type: "expression", name: "total", expression: "1" })],
+  [
+    "a repeating panel's valueName",
+    onePage(text("team"), { type: "paneldynamic", name: "members", valueName: "team", templateElements: [text("a")] })
+  ],
+  ["braces, leading #s and the first |", onePage(text("q1"), text("{q1}"), text("#q1"), text("##q1"), text("q|1"))],
+  ["only the first | is dropped", onePage(text("q||1"), text("q|1"))],
+  ["inner spaces survive the clean-up", onePage(text("# q1"), text("{ q1}"), text("q1"))],
+  ["a name that cleans up to nothing", onePage(text("{}"), text("#"))]
 ];
 
 test.describe("surveys whose questions share a name cannot be published", () => {
@@ -334,5 +357,38 @@ test.describe("surveys whose questions share a name cannot be published", () => 
       const refused = namesInRefusal(await publishNew(`Parity: ${label}`, json)).sort();
       expect(refused, `fixture "${label}"`).toEqual(expected);
     }
+  });
+
+  test("an answer is saved under the question's valueName when it has one", async () => {
+    const ownValueNames = await publishNew(
+      "One name, two valueNames",
+      onePage(text("a", { valueName: "first" }), text("a", { valueName: "second" }))
+    );
+    expect(ownValueNames, `each question keeps its own answer: ${ownValueNames?.message}`).toBeNull();
+
+    const sharedValueName = await publishNew(
+      "Two names, one valueName",
+      onePage(text("a", { valueName: "shared" }), text("b", { valueName: "shared" }))
+    );
+    expect(namesInRefusal(sharedValueName)).toEqual(["shared"]);
+  });
+
+  test("HTML and image elements hold no answer, so their names may repeat", async () => {
+    const error = await publishNew(
+      "Repeated HTML and image names",
+      onePage(
+        text("q1"),
+        { type: "html", name: "note", html: "<p>One</p>" },
+        { type: "html", name: "note", html: "<p>Two</p>" },
+        { type: "image", name: "logo", imageLink: "a.png" },
+        { type: "image", name: "logo", imageLink: "b.png" }
+      )
+    );
+    expect(error, `nothing here shares an answer: ${error?.message}`).toBeNull();
+  });
+
+  test("names are compared after SurveyJS drops braces, leading #s and the first |", async () => {
+    const error = await publishNew("Rewritten names", onePage(text("q1"), text("{q1}"), text("#q1"), text("q|1")));
+    expect(namesInRefusal(error)).toEqual(["q1"]);
   });
 });

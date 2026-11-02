@@ -90,6 +90,24 @@ test.describe("survey builder: duplicate question names", () => {
       .toEqual(["draft"]);
   });
 
+  test("a name SurveyJS rewrites, such as {question_1}, counts as the name it is saved under", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    await page.getByRole("button", { name: /Open Visual Builder/i }).click();
+    await page.getByRole("button", { name: /\+ Short Text/i }).click();
+    await page.getByRole("button", { name: /\+ Short Text/i }).click();
+    // SurveyJS drops the braces when it loads the survey, so both answers would land in question_1.
+    await page.getByPlaceholder("Short Text question").nth(1).fill("{question_1}");
+
+    const message =
+      '"question_1" is used by page 1, question 1 and page 1, question 2 (named "{question_1}", saved as "question_1"). Rename one of them.';
+    await expect(page.getByTestId("survey-builder-duplicate-names")).toContainText(message);
+    for (const row of [0, 1]) {
+      await expect(page.getByPlaceholder("Short Text question").nth(row)).toHaveAttribute("aria-invalid", "true");
+    }
+  });
+
   test("a question added on a new page gets a name no other question uses", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/surveys/new`);

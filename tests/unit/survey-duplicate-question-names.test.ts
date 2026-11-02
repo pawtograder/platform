@@ -11,6 +11,9 @@ import {
 } from "@/components/survey/questionNames";
 
 const q = (name: string, type = "text") => ({ type, name, title: name });
+const withValueName = (name: string, valueName: string) => ({ ...q(name), valueName });
+const onePage = (...elements: object[]) => ({ pages: [{ elements }] });
+const names = (json: unknown) => findDuplicateQuestionNames(json).map((d) => d.name);
 
 describe("findDuplicateQuestionNames", () => {
   it("returns nothing when every name is unique", () => {
@@ -195,6 +198,54 @@ describe("findDuplicateQuestionNames", () => {
   });
 });
 
+describe("answers are keyed the way SurveyJS stores them", () => {
+  it("keys a question with a valueName by its valueName, so two questions named alike keep their own answers", () => {
+    expect(findDuplicateQuestionNames(onePage(withValueName("a", "first"), withValueName("a", "second")))).toEqual([]);
+  });
+
+  it("finds questions with different names that save their answers under the same valueName", () => {
+    expect(findDuplicateQuestionNames(onePage(withValueName("a", "shared"), withValueName("b", "shared")))).toEqual([
+      {
+        name: "shared",
+        locations: [
+          { page: 1, question: 1, byValueName: true },
+          { page: 1, question: 2, byValueName: true }
+        ]
+      }
+    ]);
+    expect(names(onePage(q("x"), withValueName("y", "x")))).toEqual(["x"]);
+  });
+
+  it("skips HTML and image elements, which hold no answer", () => {
+    const json = onePage(
+      { type: "html", name: "note", html: "<p>One</p>" },
+      { type: "html", name: "note", html: "<p>Two</p>" },
+      { type: "image", name: "logo", imageLink: "a.png" },
+      { type: "image", name: "logo", imageLink: "b.png" }
+    );
+    expect(findDuplicateQuestionNames(json)).toEqual([]);
+  });
+
+  it("still counts an expression, which stores its result as an answer", () => {
+    expect(names(onePage(q("total"), { type: "expression", name: "total", expression: "1 + 1" }))).toEqual(["total"]);
+  });
+
+  it("compares names after SurveyJS drops braces, leading #s and the first |", () => {
+    expect(findDuplicateQuestionNames(onePage(q("q1"), q("{q1}"), q("#q1"), q("##q1"), q("q|1")))).toEqual([
+      {
+        name: "q1",
+        locations: [
+          { page: 1, question: 1 },
+          { page: 1, question: 2, writtenName: "{q1}" },
+          { page: 1, question: 3, writtenName: "#q1" },
+          { page: 1, question: 4, writtenName: "##q1" },
+          { page: 1, question: 5, writtenName: "q|1" }
+        ]
+      }
+    ]);
+  });
+});
+
 describe("duplicateQuestionNamesMessage", () => {
   it("names the duplicate, where each copy is, and how to fix it", () => {
     const json = { pages: [{ elements: [q("question_1")] }, { elements: [q("question_1")] }] };
@@ -248,6 +299,15 @@ describe("duplicateQuestionNamesMessage", () => {
     };
     expect(duplicateQuestionNamesMessage(json)).toBe(
       'Each question needs its own name, because answers are saved under it. "intro" is used by page 1, question 1 and question 1 of the panel "inner" in the panel "group" (page 1, question 2). Rename one of them.'
+    );
+  });
+
+  it("says when a question's name is saved as something else", () => {
+    expect(duplicateQuestionNamesMessage(onePage(q("q1"), q("{q1}")))).toBe(
+      'Each question needs its own name, because answers are saved under it. "q1" is used by page 1, question 1 and page 1, question 2 (named "{q1}", saved as "q1"). Rename one of them.'
+    );
+    expect(duplicateQuestionNamesMessage(onePage(q("shared"), withValueName("b", "shared")))).toBe(
+      'Each question needs its own name, because answers are saved under it. "shared" is used by page 1, question 1 and page 1, question 2 (as its valueName). Rename one of them.'
     );
   });
 
