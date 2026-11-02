@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef } from "react";
+import { Text } from "@chakra-ui/react";
 import { Model } from "survey-core";
-import { Survey } from "survey-react-ui";
+import { Survey, SurveyElementBase } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
@@ -11,6 +12,11 @@ import type { Survey as SurveyType, SurveyResponseWithProfile } from "@/types/su
 interface ViewSurveyResponseProps {
   surveyJson: SurveyType["json"];
   responseData: SurveyResponseWithProfile["response"];
+  /**
+   * The description the caller already shows next to its heading, if any. The survey's
+   * JSON description is shown above the response unless it says the same thing.
+   */
+  shownDescription?: string | null;
   readOnly?: boolean;
   onComplete?: (sender: Model, options: unknown) => void;
   onValueChanged?: (sender: Model, options: unknown) => void;
@@ -19,6 +25,7 @@ interface ViewSurveyResponseProps {
 export default function ViewSurveyResponse({
   surveyJson,
   responseData,
+  shownDescription,
   readOnly = true,
   onComplete,
   onValueChanged
@@ -46,7 +53,7 @@ export default function ViewSurveyResponse({
     // Every caller shows the survey's database title as its own heading, so the
     // renderer shows none: a second copy repeated it once per response, and the JSON
     // title is often the builder's "Survey Name" placeholder (issue #1002). SurveyJS
-    // shows the description only alongside the title, so it is hidden too.
+    // shows the description only alongside the title, so it is rendered separately.
     model.showTitle = false;
 
     // Apply SurveyJS theme based on color mode
@@ -69,5 +76,14 @@ export default function ViewSurveyResponse({
     return model;
   }, [surveyJson, responseData, colorMode, readOnly]);
 
-  return <Survey model={survey} />;
+  // SurveyJS's own string for the description, so locales and {placeholders} come out
+  // as they do for the student. Plain text, not a heading: the caller has the heading.
+  const showDescription = survey.hasDescription && survey.description.trim() !== (shownDescription ?? "").trim();
+
+  return (
+    <>
+      {showDescription && <Text mb={2}>{SurveyElementBase.renderLocString(survey.locDescription)}</Text>}
+      <Survey model={survey} />
+    </>
+  );
 }
