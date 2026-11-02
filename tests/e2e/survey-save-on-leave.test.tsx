@@ -17,7 +17,7 @@ const ONE_QUESTION_JSON = {
   pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
 };
 
-const OFFLINE_STATUS = "You're offline. Your answers will save when you reconnect.";
+const OFFLINE_STATUS = "You're offline. Keep this page open and your answers will save when you reconnect.";
 const SAVED_STATUS = "All changes saved";
 const UNSAVABLE_STATUS = "Your saved answers didn't load, so changes can't be saved. Reload the page to try again.";
 
