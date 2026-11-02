@@ -88,6 +88,12 @@ const NON_VALUE_TYPES = new Set(["html", "image"]);
 
 type AnswerKey = { key: string; note: Pick<QuestionNameLocation, "byValueName" | "writtenName"> };
 
+/** Question.getValidName drops only the first "|" (survey-core's itemValueSeparator), not all of them. */
+function dropFirstPipe(name: string): string {
+  const at = name.indexOf("|");
+  return at === -1 ? name : name.slice(0, at) + name.slice(at + 1);
+}
+
 /** The key SurveyJS saves this element's answer under, or null when it holds no answer. */
 function answerKey(el: JsonObject, type: string): AnswerKey | null {
   if (NON_VALUE_TYPES.has(type)) return null;
@@ -96,7 +102,7 @@ function answerKey(el: JsonObject, type: string): AnswerKey | null {
   }
   if (typeof el.name === "number" && Number.isFinite(el.name)) return { key: String(el.name), note: {} };
   if (typeof el.name !== "string") return null;
-  const key = el.name.trim().replace("|", "").trim().replace(/[{}]+/g, "").replace(/^#+/, "");
+  const key = dropFirstPipe(el.name.trim()).trim().replace(/[{}]+/g, "").replace(/^#+/, "");
   if (key.length === 0) return null;
   const written = el.name.trim();
   return { key, note: written === key ? {} : { writtenName: written } };

@@ -243,6 +243,9 @@ describe("answers are keyed the way SurveyJS stores them", () => {
         ]
       }
     ]);
+    // Only the first "|" goes: "q||1" is saved as "q|1", not "q1".
+    expect(names(onePage(q("q1"), q("q||1")))).toEqual([]);
+    expect(names(onePage(q("q||1"), q("|q|1")))).toEqual(["q|1"]);
   });
 });
 
