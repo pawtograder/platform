@@ -50,9 +50,10 @@ queue_repository_syncs()  ──pgmq.send──▶  handout_sync  ──▶  han
   a small poll loop around the existing `processEnvelope` from `github-async-worker/index.ts`,
   called with `meta.queue_name = "handout_sync"`. `scripts/RunAsyncMessagesLocally.ts` already
   proves that `processEnvelope` runs under plain Deno.
-- **The engine swap happens inside `syncRepositoryToHandout`.** It keeps its signature and its
-  `SyncResult` contract. Its body becomes `syncRepositoryToHandoutGit` (§5). The edge function
-  never calls it once routing moves, but it can still bundle it.
+- **The queue picks the engine.** The handler calls `syncRepositoryToHandoutGit` (§5), which
+  has the same signature and `SyncResult` contract as `syncRepositoryToHandout`, when the
+  message came from `handout_sync`, and the REST function otherwise. The edge function bundles
+  the git path but never runs it.
 
 ### 3.1 Worker process
 
@@ -307,8 +308,18 @@ The branch is `B = sync-to-${H:0:7}`, and `X` is its head from `ls-remote` (§5.
 
 ### 5.9 PR and merge (REST; the only remaining REST writes)
 
-Everything here is unchanged (`createPullRequest`, `findExistingSyncPR`, `attemptAutoMerge`,
-`resolveAutoMerge`, the PR body), with one fix for idempotency:
+The PR title and body come from the same pure functions the REST path now calls, so the two
+cannot drift. The REST helpers (`createPullRequest`, `findExistingSyncPR`, `attemptAutoMerge`)
+build their own octokit from the org installation, so the git path has twins of them that use
+the job's scoped token. They differ from the REST helpers in four ways:
+
+- A failed PR lookup is retryable, not "no PR".
+- Every PR on the branch is checked for one merged at our commit.
+- An open PR is reused and gets the same `resolveAutoMerge` decision a new one would.
+- The merge is pinned to our commit, so a student push during the wait is never merged on our
+  behalf.
+
+One further fix is for idempotency:
 
 - **Before `createPullRequest`, call `findExistingSyncPR(R, B)`.** If it returns a merged PR whose
   head is `COMMIT`, return `{ merged: true, merge_sha }`. Today a crash after the merge but
@@ -393,7 +404,7 @@ protects the branch.
 | `template_repo` is the solution repo | terminal `template_is_solution_repo` | §8.3 |
 | Repo name or SHA fails validation | terminal `invalid_sync_input` | nothing is spawned (§8.1) |
 | Foreign commits on the sync branch | terminal `sync_branch_not_ours` (existing) | unchanged |
-| Repo 404 / not granted | terminal (existing) | unchanged |
+| Repo 404 / not granted, token creation fails | retryable, as today | REST flattens these into a retryable error too |
 | `S` unfetchable | degraded, not an error | tagged; falls back to the current head (§5.2) |
 | `merge-file` conflict / killed | degraded, per file | file left to the student |
 
@@ -429,13 +440,18 @@ calls `git`.
   directory), `LANG=C`, the hardening variables from §8.1 and §8.6, and the job's auth header.
   `GIT_TRACE*` and `GIT_CURL_VERBOSE` are never passed, so nothing can print
   the header.
-- **The installation token is scoped per job.** `getScopedInstallationToken(org, repos,
-  permissions)` (new, `GitHubWrapper.ts`) calls `POST /app/installations/{id}/access_tokens` with
-  `repositories: [<student repo>, <template repo>]` and
-  `permissions: { contents: "write", pull_requests: "write", workflows: "write" }`. `workflows`
-  is required to push `.github/workflows/grade.yml`. A leaked token reaches two repos for at most
-  an hour, not the whole org. The PR and merge calls in §5.9 use an octokit built from the same
-  token.
+- **Two installation tokens per job, each scoped.** `getScopedInstallationToken(org, repos,
+  permissions)` (new, `GitHubWrapper.ts`) calls `POST /app/installations/{id}/access_tokens`.
+  - The student token covers the student repo only, with
+    `{ contents: "write", pull_requests: "write", workflows: "write" }`. `workflows` is required
+    to push `.github/workflows/grade.yml`. This token is used for the student fetch, `ls-remote`,
+    the push, and every REST call in §5.9.
+  - The template token comes from the template org's installation, covers the template repo only,
+    and has `{ contents: "read" }`. It is used only for template fetches.
+
+  A template can live in another org (`inherit_from_source` copies another assignment's
+  `template_repo`), which a single installation token could not reach. A leaked token reaches
+  one repo for at most an hour.
 - **Where the token lives.** It is passed only through `GIT_CONFIG_COUNT`/`KEY`/`VALUE`
   (`http.https://github.com/.extraheader = AUTHORIZATION: basic <base64(x-access-token:TOKEN)>`).
   It never appears in argv, in a URL or in any `.git/config`, so it stays out of `ps` and of
