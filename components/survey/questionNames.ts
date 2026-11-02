@@ -16,14 +16,23 @@
  * - Panels hold no answer, so a panel's own name is not counted.
  */
 
-/** Where one of the colliding questions sits, numbered the way an instructor reads the survey. */
+/** A panel or repeating (dynamic) panel that holds a question, by the name it was given. */
+export type HoldingPanel = { name: string | null; repeating: boolean };
+
+/** Where one of the colliding questions sits, numbered the way the Visual Builder lists it. */
 export type QuestionNameLocation = {
   /** 1-based page number, or null when the survey has no pages (root-level `elements`). */
   page: number | null;
-  /** 1-based position of the question among the questions of its page (or of its template). */
+  /**
+   * 1-based row on the page: the position of the page element that is, or holds, the question.
+   * The builder lists every element of a page as one row, a panel or an HTML block included.
+   */
   question: number;
-  /** Name of the dynamic panel whose template holds the question, when it is in one. */
-  dynamicPanel?: string;
+  /**
+   * For a question inside a panel or a repeating panel: those panels, outermost first, and the
+   * question's 1-based position among the elements of the innermost one.
+   */
+  inside?: { panels: HoldingPanel[]; question: number };
 };
 
 export type DuplicateQuestionName = {
@@ -75,33 +84,35 @@ type Entry = { scope: number; name: string; location: QuestionNameLocation };
 /** Scope 0 is the survey; every dynamic panel template gets the next number. */
 type WalkState = { entries: Entry[]; nextScope: number };
 
+/** Where a list of elements sits: its page, the page row holding it, and the panels around it. */
+type Position = { page: number | null; row: number | null; panels: HoldingPanel[] };
+
 /**
- * Walk a list of elements, collecting every question name with its scope. `counter` numbers the
- * questions of one page (or one template) in reading order, nested panels included.
+ * Walk a list of elements, collecting every question name with its scope and location. At the
+ * top of a page (`row` null) each element is a row of its own; inside a panel, every element
+ * belongs to the panel's row.
  */
-function walk(
-  elements: unknown[],
-  scope: number,
-  page: number | null,
-  counter: { n: number },
-  dynamicPanel: string | undefined,
-  state: WalkState
-) {
-  elements.forEach((el) => {
+function walk(elements: unknown[], scope: number, at: Position, state: WalkState) {
+  elements.forEach((el, idx) => {
     if (!isObject(el)) return;
+    const row = at.row ?? idx + 1;
+    const location: QuestionNameLocation =
+      at.panels.length === 0
+        ? { page: at.page, question: row }
+        : { page: at.page, question: row, inside: { panels: at.panels, question: idx + 1 } };
     const type = typeof el.type === "string" ? el.type.toLowerCase() : "";
     const nested = Array.isArray(el.elements) ? el.elements : null;
 
     // A panel (or anything else that only groups elements) holds no answer of its own.
     if (type === "panel" || (nested && type !== "paneldynamic")) {
       const children = elementList(el, "elements");
-      if (children) walk(children, scope, page, counter, dynamicPanel, state);
+      const panels = [...at.panels, { name: normalizeName(el.name), repeating: false }];
+      if (children) walk(children, scope, { page: at.page, row, panels }, state);
       return;
     }
 
-    counter.n += 1;
     const name = normalizeName(el.name);
-    if (name) state.entries.push({ scope, name, location: { page, question: counter.n, dynamicPanel } });
+    if (name) state.entries.push({ scope, name, location });
 
     const template = Array.isArray(el.templateElements)
       ? el.templateElements
@@ -110,7 +121,8 @@ function walk(
         : null;
     if (template) {
       state.nextScope += 1;
-      walk(template, state.nextScope, page, { n: 0 }, name ?? "unnamed", state);
+      const panels = [...at.panels, { name, repeating: true }];
+      walk(template, state.nextScope, { page: at.page, row, panels }, state);
     }
   });
 }
@@ -128,12 +140,12 @@ export function findDuplicateQuestionNames(rawJson: unknown): DuplicateQuestionN
     json.pages.forEach((page, pageIdx) => {
       if (!isObject(page)) return;
       const elements = elementList(page, "elements");
-      if (elements) walk(elements, 0, pageIdx + 1, { n: 0 }, undefined, state);
+      if (elements) walk(elements, 0, { page: pageIdx + 1, row: null, panels: [] }, state);
     });
   }
   // A survey with no pages keeps its questions at the root; SurveyJS makes them one page.
   const rootElements = elementList(json, "elements");
-  if (rootElements) walk(rootElements, 0, null, { n: 0 }, undefined, state);
+  if (rootElements) walk(rootElements, 0, { page: null, row: null, panels: [] }, state);
   const { entries } = state;
 
   const byKey = new Map<string, DuplicateQuestionName>();
@@ -152,13 +164,20 @@ export function findDuplicateQuestionNames(rawJson: unknown): DuplicateQuestionN
   return [...byKey.values()];
 }
 
-/** "page 2, question 1", or "question 3 of the repeating panel "team" on page 1". */
+function describePanel(panel: HoldingPanel): string {
+  const kind = panel.repeating ? "repeating panel" : "panel";
+  return panel.name === null ? `an unnamed ${kind}` : `the ${kind} "${panel.name}"`;
+}
+
+/**
+ * "page 2, question 1", or for a question inside panels, "question 1 of the panel "inner" in
+ * the panel "group" (page 1, question 2)", where the part in brackets is the builder's row.
+ */
 export function describeQuestionLocation(loc: QuestionNameLocation): string {
-  const page = loc.page === null ? "" : `page ${loc.page}`;
-  if (loc.dynamicPanel !== undefined) {
-    return `question ${loc.question} of the repeating panel "${loc.dynamicPanel}"${page ? ` on ${page}` : ""}`;
-  }
-  return page ? `${page}, question ${loc.question}` : `question ${loc.question}`;
+  const row = loc.page === null ? `question ${loc.question}` : `page ${loc.page}, question ${loc.question}`;
+  if (!loc.inside) return row;
+  const panels = [...loc.inside.panels].reverse().map(describePanel).join(" in ");
+  return `question ${loc.inside.question} of ${panels} (${row})`;
 }
 
 function joinWithAnd(parts: string[]): string {

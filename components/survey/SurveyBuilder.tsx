@@ -26,7 +26,7 @@ import type { BuilderSurvey, BuilderElement, ElementType } from "./SurveyBuilder
 import { PASSTHROUGH_TYPE, passthroughSourceType } from "./SurveyBuilderDataTypes";
 import { makeEmptySurvey, nextChoiceValue } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
-import { findDuplicateQuestionNames, formatDuplicateQuestionNames } from "./questionNames";
+import { findDuplicateQuestionNames, formatDuplicateQuestionNames, type DuplicateQuestionName } from "./questionNames";
 
 import {
   addPage as addPageOp,
@@ -138,15 +138,17 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
   // Question names used more than once in the survey's own scope. Answers are saved under the
   // name, so these questions would share one answer; the form refuses to publish until fixed.
   const duplicateNames = useMemo(() => findDuplicateQuestionNames(toJSON(survey)), [survey]);
-  const duplicatesByName = useMemo(
-    () =>
-      new Map(
-        duplicateNames
-          .filter((d) => d.locations.every((loc) => loc.dynamicPanel === undefined))
-          .map((d) => [d.name, d] as const)
-      ),
-    [duplicateNames]
-  );
+  // The duplicate each builder row is part of, keyed "page:row". A question inside a panel is
+  // edited in the JSON, so only rows that are the question itself get marked.
+  const duplicateByRow = useMemo(() => {
+    const byRow = new Map<string, DuplicateQuestionName>();
+    for (const d of duplicateNames) {
+      for (const loc of d.locations) {
+        if (!loc.inside) byRow.set(`${loc.page}:${loc.question}`, d);
+      }
+    }
+    return byRow;
+  }, [duplicateNames]);
 
   // Open all accordions by default on page switch
   useEffect(() => {
@@ -432,7 +434,7 @@ const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
                     const atTop = idxEl === 0;
                     const atBottom = idxEl === elements.length - 1;
                     const label = elementLabel(el);
-                    const duplicate = duplicatesByName.get((el.name ?? "").trim());
+                    const duplicate = duplicateByRow.get(`${pageIdx + 1}:${idxEl + 1}`);
 
                     return (
                       <Accordion.Item key={el.id} value={el.id}>
