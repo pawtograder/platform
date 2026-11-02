@@ -56,6 +56,10 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   offline: "orange.fg",
   failed: "fg.error"
 };
+// Shown in the same status region, in the `failed` color, after an edit the page can't save because
+// the student's saved response didn't load.
+const UNSAVABLE_STATUS_TEXT =
+  "Your saved answers didn't load, so changes can't be saved. Reload the page to try again.";
 // The project the browser Supabase client talks to (utils/supabase/client.ts), for the keepalive
 // request sent while the page unloads.
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -171,6 +175,8 @@ export default function SurveyTakingPage() {
   // reply was lost, or a submit from another tab. On a survey that allows editing the form keeps the
   // student's answers, so this, not existingResponse, says it is submitted.
   const [submittedSinceLoad, setSubmittedSinceLoad] = useState(false);
+  // An edit arrived that can't be saved because the student's saved response didn't load.
+  const [saveBlocked, setSaveBlocked] = useState(false);
 
   // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
   // that can race the Complete upsert: an autosave carrying is_submitted:false
@@ -289,6 +295,7 @@ export default function SurveyTakingPage() {
       responseStateKeyRef.current = responseKey;
       responseStateRef.current = "unknown";
       setSubmittedSinceLoad(false);
+      setSaveBlocked(false);
     }
 
     let cancelled = false;
@@ -612,7 +619,13 @@ export default function SurveyTakingPage() {
       // Only a submit in flight blocks autosave outright. An already-submitted response does
       // not: on an editable survey the student may still be changing answers, and
       // saveResponseToDb keeps that write in the submitted state rather than dropping it.
-      if (!canAutosave()) return;
+      if (!canAutosave()) {
+        // The saved response couldn't be read, so no edit is saved (see resolveResponseWriteFlags).
+        // The form is still editable, so say so rather than leave the status blank.
+        if (!isSubmittingRef.current && responseStateRef.current === "unknown") setSaveBlocked(true);
+        return;
+      }
+      setSaveBlocked(false);
 
       // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke and again on blur;
       // only the trailing edit needs persisting. Extract only the survey data from the model,
@@ -730,8 +743,13 @@ export default function SurveyTakingPage() {
             is already watching it when the first message arrives. */}
         {!isReadOnly && (
           <HStack gap={3} minH={6} justify="flex-end">
-            <Text role="status" aria-live="polite" fontSize="sm" color={AUTOSAVE_STATUS_COLOR[autosaveStatus]}>
-              {AUTOSAVE_STATUS_TEXT[autosaveStatus]}
+            <Text
+              role="status"
+              aria-live="polite"
+              fontSize="sm"
+              color={saveBlocked ? "fg.error" : AUTOSAVE_STATUS_COLOR[autosaveStatus]}
+            >
+              {saveBlocked ? UNSAVABLE_STATUS_TEXT : AUTOSAVE_STATUS_TEXT[autosaveStatus]}
             </Text>
             {autosaveStatus === "failed" && (
               <Button size="xs" variant="outline" onClick={() => autosaveQueueRef.current?.retryNow()}>
