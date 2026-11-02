@@ -732,6 +732,47 @@ test.describe("Surveys Page", () => {
     await expect(page.getByRole("link", { name: "Continue Survey" })).toBeVisible();
   });
 
+  test("a submitted response stays locked after a reload and sends no writes (editing off)", async ({ page }) => {
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Submitted Locked Survey",
+      status: "published",
+      allow_response_editing: false,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Submitted answer");
+    await page.getByRole("button", { name: "Complete" }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    await expect.poll(() => storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
+
+    const responseWrites: string[] = [];
+    page.on("request", (request) => {
+      if (
+        request.url().includes("/rest/v1/survey_responses") &&
+        ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())
+      ) {
+        responseWrites.push(request.method());
+      }
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible();
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toHaveValue("Submitted answer");
+    await expect(input).not.toBeEditable();
+    await expect(page.getByRole("button", { name: "Complete" })).toHaveCount(0);
+
+    // Typing at the locked field must not reach the server. Wait past the 1 s autosave debounce.
+    await input.click();
+    await page.keyboard.type(" and more");
+    await page.waitForTimeout(2000);
+    expect(responseWrites).toEqual([]);
+    await expect(input).toHaveValue("Submitted answer");
+    expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
+  });
+
   // Each debounced autosave is its own upsert. Holding the first one back makes a later write
   // reach the server before it; the writes must still land in the order the student made them.
   const holdFirstResponseWrite = async (page: Page, holdMs: number) => {
