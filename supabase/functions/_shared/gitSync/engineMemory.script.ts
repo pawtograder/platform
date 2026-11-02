@@ -1,12 +1,13 @@
 /**
  * Entry point for the engine memory test (`enginePlan.test.ts`, "memory: …"). Run under
- * `/usr/bin/time -v` so the peak RSS of this process is measured on its own, with the fixture
- * already built by the test process.
+ * `/usr/bin/time -v`, with the fixture already built by the test process so its memory is not
+ * counted.
  *
  * Usage: deno run --allow-read --allow-write --allow-run --allow-env engineMemory.script.ts <config.json>
  *
- * Prints one JSON line: `{ commit, pushed, peakRssMb }`. `peakRssMb` is sampled from inside the
- * process as a cross-check on what `time` reports.
+ * Prints one JSON line: `{ commit, pushed, peakRssMb }`. `peakRssMb` is this Deno process's own
+ * peak RSS, sampled every 20 ms with `Deno.memoryUsage().rss`. What `time -v` reports is different:
+ * the max of this process and the largest child it waited for, which here is often a git child.
  */
 import { type SyncInput, withSyncJob } from "./engine.ts";
 import { TemplateCache } from "./templateCache.ts";

@@ -40,7 +40,13 @@ import {
   type UnresolvedReason
 } from "../syncConflictGuard.ts";
 import { isBinaryPath } from "./binaryPath.ts";
-import { GitSyncError, GitSyncTerminalError, GitUnfetchableError, InvalidSyncInputError } from "./errors.ts";
+import {
+  GitSyncError,
+  GitSyncRetryableError,
+  GitSyncTerminalError,
+  GitUnfetchableError,
+  InvalidSyncInputError
+} from "./errors.ts";
 import {
   decodePath,
   escapePath,
@@ -274,10 +280,17 @@ export interface PushResult {
 export interface PushOptions {
   /**
    * Called only when the branch exists at a commit that is neither the plan's commit nor its
-   * parent (§5.8 "other"). It must throw to refuse the reset. WP3 backs it with the REST
-   * `assertSyncBranchSafeToReset`; the lease then pins the push to exactly `head`.
+   * parent (§5.8 "other"). `head` is the branch head `ls-remote` read, and `base` is the plan's
+   * parent `S`. It must throw to refuse the reset, and otherwise RETURN the head sha it validated.
+   *
+   * WP3 backs it with the REST branch-safety check, which must compare `${base}...${head}` for
+   * exactly this `head`, not re-read the branch. `assertSyncBranchSafeToReset` reads the ref
+   * itself, and a lagging read can return an older sync commit of ours while `ls-remote` already
+   * sees a student's commit on top of it: the check would approve ours, and the lease on the
+   * student's head would then force-push over their work. So the engine pushes only when the
+   * returned sha equals `head`, and the lease pins that same sha.
    */
-  confirmResetSafe: (head: string) => Promise<void>;
+  confirmResetSafe: (args: { head: string; base: string }) => Promise<string>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -642,8 +655,15 @@ class Job implements SyncJob {
       expect = plan.parent;
     } else {
       // Something else is there: an earlier sync commit of ours, or a student's work. The caller
-      // decides, and the lease holds the push to the exact head it decided about.
-      await opts.confirmResetSafe(head.sha);
+      // decides, and the lease holds the push to the exact head it decided about. An approval of
+      // any other sha is no approval of this one.
+      const validated = await opts.confirmResetSafe({ head: head.sha, base: plan.parent });
+      if (validated !== head.sha) {
+        throw new GitSyncRetryableError(
+          `the reset check for ${plan.branch} validated ${String(validated).slice(0, 40)}, but the branch is at ${head.sha}`,
+          "reset_check_mismatch"
+        );
+      }
       expect = head.sha;
     }
     await runGitChecked(

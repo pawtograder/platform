@@ -43,6 +43,10 @@
  *   default branch has another name). Raised by the engine, not by `runGit`. Terminal (§5.2).
  * - `non_utf8_path`: the handout diff names a path that is not valid UTF-8, which cannot pass
  *   through JS strings unchanged. Raised by the engine. Terminal (§5.3).
+ * - `reset_check_mismatch`: the branch-safety check approved a different sync-branch head than
+ *   the one the push would lease against, so the approval says nothing about the commit the push
+ *   would overwrite. Raised by the engine before any push. Retryable: the next attempt re-reads
+ *   the head and re-runs the check.
  */
 export type GitFailureKind =
   | "invalid_sync_input"
@@ -61,7 +65,8 @@ export type GitFailureKind =
   | "spawn_failed"
   | "git_failed"
   | "student_repo_has_no_main"
-  | "non_utf8_path";
+  | "non_utf8_path"
+  | "reset_check_mismatch";
 
 /** Terminal reasons this module can produce. They become `TerminalSyncError.reason` in WP3. */
 export type GitTerminalReason = "invalid_sync_input" | "file_too_large" | "student_repo_has_no_main" | "non_utf8_path";

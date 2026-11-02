@@ -50,7 +50,7 @@ function gitTest(name: string, fn: () => Promise<void>): void {
 }
 
 const REFUSE: PushOptions = {
-  confirmResetSafe: (head) => Promise.reject(new Error(`unexpected reset of ${head}`))
+  confirmResetSafe: ({ head }) => Promise.reject(new Error(`unexpected reset of ${head}`))
 };
 
 interface SyncRun {
@@ -389,6 +389,45 @@ gitTest("§5.7: the parent is S even when main has moved on, so GitHub's PR merg
   });
 });
 
+// Git's bare `<secs> <tz>` parser refuses dates outside ~1973-2100, and git writes a `-0000` zone
+// as `+0000`. H's date is copied verbatim out of its commit object, so each of these has to commit,
+// and do so deterministically.
+for (const [date, stored] of [
+  ["86400 +0000", "86400 +0000"],
+  ["99999999 +0000", "99999999 +0000"],
+  ["4102444800 +0000", "4102444800 +0000"],
+  ["1700000500 -0000", "1700000500 +0000"]
+] as const) {
+  gitTest(`§5.7: a handout commit dated "${date}" builds the same commit on every run`, async () => {
+    await GitFixture.with(async (fx) => {
+      const template = await fx.createRepo(T);
+      const F = await template.commitOn("main", { "a.txt": "a\n" });
+      const tree = await template.treeOf(await template.commit({ "a.txt": "A\n" }));
+      // Written as a raw object so the header carries exactly `date`, which git itself would not
+      // write for -0000.
+      const raw = `tree ${tree}\nparent ${F}\nauthor I <i@x> ${date}\ncommitter I <i@x> ${date}\n\nv2\n`;
+      const H = text(await template.git(["hash-object", "-t", "commit", "-w", "--stdin"], { stdin: raw }));
+      await template.setRef("refs/heads/main", H);
+      const student = await fx.createRepo(R);
+      const S = await student.commitOn("main", { "a.txt": "a\n" });
+      const input = { templateRepo: T, fromSha: F, toSha: H, syncedRepoSha: S, repoFullName: R };
+      assertEquals((await sync(fx, input, {}, REFUSE)).plan.analysis.handoutCommitDate, date);
+      const commits: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        const plan = await planHandoutSync(
+          input,
+          fx.jobContext({ templateCache: new TemplateCache(`${fx.root}/c${i}`) })
+        );
+        commits.push(commitPlan(plan).commit);
+      }
+      assertEquals(commits[0], commits[1]);
+      assertEquals(await student.ref(`refs/heads/sync-to-${H.slice(0, 7)}`), commits[0]);
+      const header = text(await student.git(["cat-file", "commit", commits[0]]));
+      assert(header.includes(`> ${stored}\ncommitter `) && header.includes(`> ${stored}\n\n`), header);
+    });
+  });
+}
+
 gitTest("determinism: fresh job dirs and a fresh cache build the identical commit", async () => {
   await GitFixture.with(async (fx) => {
     const w = await world(fx, {
@@ -624,13 +663,13 @@ gitTest("§5.8 other, ours-stale: confirmResetSafe approves and the lease pins t
       w.input,
       {},
       {
-        confirmResetSafe: (head) => {
-          asked.push(head);
-          return Promise.resolve();
+        confirmResetSafe: ({ head, base }) => {
+          asked.push(head, base);
+          return Promise.resolve(head);
         }
       }
     );
-    assertEquals(asked, [stale]);
+    assertEquals(asked, [stale, w.S]);
     assertEquals(push, { pushed: true, previousHead: stale });
     assertEquals(await w.student.ref(branchRef(w)), commitPlan(plan).commit);
     assert(spawnsTo(ctx, fx, R, "push")[0].includes(`--force-with-lease=${branchRef(w)}:${stale}`));
@@ -664,6 +703,35 @@ gitTest("§5.8 other, foreign: a refusal propagates and the branch is untouched"
   });
 });
 
+gitTest("§5.8 other: an approval of any sha but the head ls-remote read pushes nothing", async () => {
+  await GitFixture.with(async (fx) => {
+    const w = await simpleWorld(fx);
+    // Our earlier sync commit, and the student's resolution on top of it. ls-remote sees the
+    // student's; a lagging branch read in the REST check sees ours and approves it.
+    const ours = await w.student.commit(
+      { "a.txt": "A\n", "b.txt": "b\n" },
+      { parents: [w.S], message: syncCommitMessage(w.H, ["a.txt"]) }
+    );
+    const theirs = await w.student.commit(
+      { "a.txt": "my resolution\n", "b.txt": "b\n" },
+      { parents: [ours], message: "resolve\n", author: { name: "Student", email: "s@example.com" } }
+    );
+    await w.student.setRef(branchRef(w), theirs);
+    const ctx = fx.jobContext();
+    const e = await assertRejects(
+      () =>
+        withSyncJob(ctx, async (job) => {
+          const plan = commitPlan(await job.plan(w.input));
+          return await job.push(plan, { confirmResetSafe: () => Promise.resolve(ours) });
+        }),
+      GitSyncError
+    );
+    assertEquals([e.kind, e.retryable], ["reset_check_mismatch", true]);
+    assertEquals(spawnsTo(ctx, fx, R, "push"), []);
+    assertEquals(await w.student.ref(branchRef(w)), theirs);
+  });
+});
+
 gitTest("§5.8 lease race: a push landing between the read and the write is rejected, retryably", async () => {
   // The branch moves while the reset is being authorized.
   await GitFixture.with(async (fx) => {
@@ -678,8 +746,9 @@ gitTest("§5.8 lease race: a push landing between the read and the write is reje
           w.input,
           {},
           {
-            confirmResetSafe: async () => {
+            confirmResetSafe: async ({ head }) => {
               await w.student.setRef(branchRef(w), raced);
+              return head;
             }
           }
         ),
@@ -874,12 +943,19 @@ gitTest("push refuses a plan this job did not build", async () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Memory (spec §2, plan WP2): peak RSS of the Deno process under 150 MB
+// Memory (spec §2, plan WP2)
+//
+// Two bounds. GNU time's "Maximum resident set size" is the max of the measured process and the
+// largest child it waited for, so for this script it is max(Deno, largest git child): the 150 MB
+// bound covers the whole job. Deno's own peak, sampled inside the script with
+// `Deno.memoryUsage().rss`, is held under 100 MB, which is the property the rewrite is for: file
+// content never enters the JS heap.
 // ---------------------------------------------------------------------------------------------
 
 const TIME = "/usr/bin/time";
 const MEMORY_SCRIPT = new URL("./engineMemory.script.ts", import.meta.url).pathname;
 const RSS_LIMIT_KB = 150 * 1024;
+const DENO_OWN_RSS_LIMIT_MB = 100;
 
 async function haveTime(): Promise<boolean> {
   try {
@@ -920,7 +996,7 @@ async function writeLargeFile(path: string, bytes: number, kind: "ascii-ppm" | "
 
 for (const scenario of ["hw-img1 (8.4 MB PPM + 11 x 2 MB)", "one 90 MB file"] as const) {
   Deno.test({
-    name: `memory: ${scenario} syncs with the Deno process under 150 MB peak RSS`,
+    name: `memory: ${scenario}: max(Deno, any git child) under 150 MB, Deno's own peak under 100 MB`,
     ignore: SKIP || (!Deno.env.get("CI") && !(await haveTime())),
     fn: async () => {
       await GitFixture.with(async (fx) => {
@@ -973,12 +1049,16 @@ for (const scenario of ["hw-img1 (8.4 MB PPM + 11 x 2 MB)", "one 90 MB file"] as
         const kb = Number(/Maximum resident set size \(kbytes\): (\d+)/.exec(stderr)?.[1]);
         const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
         console.log(
-          `  ${scenario}: peak RSS ${Math.round(kb / 1024)} MB (time -v), deno heap peak ${result.peakRssMb} MB sampled`
+          `  ${scenario}: max(Deno, largest git child) RSS ${Math.round(kb / 1024)} MB (time -v); Deno's own peak RSS ${result.peakRssMb} MB (sampled)`
         );
         assertEquals(result.pushed, true);
         assertEquals(await w.student.ref(`refs/heads/sync-to-${w.H.slice(0, 7)}`), result.commit);
         assertEquals(await w.student.treeOf(result.commit), await w.template.treeOf(w.H));
-        assert(kb > 0 && kb < RSS_LIMIT_KB, `peak RSS ${kb} kB is over ${RSS_LIMIT_KB} kB`);
+        assert(kb > 0 && kb < RSS_LIMIT_KB, `max RSS of Deno and its git children ${kb} kB is over ${RSS_LIMIT_KB} kB`);
+        assert(
+          result.peakRssMb > 0 && result.peakRssMb < DENO_OWN_RSS_LIMIT_MB,
+          `Deno's own peak RSS ${result.peakRssMb} MB is over ${DENO_OWN_RSS_LIMIT_MB} MB`
+        );
       });
     }
   });
