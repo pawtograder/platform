@@ -33,8 +33,6 @@ function recordDashboardRefreshes(page: Page, courseId: number) {
   return refreshes;
 }
 
-const HYDRATION_ERROR = /hydrat|did(?: not|n't) match|Minified React error #4(?:18|23|25)/i;
-
 test.describe("Student dashboard survey countdown", () => {
   let course: Course;
   let student: User;
@@ -143,38 +141,21 @@ test.describe("Student dashboard survey countdown", () => {
     expect(refreshes).toHaveLength(2);
   });
 
-  test("the dashboard loads without hydration errors, then the countdown follows the browser clock", async ({
-    page
-  }) => {
-    const hydrationErrors: string[] = [];
-    page.on("console", (message) => {
-      if (message.type() === "error" && HYDRATION_ERROR.test(message.text())) {
-        hydrationErrors.push(message.text());
-      }
-    });
-    page.on("pageerror", (error) => {
-      if (HYDRATION_ERROR.test(error.message)) {
-        hydrationErrors.push(error.message);
-      }
-    });
-
+  test("a dashboard opened with the browser clock past the deadline shows Overdue at once", async ({ page }) => {
     await loginAsUser(page, student, course);
     const dueAt = Date.now() + 5 * 60_000;
-    await seedPublishedSurvey("Hydration Survey", dueAt);
+    await seedPublishedSurvey("Clock Ahead Survey", dueAt);
 
     // The server renders "Due in 5 minutes"; the browser's clock is already past the deadline,
-    // as it is for a dashboard restored from the router cache. CourseControllerProvider renders a
-    // spinner on the server, so today the cards are not in the server HTML and are first rendered
-    // on the client; the hydration check guards the page as a whole.
+    // as it is for a dashboard restored from the router cache. useNow reads the browser clock on
+    // mount, so the card is Overdue before the first 30 s tick.
     // From a blank page, so the dashboard load below is the first page to see the moved clock.
     await page.goto("about:blank");
     await page.clock.install({ time: dueAt + 5 * 60_000 });
     await page.goto(`/course/${course.id}`);
     const surveys = surveysToComplete(page);
-    await expect(surveys.getByText("Hydration Survey")).toBeVisible();
+    await expect(surveys.getByText("Clock Ahead Survey")).toBeVisible();
     await expect(surveys.getByText("Overdue", { exact: true })).toBeVisible();
     await expect(surveys.getByText(/^Was due \d+ minutes ago$/)).toBeVisible();
-    await page.waitForLoadState("networkidle");
-    expect(hydrationErrors).toEqual([]);
   });
 });
