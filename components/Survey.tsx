@@ -10,7 +10,10 @@ import { Json } from "@/utils/supabase/SupabaseTypes";
 
 interface SurveyComponentProps {
   surveyJson: Json;
-  /** The survey's database title. Shown instead of any title inside `surveyJson`. */
+  /**
+   * The survey's database title. Shown instead of any title inside `surveyJson`;
+   * without it the JSON title shows.
+   */
   title?: string;
   /**
    * Tag for the survey title. "h1" (the default) makes it the page heading, as on the
@@ -90,12 +93,15 @@ export default function SurveyComponent({
   // A rename arrives as a realtime update while a student may be mid-answer, so it
   // updates the existing model instead of rebuilding it (which would discard the
   // answers, page and focus). A layout effect sets it before the first paint, so
-  // the JSON title never flashes.
+  // the JSON title never flashes. Without a database title the JSON title comes back,
+  // per-locale values included.
   useLayoutEffect(() => {
     if (title) {
       survey.title = title;
+    } else {
+      survey.locTitle.setJson(JSON.parse(surveyJsonKey)?.title);
     }
-  }, [survey, title]);
+  }, [survey, surveyJsonKey, title]);
 
   useEffect(() => {
     if (colorMode === "dark") {
