@@ -745,6 +745,9 @@ test.describe("Surveys Page", () => {
     await page.getByRole("textbox", { name: "Question 1" }).fill("Submitted answer");
     await page.getByRole("button", { name: "Complete" }).click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    // Let the list finish loading first: on WebKit the redirect's navigation can still be under
+    // way after the URL changes, and it cuts off the goto below.
+    await expect(page.getByRole("link", { name: "View Submission" })).toBeVisible();
     await expect.poll(() => storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
 
     const responseWrites: string[] = [];
