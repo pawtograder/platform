@@ -4,7 +4,6 @@ import { Survey, SurveyResponse } from "@/types/survey";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
-  Badge,
   Box,
   CardBody,
   CardHeader,
@@ -15,13 +14,11 @@ import {
   DataListRoot,
   Heading,
   HStack,
-  Icon,
   Stack,
   Text,
   VStack
 } from "@chakra-ui/react";
-import { format, formatDistanceToNow, isPast } from "date-fns";
-import { FaClipboardList, FaExclamationCircle } from "react-icons/fa";
+import { format } from "date-fns";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
@@ -38,57 +35,10 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
+import SurveyDashboardCta from "./SurveyDashboardCta";
+import SurveysToComplete, { type SurveyToComplete } from "./SurveysToComplete";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
-
-function SurveyDashboardCta({
-  href,
-  label,
-  ariaLabel,
-  colorPalette
-}: {
-  href: string;
-  label: string;
-  ariaLabel: string;
-  colorPalette: "blue" | "red" | "yellow" | "green" | "gray";
-}) {
-  return (
-    <Link href={href} aria-label={ariaLabel} style={{ textDecoration: "none" }}>
-      <Box
-        as="span"
-        display="inline-flex"
-        alignItems="center"
-        justifyContent="center"
-        h="8"
-        px="3"
-        fontSize="sm"
-        fontWeight="medium"
-        borderRadius="l2"
-        colorPalette={colorPalette}
-        bg="colorPalette.solid"
-        color="colorPalette.contrast"
-        _hover={{ opacity: 0.92 }}
-        _active={{ opacity: 0.88 }}
-      >
-        {label}
-      </Box>
-    </Link>
-  );
-}
-
-function sortIncompleteSurveysForBanner(surveys: Survey[]): Survey[] {
-  const now = Date.now();
-  return [...surveys].sort((a, b) => {
-    const aTime = a.due_date ? new Date(a.due_date).getTime() : Number.POSITIVE_INFINITY;
-    const bTime = b.due_date ? new Date(b.due_date).getTime() : Number.POSITIVE_INFINITY;
-    const aOver = a.due_date != null && aTime < now;
-    const bOver = b.due_date != null && bTime < now;
-    if (aOver !== bOver) {
-      return aOver ? -1 : 1;
-    }
-    return aTime - bTime;
-  });
-}
 
 export default async function StudentDashboard({
   course_id,
@@ -126,9 +76,11 @@ export default async function StudentDashboard({
   // both dates, so a passed suggested date is still legible.
   const showSuggestedDueDate = courseFeatureEnabled(course?.features, COURSE_FEATURES.SUGGESTED_DUE_DATE);
 
-  const nowMs = Date.now();
+  // Gates available_at here, and is the time SurveysToComplete's countdown starts from, so its
+  // first client render agrees with this one.
+  const renderedAt = Date.now();
   const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
-    (s) => s.status === "published" && (s.available_at == null || new Date(s.available_at).getTime() <= nowMs)
+    (s) => s.status === "published" && (s.available_at == null || new Date(s.available_at).getTime() <= renderedAt)
   );
 
   const surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
@@ -163,11 +115,14 @@ export default async function StudentDashboard({
     responsesBySurveyId.set(r.survey_id, r);
   }
 
-  const incompletePublishedSurveys = surveys.filter((s) => {
-    const r = responsesBySurveyId.get(s.id);
-    return !r?.is_submitted;
-  });
-  const incompleteSurveysForBanner = sortIncompleteSurveysForBanner(incompletePublishedSurveys);
+  const surveysToComplete: SurveyToComplete[] = surveys
+    .filter((s) => !responsesBySurveyId.get(s.id)?.is_submitted)
+    .map((s) => ({
+      id: s.id,
+      title: s.title,
+      due_date: s.due_date,
+      inProgress: responsesBySurveyId.has(s.id)
+    }));
 
   const labLeaders: string[] =
     leadersRaw
@@ -227,67 +182,7 @@ export default async function StudentDashboard({
       {discordConfigured && !isViewingAsStudent && <PendingInvites classId={course_id} />}
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
-        {incompleteSurveysForBanner.length > 0 && (
-          <Box w="100%" mb={3}>
-            <Text fontWeight="semibold" fontSize="sm" mb={2} color="fg.muted">
-              Surveys to complete
-            </Text>
-            <VStack gap={2} align="stretch">
-              {incompleteSurveysForBanner.map((survey) => {
-                const response = responsesBySurveyId.get(survey.id);
-                const isOverdue = Boolean(survey.due_date && isPast(new Date(survey.due_date)));
-                const inProgress = Boolean(response && !response.is_submitted);
-                const href = `/course/${course_id}/surveys/${survey.id}`;
-                return (
-                  <Box
-                    key={survey.id}
-                    w="100%"
-                    p={3}
-                    borderRadius="md"
-                    border="1px solid"
-                    borderColor={isOverdue ? "red.300" : "blue.300"}
-                    bg={isOverdue ? "red.50" : "blue.50"}
-                    _dark={{
-                      bg: isOverdue ? "red.900" : "blue.900",
-                      borderColor: isOverdue ? "red.600" : "blue.600"
-                    }}
-                  >
-                    <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
-                      <HStack gap={3} align="flex-start">
-                        <Icon fontSize="lg" color={isOverdue ? "red.500" : "blue.500"} mt={0.5}>
-                          {isOverdue ? <FaExclamationCircle /> : <FaClipboardList />}
-                        </Icon>
-                        <VStack align="start" gap={0}>
-                          <HStack gap={2} flexWrap="wrap">
-                            <Text fontWeight="semibold" fontSize="sm">
-                              {survey.title ?? "Untitled survey"}
-                            </Text>
-                            <Badge colorPalette={isOverdue ? "red" : inProgress ? "yellow" : "blue"} size="sm">
-                              {isOverdue ? "Overdue" : inProgress ? "In progress" : "Pending"}
-                            </Badge>
-                          </HStack>
-                          {survey.due_date && (
-                            <Text fontSize="xs" color="fg.muted">
-                              {isOverdue
-                                ? `Was due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`
-                                : `Due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`}
-                            </Text>
-                          )}
-                        </VStack>
-                      </HStack>
-                      <SurveyDashboardCta
-                        href={href}
-                        label={inProgress ? "Continue" : "Take survey"}
-                        ariaLabel={`${inProgress ? "Continue" : "Take survey"}: ${survey.title ?? "Untitled survey"}`}
-                        colorPalette={isOverdue ? "red" : "blue"}
-                      />
-                    </HStack>
-                  </Box>
-                );
-              })}
-            </VStack>
-          </Box>
-        )}
+        <SurveysToComplete courseId={course_id} surveys={surveysToComplete} renderedAt={renderedAt} />
       </CourseFeatureGate>
 
       {/* Section Cards */}
