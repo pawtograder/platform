@@ -80,7 +80,7 @@ test.describe("Student dashboard survey countdown", () => {
   test("a survey left open on the dashboard turns Overdue within 30 s of its deadline, without a reload", async ({
     page
   }) => {
-    await loginAsUser(page, student);
+    await loginAsUser(page, student, course);
     const dueAt = Date.now() + 3 * 60_000;
     await seedPublishedSurvey("Deadline Survey", dueAt);
 
@@ -109,7 +109,7 @@ test.describe("Student dashboard survey countdown", () => {
   test("a hidden dashboard shows the current countdown as soon as it is shown again, and refreshes at most once a minute", async ({
     page
   }) => {
-    await loginAsUser(page, student);
+    await loginAsUser(page, student, course);
     const dueAt = Date.now() + 30 * 60_000;
     await seedPublishedSurvey("Background Tab Survey", dueAt);
 
@@ -158,7 +158,7 @@ test.describe("Student dashboard survey countdown", () => {
       }
     });
 
-    await loginAsUser(page, student);
+    await loginAsUser(page, student, course);
     const dueAt = Date.now() + 5 * 60_000;
     await seedPublishedSurvey("Hydration Survey", dueAt);
 
@@ -166,6 +166,8 @@ test.describe("Student dashboard survey countdown", () => {
     // as it is for a dashboard restored from the router cache. CourseControllerProvider renders a
     // spinner on the server, so today the cards are not in the server HTML and are first rendered
     // on the client; the hydration check guards the page as a whole.
+    // From a blank page, so the dashboard load below is the first page to see the moved clock.
+    await page.goto("about:blank");
     await page.clock.install({ time: dueAt + 5 * 60_000 });
     await page.goto(`/course/${course.id}`);
     const surveys = surveysToComplete(page);
