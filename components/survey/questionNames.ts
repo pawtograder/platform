@@ -5,7 +5,7 @@
  * key share one answer: picking an answer in one clears the other, a required question can be
  * left empty, and the response shows one value in both places. This module finds those
  * collisions so the builder, the save paths and the publish menu can refuse to publish them.
- * `supabase/migrations/20261029120000_surveys_unique_question_names.sql` applies the same rule
+ * `supabase/migrations/20261102160000_surveys_unique_question_names.sql` applies the same rule
  * in the database; keep the two walks in step.
  *
  * The key is the one survey-core 2.3 uses (Question.getValueName):

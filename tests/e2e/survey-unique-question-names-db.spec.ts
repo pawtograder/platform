@@ -1,6 +1,6 @@
 /**
  * DB-level coverage for `surveys_reject_duplicate_question_names`
- * (20261029120000_surveys_unique_question_names.sql): a survey whose questions share a name may
+ * (20261102160000_surveys_unique_question_names.sql): a survey whose questions share a name may
  * not become published, and a published survey's questions may not change while a duplicate
  * remains (#1005).
  *
