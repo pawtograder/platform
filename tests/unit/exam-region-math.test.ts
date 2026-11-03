@@ -47,12 +47,14 @@ describe("cropAspect", () => {
     expect(cropAspect(region, LETTER)).toBeCloseTo(979.2 / 316.8, 5);
   });
 
-  it("is narrower than the uncorrected ratio by exactly the page's own aspect", () => {
-    // This is the bug: the old code returned region.width / region.height, which is too wide
-    // by pageHeight / pageWidth = 1584 / 1224 = 1.294, so every crop looked stretched.
+  it("uses the page it is given, not Letter (A4 at scale 2 is 1191x1684)", () => {
+    // Replaces an algebraic rearrangement of the test above, which added no coverage: Aryan showed
+    // on review that a cropAspect hardcoding Letter -- (region.width * 1224) / (region.height * 1584)
+    // -- passed all 14 tests, because every one of them used the Letter page. rasterizePdf renders
+    // each scanned page at 2x its PDF size, so an A4 scan arrives at 1191x1684 and that mutant is
+    // wrong for it.
     const region = { x: 0.1, y: 0.3, width: 0.8, height: 0.2 };
-    const uncorrected = region.width / region.height;
-    expect(uncorrected / cropAspect(region, LETTER)).toBeCloseTo(1584 / 1224, 5);
+    expect(cropAspect(region, { width: 1191, height: 1684 })).toBeCloseTo((0.8 * 1191) / (0.2 * 1684), 5);
   });
 
   it("returns a square for a region that covers the same pixels each way", () => {
