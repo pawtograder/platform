@@ -79,4 +79,25 @@ describe("saveExamStructure", () => {
 
     expect(result).toEqual({ rubric: "failed", rubricError: "Rubric 42 does not belong to assignment 8" });
   });
+
+  it("explains a build that lost a race with another build", async () => {
+    const { client } = mockSupabase({
+      rpc: ({ fn }) =>
+        fn === "exam_sync_rubric_from_questions"
+          ? {
+              data: null,
+              error: {
+                code: "23505",
+                message: 'duplicate key value violates unique constraint "rubric_parts_rubric_exam_question_key"'
+              }
+            }
+          : { data: null, error: null }
+    });
+    const result = await saveExamStructure(client, { ...structure, gradingRubricId: 42 });
+
+    expect(result).toEqual({
+      rubric: "failed",
+      rubricError: "Someone else built this rubric at the same time. Reload to see it."
+    });
+  });
 });
