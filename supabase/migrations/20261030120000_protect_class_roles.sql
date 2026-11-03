@@ -18,8 +18,14 @@
 -- holds the default grader role's capabilities plus Head TA's. user_class_capabilities() is the one
 -- place that applies this rule. No tables change for it.
 --
--- The manage_roles check can't use step 1's inline shape here: it reads role_capabilities, and
--- role_capabilities' own policies read class_roles, so Postgres stops with "infinite recursion
+-- Every policy that checks a capability uses
+--   class_id IN (SELECT public.user_class_ids_with_capability('<capability>'))
+-- and never looks the capability up itself by joining user_privileges and role_capabilities:
+-- that finds only the user's own class role and misses their default role's capabilities. This
+-- replaces the "inline shape" advice in step 1's header. See docs/capabilities.md.
+--
+-- In this file there is a second reason: the manage_roles check reads role_capabilities, whose
+-- own policies read class_roles, so an inline join makes Postgres stop with "infinite recursion
 -- detected in policy". Like authorize_for_private_discussion_thread
 -- (20250917002948_optimize-submission-rls.sql), a SECURITY DEFINER function reads the tables
 -- without RLS. It takes no per-row argument, so `class_id IN (SELECT f(...))` runs it once per
