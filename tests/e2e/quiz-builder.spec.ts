@@ -83,11 +83,14 @@ test.describe("Quiz builder", () => {
     // rubric scaffolded from the question tree (back-reference present). The numeric leaf is
     // auto-graded in an in-app quiz, so it gets a criterion but no manual check.
     const rubricId = assignment.grading_rubric_id as number;
-    const linked = (rows: { data: unknown }[] | null) =>
-      (rows ?? []).some((r) => (r.data as { exam_question_id?: number } | null)?.exam_question_id);
-    const { data: criteria } = await supabase.from("rubric_criteria").select("data").eq("rubric_id", rubricId);
+    const linked = (rows: { exam_question_id: number | null }[] | null) =>
+      (rows ?? []).some((r) => r.exam_question_id != null);
+    const { data: criteria } = await supabase
+      .from("rubric_criteria")
+      .select("exam_question_id")
+      .eq("rubric_id", rubricId);
     expect(linked(criteria)).toBe(true);
-    const { data: checks } = await supabase.from("rubric_checks").select("data").eq("rubric_id", rubricId);
+    const { data: checks } = await supabase.from("rubric_checks").select("exam_question_id").eq("rubric_id", rubricId);
     expect(linked(checks)).toBe(false);
   });
 });

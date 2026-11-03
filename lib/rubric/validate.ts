@@ -1,8 +1,6 @@
-import { ExamRubricCheckDataType, RubricChecksDataType, YmlRubricChecksType } from "@/utils/supabase/DatabaseTypes";
+import { RubricChecksDataType, YmlRubricChecksType } from "@/utils/supabase/DatabaseTypes";
 
-export function rubricCheckDataOrThrow(
-  check: YmlRubricChecksType
-): RubricChecksDataType | ExamRubricCheckDataType | undefined {
+export function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataType | undefined {
   if (!check.data) {
     return undefined;
   }
@@ -28,8 +26,7 @@ export function rubricCheckDataOrThrow(
     }
     return specificData;
   } else if (typeof check.data === "object" && check.data !== null && !("options" in check.data)) {
-    const { exam_question_id } = check.data as ExamRubricCheckDataType;
-    return typeof exam_question_id === "number" ? { exam_question_id } : undefined;
+    return undefined;
   }
 
   return undefined;

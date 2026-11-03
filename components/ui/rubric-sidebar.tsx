@@ -18,6 +18,7 @@ import {
   Fieldset,
   Heading,
   HStack,
+  Input,
   Menu,
   NativeSelectField,
   NativeSelectRoot,
@@ -87,6 +88,7 @@ import {
   GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE
 } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
+import { parseAppliedExamPoints } from "@/lib/rubric/pointsSanitize";
 import { Icon } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -1154,6 +1156,10 @@ function SubmissionCommentForm({
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
+  // A check generated from an exam question takes any amount from 0 to its points (#1069).
+  const isExamCheck = check.exam_question_id != null;
+  const [pointsInput, setPointsInput] = useState(String(check.points));
+  const examPoints = isExamCheck ? parseAppliedExamPoints(pointsInput, check.points) : null;
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -1177,6 +1183,28 @@ function SubmissionCommentForm({
           {check.is_comment_required ? "A comment is required." : "Comment is optional, enter to add."}
         </Text>
       </Box>
+      {isExamCheck && (
+        <Field.Root invalid={examPoints === null} px={2} py={1}>
+          <HStack gap={2}>
+            <Field.Label mb={0}>Points</Field.Label>
+            <Input
+              aria-label={`Points for ${check.name}`}
+              type="number"
+              size="xs"
+              w="80px"
+              min={0}
+              max={check.points}
+              step="any"
+              value={pointsInput}
+              onChange={(e) => setPointsInput(e.target.value)}
+            />
+            <Text fontSize="xs" color="fg.muted">
+              out of {check.points}
+            </Text>
+          </HStack>
+          <Field.ErrorText>Enter a number from 0 to {check.points}.</Field.ErrorText>
+        </Field.Root>
+      )}
       <MessageInput
         ariaLabel={
           check.is_comment_required
@@ -1203,7 +1231,12 @@ function SubmissionCommentForm({
             submission_id: submission.id,
             // Use the determined author profile based on grader pseudonymous mode
             author: authorProfileId,
-            points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
+            points:
+              examPoints !== null
+                ? examPoints
+                : selectedOption?.points !== undefined
+                  ? selectedOption.points
+                  : check.points,
             released: submissionReview?.released ?? true,
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
@@ -1230,6 +1263,7 @@ function SubmissionCommentForm({
         }}
         defaultSingleLine={true}
         allowEmptyMessage={!check.is_comment_required}
+        disabled={isExamCheck && examPoints === null}
       />
     </Box>
   );

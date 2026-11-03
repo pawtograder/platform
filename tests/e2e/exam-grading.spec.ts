@@ -103,9 +103,9 @@ test.describe("Exam grading OCR pipeline", () => {
 
     const { data: parts } = await supabase
       .from("rubric_parts")
-      .select("id, data")
+      .select("id, exam_question_id")
       .eq("rubric_id", assignment.grading_rubric_id as number);
-    const examParts = (parts ?? []).filter((p) => (p.data as { exam_question_id?: number } | null)?.exam_question_id);
+    const examParts = (parts ?? []).filter((p) => p.exam_question_id != null);
     expect(examParts.length).toBeGreaterThanOrEqual(1);
 
     // --- 4) seed a scan batch: 3 single-page exams (Alice=111, Bob=222, unknown=999) ---
