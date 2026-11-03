@@ -385,11 +385,9 @@ test.describe("Assessment types (quiz + survey)", () => {
     // instructor hand-grades the free-text question by applying its rubric check (+5)
     const { data: ftCheck } = await supabase
       .from("rubric_checks")
-      .select("id, data")
+      .select("id, exam_question_id")
       .eq("rubric_id", assignment.grading_rubric_id as number);
-    const check = (ftCheck ?? []).find(
-      (c) => (c.data as { exam_question_id?: number } | null)?.exam_question_id === ftQ.id
-    )!;
+    const check = (ftCheck ?? []).find((c) => c.exam_question_id === ftQ.id)!;
     expect(check).toBeTruthy();
 
     await supabase.from("submission_comments").insert({

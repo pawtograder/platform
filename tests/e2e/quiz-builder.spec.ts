@@ -83,8 +83,8 @@ test.describe("Quiz builder", () => {
     // rubric scaffolded from the question tree (back-reference present)
     const { data: checks } = await supabase
       .from("rubric_checks")
-      .select("data")
+      .select("exam_question_id")
       .eq("rubric_id", assignment.grading_rubric_id as number);
-    expect((checks ?? []).some((c) => (c.data as { exam_question_id?: number } | null)?.exam_question_id)).toBe(true);
+    expect((checks ?? []).some((c) => c.exam_question_id != null)).toBe(true);
   });
 });
