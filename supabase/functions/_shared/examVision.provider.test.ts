@@ -7,7 +7,7 @@
  * rejects the way AbortSignal.timeout does. The worker-side behaviour (retry, no premature
  * finalization) is covered end to end by tests/e2e/exam-provider-faults.spec.ts.
  *
- * Run from supabase/functions:  deno test --no-check --allow-net --allow-env _shared/examVision.test.ts
+ * Run from supabase/functions:  deno test --no-check --allow-net --allow-env _shared/examVision.provider.test.ts
  */
 import { assert, assertEquals, assertInstanceOf, assertRejects } from "jsr:@std/assert@^1";
 import { getExamVisionProvider, ProviderRateLimitError, ProviderTransientError } from "./examVision.ts";
