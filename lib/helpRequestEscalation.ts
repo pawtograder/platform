@@ -1,7 +1,7 @@
 /**
  * Rules for office hours ticket escalation shared by the queue views.
  * The database enforces the same rules in
- * supabase/migrations/20261029120000_help_request_escalation.sql; these helpers
+ * supabase/migrations/20261103130000_help_request_escalation.sql; these helpers
  * only decide what to show.
  */
 

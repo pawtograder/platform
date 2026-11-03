@@ -129,6 +129,8 @@ export default function StudentActivitySummary({
         return "Sent message";
       case "request_resolved":
         return "Request resolved";
+      case "request_escalated":
+        return "Request escalated";
       case "video_joined":
         return "Joined video";
       case "video_left":

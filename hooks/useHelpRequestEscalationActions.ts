@@ -7,7 +7,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useCallback, useMemo } from "react";
 
 /**
- * Calls the escalation RPCs (20261029120000_help_request_escalation.sql). Each call refetches the
+ * Calls the escalation RPCs (20261103130000_help_request_escalation.sql). Each call refetches the
  * request afterwards so the acting user sees the change before the realtime broadcast arrives.
  * Returns true on success; failures are reported with a toast.
  */

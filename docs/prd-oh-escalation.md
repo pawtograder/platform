@@ -4,7 +4,7 @@ Status: V1 built on `feature/oh-escalation`, revised after capstone feedback. Ow
 
 ## Problem
 
-Students told us in discovery interviews that when a TA can't resolve their question, they have no way to hand it to someone more experienced. They rejoin the queue at the back and wait again, often for a question that takes two minutes once the right person sees it. Today the only staff action short of resolving is "Stop helping", which returns the ticket to the queue with no note and no priority. Every rejoin adds a ticket to the line for everyone else.
+Students told us in discovery interviews that when a TA can't resolve their question, they have no way to hand it on to another staff member along with what has already been tried. They rejoin the queue at the back and wait again, often for a question that takes two minutes once the right person sees it. Today the only staff action short of resolving is "Stop helping", which returns the ticket to the queue with no note and no priority. Every rejoin adds a ticket to the line for everyone else.
 
 ## Goals
 
@@ -18,7 +18,7 @@ Students told us in discovery interviews that when a TA can't resolve their ques
 - Automatic routing by topic or assignment.
 - Notifications outside the app (email, Discord, push).
 - Analytics dashboards for escalation data.
-- Escalation targets or new staff roles. An escalated ticket is flagged to every staff member working the queue.
+- Escalation targets or new staff roles. Many courses have no senior TA tier, so an escalated ticket is flagged to every staff member working the queue, and the note and history let whoever has the right expertise, including an instructor, claim it. Routing to an instructor after repeated escalations is a possible follow-up.
 - A cap on escalations per ticket. Staff decide case by case with End ticket.
 
 ## Definitions
@@ -89,4 +89,4 @@ Each metric has a baseline we can compute from existing tables (`help_requests`,
 - Interview notes and synthesis: TODO
 - Final PRD: TODO
 - Clickable prototype (mock data): https://claude.ai/artifact/7ZB62gNYXo3iJywFkV163K
-- Migration: `supabase/migrations/20261029120000_help_request_escalation.sql`
+- Migration: `supabase/migrations/20261103130000_help_request_escalation.sql`
