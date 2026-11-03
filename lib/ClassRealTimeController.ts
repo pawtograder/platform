@@ -413,7 +413,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
 
   /**
    * Subscribe to UPDATE events on this controller's course row in `public.classes`.
-   * Delivered as classes_update broadcasts on the students topic; managed by RealtimeChannelManager.
+   * Delivered as classes_update broadcasts on the students or staff topic; managed by RealtimeChannelManager.
    */
   subscribeToClassesUpdate(callback: (updatedCourse: ClassesRealtimeUpdate) => void): () => void {
     if (this._closed) {
@@ -424,9 +424,15 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     let cancelled = false;
 
     void this._channelManager
-      .subscribeToClassesUpdate(this._classId, this._client, callback, async (channel, status, err) => {
-        await this._handleSubscriptionStateEvent(channel, status, err);
-      })
+      .subscribeToClassesUpdate(
+        this._classId,
+        this._client,
+        callback,
+        async (channel, status, err) => {
+          await this._handleSubscriptionStateEvent(channel, status, err);
+        },
+        this._isStaff
+      )
       .then((unsub) => {
         if (cancelled) {
           unsub();

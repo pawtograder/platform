@@ -899,17 +899,18 @@ export class RealtimeChannelManager {
 
   /**
    * Subscribe to UPDATE events on a single course row in `public.classes`.
-   * A DB trigger broadcasts these on the students topic (classes_update broadcast migration),
-   * so they ride the same channel that ClassRealTimeController already uses for the class.
+   * A DB trigger broadcasts these on the students topic and the staff topic. Staff subscribe to
+   * the staff topic, so they don't join the students topic and receive its events too.
    */
   async subscribeToClassesUpdate(
     courseId: number,
     client: SupabaseClient<Database>,
     callback: (updatedCourse: ClassesRealtimeUpdate) => void,
-    statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void
+    statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void,
+    isStaff: boolean
   ): Promise<() => void> {
     return this.subscribe(
-      `class:${courseId}:students`,
+      `class:${courseId}:${isStaff ? "staff" : "students"}`,
       client,
       (message) => {
         const raw = message as unknown as { type?: string; data?: Partial<ClassesRow> };

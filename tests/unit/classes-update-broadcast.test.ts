@@ -55,16 +55,36 @@ describe("RealtimeChannelManager.subscribeToClassesUpdate", () => {
   it("subscribes to the class students topic", async () => {
     const { client, channelFn } = makeClient();
 
-    await manager.subscribeToClassesUpdate(7, client, () => {});
+    await manager.subscribeToClassesUpdate(
+      7,
+      client,
+      () => {},
+      () => {},
+      false
+    );
 
     expect(channelFn).toHaveBeenCalledWith("class:7:students", expect.anything());
+  });
+
+  it("subscribes staff to the class staff topic", async () => {
+    const { client, channelFn } = makeClient();
+
+    await manager.subscribeToClassesUpdate(
+      7,
+      client,
+      () => {},
+      () => {},
+      true
+    );
+
+    expect(channelFn).toHaveBeenCalledWith("class:7:staff", expect.anything());
   });
 
   it("passes the updated row from a classes_update message to the callback", async () => {
     const { client, deliver } = makeClient();
     const callback = jest.fn();
 
-    await manager.subscribeToClassesUpdate(7, client, callback);
+    await manager.subscribeToClassesUpdate(7, client, callback, () => {}, false);
     deliver({ type: "classes_update", class_id: 7, data: { id: 7, name: "Renamed" }, timestamp: "t" });
 
     expect(callback).toHaveBeenCalledTimes(1);
@@ -75,7 +95,7 @@ describe("RealtimeChannelManager.subscribeToClassesUpdate", () => {
     const { client, deliver } = makeClient();
     const callback = jest.fn();
 
-    await manager.subscribeToClassesUpdate(7, client, callback);
+    await manager.subscribeToClassesUpdate(7, client, callback, () => {}, false);
     deliver({ type: "table_change", table: "help_requests", class_id: 7, data: { id: 7 }, timestamp: "t" });
 
     expect(callback).not.toHaveBeenCalled();
@@ -85,7 +105,7 @@ describe("RealtimeChannelManager.subscribeToClassesUpdate", () => {
     const { client, deliver } = makeClient();
     const callback = jest.fn();
 
-    await manager.subscribeToClassesUpdate(7, client, callback);
+    await manager.subscribeToClassesUpdate(7, client, callback, () => {}, false);
     deliver({ type: "classes_update", class_id: 7, data: {}, timestamp: "t" });
 
     expect(callback).not.toHaveBeenCalled();
@@ -108,7 +128,7 @@ describe("RealtimeChannelManager shared channel teardown", () => {
     const classesCallback = jest.fn();
     const otherCallback = jest.fn();
 
-    const unsubscribeClasses = await manager.subscribeToClassesUpdate(7, client, classesCallback);
+    const unsubscribeClasses = await manager.subscribeToClassesUpdate(7, client, classesCallback, () => {}, false);
     await manager.subscribe("class:7:students", client, otherCallback, () => {});
     unsubscribeClasses();
 
