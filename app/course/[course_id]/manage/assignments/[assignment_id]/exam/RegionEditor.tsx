@@ -1,7 +1,7 @@
 "use client";
 
 import { examExtractTemplate } from "@/lib/edgeFunctions";
-import { saveExamStructure } from "@/lib/exam/examClient";
+import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -419,7 +419,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       p_exam_id: examId,
       p_rubric_id: gradingRubricId
     });
-    if (error) toaster.error({ title: "Build rubric failed", description: error.message });
+    if (error) toaster.error({ title: "Build rubric failed", description: rubricBuildErrorMessage(error) });
     else toaster.success({ title: "Rubric built from exam structure" });
   }, [examId, gradingRubricId, dirty]);
 

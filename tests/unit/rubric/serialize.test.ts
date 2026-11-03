@@ -52,37 +52,6 @@ describe("HydratedRubricToYamlRubric — round-trip on CSV fixtures", () => {
     expect(foundOptions).toBe(true);
   });
 
-  it("preserves data.exam_question_id on generated exam checks", () => {
-    const yaml: YmlRubricType = {
-      name: "Exam",
-      parts: [
-        {
-          name: "Part A",
-          criteria: [
-            {
-              name: "Q1",
-              is_additive: true,
-              is_deduction_only: false,
-              total_points: 5,
-              checks: [
-                {
-                  name: "Item 1",
-                  points: 5,
-                  is_annotation: false,
-                  is_required: false,
-                  is_comment_required: false,
-                  data: { exam_question_id: 38 }
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    };
-    const once = roundTripYaml(yaml);
-    expect(once.parts[0].criteria[0].checks[0].data).toEqual({ exam_question_id: 38 });
-  });
-
   it("preserves is_deduction_only and is_comment_required + max_annotations", () => {
     const yaml = loadFixtureAsYaml("deduction_only");
     const once = roundTripYaml(yaml);
@@ -152,6 +121,7 @@ describe("HydratedRubricToYamlRubric — references emission", () => {
           id: id * 10,
           name: "P",
           description: null,
+          exam_question_id: null,
           ordinal: 0,
           rubric_id: id,
           class_id: 0,
@@ -164,6 +134,7 @@ describe("HydratedRubricToYamlRubric — references emission", () => {
               id: id * 100,
               name: "C",
               description: null,
+              exam_question_id: null,
               is_deduction_only: false,
               ordinal: 0,
               rubric_id: id,
@@ -181,6 +152,7 @@ describe("HydratedRubricToYamlRubric — references emission", () => {
                   id: checkId,
                   name: checkName,
                   description: null,
+                  exam_question_id: null,
                   ordinal: 0,
                   rubric_id: id,
                   assignment_id: 1,
@@ -257,6 +229,7 @@ describe("HydratedRubricToYamlRubric — sort by ordinal", () => {
           id: 1,
           name: "B",
           description: null,
+          exam_question_id: null,
           ordinal: 1,
           rubric_id: 0,
           class_id: 0,
@@ -271,6 +244,7 @@ describe("HydratedRubricToYamlRubric — sort by ordinal", () => {
           id: 2,
           name: "A",
           description: null,
+          exam_question_id: null,
           ordinal: 0,
           rubric_id: 0,
           class_id: 0,

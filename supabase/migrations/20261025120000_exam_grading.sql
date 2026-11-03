@@ -596,40 +596,27 @@ $$;
 revoke all on function public.exam_upsert_questions_and_regions(bigint, jsonb, jsonb) from public;
 grant execute on function public.exam_upsert_questions_and_regions(bigint, jsonb, jsonb) to authenticated, service_role;
 
--- Scaffold / link rubric_parts -> rubric_criteria -> rubric_checks from the exam's
--- 3-level question tree, writing the back-reference {exam_question_id} into each
--- component's data jsonb. Idempotent (matches on data->>'exam_question_id').
--- Data for a generated exam check: the link back to its question, plus partial-credit options from
--- the question's points down to 0. Whole points up to 20; larger questions step so there are about
--- 20 options. A question under 1 point gets no options, since a check can't have just one.
-create or replace function public.exam_generated_check_data(p_question_id bigint, p_points numeric)
-returns jsonb
-language sql
-immutable
-set search_path = ''
-as $$
-  select case
-    when p_points is null or p_points < 1 then jsonb_build_object('exam_question_id', p_question_id)
-    else jsonb_build_object(
-      'exam_question_id', p_question_id,
-      'options', (
-        select jsonb_agg(
-                 jsonb_build_object(
-                   'label', case when pts = p_points then 'Full credit' when pts = 0 then 'No credit' else 'Partial credit' end,
-                   'points', pts)
-                 order by pts desc)
-        from (
-          select p_points - s.i * ceil(p_points / 20.0) as pts
-            from generate_series(0, floor(p_points / ceil(p_points / 20.0))::int) as s(i)
-          union
-          select 0
-        ) steps
-      )
-    )
-  end;
-$$;
-revoke all on function public.exam_generated_check_data(bigint, numeric) from public;
+-- The link from a generated rubric part, criterion or check back to its exam question. It used to
+-- live in data jsonb, which the rubric editor rewrites on every save, so a save could cut a check
+-- off from its question and the next rebuild added a second copy (#1068). update_rubric_full only
+-- sets the columns it lists, so a column survives every editor save. on delete cascade removes a
+-- deleted question's generated rows, and the unique indexes make a second copy impossible.
+alter table public.rubric_parts
+  add column exam_question_id bigint references public.exam_questions(id) on delete cascade;
+alter table public.rubric_criteria
+  add column exam_question_id bigint references public.exam_questions(id) on delete cascade;
+alter table public.rubric_checks
+  add column exam_question_id bigint references public.exam_questions(id) on delete cascade;
+create unique index rubric_parts_rubric_exam_question_key
+  on public.rubric_parts (rubric_id, exam_question_id);
+create unique index rubric_criteria_rubric_exam_question_key
+  on public.rubric_criteria (rubric_id, exam_question_id);
+create unique index rubric_checks_rubric_exam_question_key
+  on public.rubric_checks (rubric_id, exam_question_id);
 
+-- Scaffold / link rubric_parts -> rubric_criteria -> rubric_checks from the exam's
+-- 3-level question tree, setting exam_question_id on each generated row. Idempotent
+-- (matches on exam_question_id).
 create or replace function public.exam_sync_rubric_from_questions(
   p_exam_id bigint,
   p_rubric_id bigint
@@ -652,7 +639,6 @@ declare
   v_l3_count integer;
   v_delivery text;
   v_in_app boolean;
-  v_lost_check text;
 begin
   select class_id, assignment_id, delivery_mode into v_class_id, v_assignment_id, v_delivery
     from public.exams where id = p_exam_id;
@@ -695,125 +681,59 @@ begin
   -- draft question's points never reached rubric_checks.points: the criterion total summed stale
   -- checks, so manual grading used the old maximum while quiz autograding used the new value.
   -- Gating on "no submissions yet" keeps both properties -- a draft stays consistent, and once
-  -- grading can have happened the grader's numbers are left alone. Only rows carrying
-  -- data.exam_question_id are touched, so user-authored checks are never rewritten.
+  -- grading can have happened the grader's numbers are left alone. Only rows with an
+  -- exam_question_id are touched, so user-authored checks are never rewritten.
   if not exists (select 1 from public.submissions where assignment_id = v_assignment_id) then
     update public.rubric_checks c
       set points = coalesce(q.points, 0)
       from public.exam_questions q
       where c.rubric_id = p_rubric_id
-        and c.data ? 'exam_question_id'
-        and q.id = (c.data->>'exam_question_id')::bigint
+        and q.id = c.exam_question_id
         and q.exam_id = p_exam_id
         and c.points is distinct from coalesce(q.points, 0);
-    -- Same for the partial-credit options, so they never go past the question's points.
-    update public.rubric_checks c
-      set data = public.exam_generated_check_data(q.id, q.points)
-      from public.exam_questions q
-      where c.rubric_id = p_rubric_id
-        and c.data ? 'exam_question_id'
-        and q.id = (c.data->>'exam_question_id')::bigint
-        and q.exam_id = p_exam_id
-        and c.data is distinct from public.exam_generated_check_data(q.id, q.points);
   end if;
 
   -- Drop generated LEAF rows for questions that have since GAINED children. The leaf branches
   -- above simply stop treating such a question as a leaf; the criterion/check generated for it
-  -- while it WAS a leaf survived, because reconciliation only removes rows whose question no
+  -- while it WAS a leaf survived, because on delete cascade only removes rows whose question no
   -- longer exists. Its old hidden points were then awardable alongside the new child checks.
   delete from public.rubric_checks c
   using public.exam_questions q
   where c.rubric_id = p_rubric_id
-    and c.data ? 'exam_question_id'
-    and q.id = (c.data->>'exam_question_id')::bigint
+    and q.id = c.exam_question_id
     and q.exam_id = p_exam_id
     and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
   delete from public.rubric_criteria cr
   using public.exam_questions q
   where cr.rubric_id = p_rubric_id
-    and cr.data ? 'exam_question_id'
-    and q.id = (cr.data->>'exam_question_id')::bigint
+    and q.id = cr.exam_question_id
     and q.exam_id = p_exam_id
     and q.level = 1
     and exists (select 1 from public.exam_questions ch where ch.parent_id = q.id);
 
   -- Drop generated checks whose question has BECOME auto-scored. The skip-on-insert predicates
   -- above only stop a NEW manual check being created; a free-text leaf that was synced once and
-  -- later given an objective type plus an answer key kept its existing check, and the
-  -- reconciliation below retains it because the question still exists -- so the recompute could
+  -- later given an objective type plus an answer key kept its existing check, which
+  -- stays because the question still exists -- so the recompute could
   -- sum that manual check on top of quiz_autograde's score for the same question.
   if v_in_app then
     delete from public.rubric_checks c
     using public.exam_questions q
     where c.rubric_id = p_rubric_id
-      and c.data ? 'exam_question_id'
-      and q.id = (c.data->>'exam_question_id')::bigint
+      and q.id = c.exam_question_id
       and q.exam_id = p_exam_id
       and q.answer_type in ('multiple_choice','true_false','numeric')
       and q.correct_answer is not null;
   end if;
 
-  -- Reconcile: drop generated rows whose question no longer exists. exam_upsert_questions_and_
-  -- regions prunes deleted questions, but this sync only ever iterated the SURVIVING ones, so a
-  -- question deleted while the quiz was still a draft left its part/criterion/check behind --
-  -- and _submission_review_recompute_scores kept counting that orphaned criterion for every
-  -- future submission. Only rows carrying a data.exam_question_id are touched, so genuinely
-  -- user-authored parts/criteria/checks are never removed. Safe to delete rather than merely
-  -- hide, because the write RPC now refuses any question change once a submission exists: an
-  -- orphan can only have been created while the assignment was still ungraded.
-  delete from public.rubric_checks c
-  where c.rubric_id = p_rubric_id
-    and c.data ? 'exam_question_id'
-    and not exists (
-      select 1 from public.exam_questions q
-      where q.exam_id = p_exam_id and q.id = (c.data->>'exam_question_id')::bigint
-    );
-  delete from public.rubric_criteria cr
-  where cr.rubric_id = p_rubric_id
-    and cr.data ? 'exam_question_id'
-    and not exists (
-      select 1 from public.exam_questions q
-      where q.exam_id = p_exam_id and q.id = (cr.data->>'exam_question_id')::bigint
-    );
-  delete from public.rubric_parts pt
-  where pt.rubric_id = p_rubric_id
-    and pt.data ? 'exam_question_id'
-    and not exists (
-      select 1 from public.exam_questions q
-      where q.exam_id = p_exam_id and q.id = (pt.data->>'exam_question_id')::bigint
-    );
-
-  -- A generated check found by name but not by exam_question_id lost its key (an editor save
-  -- used to null check data). The loop below would insert a second copy, so refuse instead.
-  select c.name into v_lost_check
-    from public.exam_questions q
-    join public.rubric_criteria cr
-      on cr.rubric_id = p_rubric_id
-     and (cr.data->>'exam_question_id')::bigint = case when q.level = 3 then q.parent_id else q.id end
-    join public.rubric_checks c
-      on c.rubric_criteria_id = cr.id
-     and not coalesce(c.data ? 'exam_question_id', false)
-     and c.name = coalesce(q.label, 'Check')
-    where q.exam_id = p_exam_id
-      and not exists (select 1 from public.exam_questions ch where ch.parent_id = q.id)
-      and not (v_in_app and q.answer_type in ('multiple_choice','true_false','numeric') and q.correct_answer is not null)
-      and not exists (
-        select 1 from public.rubric_checks k
-        where k.rubric_criteria_id = cr.id and (k.data->>'exam_question_id')::bigint = q.id
-      )
-    limit 1;
-  if found then
-    raise exception 'Rubric check "%" has lost its exam_question_id, so rebuilding would add a second copy. Delete the check or restore its data, then rebuild.', v_lost_check;
-  end if;
-
   -- level 1 -> rubric_parts
   for r1 in select * from public.exam_questions where exam_id = p_exam_id and level = 1 order by ordinal loop
     select id into v_part_id from public.rubric_parts
-      where rubric_id = p_rubric_id and (data->>'exam_question_id')::bigint = r1.id limit 1;
+      where rubric_id = p_rubric_id and exam_question_id = r1.id limit 1;
     if v_part_id is null then
-      insert into public.rubric_parts (class_id, assignment_id, rubric_id, name, description, ordinal, data)
+      insert into public.rubric_parts (class_id, assignment_id, rubric_id, name, description, ordinal, exam_question_id)
       values (v_class_id, v_assignment_id, p_rubric_id, coalesce(r1.label, 'Part'), r1.prompt, r1.ordinal,
-              jsonb_build_object('exam_question_id', r1.id))
+              r1.id)
       returning id into v_part_id;
     else
       update public.rubric_parts set name = coalesce(r1.label, name), description = r1.prompt, ordinal = r1.ordinal
@@ -829,12 +749,12 @@ begin
       where exam_id = p_exam_id and level = 2 and parent_id = r1.id;
     if v_l2_count = 0 then
       select id into v_crit_id from public.rubric_criteria
-        where rubric_id = p_rubric_id and (data->>'exam_question_id')::bigint = r1.id limit 1;
+        where rubric_id = p_rubric_id and exam_question_id = r1.id limit 1;
       if v_crit_id is null then
         insert into public.rubric_criteria
-          (class_id, assignment_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, data)
+          (class_id, assignment_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, exam_question_id)
         values (v_class_id, v_assignment_id, p_rubric_id, v_part_id, coalesce(r1.label, 'Criteria'), r1.prompt,
-                coalesce(r1.points, 0), true, r1.ordinal, jsonb_build_object('exam_question_id', r1.id))
+                coalesce(r1.points, 0), true, r1.ordinal, r1.id)
         returning id into v_crit_id;
       else
         update public.rubric_criteria set rubric_part_id = v_part_id, name = coalesce(r1.label, name),
@@ -849,12 +769,12 @@ begin
       if not (v_in_app and r1.answer_type in ('multiple_choice','true_false','numeric') and r1.correct_answer is not null)
          and not exists (
         select 1 from public.rubric_checks
-        where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r1.id
+        where rubric_criteria_id = v_crit_id and exam_question_id = r1.id
       ) then
         insert into public.rubric_checks
-          (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
+          (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, exam_question_id)
         values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r1.label, 'Check'), r1.prompt, r1.ordinal,
-                coalesce(r1.points, 0), false, false, public.exam_generated_check_data(r1.id, r1.points));
+                coalesce(r1.points, 0), false, false, r1.id);
       end if;
       select count(*), coalesce(sum(points), 0)
         into v_check_count, v_check_points
@@ -869,12 +789,12 @@ begin
     for r2 in select * from public.exam_questions
               where exam_id = p_exam_id and level = 2 and parent_id = r1.id order by ordinal loop
       select id into v_crit_id from public.rubric_criteria
-        where rubric_id = p_rubric_id and (data->>'exam_question_id')::bigint = r2.id limit 1;
+        where rubric_id = p_rubric_id and exam_question_id = r2.id limit 1;
       if v_crit_id is null then
         insert into public.rubric_criteria
-          (class_id, assignment_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, data)
+          (class_id, assignment_id, rubric_id, rubric_part_id, name, description, total_points, is_additive, ordinal, exam_question_id)
         values (v_class_id, v_assignment_id, p_rubric_id, v_part_id, coalesce(r2.label,'Criteria'), r2.prompt,
-                coalesce(r2.points, 0), true, r2.ordinal, jsonb_build_object('exam_question_id', r2.id))
+                coalesce(r2.points, 0), true, r2.ordinal, r2.id)
         returning id into v_crit_id;
       else
         update public.rubric_criteria set rubric_part_id = v_part_id, name = coalesce(r2.label, name),
@@ -894,12 +814,12 @@ begin
         if not (v_in_app and r2.answer_type in ('multiple_choice','true_false','numeric') and r2.correct_answer is not null)
            and not exists (
           select 1 from public.rubric_checks
-          where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r2.id
+          where rubric_criteria_id = v_crit_id and exam_question_id = r2.id
         ) then
           insert into public.rubric_checks
-            (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
+            (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, exam_question_id)
           values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r2.label, 'Check'), r2.prompt, r2.ordinal,
-                  coalesce(r2.points, 0), false, false, public.exam_generated_check_data(r2.id, r2.points));
+                  coalesce(r2.points, 0), false, false, r2.id);
         end if;
       end if;
 
@@ -909,12 +829,12 @@ begin
         if not (v_in_app and r3.answer_type in ('multiple_choice','true_false','numeric') and r3.correct_answer is not null)
            and not exists (
           select 1 from public.rubric_checks
-          where rubric_criteria_id = v_crit_id and (data->>'exam_question_id')::bigint = r3.id
+          where rubric_criteria_id = v_crit_id and exam_question_id = r3.id
         ) then
           insert into public.rubric_checks
-            (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, data)
+            (class_id, assignment_id, rubric_id, rubric_criteria_id, name, description, ordinal, points, is_annotation, is_comment_required, exam_question_id)
           values (v_class_id, v_assignment_id, p_rubric_id, v_crit_id, coalesce(r3.label,'Check'), r3.prompt, r3.ordinal,
-                  coalesce(r3.points, 0), false, false, public.exam_generated_check_data(r3.id, r3.points));
+                  coalesce(r3.points, 0), false, false, r3.id);
         end if;
       end loop;
 

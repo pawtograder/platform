@@ -24,8 +24,17 @@ export type AssessmentQuestion = GeneratedQuestion & {
 export type ExamRubricStatus = "built" | "existing" | "no-rubric" | "failed";
 
 /**
- * Save an exam's question tree and regions. On the first save, also build the grading rubric from
- * them. Later saves leave an existing rubric alone, since a rebuild resets its generated checks.
+ * What to show an instructor when exam_sync_rubric_from_questions fails. Two builds racing on an
+ * empty rubric make the second one hit a unique index (23505), and Postgres's text means nothing here.
+ */
+export function rubricBuildErrorMessage(error: { code?: string; message: string }): string {
+  return error.code === "23505" ? "Someone else built this rubric at the same time. Reload to see it." : error.message;
+}
+
+/**
+ * Save an exam's question tree and regions, and build the grading rubric from them if the rubric is
+ * still empty. A rubric that has anything in it is left alone: a rebuild resets generated checks,
+ * and building into a hand-written rubric could count the same answers twice.
  * Throws if the save fails. A failed build doesn't undo the save, so it comes back as rubricError.
  */
 export async function saveExamStructure(
@@ -48,8 +57,7 @@ export async function saveExamStructure(
   const { count, error: countErr } = await supabase
     .from("rubric_parts")
     .select("id", { count: "exact", head: true })
-    .eq("rubric_id", gradingRubricId)
-    .not("data->exam_question_id", "is", null);
+    .eq("rubric_id", gradingRubricId);
   if (countErr) return { rubric: "failed", rubricError: countErr.message };
   if (count) return { rubric: "existing", rubricError: null };
 
@@ -57,7 +65,9 @@ export async function saveExamStructure(
     p_exam_id: examId,
     p_rubric_id: gradingRubricId
   });
-  return syncErr ? { rubric: "failed", rubricError: syncErr.message } : { rubric: "built", rubricError: null };
+  return syncErr
+    ? { rubric: "failed", rubricError: rubricBuildErrorMessage(syncErr) }
+    : { rubric: "built", rubricError: null };
 }
 
 /**

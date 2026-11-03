@@ -34,6 +34,7 @@ function newBlankPart(ordinal: number): HydratedRubricPart {
     id: -1,
     name: `Part ${ordinal + 1}`,
     description: null,
+    exam_question_id: null,
     ordinal,
     rubric_id: 0,
     class_id: 0,
