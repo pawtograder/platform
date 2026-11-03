@@ -83,9 +83,9 @@ async function openExamEditor(page: Page, { emptyRubric }: { emptyRubric: boolea
   const examChecks = async () => {
     const { data } = await supabase
       .from("rubric_checks")
-      .select("points, data")
+      .select("points, exam_question_id")
       .eq("rubric_id", rubricId)
-      .not("data->exam_question_id", "is", null);
+      .not("exam_question_id", "is", null);
     return data ?? [];
   };
   return { examChecks };
