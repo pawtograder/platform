@@ -135,7 +135,12 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   fi
   export NEXT_DIST_DIR=.next-sso-e2e
   BUILD_STAMP="$REPO/$NEXT_DIST_DIR/.sso-e2e-public-env"
-  PUBLIC_ENV="$({ env; cat .env.production.local .env.local .env.production .env 2>/dev/null || true; } | grep '^NEXT_PUBLIC_' | sort)"
+  # The NEXT_PUBLIC_* values `next build` sees, .env files included; it loads them as production.
+  PUBLIC_ENV="$(NODE_ENV=production node -e '
+    const { combinedEnv } = require("@next/env").loadEnvConfig(process.cwd(), false);
+    const keys = Object.keys(combinedEnv).filter((k) => k.startsWith("NEXT_PUBLIC_")).sort();
+    process.stdout.write(keys.map((k) => `${k}=${combinedEnv[k]}`).join("\n"));
+  ')"
   if [ "${SKIP_BUILD:-}" != "1" ] || [ "$(cat "$BUILD_STAMP" 2>/dev/null)" != "$PUBLIC_ENV" ]; then
     log "Building Pawtograder"
     rm -rf "${REPO:?}/$NEXT_DIST_DIR"
