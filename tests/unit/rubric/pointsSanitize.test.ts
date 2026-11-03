@@ -1,5 +1,20 @@
-import { sanitizeHydratedRubricPoints, normalizePointValue } from "@/lib/rubric/pointsSanitize";
+import { sanitizeHydratedRubricPoints, normalizePointValue, parseAppliedExamPoints } from "@/lib/rubric/pointsSanitize";
 import type { HydratedRubric } from "@/utils/supabase/DatabaseTypes";
+
+describe("parseAppliedExamPoints", () => {
+  it.each([
+    ["6", 6],
+    ["2.5", 2.5],
+    ["0", 0],
+    ["10", 10]
+  ])("accepts %s on a 10-point check", (input, expected) => {
+    expect(parseAppliedExamPoints(input, 10)).toBe(expected);
+  });
+
+  it.each(["11", "-1", "", "  ", "abc", "Infinity"])("refuses %p on a 10-point check", (input) => {
+    expect(parseAppliedExamPoints(input, 10)).toBeNull();
+  });
+});
 
 describe("normalizePointValue", () => {
   it("leaves non-negative values unchanged", () => {
