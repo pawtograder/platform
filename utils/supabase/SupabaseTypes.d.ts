@@ -11744,6 +11744,9 @@ export type Database = {
           class_id: number | null;
           class_section_id: number | null;
           class_section_name: string | null;
+          code_walk_completed: boolean | null;
+          code_walk_released: boolean | null;
+          code_walk_review_count: number | null;
           completed_at: string | null;
           completed_by: string | null;
           created_at: string | null;
@@ -12911,6 +12914,10 @@ export type Database = {
       };
       delete_queued_messages_for_class_simple: {
         Args: { p_class_id: number };
+        Returns: number;
+      };
+      delete_repository_rows: {
+        Args: { p_repository_ids: number[] };
         Returns: number;
       };
       delete_system_notifications_by_campaign: {
