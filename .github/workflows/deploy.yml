@@ -549,6 +549,13 @@ jobs:
       - name: Check function grants
         run: npm run check:function-grants
 
+      # Foreign keys into repositories and submissions are NO ACTION, not CASCADE, so a delete
+      # path that misses a child table fails with 23503 instead of destroying graded work. Fails
+      # when a foreign key into either table is new or changed, when a registered SQL delete path
+      # does not clear a NO ACTION child table, or when anything else deletes those rows directly.
+      - name: Check delete paths
+        run: npm run check:delete-paths
+
       - name: Serve Edge Functions
         run: |
           set -euo pipefail
