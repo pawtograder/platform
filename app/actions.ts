@@ -6,6 +6,13 @@ import { redirect } from "next/navigation";
 import { env } from "process";
 import { isSignupsEnabled } from "@/lib/features";
 import { getBranding } from "@/lib/branding";
+import { safeRedirectPath, sameOriginRedirectPath } from "@/lib/redirectPath";
+
+function webBaseUrl() {
+  return process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL
+    : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL;
+}
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
@@ -17,7 +24,9 @@ export const confirmEmailAction = async (formData: FormData) => {
   if (error) {
     return encodedRedirect("error", "/auth/confirm", error.message);
   }
-  return redirect("/course");
+  // The confirmation email carries GoTrue's RedirectTo: signup's emailRedirectTo, or the site URL.
+  const redirectPath = sameOriginRedirectPath(formData.get("redirect_to") as string | null, webBaseUrl());
+  return redirect(redirectPath && redirectPath !== "/" ? redirectPath : "/course");
 };
 export const acceptInvitationAction = async (formData: FormData) => {
   const password = formData.get("password");
@@ -80,18 +89,6 @@ export const signInWithMagicLinkAction = async (formData: FormData) => {
   return redirect("/course");
 };
 
-// Browsers drop tabs/newlines and read `\` as `/`, so `/\t/evil.test` or `/\evil.test` would leave the origin.
-function safeRedirectPath(value: string | null): string | undefined {
-  if (!value || !value.startsWith("/")) return undefined;
-  if ([...value].some((c) => c === "\\" || c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return undefined;
-  const base = "http://pawtograder.invalid";
-  try {
-    return new URL(value, base).origin === base ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
@@ -110,7 +107,7 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
+    redirectTo: `${webBaseUrl()}/reset-password`
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
@@ -140,7 +137,7 @@ export const signUpWithEmailAction = async (email: string, password: string, red
     email,
     password,
     options: {
-      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
+      emailRedirectTo: `${webBaseUrl()}${redirectPath ?? "/"}`
     }
   });
   if (error) {
