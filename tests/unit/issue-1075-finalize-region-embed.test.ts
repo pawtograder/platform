@@ -83,15 +83,22 @@ describeIntegration("issue #1075: finalize's answer-region embed is unambiguous"
     expect(row.exam_questions?.answer_type).toBe("numeric");
   });
 
-  test("the unnamed embed still fails, so the named one is load-bearing", async () => {
-    // Guards against someone 'simplifying' the select back: if a future migration drops one of
-    // the two foreign keys this fails, and the named-FK version above can be reconsidered.
+  test("the ambiguity is gone: an unnamed embed now resolves instead of PGRST201", async () => {
+    // This test used to assert the opposite. While both the single-column and composite foreign
+    // keys existed, an unnamed embed was ambiguous and PostgREST refused it, which is #1075.
+    // Aryan pointed out in review that every single-column FK here has a composite partner to the
+    // same table over NOT NULL columns with the same cascade, so it constrained nothing extra, and
+    // that dropping them removes the ambiguity rather than working around it. The migration now
+    // does that, so this asserts the end state: the next person who writes an embed across this
+    // pair cannot hit #1075.
+    //
+    // finalize still names the FK (finalizeQueries.ts). That is now belt and braces rather than
+    // load-bearing, and it stays because it also documents which relationship the query means.
     const { error } = await supabase
       .from("exam_question_regions")
       .select("exam_question_id, exam_questions(answer_type)")
       .limit(1);
 
-    expect(error).not.toBeNull();
-    expect(error!.code).toBe("PGRST201");
+    expect(error).toBeNull();
   });
 });

@@ -200,6 +200,28 @@ alter table public.exam_scan_pages
   add constraint exam_scan_pages_batch_class_fkey
   foreign key (batch_id, class_id) references public.exam_scan_batches (id, class_id) on delete cascade;
 
+-- Drop the single-column FKs the composite ones above supersede (#1075).
+--
+-- Each of these points at the same parent table as a composite partner declared above, over NOT
+-- NULL columns and with the same ON DELETE CASCADE, so it constrains nothing the composite does
+-- not. Keeping both is what produced #1075: PostgREST sees two relationships between the same
+-- pair of tables, cannot choose, and fails the whole query with PGRST201. finalize's region query
+-- hit that and every scan batch stalled in `finalizing`.
+--
+-- Naming the FK in the embed (see exam-async-worker/finalizeQueries.ts) fixes that query. These
+-- drops remove the ambiguity itself, so the next embed written across any of these pairs cannot
+-- reintroduce it. Suggested and verified by @Aryan0102 in review on #1088; done here rather than
+-- as a follow-up because #814 is still unmerged, so this edits the original migration instead of
+-- needing one that drops constraints on live rows.
+alter table public.exams drop constraint if exists exams_assignment_id_fkey;
+alter table public.exam_template_pages drop constraint if exists exam_template_pages_exam_id_fkey;
+alter table public.exam_questions drop constraint if exists exam_questions_exam_id_fkey;
+alter table public.exam_question_regions drop constraint if exists exam_question_regions_exam_id_fkey;
+alter table public.exam_question_regions drop constraint if exists exam_question_regions_exam_question_id_fkey;
+alter table public.exam_scan_batches drop constraint if exists exam_scan_batches_exam_id_fkey;
+alter table public.exam_scanned_submissions drop constraint if exists exam_scanned_submissions_exam_id_fkey;
+alter table public.exam_scan_pages drop constraint if exists exam_scan_pages_batch_id_fkey;
+
 
 -- DLQ tracking table (mirrors async_worker_dlq_messages)
 create table if not exists public.exam_async_worker_dlq_messages (

@@ -1,17 +1,18 @@
 /**
- * Companion guard for #1075.
+ * Keeps `finalize`'s select and the test that exercises it from drifting apart.
  *
- * `issue-1075-finalize-region-embed.test.ts` proves the exported select works against a real
- * database. It does not prove `finalize` uses it. Aryan pointed out on review that putting an
- * inline `exam_questions(answer_type)` select back into index.ts leaves both of those tests green,
- * because neither one loads the worker. So the fix could be undone without anything going red.
+ * `issue-1075-finalize-region-embed.test.ts` runs FINALIZE_ANSWER_REGION_SELECT against a real
+ * database. If the worker stopped using that constant, the test would still pass while checking a
+ * query the worker no longer runs. Aryan showed on review that this was not hypothetical: putting
+ * an inline select back into index.ts left both of those tests green.
  *
- * This reads the worker and asserts the call site still takes its select from finalizeQueries.ts.
- * Source-level rather than behavioural on purpose: the worker is Deno, the thing being protected is
- * one argument of one call, and the cheap check is that the argument is not a literal.
+ * Note this is no longer guarding against #1075 itself. The migration now drops the single-column
+ * foreign keys that made the embed ambiguous, so an inline embed would work. What is left is the
+ * narrower point above: the test and the worker should be reading the same string.
  *
- * Separate file because the integration test imports TestingUtils, which builds an admin client at
- * module scope and throws without database env vars. This guard needs none, so it runs anywhere.
+ * Source-level rather than behavioural on purpose, and in its own file because the integration
+ * test imports TestingUtils, which builds an admin client at module scope and throws without
+ * database env vars. This one needs none.
  */
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -26,11 +27,6 @@ describe("issue #1075: finalize's call site uses the shared select", () => {
     // ~353 selects a literal and is unrelated to #1075. The one this protects is the answer-region
     // query inside finalize, which is the only place the double-FK embed appears.
     expect(workerSource).toContain(".select(FINALIZE_ANSWER_REGION_SELECT)");
-  });
-
-  test("no inline exam_questions embed is left anywhere in the worker", () => {
-    // An unnamed embed is the #1075 bug in any query, not only finalize's.
-    expect(workerSource).not.toMatch(/\.select\([^)]*exam_questions\s*\(/);
   });
 
   test("the worker imports it from finalizeQueries", () => {
