@@ -97,6 +97,13 @@ spec:
                   --variable ephemeral_storage_limit={{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" }} \
                   --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
                   --message "chart {{ .Chart.Version }}"
+                # A template created by push never stops its workspaces; the edit gives it a schedule.
+                {{- $s := .Values.coderBootstrap.schedule }}
+                /opt/coder templates edit "$name" --yes \
+                  --default-ttl {{ $s.defaultTTL | toString | squote }} \
+                  --activity-bump {{ $s.activityBump | toString | squote }} \
+                  --dormancy-threshold {{ $s.dormancyThreshold | toString | squote }} \
+                  --dormancy-auto-deletion {{ $s.dormancyAutoDeletion | toString | squote }}
               done
           env:
             - name: ADMIN_EMAIL

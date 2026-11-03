@@ -2899,6 +2899,14 @@ coder-db:
 coderBootstrap:
   enabled: true
   workspaceNamespace: ""
+  # Applied to every pushed template with `coder templates edit` on each install and upgrade, so
+  # changes made in Coder's UI are reset. Go durations; "0" turns a setting off. See README "Coder".
+  schedule:
+    defaultTTL: 2h # a new workspace stops this long after it starts (a template push creates has none)
+    activityBump: 1h # each time the agent reports a connection, the stop moves to at least this far out
+    # Need a Coder Premium license; with either set non-zero on an unlicensed Coder the hook fails.
+    dormancyThreshold: "0"
+    dormancyAutoDeletion: "0" # deletes the workspace and its home volume
   workspaces:
     image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
     arch: amd64
