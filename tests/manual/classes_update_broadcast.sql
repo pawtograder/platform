@@ -1,4 +1,4 @@
--- Proof harness for trigger_broadcast_classes_update (migration 20261028130000).
+-- Proof harness for trigger_broadcast_classes_update (migration 20261103120000).
 --
 -- Manual check, not run in CI. Run from the repo root against local Supabase. Everything
 -- happens in one transaction that ends in ROLLBACK, so it leaves no fixtures behind:
@@ -30,7 +30,7 @@ BEGIN
   VALUES (chan_topic, gen_random_uuid(), gen_random_uuid(), now() + interval '10 minutes');
 
   SELECT count(*) INTO before_count FROM realtime.messages WHERE realtime.messages.topic = chan_topic;
-  UPDATE public.classes SET term = term WHERE id = cid;
+  UPDATE public.classes SET term = COALESCE(term, 0) + 1 WHERE id = cid;
   SELECT count(*) INTO after_count FROM realtime.messages WHERE realtime.messages.topic = chan_topic;
 
   IF after_count - before_count <> 1 THEN
@@ -56,7 +56,7 @@ BEGIN
   DELETE FROM public.realtime_channel_subscriptions WHERE channel = chan_topic;
 
   SELECT count(*) INTO before_count FROM realtime.messages WHERE realtime.messages.topic = chan_topic;
-  UPDATE public.classes SET term = term WHERE id = cid;
+  UPDATE public.classes SET term = COALESCE(term, 0) + 1 WHERE id = cid;
   SELECT count(*) INTO after_count FROM realtime.messages WHERE realtime.messages.topic = chan_topic;
 
   IF after_count <> before_count THEN
