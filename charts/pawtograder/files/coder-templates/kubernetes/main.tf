@@ -74,6 +74,12 @@ variable "ephemeral_storage_limit" {
   default     = "4Gi"
 }
 
+variable "code_server_version" {
+  type        = string
+  description = "code-server release to run, downloaded into the home volume unless the image's code-server is this version; empty uses the image's."
+  default     = "4.143.1"
+}
+
 variable "image" {
   type        = string
   description = "Workspace container image."
@@ -144,11 +150,22 @@ resource "coder_agent" "main" {
   arch           = var.arch
   startup_script = <<-EOT
     set -e
+    V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
-    if [ -z "$CS" ]; then
-      CS="$HOME/.local/bin/code-server"
-      [ -x "$CS" ] || curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix="$HOME/.local"
+    # Every workspace runs the same release, whatever the image or an earlier start left on PATH.
+    if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
+      CS="$HOME/.local/lib/code-server-$V/bin/code-server"
+      if [ ! -x "$CS" ]; then
+        mkdir -p "$HOME/.local/lib"
+        rm -rf "$HOME"/.local/lib/.code-server-*
+        tmp="$(mktemp -d "$HOME/.local/lib/.code-server-XXXXXX")"
+        curl -fsSL "https://github.com/coder/code-server/releases/download/v$V/code-server-$V-linux-${var.arch}.tar.gz" | tar -xz -C "$tmp"
+        rm -rf "$HOME/.local/lib/code-server-$V"
+        mv "$tmp/code-server-$V-linux-${var.arch}" "$HOME/.local/lib/code-server-$V"
+        rmdir "$tmp"
+      fi
     fi
+    [ -n "$CS" ] || { echo "the workspace image has no code-server and code_server_version is empty" >&2; exit 1; }
     "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
   EOT
 

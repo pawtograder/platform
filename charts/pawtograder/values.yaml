@@ -2909,6 +2909,9 @@ coderBootstrap:
     dormancyAutoDeletion: "0" # deletes the workspace and its home volume
   workspaces:
     image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    # The template downloads this code-server release into the home volume on a workspace's first
+    # start, unless the image's code-server is already this version. "" uses the image's copy.
+    codeServerVersion: 4.143.1
     arch: amd64
     priorityClassName: ""
     imagePullPolicy: IfNotPresent
