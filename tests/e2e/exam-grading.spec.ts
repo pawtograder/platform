@@ -263,7 +263,8 @@ test.describe("Exam grading OCR pipeline", () => {
     const graded = (submissions ?? [])[1]!;
     await loginAsUser(page, grader, course);
     await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${graded.id}/files`);
-    await page.getByRole("radio", { name: /3\s*Partial credit/ }).check({ force: true });
+    await page.getByRole("checkbox", { name: /Item 1/ }).check({ force: true });
+    await page.getByLabel("Points for Item 1").fill("3");
     await page.getByRole("button", { name: "Add Check" }).click();
     await expect
       .poll(
