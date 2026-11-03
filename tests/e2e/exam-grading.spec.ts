@@ -248,11 +248,15 @@ test.describe("Exam grading OCR pipeline", () => {
       const data = examArtifact!.data as { questions: { ocr_text: string }[] };
       expect(Array.isArray(data.questions)).toBe(true);
       expect(data.questions.length).toBeGreaterThanOrEqual(1);
-      // An artifact row existing is not the same as the region having matched anything. With
-      // the fake provider every answer region has words under it, so empty text here means the
-      // region math or the fixture placement regressed, not that the page was blank.
+      // An artifact row existing is not the same as the region having matched anything, and
+      // non-empty text is not the same as THIS student's text. Aryan tried a finalize that loads
+      // pages by batch_id instead of scanned_submission_id on review: Bob's artifact came back
+      // holding Alice's answers, so Bob would be graded on Alice's work, and a non-empty check
+      // passed anyway. The fake provider puts the page's SIS id in every word, so checking for it
+      // pins the text to the student whose page it came from.
+      const expectedSis = s.profile_id === alice.private_profile_id ? aliceSis : bobSis;
       for (const q of data.questions) {
-        expect(q.ocr_text, `ocr_text for submission ${s.id}`).not.toBe("");
+        expect(q.ocr_text, `ocr_text for submission ${s.id}`).toContain(`sis-${expectedSis}`);
       }
     }
 

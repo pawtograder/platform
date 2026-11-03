@@ -112,23 +112,35 @@ export class FakeExamVisionProvider implements ExamVisionProvider {
   ocrImage(page: PageImage): Promise<{ text: string; words: WordBox[] }> {
     const sis = page.name.match(/sis-([A-Za-z0-9]+)/)?.[1] ?? "unknown";
     const text = `OCR(${page.name}) sis-${sis}`;
-    // One word box per band, tiling the tokens down the page.
+    // Tokens tiled across a grid, not just down one column.
     //
-    // This read as "spread down the page", but `text` is only ever two tokens, so every page
-    // put its words at y 0.10 and 0.15 and nowhere else. wordsInRegion keeps a word when its
-    // centre is inside the region, so any answer region below roughly y 0.17 matched nothing
-    // and ocr_text came back "" -- including the one in exam-grading.spec.ts, which sits at
-    // y 0.3..0.5. Tiling means a region anywhere on the page has words to match, which is what
-    // a fake OCR backend owes the tests that depend on it.
+    // This read as "spread down the page", but `text` is only ever two tokens, so every page put
+    // its words at y 0.10 and 0.15 and nowhere else. wordsInRegion keeps a word when its centre is
+    // inside the region, so any answer region below roughly y 0.17 matched nothing and ocr_text
+    // came back "" -- including the one in exam-grading.spec.ts, which sits at y 0.3..0.5.
+    //
+    // The first fix tiled down the page only, and Adhiraj pointed out on review that every box was
+    // still x 0.1..0.4, so a region that misses x = 0.25 matched nothing even though the comment
+    // claimed "anywhere on the page". Hence a grid. Centres land every 0.2 across and every 0.05
+    // down, so any region at least 0.2 wide and 0.05 tall has a word in it, which is the bound a
+    // fake OCR backend owes the tests that depend on it.
     const tokens = text.split(/\s+/);
-    const BAND_COUNT = 18; // y = 0.05 .. 0.90, one band every 0.05
-    const words: WordBox[] = Array.from({ length: BAND_COUNT }, (_, band) => ({
-      text: tokens[band % tokens.length],
-      x: 0.1,
-      y: 0.05 + band * 0.05,
-      width: 0.3,
-      height: 0.03
-    }));
+    const COL_CENTRES = [0.1, 0.3, 0.5, 0.7, 0.9];
+    const ROW_COUNT = 18; // y centres 0.065 .. 0.915, one row every 0.05
+    const BOX_W = 0.18;
+    const BOX_H = 0.03;
+    const words: WordBox[] = [];
+    for (let row = 0; row < ROW_COUNT; row++) {
+      for (let col = 0; col < COL_CENTRES.length; col++) {
+        words.push({
+          text: tokens[(row * COL_CENTRES.length + col) % tokens.length],
+          x: COL_CENTRES[col] - BOX_W / 2,
+          y: 0.05 + row * 0.05,
+          width: BOX_W,
+          height: BOX_H
+        });
+      }
+    }
     return Promise.resolve({ text, words });
   }
   extractTemplate(_pages: PageImage[]): Promise<ProposedTree> {

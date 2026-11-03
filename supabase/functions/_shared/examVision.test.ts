@@ -97,3 +97,30 @@ Deno.test("the fake provider's words reach the whole page, not just the top", as
     assertNotEquals(wordsInRegion(words, band), "", `no words in the band at y=${y}`);
   }
 });
+
+Deno.test("the fake provider's words reach across the page, not just one column", async () => {
+  // The full-width bands above cannot catch a provider that puts every box in one column.
+  // Adhiraj found exactly that on review: the first fix tiled down only, every box was x 0.1..0.4,
+  // so a region missing x = 0.25 still got "". These columns fail against that version.
+  const { words } = await new FakeExamVisionProvider().ocrImage({
+    name: "exam__sis-12345__page-0.png",
+    bytes: new Uint8Array(),
+    width: 1224,
+    height: 1584
+  });
+  for (const x of [0.0, 0.4, 0.8]) {
+    const column: NormRect = { x, y: 0, width: 0.2, height: 1 };
+    assertNotEquals(wordsInRegion(words, column), "", `no words in the column at x=${x}`);
+  }
+});
+
+Deno.test("a mid-page region well away from the old hot spot still matches", async () => {
+  // The concrete shape of the bug: nothing at x 0.6, y 0.5 before the grid.
+  const { words } = await new FakeExamVisionProvider().ocrImage({
+    name: "exam__sis-12345__page-0.png",
+    bytes: new Uint8Array(),
+    width: 1224,
+    height: 1584
+  });
+  assertNotEquals(wordsInRegion(words, { x: 0.55, y: 0.45, width: 0.25, height: 0.2 }), "");
+});
