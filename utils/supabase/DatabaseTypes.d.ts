@@ -67,6 +67,14 @@ export type ActiveSubmissionsWithGradesForAssignment =
     assignment_group_id?: number | null;
     /** Present on `submissions_with_grades_for_assignment_nice`: instructor-created placeholder stub. */
     is_placeholder?: boolean | null;
+    /**
+     * Present on `submissions_with_grades_for_assignment_nice`: the active submission's code-walk
+     * reviews. The count is 0 and the booleans are null when there are none; with several code-walk
+     * rubrics, a boolean is true only when it holds for all of them.
+     */
+    code_walk_review_count?: number | null;
+    code_walk_completed?: boolean | null;
+    code_walk_released?: boolean | null;
   };
 export type ActiveSubmissionsWithRegressionTestResults =
   Database["public"]["Views"]["submissions_with_grades_for_assignment_and_regression_test"]["Row"] & {
@@ -768,12 +776,6 @@ export type RubricChecksDataType = {
     description?: string;
     points: number;
   }[];
-  exam_question_id?: number;
-};
-/** Data on a check generated from an exam question, linking it back to that question. */
-export type ExamRubricCheckDataType = {
-  exam_question_id: number;
-  options?: never;
 };
 export type HydratedRubricParts = Database["public"]["Tables"]["rubric_parts"]["Row"] & {
   rubric_criteria: HydratedRubricCriteria[];
@@ -811,6 +813,7 @@ export type YmlRubricPartType = Omit<
   | "assignment_id"
   | "is_individual_grading"
   | "is_assign_to_student"
+  | "exam_question_id"
 > & {
   criteria: YmlRubricCriteriaType[];
   id?: number;
@@ -833,6 +836,7 @@ export type YmlRubricCriteriaType = Omit<
   | "max_checks_per_submission"
   | "min_checks_per_submission"
   | "total_points"
+  | "exam_question_id"
 > & {
   checks: YmlRubricChecksType[];
   id?: number;
@@ -861,6 +865,7 @@ export type YmlRubricChecksType = Omit<
   | "data"
   | "kpi_category"
   | "references"
+  | "exam_question_id"
 > & {
   id?: number;
   description?: string;
@@ -868,7 +873,7 @@ export type YmlRubricChecksType = Omit<
   artifact?: string;
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
-  data?: RubricChecksDataType | ExamRubricCheckDataType;
+  data?: RubricChecksDataType;
   kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
   references?: YamlReference[];
 };
