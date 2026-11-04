@@ -2767,6 +2767,89 @@ fi
 
 echo
 
+echo "== forgejo runner: action mirrors and capacity against the job namespace quota =="
+SVC_URL='DEFAULT_ACTIONS_URL: "http://pawtograder-forgejo-http.pawtograder.svc:3000"'
+apps_has "mirrors: bare uses: names resolve against Forgejo's Service by default" yes "$SVC_URL" \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: Forgejo reads DEFAULT_ACTIONS_URL from the chart's ConfigMap" yes \
+  "name: pawtograder-forgejo-actions" --show-only charts/forgejo/templates/gitea/deployment.yaml
+apps_has "mirrors: the hook Job renders" yes "name: pawtograder-forgejo-action-mirrors" \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: the hook authenticates with its token, not the admin password" no "pawtograder-forgejo-admin" \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: with the runner off, bare names resolve against upstreamURL" yes 'DEFAULT_ACTIONS_URL: "https://github.com"' \
+  --set forgejoRunner.enabled=false --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: with the runner off, there's no hook" no "kind: Job" \
+  --set forgejoRunner.enabled=false --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: source=upstream resolves against upstreamURL" yes 'DEFAULT_ACTIONS_URL: "https://code.example.com"' \
+  --set forgejoRunner.actions.source=upstream --set forgejoRunner.actions.upstreamURL=https://code.example.com/ \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: source=upstream renders no hook" no "kind: Job" \
+  --set forgejoRunner.actions.source=upstream --show-only templates/forgejo-actions-mirrors.yaml
+apps_refused "mirrors: an unknown source is refused" \
+  "forgejoRunner.actions.source must be mirrors or upstream" --set forgejoRunner.actions.source=cache
+apps_refused "mirrors: an upstreamURL that isn't a URL is refused" \
+  "must be an http(s) URL" --set forgejoRunner.actions.source=upstream --set forgejoRunner.actions.upstreamURL=github.com
+apps_refused "mirrors: setting DEFAULT_ACTIONS_URL in Forgejo's config is refused" \
+  "the chart sets it from forgejoRunner.actions" --set forgejo.gitea.config.actions.DEFAULT_ACTIONS_URL=https://github.com
+NO_ACTIONS_ENV="$(mktemp)"
+cat >"$NO_ACTIONS_ENV" <<'YAML'
+forgejo:
+  gitea:
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+YAML
+apps_refused "mirrors: an overlay that drops the DEFAULT_ACTIONS_URL env entry is refused" \
+  "must keep the chart's FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL entry" -f "$NO_ACTIONS_ENV"
+rm -f "$NO_ACTIONS_ENV"
+apps_refused "mirrors: no tokenSecret is refused" \
+  "needs forgejoRunner.actions.tokenSecret" --set forgejoRunner.actions.tokenSecret=
+apps_refused "mirrors: an empty list is refused" \
+  "leaves every bare uses: name unresolvable" --set forgejoRunner.actions.mirrors=null
+# --set on a list index replaces the whole list, so each case spells out its entries.
+M0=(--set 'forgejoRunner.actions.mirrors[0].repo=actions/checkout' --set 'forgejoRunner.actions.mirrors[0].ref=v4')
+apps_refused "mirrors: a repo without an owner is refused" \
+  "must be owner/name" --set 'forgejoRunner.actions.mirrors[0].repo=checkout' --set 'forgejoRunner.actions.mirrors[0].ref=v4'
+apps_refused "mirrors: the same repo twice is refused" "lists Actions/Checkout twice" "${M0[@]}" \
+  --set 'forgejoRunner.actions.mirrors[1].repo=Actions/Checkout' --set 'forgejoRunner.actions.mirrors[1].ref=v4'
+apps_refused "mirrors: a mirror without a ref is refused" \
+  "needs a ref" --set 'forgejoRunner.actions.mirrors[0].repo=actions/checkout'
+apps_refused "mirrors: an ssh upstream is refused" "give the upstream's http(s) clone URL" "${M0[@]}" \
+  --set 'forgejoRunner.actions.mirrors[0].url=git@github.com:actions/checkout'
+apps_has "mirrors: a url override reaches the hook" yes 'https://code.example.com/mirrors/checkout.git' "${M0[@]}" \
+  --set 'forgejoRunner.actions.mirrors[0].url=https://code.example.com/mirrors/checkout.git' \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_refused "mirrors: a malformed interval is refused" \
+  "must be a duration such as 8h" --set forgejoRunner.actions.mirrorInterval=8hours
+
+apps_has "quota: capacity within the quota renders" yes "kind: Deployment" --set forgejoRunner.capacity=4 \
+  --set forgejoRunner.quota.pods=4 --set forgejoRunner.quota.requests\\.cpu=4 --set forgejoRunner.quota.limits\\.memory=16Gi
+apps_has "quota: milli-units add up exactly" yes "kind: Deployment" --set forgejoRunner.capacity=10 \
+  --set forgejoRunner.resources.requests.cpu=100m --set forgejoRunner.quota.requests\\.cpu=1
+apps_refused "quota: capacity over requests.cpu is refused, naming what fits" \
+  "forgejoRunner.capacity=4 doesn't fit forgejoRunner.quota.requests.cpu=3: 4 jobs × 1. At most 3 fit" \
+  --set forgejoRunner.capacity=4 --set forgejoRunner.quota.requests\\.cpu=3
+apps_refused "quota: capacity over limits.memory is refused" \
+  "doesn't fit forgejoRunner.quota.limits.memory=15Gi: 4 jobs × 4Gi. At most 3 fit" \
+  --set forgejoRunner.capacity=4 --set forgejoRunner.quota.limits\\.memory=15Gi
+apps_refused "quota: capacity over pods is refused" \
+  "is more job pods than forgejoRunner.quota.pods=1" --set forgejoRunner.quota.pods=1
+apps_refused "quota: a quota on a value job pods don't declare is refused" \
+  "forgejoRunner.resources.limits.ephemeral-storage is empty" \
+  --set forgejoRunner.resources.limits.ephemeral-storage=null --set forgejoRunner.quota.limits\\.ephemeral-storage=100Gi
+apps_refused "quota: an unknown key is refused" \
+  "forgejoRunner.quota.services isn't a key the chart checks" --set forgejoRunner.quota.services=3
+apps_refused "quota: an unreadable quantity is refused" \
+  "isn't a quantity the chart can read" --set forgejoRunner.quota.requests\\.cpu=four
+label="mirrors: nothing renders with Forgejo off"
+if ! helm template t "$CHART" "${BASE[@]}" >"$OUTFILE" 2>"$ERRFILE"; then echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif grep -qF "forgejo-actions" "$OUTFILE"; then echo "FAIL [$label]: rendered forgejo-actions objects"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
 echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
 
 # With database: pawtograder, the forgejo and coder roles live on this chart's

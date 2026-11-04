@@ -2721,6 +2721,10 @@ forgejo:
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      # Where bare `uses:` names resolve, which the chart works out from forgejoRunner.actions.
+      - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
     config:
       server:
         DISABLE_SSH: true
@@ -2737,7 +2741,7 @@ forgejo:
         DISABLE_REGISTRATION: true
       actions:
         ENABLED: true
-        DEFAULT_ACTIONS_URL: https://github.com
+        # DEFAULT_ACTIONS_URL comes from forgejoRunner.actions, through additionalConfigFromEnvs.
       session:
         PROVIDER: db
       cache:
@@ -2780,7 +2784,15 @@ forgejoRunner:
     pullPolicy: IfNotPresent
   arch: amd64
   imagePullSecrets: [] # used by the dispatcher and the job pods, so the Secrets must exist in both namespaces
+  # Jobs that run at once. Size it from jobNamespace's ResourceQuota: floor(quota / per-job value)
+  # for each quota key, taking the smallest. The dispatcher and mirror hook run in the release's
+  # namespace, so no headroom is needed unless the quota is shared with other namespaces; then use
+  # the part left for jobs. Set quota below to have the render check it. README "Sizing capacity".
   capacity: 2
+  # jobNamespace's ResourceQuota `hard` (pods, requests.cpu, limits.memory, ...), or the part of it
+  # set aside for Actions jobs. When set, capacity × each job pod's value must fit, or the render
+  # fails. Empty skips the check.
+  quota: {}
   labels:
     - ubuntu-latest:host
     - ubuntu-24.04:host
@@ -2807,6 +2819,29 @@ forgejoRunner:
     enabled: true
     privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
     extraEgress: []
+  # Where jobs get the actions that bare `uses:` names (actions/checkout@v4) point at; the chart
+  # sets Forgejo's [actions] DEFAULT_ACTIONS_URL from it. README "Action mirrors".
+  actions:
+    # mirrors: a post-install hook keeps a pull mirror in Forgejo of each entry below, and bare
+    #   names resolve against Forgejo's Service. A bare name that isn't listed fails to resolve;
+    #   list it, or write the full https://... URL in the workflow.
+    # upstream: no mirrors; bare names resolve against upstreamURL, and every job clones its
+    #   actions from there. With the runner off, the chart always uses upstreamURL.
+    source: mirrors
+    upstreamURL: https://github.com
+    # Forgejo pulls each mirror this often (Forgejo's floor is [mirror] MIN_INTERVAL, 10m).
+    mirrorInterval: 8h
+    # repo is the bare name workflows use; url defaults to https://github.com/<repo>. The hook
+    # fails unless ref (the tag or branch workflows pin) exists in the mirror.
+    mirrors:
+      - { repo: actions/checkout, ref: v4 }
+      - { repo: pawtograder/assignment-action, ref: v4 }
+    # Required with source=mirrors: Secret with a Forgejo access `token` (scopes write:organization
+    # and write:repository) from an account that may create the mirrors' orgs.
+    tokenSecret: ""
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
 
 coder:
   enabled: false

@@ -657,6 +657,7 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 | `pawtograder-forgejo-db` | `PGPASSWORD` | Forgejo's database role |
 | `pawtograder-forgejo-db-superuser` | `POSTGRES_PASSWORD` | `forgejo-db` (`forgejo.database=own` only) |
 | `forgejoRunner.dispatcher.tokenSecret` (e.g. `pawtograder-forgejo-runner-token`) | `token` | The Actions dispatcher; created after Forgejo is up (see "Actions runner") |
+| `forgejoRunner.actions.tokenSecret` (e.g. `pawtograder-forgejo-mirror-token`) | `token` | The action mirror hook; created after Forgejo is up (see "Action mirrors") |
 | `pawtograder-coder-admin` | `email`, `username`, `password` | Coder's first owner |
 | `pawtograder-coder-db` | `PGPASSWORD` | Coder's database role |
 | `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` (`coder.database=own` only) |
@@ -665,9 +666,9 @@ Keep database passwords alphanumeric; Coder's connection settings don't escape t
 
 ### Forgejo
 
-Forgejo's public URL comes from the first `forgejo.ingress.hosts` entry: the subchart builds `ROOT_URL` from it (https when the ingress has `tls`, otherwise `gitea.config.server.PROTOCOL`, unless `gitea.config.server.ROOT_URL` is set), and the edge functions get the same URL, derived the same way, as `FORGEJO_URL`. Forgejo Actions job tokens carry `<ROOT_URL>api/actions` as their issuer; a job asks for one with `enable-openid-connect: true`. The edge functions in this release don't read `FORGEJO_URL` yet, so they still only accept GitHub's tokens: grading from Forgejo Actions needs the follow-up that teaches `validateOIDCToken` this issuer. Bare `uses:` names (`actions/checkout@v4`, `pawtograder/assignment-action@v3`) resolve against GitHub, as they do there. Self-registration is off; accounts are provisioned.
+Forgejo's public URL comes from the first `forgejo.ingress.hosts` entry: the subchart builds `ROOT_URL` from it (https when the ingress has `tls`, otherwise `gitea.config.server.PROTOCOL`, unless `gitea.config.server.ROOT_URL` is set), and the edge functions get the same URL, derived the same way, as `FORGEJO_URL`. Forgejo Actions job tokens carry `<ROOT_URL>api/actions` as their issuer; a job asks for one with `enable-openid-connect: true`. The edge functions in this release don't read `FORGEJO_URL` yet, so they still only accept GitHub's tokens: grading from Forgejo Actions needs the follow-up that teaches `validateOIDCToken` this issuer. With the runner on, bare `uses:` names (`actions/checkout@v4`) resolve against mirrors in Forgejo itself; see "Action mirrors" below. Self-registration is off; accounts are provisioned.
 
-Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay that extends `forgejo.gitea.additionalConfigFromEnvs`, for instance with S3 credentials as in the example, has to keep the chart's `FORGEJO__DATABASE__PASSWD` entry, and mustn't set `FORGEJO__DATABASE__HOST`, which would override `gitea.config.database.HOST`; the render fails otherwise.
+Git is HTTPS only, since SSH is disabled for ingress-only clusters. An overlay that extends `forgejo.gitea.additionalConfigFromEnvs`, for instance with S3 credentials as in the example, has to keep the chart's `FORGEJO__DATABASE__PASSWD` and `FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL` entries, and mustn't set `FORGEJO__DATABASE__HOST`, which would override `gitea.config.database.HOST`; the render fails otherwise.
 
 ### Actions runner
 
@@ -690,6 +691,57 @@ kubectl -n "$NS" create secret generic pawtograder-forgejo-runner-token --from-l
 With `forgejoRunner.dispatcher.orgs` empty, the dispatcher uses Forgejo's admin API and runs jobs from every repository, so `<user>` must be a site admin and `<scope>` is `write:admin`. With `orgs` set to the organizations whose jobs it should run, it registers runners in each organization instead (`/orgs/<org>/actions/runners`, which Forgejo 15 serves to the organization's owners). Then `<user>` can be an ordinary account that owns those organizations, and `<scope>` is `write:organization`; a site admin's token is never needed. Each new organization has to be added to `orgs`, with that account made an owner. The dispatcher polls the organizations in order, so a busy one listed first can use all of `forgejoRunner.capacity`.
 
 `forgejoRunner.networkPolicy` limits job pods to DNS, Forgejo and the public internet (`privateCidrs` excluded; add exceptions under `extraEgress`), but only on a CNI that enforces NetworkPolicy. See "Isolating jobs and workspaces" below for what the render requires before it runs jobs.
+
+### Action mirrors
+
+Forgejo resolves a bare `uses:` name such as `actions/checkout@v4` against its `[actions] DEFAULT_ACTIONS_URL`, and every job clones its actions afresh, since the runner's cache is off and each job gets a new work directory. With `DEFAULT_ACTIONS_URL` on github.com, a GitHub outage would stop grading. So with the runner on, the chart points `DEFAULT_ACTIONS_URL` at Forgejo's own Service, `http://pawtograder-forgejo-http.<release namespace>.svc:3000`, and a post-install and post-upgrade hook, `pawtograder-forgejo-action-mirrors`, keeps a pull mirror in Forgejo of each entry in `forgejoRunner.actions.mirrors`. The defaults, `actions/checkout` and `pawtograder/assignment-action`, are all that the grade workflow below uses. A mirror keeps its upstream owner and name, because that's the path a bare name asks for: `actions/checkout` lives in an `actions` organization and `pawtograder/assignment-action` in `pawtograder`. Mirrors are public, so job pods clone them without credentials. Forgejo pulls each one from upstream every `forgejoRunner.actions.mirrorInterval` (8h), and jobs use whatever Forgejo already has, so a GitHub outage delays new upstream tags, not grading. To pick up a new tag sooner, use "Synchronize now" in the mirror's settings. The chart uses the Service rather than Forgejo's `self` value, which means the public `ROOT_URL`: job pods reach that only through the ingress, which their egress rules may not allow.
+
+The hook creates a missing organization or mirror and leaves an existing mirror alone apart from its interval. Then, for each entry, it checks that `ref` resolves over the Service without credentials, the way a job clones it. It fails, and the install or upgrade with it, when a repository of that name exists but isn't a mirror, mirrors another `url`, is private, or lacks `ref`. It needs github.com only to create a mirror, so only an upgrade that adds one depends on GitHub being up. It authenticates with the `token` in the Secret named by `forgejoRunner.actions.tokenSecret`, which the render requires. Make the token for an account that can create organizations, or that owns `actions` and `pawtograder` if they already exist, with scopes `write:organization` and `write:repository`:
+
+```bash
+TOKEN=$(kubectl -n "$NS" exec deploy/pawtograder-forgejo -c forgejo -- \
+  forgejo admin user generate-access-token --username <user> --token-name action-mirrors --scopes write:organization,write:repository --raw)
+kubectl -n "$NS" create secret generic pawtograder-forgejo-mirror-token --from-literal=token="$TOKEN"
+```
+
+A bare name that isn't in the list doesn't resolve: the job fails at `git clone` with "not found". Add the action to `forgejoRunner.actions.mirrors` (with `url` when it isn't on GitHub), or write its full URL in the workflow (`uses: https://github.com/<owner>/<repo>@<ref>`), which bypasses the mirrors and depends on that host again. `forgejoRunner.actions.source: upstream` turns the mirrors off and sends bare names to `forgejoRunner.actions.upstreamURL` (`https://github.com`); with the runner off, the chart uses `upstreamURL` either way. Mirrors are the default with the runner on because nothing in a course depends on bare names reaching GitHub, and keeping grading independent of github.com is the reason to mirror at all.
+
+Forgejo reads `DEFAULT_ACTIONS_URL` at startup from the `pawtograder-forgejo-actions` ConfigMap, through the `FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL` entry in `forgejo.gitea.additionalConfigFromEnvs`. After changing `source`, `upstreamURL` or `forgejoRunner.enabled`, run `kubectl rollout restart deployment/pawtograder-forgejo`. The render fails when `forgejo.gitea.config.actions.DEFAULT_ACTIONS_URL` is set, since the env entry would override it, and when an overlay drops that entry.
+
+### Grade workflow on Forgejo
+
+The grade workflow lives in each course's handout repositories, not in this chart, as it does on GitHub. `examples/forgejo-grade.yml` is the Forgejo version of the stock `grade.yml` in [pawtograder/template-assignment-handout](https://github.com/pawtograder/template-assignment-handout/blob/main/.github/workflows/grade.yml). Put it at `.github/workflows/grade.yml` in the handout (template) repositories on this Forgejo, which reads `.github/workflows` when a repository has no `.forgejo/workflows`. Grading from it still needs the edge-function follow-up described under "Forgejo". It differs from the GitHub file in four ways:
+
+- `enable-openid-connect: true`, since Forgejo ignores `permissions: id-token: write`.
+- `concurrency: { cancel-in-progress: false }`. Without a `concurrency` key, a push cancels that workflow's waiting and running runs on the branch, so a student who pushes twice in a minute loses the first grading run. In the load test below, 15 of 20 runs were cancelled this way before the key was added.
+- No `actions/setup-*` steps, which would download a JDK, Python or Node from GitHub on every run. The runner image already has JDK 21, Maven, Python 3 with pip, Node 22 and git; a course that needs another toolchain should have it baked into the image it runs on.
+- `action_ref` and `action_repository` as literals, because the runner leaves `github.action_ref` and `github.action_repository` empty in `with:` and the action refuses empty values.
+
+### Sizing capacity
+
+Each job pod requests `forgejoRunner.resources.requests` (1 CPU, 2Gi) and may use up to its limits (2 CPU, 4Gi). At most `forgejoRunner.capacity` (2) run at once, and the rest wait in Forgejo's queue. Job pods are the only pods in `forgejoRunner.jobNamespace`, so that namespace's ResourceQuota is what bounds them. For each key in the quota, `floor(quota / per-job value)` jobs fit; capacity is the smallest of those. The dispatcher and the mirror hook run in the release's namespace, so they need no headroom in it. If the quota also covers other namespaces, as a per-team budget does, use the part left over for jobs. Set the result in `forgejoRunner.quota`, in the quota's own keys, and the render refuses a `capacity` that doesn't fit, naming how many do:
+
+```yaml
+forgejoRunner:
+  capacity: 6 # limits.cpu, limits.memory and pods each allow 6; the requests allow 8
+  quota: { requests.cpu: "8", requests.memory: 16Gi, limits.cpu: "12", limits.memory: 24Gi, pods: "6" }
+```
+
+A capacity above the quota doesn't fail jobs: the dispatcher's pod create is refused, and the job waits in Forgejo's queue while the dispatcher retries on each poll. A capacity below it leaves quota unused.
+
+How long the queue gets depends on how long a grading job takes. The Cloud team's lab measured 35 seconds cold and 16 seconds warm for a small Java assignment, peaking at 3.4 cores, so a 2-CPU limit slows it. At a minute per job, 200 pushes spread over the last hour before a deadline are 200 job-minutes of work: at capacity 2 the last job finishes about 100 minutes after the first push, having waited about 40, while capacity 4 keeps up. `tests/forgejo-actions-load.sh --dry-run --pushes 200 --minutes 60 --job-seconds 60 --capacity 4` prints that estimate without touching anything.
+
+To measure rather than estimate, run the load test against a sandbox install before a real deadline. It creates M private repositories in an organization, installs a workflow (a `sleep` by default, or the course's own with `--workflow`), pushes N commits round-robin over T minutes through Forgejo's API, waits for every run, and reports queue wait (run start minus run creation), job duration and peak concurrency, all from Forgejo's API:
+
+```bash
+kubectl -n "$NS" port-forward svc/pawtograder-forgejo-http 3000:3000 &
+FORGEJO_TOKEN=<token with write:organization, write:repository> \
+  charts/pawtograder/tests/forgejo-actions-load.sh --url http://localhost:3000 \
+  --repos 50 --pushes 200 --minutes 60 --job-seconds 60 --out /tmp/load.tsv
+charts/pawtograder/tests/forgejo-actions-load.sh --url http://localhost:3000 --repos 50 --cleanup
+```
+
+Against Forgejo 15.0.9 and a forgejo-runner 13.2.0 in Docker, 20 pushes to 5 repositories over one minute with 15-second jobs took 2.7 minutes at capacity 2, with a p50 queue wait of 41 seconds and a maximum of 89. At capacity 4 they took 1.5 minutes, with a maximum wait of 18 seconds. Both matched the script's estimate.
 
 ### Coder
 
