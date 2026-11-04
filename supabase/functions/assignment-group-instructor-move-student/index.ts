@@ -2,10 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentGroupInstructorMoveStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { enqueueGithubArchiveRepo, enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { moveStudentBetweenGroups } from "./moveStudent.ts";
 
 async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: Sentry.Scope): Promise<void> {
   const { new_assignment_group_id, old_assignment_group_id, profile_id, class_id } =
@@ -23,131 +24,20 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
 
-  if (old_assignment_group_id !== null) {
-    //Remove student from current group
-    const { data: currentGroup } = await supabase
-      .from("assignment_groups_members")
-      .select("*, assignments(slug), classes(*), assignment_groups(*, repositories(*))")
-      .eq("assignment_group_id", old_assignment_group_id)
-      .eq("profile_id", profile_id)
-      .eq("class_id", class_id)
-      .single();
-    if (!currentGroup) {
-      throw new IllegalArgumentError("Student not in group");
-    }
-    const { error: remove_member_error } = await adminSupabase
-      .from("assignment_groups_members")
-      .delete()
-      .eq("id", currentGroup.id);
-    if (remove_member_error) {
-      console.error(remove_member_error);
-      throw new Error("Failed to remove member from group");
-    }
-    const { data: remaining_members, error: remaining_members_error } = await adminSupabase
-      .from("assignment_groups_members")
-      .select("*, profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
-      .eq("assignment_group_id", old_assignment_group_id);
-    if (remaining_members_error) {
-      throw new Error("Failed to get remaining members");
-    }
-    if (!remaining_members) {
-      throw new Error("Failed to get remaining members");
-    }
-    if (remaining_members.length === 0) {
-      // Remove any invitations to the group
-      await adminSupabase
-        .from("assignment_group_invitations")
-        .delete()
-        .eq("assignment_group_id", old_assignment_group_id);
-      // Remove any join requests to the group
-      await adminSupabase
-        .from("assignment_group_join_request")
-        .delete()
-        .eq("assignment_group_id", old_assignment_group_id);
-      const oldGroupRepo = currentGroup.assignment_groups!.repositories[0];
-      if (oldGroupRepo) {
-        const parts = oldGroupRepo.repository.split("/");
-        const repoName = parts.length > 1 ? parts[1] : parts[0];
-        if (repoName) {
-          await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
-        }
-        await adminSupabase.from("repositories").delete().eq("id", oldGroupRepo.id);
-      }
-      await adminSupabase.from("assignment_groups").delete().eq("id", old_assignment_group_id);
-    }
-    const repository = currentGroup.assignment_groups!.repositories[0];
-    if (repository && remaining_members.length > 0) {
-      await enqueueSyncRepoPermissions({
-        class_id,
-        course_slug: currentGroup.classes!.slug!,
-        org: currentGroup.classes!.github_org!,
-        repo: repository.repository,
-        githubUsernames: remaining_members
-          .filter((m) => m.profiles!.user_roles!.users!.github_username)
-          .map((m) => m.profiles!.user_roles!.users!.github_username!),
-        debug_id: `assignment-group-instructor-move-student-${old_assignment_group_id}-${profile_id}`
-      });
-    }
-  }
-
-  //Add student to new group
-  if (new_assignment_group_id !== null) {
-    const { data: newGroup } = await adminSupabase
-      .from("assignment_groups")
-      .select("*, repositories(*), classes(github_org, slug)")
-      .eq("id", new_assignment_group_id)
-      .single();
-    if (!newGroup) {
-      throw new IllegalArgumentError("New group not found");
-    }
-
-    if (!old_assignment_group_id) {
-      //Deactivate any submissions for this assignment for this student
-      const { error: deactivateError } = await adminSupabase
-        .from("submissions")
-        .update({
-          is_active: false
-        })
-        .eq("assignment_id", newGroup.assignment_id)
-        .eq("profile_id", profile_id);
-      if (deactivateError) {
-        throw new Error("Failed to deactivate submissions");
+  await moveStudentBetweenGroups(
+    { new_assignment_group_id, old_assignment_group_id, profile_id, class_id },
+    {
+      supabase,
+      adminSupabase,
+      addedBy: enrollment.private_profile_id,
+      enqueueGithubArchiveRepo,
+      enqueueSyncRepoPermissions,
+      reportError: (error) => {
+        console.error(error);
+        Sentry.captureException(error, scope);
       }
     }
-    const { error: add_member_error } = await adminSupabase.from("assignment_groups_members").insert({
-      assignment_group_id: new_assignment_group_id,
-      profile_id,
-      assignment_id: newGroup.assignment_id,
-      class_id,
-      added_by: enrollment.private_profile_id
-    });
-    if (add_member_error) {
-      throw new Error("Failed to add member to group");
-    }
-    const { data: remaining_members, error: remaining_members_error } = await adminSupabase
-      .from("assignment_groups_members")
-      .select("*, profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
-      .eq("assignment_group_id", new_assignment_group_id);
-    if (remaining_members_error) {
-      throw new Error("Failed to get remaining members");
-    }
-    if (!remaining_members) {
-      throw new Error("Failed to get remaining members");
-    }
-    const repository = newGroup.repositories[0];
-    if (repository) {
-      await enqueueSyncRepoPermissions({
-        class_id,
-        course_slug: newGroup.classes!.slug!,
-        org: newGroup.classes!.github_org!,
-        repo: repository.repository,
-        githubUsernames: remaining_members
-          .filter((m) => m.profiles!.user_roles!.users!.github_username)
-          .map((m) => m.profiles!.user_roles!.users!.github_username!),
-        debug_id: `assignment-group-instructor-move-student-${new_assignment_group_id}-${profile_id}`
-      });
-    }
-  }
+  );
 }
 Deno.serve(async (req) => {
   return wrapRequestHandler(req, handleAssignmentGroupInstructorMoveStudent);
