@@ -1,0 +1,107 @@
+{{- /*
+egressDeny for the pods that run students' code: Actions job pods and Coder
+workspaces. Cilium unions the allows of every policy that selects a pod, so the
+chart's NetworkPolicies bound them only while nothing else allows more; a deny
+wins over any allow. Modeled on pawtograder-ci-egress-deny in
+docs/operations/manifests/preview-isolation.yaml.
+*/ -}}
+{{- if dig "cilium" "enabled" false .Values.networkPolicy }}
+{{- $rel := .Release.Namespace }}
+{{- $targets := list }}
+{{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
+{{- $targets = append $targets (dict
+  "kind" "forgejo-jobs"
+  "ns" .Values.forgejoRunner.jobNamespace
+  "selector" (dict "pawtograder.net/forgejo-job" (include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner")))
+  "app" "forgejo"
+  "ports" (list (include "pawtograder.forgejo.containerPort" . | int))
+  "cidrs" .Values.forgejoRunner.networkPolicy.privateCidrs
+  "ingressController" false
+  "keep" false) }}
+{{- end }}
+{{- if .Values.coder.enabled }}
+{{- $ic := .Values.networkPolicy.ingressControllerNamespaceSelector | default dict }}
+{{- if or (not $ic.matchLabels) $ic.matchExpressions }}
+{{- fail "networkPolicy.cilium.enabled with coder.enabled needs networkPolicy.ingressControllerNamespaceSelector as matchLabels only: workspace agents reach Coder through the ingress controller, and the deny rules exempt its namespace by those labels" }}
+{{- end }}
+{{- $targets = append $targets (dict
+  "kind" "coder-workspaces"
+  "ns" (.Values.coderBootstrap.workspaceNamespace | default $rel)
+  "selector" (dict "app.kubernetes.io/name" "coder-workspace")
+  "app" "coder"
+  "ports" (list 8080 8443)
+  "cidrs" .Values.coderBootstrap.workspaces.networkPolicy.privateCidrs
+  "ingressController" $ic.matchLabels
+  "keep" true) }}
+{{- end }}
+{{- range $t := $targets }}
+{{- $others := list $t.ns $rel "kube-system" | uniq }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "pawtograder.fullname" $ }}-{{ $t.kind }}-egress-deny
+  namespace: {{ $t.ns }}
+  labels:
+    {{- include "pawtograder.labels" $ | nindent 4 }}
+  {{- if $t.keep }}
+  annotations:
+    # Workspace pods outlive the release (see the workspace NetworkPolicy), so this stays too.
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  endpointSelector:
+    matchLabels: {{ toJson $t.selector }}
+  # Only deny rules here; what's allowed is still up to the NetworkPolicies.
+  enableDefaultDeny:
+    egress: false
+    ingress: false
+  egressDeny:
+    {{- if $t.ingressController }}
+    {{- /* One rule per label: a namespace is exempt only if it has every label. */}}
+    {{- range $k, $v := $t.ingressController }}
+    - toEndpoints:
+        - matchExpressions:
+            - { key: k8s:io.kubernetes.pod.namespace, operator: NotIn, values: {{ toJson $others }} }
+            - { key: {{ printf "k8s:io.cilium.k8s.namespace.labels.%s" $k | quote }}, operator: NotIn, values: [{{ toString $v | quote }}] }
+    {{- end }}
+    {{- else }}
+    - toEndpoints:
+        - matchExpressions:
+            - { key: k8s:io.kubernetes.pod.namespace, operator: NotIn, values: {{ toJson $others }} }
+    {{- end }}
+    - toEndpoints:
+        - matchExpressions:
+            - { key: k8s:io.kubernetes.pod.namespace, operator: In, values: [kube-system] }
+            - { key: k8s:k8s-app, operator: NotIn, values: [kube-dns] }
+    # The release's pods other than {{ $t.app }}: meta, Studio, Kong, Postgres and the rest.
+    - toEndpoints:
+        - matchExpressions:
+            - { key: k8s:io.kubernetes.pod.namespace, operator: In, values: [{{ $rel }}] }
+            - { key: k8s:app.kubernetes.io/name, operator: NotIn, values: [{{ $t.app }}] }
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $rel }}
+            k8s:app.kubernetes.io/name: {{ $t.app }}
+      toPorts:
+        - ports:
+            {{- include "pawtograder.cilium.portsExcept" $t.ports | trim | nindent 12 }}
+    {{- if ne $t.ns $rel }}
+    # Every other pod in this namespace, other students' included.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $t.ns }}
+    {{- end }}
+    # Every node port but 80 and 443 (an ingress controller on the host network):
+    # the kube-apiserver, kubelet, etcd and the rest.
+    - toEntities: [host, remote-node, kube-apiserver]
+      toPorts:
+        - ports:
+            {{- include "pawtograder.cilium.portsExcept" (list 80 443) | trim | nindent 12 }}
+    # Not reopened by forgejoRunner/coderBootstrap extraEgress: a deny wins.
+    - toCIDRSet:
+        {{- range $t.cidrs }}
+        - cidr: {{ . }}
+        {{- end }}
+{{- end }}
+{{- end }}

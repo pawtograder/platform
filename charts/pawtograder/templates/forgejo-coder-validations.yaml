@@ -152,9 +152,6 @@
 {{- fail (printf "%s.settings.superuser.value is ignored once existingSecret is set (the subchart reads POSTGRES_USER from the Secret); use settings.superuser.secretKey" $key) }}
 {{- end }}
 {{- end }}
-{{- if and .Values.forgejoRunner.enabled (not .Values.forgejoRunner.dispatcher.tokenSecret) (not .Values.forgejo.gitea.admin.existingSecret) }}
-{{- fail "forgejoRunner needs forgejoRunner.dispatcher.tokenSecret or forgejo.gitea.admin.existingSecret for the dispatcher's credential" }}
-{{- end }}
 {{- if and .Values.forgejo.enabled (eq (toString .Values.forgejo.image.rootless) "false") }}
 {{- fail "forgejo.image.rootless=false isn't supported: the chart runs Forgejo as uid 1000 with all capabilities dropped, and the rootful init chowns /data" }}
 {{- end }}
@@ -248,12 +245,47 @@
 {{- end }}
 {{- end }}
 
+{{- if or .Values.forgejoRunner.enabled .Values.coder.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- if $np.cniEnforcesEgress }}
+{{- if and .Values.forgejoRunner.enabled (not .Values.forgejoRunner.networkPolicy.enabled) }}
+{{- fail "networkPolicy.cniEnforcesEgress=true, but forgejoRunner.networkPolicy.enabled=false renders no egress policy for job pods to enforce" }}
+{{- end }}
+{{- if and .Values.coder.enabled (not $np.enabled) }}
+{{- fail "networkPolicy.cniEnforcesEgress=true, but networkPolicy.enabled=false renders no egress policy for Coder workspaces to enforce" }}
+{{- end }}
+{{- else if not (dig "cilium" "enabled" false $np) }}
+{{- $open := list }}
+{{- if .Values.meta.enabled }}{{ $open = append $open "postgres-meta (meta.enabled; it runs any SQL as postgres, with no auth)" }}{{ end }}
+{{- if .Values.studio.enabled }}{{ $open = append $open "Studio (studio.enabled; it has no auth inside the cluster)" }}{{ end }}
+{{- if and .Values.kong.enabled .Values.monitoring.enabled (ne .Values.kong.metricsListener "status") }}{{ $open = append $open "Kong's admin API (monitoring.enabled with kong.metricsListener=admin; its POST /config replaces the routes)" }}{{ end }}
+{{- if $open }}
+{{- fail (printf "forgejoRunner and coder run students' code, and nothing in these values stops their pods reaching %s. Turn those off (kong.metricsListener=status keeps Kong's metrics), or on Cilium set networkPolicy.cilium.enabled=true, or set networkPolicy.cniEnforcesEgress=true if the CNI enforces the chart's egress NetworkPolicies and nothing else allows more. See README \"Isolating jobs and workspaces\"" (join ", " $open)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- if .Values.forgejoRunner.enabled }}
 {{- if not .Values.forgejo.enabled }}
 {{- fail "forgejoRunner.enabled needs forgejo.enabled" }}
 {{- end }}
 {{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
 {{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- end }}
+{{- if not .Values.forgejoRunner.dispatcher.tokenSecret }}
+{{- fail "forgejoRunner.dispatcher.tokenSecret must name a Secret with a Forgejo access token (key token): install with forgejoRunner.enabled=false, create the token in Forgejo, then enable the runner. See README \"Actions runner\"" }}
+{{- end }}
+{{- range (.Values.forgejoRunner.dispatcher.orgs | default list) }}
+{{- if not (regexMatch "^[A-Za-z0-9_.-]+$" (toString .)) }}
+{{- fail (printf "forgejoRunner.dispatcher.orgs: %q isn't a Forgejo organization name" (toString .)) }}
+{{- end }}
+{{- end }}
+{{- $jobNS := .Values.forgejoRunner.jobNamespace | default "" }}
+{{- if or (not $jobNS) (eq $jobNS .Release.Namespace) }}
+{{- fail (printf "forgejoRunner.jobNamespace must name an existing namespace other than %s: the dispatcher can create pods there, and a pod can mount any Secret in its namespace" .Release.Namespace) }}
+{{- end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled (eq $jobNS (.Values.coderBootstrap.workspaceNamespace | default .Release.Namespace)) }}
+{{- fail (printf "forgejoRunner.jobNamespace and coderBootstrap.workspaceNamespace are both %s; keep them apart, or coderd's Role there reaches the job pods' runner tokens" $jobNS) }}
 {{- end }}
 {{- $protocol := dig "gitea" "config" "server" "PROTOCOL" "http" .Values.forgejo | toString }}
 {{- if ne $protocol "http" }}

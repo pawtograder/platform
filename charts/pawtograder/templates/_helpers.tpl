@@ -443,6 +443,32 @@ credentials come from secrets.names.s3 (the same secret backup.yaml uses).
 {{- end -}}
 
 {{/*
+Full backups the walg-retention CronJob keeps: postgres.walg.retention.keepBackups,
+or baseBackup.keepBackups when that is unset. Refuses anything below 1, which
+`wal-g delete retain` would take as "delete every backup".
+*/}}
+{{- define "pawtograder.walg.retentionKeep" -}}
+{{- /* Only nil/"" inherit. Not `| default`: sprig treats 0 as empty, so an
+     explicit 0 would quietly become baseBackup.keepBackups instead of failing. */ -}}
+{{- $raw := .Values.postgres.walg.retention.keepBackups -}}
+{{- if or (kindIs "invalid" $raw) (eq (toString $raw) "") -}}
+{{- $raw = .Values.postgres.walg.baseBackup.keepBackups | default 8 -}}
+{{- end -}}
+{{- /* Whole-number syntax before `int`, which would truncate 4.9 to 4, turn
+     `true` into 1, and read "010" as octal 8, each then passing the >= 1
+     check with a count nobody wrote. So no leading zero (which also rules out
+     0). A YAML 4 arrives as a float64 and renders "4", so it still matches. */ -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString $raw)) -}}
+{{- fail (printf "postgres.walg.retention.keepBackups must be an integer >= 1 (got %v) — a fraction or boolean would be truncated to a count nobody set, and `wal-g delete retain FULL 0` deletes every base backup and all WAL." $raw) -}}
+{{- end -}}
+{{- $keep := int $raw -}}
+{{- if lt $keep 1 -}}
+{{- fail (printf "postgres.walg.retention.keepBackups must be an integer >= 1 (got %v) — `wal-g delete retain FULL 0` deletes every base backup and all WAL." $raw) -}}
+{{- end -}}
+{{- $keep -}}
+{{- end -}}
+
+{{/*
 Postgres connection URL — pointed at supavisor by default. Components that
 need the unpooled connection use pawtograder.postgres.directUrl.
 */}}
@@ -616,4 +642,25 @@ on — production and the chart default already disagree.
 */}}
 {{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
+{{- end -}}
+
+{{/*
+Cilium PortProtocol entries covering every TCP port except the given ones, and all of UDP.
+Usage: {{ include "pawtograder.cilium.portsExcept" (list 80 443) }}
+*/}}
+{{- define "pawtograder.cilium.portsExcept" -}}
+{{- $from := 1 }}
+{{- $sorted := list }}
+{{- range $p := . }}{{ $sorted = append $sorted (printf "%05d" (int $p)) }}{{ end }}
+{{- range $s := sortAlpha $sorted }}
+{{- $p := atoi (regexReplaceAll "^0+" $s "") }}
+{{- if lt $from $p }}
+- { port: {{ $from | quote }}, endPort: {{ sub $p 1 }}, protocol: TCP }
+{{- end }}
+{{- $from = add1 $p }}
+{{- end }}
+{{- if le $from 65535 }}
+- { port: {{ $from | quote }}, endPort: 65535, protocol: TCP }
+{{- end }}
+- { port: "1", endPort: 65535, protocol: UDP }
 {{- end -}}

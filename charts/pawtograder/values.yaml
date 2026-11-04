@@ -115,6 +115,21 @@ networkPolicy:
   # Extra NetworkPolicyIngressRule entries appended to a release-wide allow
   # policy (e.g. another namespace that consumes the API in-cluster).
   extraIngressRules: []
+  # forgejoRunner and coder run code from students. Their pods don't carry this
+  # release's labels, so only their own egress policies constrain them. The
+  # render refuses either one while meta, Studio or Kong's admin API is up,
+  # unless one of the two values below is set. See README "Isolating jobs and
+  # workspaces".
+  #
+  # true asserts that the CNI enforces the chart's egress NetworkPolicies for job
+  # and workspace pods, and that no other policy (a cluster-wide allow on Cilium,
+  # say) allows them more.
+  cniEnforcesEgress: false
+  cilium:
+    # Renders a CiliumNetworkPolicy with egressDeny rules for job pods and
+    # workspaces. A deny wins over any allow, so this holds whatever else the
+    # cluster allows. Needs Cilium and RBAC on ciliumnetworkpolicies.cilium.io.
+    enabled: false
 
 # -----------------------------------------------------------------------------
 # Deployment channels (A/B by course)
@@ -429,6 +444,24 @@ postgres:
       resources:
         requests: { cpu: "50m",  memory: "128Mi" }
         limits:   { cpu: "1",    memory: "512Mi" }
+    # Retention CronJob (templates/walg-retention.yaml): `wal-g delete retain
+    # FULL <keepBackups>` in its own pod. Change the retained count HERE, not in
+    # baseBackup.keepBackups: that one is baked into the primary's sidecar, so
+    # editing it restarts Postgres; this one restarts nothing. Set it at or
+    # below baseBackup.keepBackups — above it, the sidecar's prune wins.
+    retention:
+      enabled: true
+      # Hourly: the prune is a listing plus deletes, and running it every hour
+      # keeps it close behind each base backup however far the sidecar's
+      # interval loop has drifted from its start time.
+      schedule: "17 * * * *"
+      # Empty = baseBackup.keepBackups. Must be >= 1.
+      keepBackups: ""
+      startingDeadlineSeconds: 1800
+      activeDeadlineSeconds: 1800
+      resources:
+        requests: { cpu: "10m",  memory: "64Mi" }
+        limits:   { cpu: "500m", memory: "256Mi" }
 
   # ---------------------------------------------------------------------------
   # Streaming standby replica. A separate StatefulSet that bootstraps from the
@@ -1834,6 +1867,11 @@ kong:
     limits: { cpu: "2", memory: "6Gi" }
   service:
     port: 8000
+  # Where /metrics is served when monitoring.enabled. `admin` opens the admin API
+  # on 0.0.0.0:8001 with no auth; in DB-less mode its POST /config replaces every
+  # route, so any pod that reaches it can reroute the API. `status` serves
+  # /metrics from the read-only status API on :8100 and turns the admin API off.
+  metricsListener: admin
   terminationGracePeriodSeconds: 45
   preStopSleepSeconds: 10
   spreadAcrossNodes: true
@@ -2706,6 +2744,10 @@ forgejo:
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      # Where bare `uses:` names resolve, which the chart works out from forgejoRunner.actions.
+      - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
     config:
       server:
         DISABLE_SSH: true
@@ -2722,7 +2764,7 @@ forgejo:
         DISABLE_REGISTRATION: true
       actions:
         ENABLED: true
-        DEFAULT_ACTIONS_URL: https://github.com
+        # DEFAULT_ACTIONS_URL comes from forgejoRunner.actions, through additionalConfigFromEnvs.
       session:
         PROVIDER: db
       cache:
@@ -2757,13 +2799,23 @@ forgejo-db:
 
 forgejoRunner:
   enabled: false
+  # Required: an existing namespace other than the release's for the job pods. See README "Actions runner".
+  jobNamespace: ""
   image:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
   arch: amd64
-  imagePullSecrets: []
+  imagePullSecrets: [] # used by the dispatcher and the job pods, so the Secrets must exist in both namespaces
+  # Jobs that run at once. Size it from jobNamespace's ResourceQuota: floor(quota / per-job value)
+  # for each quota key, taking the smallest. The dispatcher and mirror hook run in the release's
+  # namespace, so no headroom is needed unless the quota is shared with other namespaces; then use
+  # the part left for jobs. Set quota below to have the render check it. README "Sizing capacity".
   capacity: 2
+  # jobNamespace's ResourceQuota `hard` (pods, requests.cpu, limits.memory, ...), or the part of it
+  # set aside for Actions jobs. When set, capacity × each job pod's value must fit, or the render
+  # fails. Empty skips the check.
+  quota: {}
   labels:
     - ubuntu-latest:host
     - ubuntu-24.04:host
@@ -2777,8 +2829,11 @@ forgejoRunner:
     requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
     limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
   dispatcher:
-    # Secret with a write:admin `token`; empty falls back to the admin password, which breaks under 2FA.
+    # Required: Secret with a Forgejo access `token`. Scope write:admin from a site admin, or with
+    # `orgs` set, write:organization from an owner of each org. See README "Actions runner".
     tokenSecret: ""
+    # Organizations whose jobs to run. Empty runs every repository's jobs through the admin API.
+    orgs: []
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { cpu: 200m, memory: 128Mi }
@@ -2787,6 +2842,29 @@ forgejoRunner:
     enabled: true
     privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
     extraEgress: []
+  # Where jobs get the actions that bare `uses:` names (actions/checkout@v4) point at; the chart
+  # sets Forgejo's [actions] DEFAULT_ACTIONS_URL from it. README "Action mirrors".
+  actions:
+    # mirrors: a post-install hook keeps a pull mirror in Forgejo of each entry below, and bare
+    #   names resolve against Forgejo's Service. A bare name that isn't listed fails to resolve;
+    #   list it, or write the full https://... URL in the workflow.
+    # upstream: no mirrors; bare names resolve against upstreamURL, and every job clones its
+    #   actions from there. With the runner off, the chart always uses upstreamURL.
+    source: mirrors
+    upstreamURL: https://github.com
+    # Forgejo pulls each mirror this often (Forgejo's floor is [mirror] MIN_INTERVAL, 10m).
+    mirrorInterval: 8h
+    # repo is the bare name workflows use; url defaults to https://github.com/<repo>. The hook
+    # fails unless ref (the tag or branch workflows pin) exists in the mirror.
+    mirrors:
+      - { repo: actions/checkout, ref: v4 }
+      - { repo: pawtograder/assignment-action, ref: v4 }
+    # Required with source=mirrors: Secret with a Forgejo access `token` (scopes write:organization
+    # and write:repository) from an account that may create the mirrors' orgs.
+    tokenSecret: ""
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
 
 coder:
   enabled: false
