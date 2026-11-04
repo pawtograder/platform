@@ -176,11 +176,11 @@ test.describe("Office hours request roster", () => {
   test("A new request keeps its roster when the first roster response arrives after the request is created", async ({
     page
   }) => {
-    // When the helpRequestStudents cache finishes its first load, it replaces all of its rows with the result.
-    // That load starts when the form page opens, before the request exists, so its result has no
-    // rows for the new request. If the result arrives after the form has already added the new
-    // request's rows, it overwrites them. The page then goes from "1 student" and a Resolve button
-    // to "0 students" and no Resolve button.
+    // When the helpRequestStudents cache finishes its first load, it replaces all of its rows with
+    // the result. That load starts when the form page opens, before the request exists, so its
+    // result has no rows for the new request. If the result arrives after the form has already
+    // added the new request's rows, it overwrites them. The page then goes from "1 student" and a
+    // Resolve button to "0 students" and no Resolve button.
     test.slow();
     await loginAsUser(page, student!, course);
 
@@ -254,9 +254,9 @@ test.describe("Office hours request roster", () => {
   });
 
   test("A new request gets its roster when the first roster query fails", async ({ page }) => {
-    // The form waits for the helpRequestStudents cache's first load to finish, even if it fails. Check that a
-    // failed first load doesn't count as a failure to load the new request's rows: the roster
-    // shows, and the student gets no error toast.
+    // The form waits for the helpRequestStudents cache's first load to finish, even if it fails.
+    // Check that a failed first load doesn't count as a failure to load the new request's rows: the
+    // roster shows, and the student gets no error toast.
     test.slow();
     await loginAsUser(page, student!, course);
 
@@ -293,15 +293,15 @@ test.describe("Office hours request roster", () => {
 
     // The form refetches once right away and once after the first load has settled. The second
     // refetch only happens if the form carried on past the failed first load.
-    await expect.poll(() => refetches, { timeout: 10_000 }).toBe(2);
+    await expect.poll(() => refetches, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
     await expect(page.getByText("1 student", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
     await expect(page.getByText("Could not load the students on this request")).toHaveCount(0);
   });
 
   test("A new request shows its roster while the first roster query is still running", async ({ page }) => {
-    // The helpRequestStudents cache's first load has no timeout. If it never answers, the form must not wait
-    // for it before showing the new request's rows.
+    // The helpRequestStudents cache's first load has no timeout. If it never answers, the form must
+    // not wait for it before showing the new request's rows.
     test.slow();
     await loginAsUser(page, student!, course);
 

@@ -592,10 +592,10 @@ export default function HelpRequestForm({
             // (#1080). So we load the rows ourselves. We don't await this, for the same
             // router.push reason as above.
             //
-            // We add the rows twice. The first time is right away, so the page can show them
-            // even if the helpRequestStudents cache's first load never finishes. That first load may still be
-            // running. When it finishes, it replaces every row in the cache, which removes the
-            // rows we added. So we wait for it to finish, whether it succeeds or fails, and add
+            // We add the rows twice. The first time is right away, so the page can show them even
+            // if the helpRequestStudents cache's first load never finishes. That first load may
+            // still be running. When it finishes, it replaces every row in the cache, which removes
+            // the rows we added. So we wait for it to finish, whether it succeeds or fails, and add
             // the rows again. Adding a row that is already in the cache updates it and does not
             // make a second copy.
             //
