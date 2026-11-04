@@ -771,6 +771,8 @@ export class RealtimeChannelManager {
           switch (status) {
             case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
               settled = true;
+              // A replacement channel has no lease and no refresh timer, so register again and restart the refresh.
+              void this._registerLease(managedChannel).then(() => this._startLeaseRefresh(managedChannel));
               resolve();
               break;
             case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
