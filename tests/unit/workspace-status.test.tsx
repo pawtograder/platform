@@ -155,7 +155,7 @@ describe("WorkspaceStatus", () => {
     await act(async () => {
       jest.advanceTimersByTime(POLL_MIN_MS * 1.5);
     });
-    const link = await screen.findByRole("link", { name: "Open in VS Code" });
+    const link = await screen.findByRole("link", { name: "Open in VS Code (opens in a new tab)" });
     expect(link).toHaveAttribute("href", "https://editor.example");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
@@ -218,7 +218,7 @@ describe("WorkspaceStatus", () => {
     });
     const { container } = renderCard(client);
     expect(await screen.findByText("Workspace not ready: Clone your repository failed.")).toBeInTheDocument();
-    expect(screen.getByText(/Clone broke\./)).toBeInTheDocument();
+    expect(screen.getByText(/Try again, and if it keeps failing/)).toHaveTextContent("Clone broke.");
     expect(container.querySelector('[data-step="git_setup"]')).toHaveAttribute("data-mark", "done");
     expect(container.querySelector('[data-step="clone"]')).toHaveAttribute("data-mark", "failed");
     expect(container.querySelector('[data-step="editor"]')).toHaveAttribute("data-mark", "pending");
@@ -238,6 +238,33 @@ describe("WorkspaceStatus", () => {
     await screen.findByText(/Starting your workspace/);
     expect(screen.getByRole("status")).toBe(status);
     expect(status).toHaveTextContent("Starting your workspace: Prepare the workspace…");
+  });
+
+  it("reads the failure reason out in the live region", async () => {
+    renderCard(stubClient({ initial: { status: "failed", step: "clone", message: "Clone broke." } }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Workspace not ready: Clone your repository failed. Clone broke."
+    );
+  });
+
+  it("keeps focus inside the card after Open and after Retry", async () => {
+    const client = stubClient({
+      initial: { status: "not_started" },
+      opened: { status: "failed", step: "clone", message: "Clone broke." }
+    });
+    renderCard(client);
+    const openButton = await screen.findByRole("button", { name: "Open workspace" });
+    openButton.focus();
+    fireEvent.click(openButton);
+    await screen.findByRole("button", { name: "Retry" });
+    expect(document.activeElement).toBe(screen.getByRole("status"));
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    await act(async () => {});
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByTestId("workspace-status").closest("div")?.contains(document.activeElement)).toBe(true);
   });
 
   it("sends one open request for a double click", async () => {

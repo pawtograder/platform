@@ -3,6 +3,7 @@
 import { useWorkspaceStatus } from "@/hooks/useWorkspaceStatus";
 import { WORKSPACE_STEPS, WorkspaceClient, WorkspaceState, workspaceStepLabel } from "@/lib/workspaceStatus";
 import { Alert, Box, Button, Heading, HStack, Icon, Skeleton, Spinner, Text, VStack } from "@chakra-ui/react";
+import { useCallback, useEffect, useRef } from "react";
 import { LuCheck, LuCircle, LuCodeXml, LuRotateCcw, LuX } from "react-icons/lu";
 
 type StepMark = "done" | "running" | "failed" | "pending";
@@ -18,7 +19,8 @@ function stepMark(state: WorkspaceState, index: number): StepMark {
 
 function StepList({ state }: { state: WorkspaceState }) {
   return (
-    <VStack as="ol" align="stretch" gap={1} listStyleType="none" m={0} p={0}>
+    // role="list" keeps list semantics in Safari/VoiceOver, which drops them for `list-style: none`.
+    <VStack as="ol" role="list" align="stretch" gap={1} listStyleType="none" m={0} p={0}>
       {WORKSPACE_STEPS.map((step, index) => {
         const mark = stepMark(state, index);
         return (
@@ -71,17 +73,42 @@ function statusText(state: WorkspaceState): string {
  */
 export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number; client: WorkspaceClient }) {
   const { state, error, pending, open, reload } = useWorkspaceStatus(client, assignmentId);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+
+  // Each state renders a different button, so the one the student pressed unmounts. Move focus to
+  // the status line so the next Tab reaches the new button or link instead of the page header. The
+  // ready link is never focused on its own, because that change comes from a poll, not the student.
+  const restoreFocus = useRef(false);
+  const runAndKeepFocus = useCallback((action: () => Promise<void>) => {
+    restoreFocus.current = true;
+    void action();
+  }, []);
+  useEffect(() => {
+    if (pending || !restoreFocus.current) return;
+    restoreFocus.current = false;
+    const card = cardRef.current;
+    if (card && !card.contains(document.activeElement)) {
+      // Before the first status loads there is no status line, only the error.
+      (statusRef.current ?? errorRef.current)?.focus();
+    }
+  }, [pending, state, error]);
 
   return (
-    <Box borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
+    <Box ref={cardRef} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
       <VStack align="stretch" gap={3}>
         <Heading size="md">Your workspace</Heading>
         {!state ? (
-          // If the first status lookup failed there is nothing to show yet, so offer a way to ask
-          // again instead of leaving the skeleton up until the page is reloaded.
           error ? (
             <HStack>
-              <Button size="sm" colorPalette="blue" variant="outline" loading={pending} onClick={reload}>
+              <Button
+                size="sm"
+                colorPalette="blue"
+                variant="outline"
+                loading={pending}
+                onClick={() => runAndKeepFocus(reload)}
+              >
                 <LuRotateCcw />
                 Try again
               </Button>
@@ -91,8 +118,23 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
           )
         ) : (
           <>
-            <Text fontSize="sm" role="status" aria-live="polite" data-testid="workspace-status">
+            <Text
+              ref={statusRef}
+              tabIndex={-1}
+              fontSize="sm"
+              role="status"
+              aria-live="polite"
+              data-testid="workspace-status"
+            >
               {statusText(state)}
+              {state.status === "failed" && (
+                // The reason is in the Alert below, which is not a live region, so it is repeated
+                // here for screen readers. Otherwise they hear which step failed but not why.
+                <Text as="span" srOnly>
+                  {" "}
+                  {state.message}
+                </Text>
+              )}
             </Text>
             {state.status !== "not_started" && <StepList state={state} />}
             {state.status === "failed" && (
@@ -108,7 +150,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
             )}
             <HStack>
               {state.status === "not_started" && (
-                <Button size="sm" colorPalette="blue" loading={pending} onClick={open}>
+                <Button size="sm" colorPalette="blue" loading={pending} onClick={() => runAndKeepFocus(open)}>
                   <LuCodeXml />
                   Open workspace
                 </Button>
@@ -124,11 +166,21 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
                   <a href={state.url} target="_blank" rel="noopener noreferrer">
                     <LuCodeXml />
                     Open in VS Code
+                    <Text as="span" srOnly>
+                      {" "}
+                      (opens in a new tab)
+                    </Text>
                   </a>
                 </Button>
               )}
               {state.status === "failed" && (
-                <Button size="sm" colorPalette="blue" variant="outline" loading={pending} onClick={open}>
+                <Button
+                  size="sm"
+                  colorPalette="blue"
+                  variant="outline"
+                  loading={pending}
+                  onClick={() => runAndKeepFocus(open)}
+                >
                   <LuRotateCcw />
                   Retry
                 </Button>
@@ -137,7 +189,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
           </>
         )}
         {error && (
-          <Text fontSize="sm" color="fg.error" role="alert">
+          <Text ref={errorRef} tabIndex={-1} fontSize="sm" color="fg.error" role="alert">
             Could not reach your workspace: {error}
           </Text>
         )}
