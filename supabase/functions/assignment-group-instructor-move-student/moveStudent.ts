@@ -134,12 +134,15 @@ export async function moveStudentBetweenGroups(
             reportError(delete_repo_error);
             keepGroup = true;
           } else {
-            // The stored owner/name, not one rebuilt from the class github_org.
-            const repoName = oldGroupRepo.repository;
+            // The stored owner, not the class github_org, and everything after the FIRST slash:
+            // the repo name can itself contain one.
+            const slash = oldGroupRepo.repository.indexOf("/");
+            const owner = slash >= 0 ? oldGroupRepo.repository.slice(0, slash) : currentGroup.classes!.github_org!;
+            const repoName = slash >= 0 ? oldGroupRepo.repository.slice(slash + 1) : oldGroupRepo.repository;
             if (repoName) {
               // The repo row is gone, so a failed enqueue only leaves the GitHub repo unarchived.
               try {
-                await deps.enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, repoName);
+                await deps.enqueueGithubArchiveRepo(class_id, owner, repoName);
               } catch (archive_error) {
                 reportError(archive_error);
               }

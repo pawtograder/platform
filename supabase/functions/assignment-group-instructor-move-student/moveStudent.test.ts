@@ -367,7 +367,7 @@ Deno.test("last member leaves a group with no submissions: repo deleted and arch
   );
   assertEquals(db.invitations, []);
   assertEquals(db.joinRequests, []);
-  assertEquals(archives, [{ class_id: CLASS.id, org: CLASS.github_org, repo: OLD_REPO }]);
+  assertEquals(archives, [{ class_id: CLASS.id, org: CLASS.github_org, repo: "cs3100-f26-hw1-group-1" }]);
   // No sync for a repo that is gone; the destination is synced to its new member list.
   assertEquals(syncs, [
     { repo: NEW_REPO, githubUsernames: ["gh-alice", "gh-bob"], org: CLASS.github_org, course_slug: CLASS.slug }
@@ -448,7 +448,7 @@ Deno.test("last member leaves a group that never got a repo: group dissolved, no
   ]);
 });
 
-Deno.test("archive passes the stored owner/name, even when the repo name contains a slash", async () => {
+Deno.test("archive uses everything after the first slash of a repo name that contains one", async () => {
   const db = new FakeDb();
   db.addGroup(1, { repo: "neu-cs3100/e2e-31/10/26-hw1-group-1" });
   db.addMember(1, "alice");
@@ -458,8 +458,19 @@ Deno.test("archive passes the stored owner/name, even when the repo name contain
 
   assertEquals(
     archives.map((a) => a.repo),
-    ["neu-cs3100/e2e-31/10/26-hw1-group-1"]
+    ["e2e-31/10/26-hw1-group-1"]
   );
+});
+
+Deno.test("archive targets the stored owner, not the class github_org", async () => {
+  const db = new FakeDb();
+  db.addGroup(1, { repo: "orgname/hw1-group-a" });
+  db.addMember(1, "alice");
+  const { deps, archives } = harness(db);
+
+  await moveStudentBetweenGroups(move(1, null), deps);
+
+  assertEquals(archives, [{ class_id: CLASS.id, org: "orgname", repo: "hw1-group-a" }]);
 });
 
 // ---- other members remain ------------------------------------------------
