@@ -61,6 +61,13 @@ describe("createSimulatedWorkspaceClient", () => {
     expect(await client.open(1)).toEqual({ status: "starting", step: "git_setup" });
   });
 
+  it.each([-5, 0, Infinity, NaN])("falls back to the default step length for stepMs=%s", async (stepMs) => {
+    const client = createSimulatedWorkspaceClient({ stepMs });
+    expect(await client.open(1)).toEqual({ status: "starting", step: "git_setup" });
+    jest.advanceTimersByTime(1500);
+    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "clone" });
+  });
+
   it("keeps each assignment's workspace separate", async () => {
     const client = createSimulatedWorkspaceClient({ stepMs: 1000 });
     await client.open(1);

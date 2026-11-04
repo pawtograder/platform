@@ -34,16 +34,19 @@ const SIMULATED_FAILURE_MESSAGES: Record<WorkspaceStepId, string> = {
   editor: "VS Code did not start in the workspace."
 };
 
+export const DEFAULT_SIMULATED_STEP_MS = 1500;
+
 /**
  * A stand-in for Coder: each step takes `stepMs`, and with `failAt` set the workspace stops at that
  * step. State is kept per assignment so polling sees progress, and `open` restarts it, which is
- * what Retry does.
+ * what Retry does. A `stepMs` that is not a positive finite number falls back to the default.
  */
 export function createSimulatedWorkspaceClient({
   failAt,
-  stepMs = 1500,
+  stepMs,
   editorUrl = "about:blank"
 }: { failAt?: WorkspaceStepId; stepMs?: number; editorUrl?: string } = {}): WorkspaceClient {
+  const step = stepMs !== undefined && Number.isFinite(stepMs) && stepMs > 0 ? stepMs : DEFAULT_SIMULATED_STEP_MS;
   const startedAt = new Map<number, number>();
 
   const stateAt = (assignmentId: number): WorkspaceState => {
@@ -51,7 +54,8 @@ export function createSimulatedWorkspaceClient({
     if (start === undefined) {
       return { status: "not_started" };
     }
-    const stepIndex = Math.floor((Date.now() - start) / stepMs);
+    // Clamped so a clock that moves backwards can't produce a negative index.
+    const stepIndex = Math.max(0, Math.floor((Date.now() - start) / step));
     const failIndex = failAt ? WORKSPACE_STEPS.findIndex((s) => s.id === failAt) : -1;
     if (failIndex !== -1 && stepIndex >= failIndex) {
       return { status: "failed", step: failAt!, message: SIMULATED_FAILURE_MESSAGES[failAt!] };
