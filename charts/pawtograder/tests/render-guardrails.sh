@@ -2659,6 +2659,19 @@ assert_refused "posture: a user-supplied posture marker annotation is refused" \
   "ingress.annotations must not set pawtograder.io/maintenance-active" \
   --set-string 'ingress.annotations.pawtograder\.io/maintenance-active=true'
 
+echo "== kong metrics listener =="
+KONG_MON=(--set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps)
+assert_rendered_contains "kong: metricsListener=admin keeps the admin API for /metrics" \
+  templates/kong.yaml '"0.0.0.0:8001"' "${KONG_MON[@]}"
+assert_rendered_contains "kong: metricsListener=status serves /metrics from the status API" \
+  templates/kong.yaml '"0.0.0.0:8100"' "${KONG_MON[@]}" --set kong.metricsListener=status
+assert_rendered_lacks "kong: metricsListener=status turns the admin API off" \
+  templates/kong.yaml '"0.0.0.0:8001"' "${KONG_MON[@]}" --set kong.metricsListener=status
+assert_rendered_contains "kong: the ServiceMonitor follows the status port" \
+  templates/monitoring.yaml "port: status-metrics" "${KONG_MON[@]}" --set kong.metricsListener=status
+assert_refused "kong: an unknown metricsListener is refused" \
+  "kong.metricsListener must be admin or status" --set kong.metricsListener=bogus
+
 echo
 
 echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="

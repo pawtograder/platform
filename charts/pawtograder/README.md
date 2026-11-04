@@ -784,7 +784,7 @@ Prometheus or Grafana itself.
 | storage-api      | `:5000 /metrics`         | none (already exposes Prometheus format) |
 | edge-functions   | `:9000 /metrics`         | none                                     |
 | auth (GoTrue)    | `:9100 /metrics`         | `GOTRUE_METRICS_EXPORTER=prometheus` (separate port; `:9999` is the API) |
-| kong             | `:8001 /metrics` (admin) | none — admin port is ClusterIP-only      |
+| kong             | `:8001 /metrics` (admin), or `:8100 /metrics` (status) with `kong.metricsListener: status` | none. The admin API also accepts `POST /config`, which replaces Kong's routes; the status API is read-only |
 | realtime         | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:REALTIME_METRICS_BEARER` |
 | supavisor        | `:4000 /metrics`         | HS256 JWT in `pawtograder-jwt:SUPAVISOR_METRICS_BEARER` |
 | web (Next.js)    | `:3000 /api/metrics`     | bearer in `pawtograder-jwt:METRICS_SCRAPE_TOKEN` |

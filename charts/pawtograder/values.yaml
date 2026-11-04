@@ -1829,6 +1829,11 @@ kong:
     limits: { cpu: "2", memory: "6Gi" }
   service:
     port: 8000
+  # Where /metrics is served when monitoring.enabled. `admin` opens the admin API
+  # on 0.0.0.0:8001 with no auth; in DB-less mode its POST /config replaces every
+  # route, so any pod that reaches it can reroute the API. `status` serves
+  # /metrics from the read-only status API on :8100 and turns the admin API off.
+  metricsListener: admin
   terminationGracePeriodSeconds: 45
   preStopSleepSeconds: 10
   spreadAcrossNodes: true

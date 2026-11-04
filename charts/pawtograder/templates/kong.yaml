@@ -1,4 +1,7 @@
 {{- if .Values.kong.enabled }}
+{{- if not (has .Values.kong.metricsListener (list "admin" "status")) }}
+{{- fail (printf "kong.metricsListener must be admin or status, got %q" .Values.kong.metricsListener) }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -13,12 +16,18 @@ spec:
       port: {{ .Values.kong.service.port }}
       targetPort: http
     {{- if .Values.monitoring.enabled }}
+    {{- if eq .Values.kong.metricsListener "status" }}
+    - name: status-metrics
+      port: 8100
+      targetPort: status-metrics
+    {{- else }}
     # Admin API exposes /metrics for the Prometheus plugin. ClusterIP-only,
     # never published through the ingress. Add a NetworkPolicy if you want
     # to gate by source namespace.
     - name: admin-metrics
       port: 8001
       targetPort: admin-metrics
+    {{- end }}
     {{- end }}
   selector:
     {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "kong") | nindent 4 }}
@@ -58,8 +67,13 @@ spec:
             - name: http
               containerPort: {{ .Values.kong.service.port }}
             {{- if .Values.monitoring.enabled }}
+            {{- if eq .Values.kong.metricsListener "status" }}
+            - name: status-metrics
+              containerPort: 8100
+            {{- else }}
             - name: admin-metrics
               containerPort: 8001
+            {{- end }}
             {{- end }}
           env:
             - name: KONG_DATABASE
@@ -89,7 +103,14 @@ spec:
               value: "request-transformer,cors,key-auth,acl,basic-auth{{ if .Values.monitoring.enabled }},prometheus{{ end }}"
             - name: KONG_PROXY_LISTEN
               value: "0.0.0.0:{{ .Values.kong.service.port }}"
-            {{- if .Values.monitoring.enabled }}
+            {{- if and .Values.monitoring.enabled (eq .Values.kong.metricsListener "status") }}
+            # The status API serves /metrics and /status only; it has no
+            # POST /config, so a pod that reaches it can't replace the routes.
+            - name: KONG_ADMIN_LISTEN
+              value: "off"
+            - name: KONG_STATUS_LISTEN
+              value: "0.0.0.0:8100"
+            {{- else if .Values.monitoring.enabled }}
             # Admin API enabled solely for the Prometheus plugin's /metrics
             # endpoint. ClusterIP-only port; the chart does not publish it.
             - name: KONG_ADMIN_LISTEN
