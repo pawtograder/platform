@@ -97,7 +97,8 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
     .eq("disabled", false)
     .in("role", ["instructor", "grader", "admin"])
     .eq("user_id", userID)
-    .is("classes.assignments.archived_at", null);
+    .is("classes.assignments.archived_at", null)
+    .not("classes.assignments.repo_mode", "in", "(none,no_submission)");
   if (staffError) {
     Sentry.captureException(staffError, scope);
     return {
@@ -116,7 +117,8 @@ async function ensureStaffOrgMembership(userID: string, githubUsername: string, 
     if (!c.classes?.github_org || !c.classes?.slug) {
       continue;
     }
-    // Skip only Forgejo-only classes. A class with no live assignments still gets its GitHub org invite.
+    // The query keeps only live repo-backed assignments, since no-repo ones default to GitHub. Skip a
+    // class only when all of those are on Forgejo; a class with none still gets its GitHub org invite.
     if (c.classes.assignments.length && !c.classes.assignments.some((a) => a.git_provider === "github")) {
       continue;
     }
@@ -191,12 +193,14 @@ async function ensureAllReposExist(userID: string, githubUsername: string, scope
     .eq("disabled", false)
     .eq("role", "student")
     .eq("user_id", userID)
-    .is("classes.assignments.archived_at", null);
+    .is("classes.assignments.archived_at", null)
+    .not("classes.assignments.repo_mode", "in", "(none,no_submission)");
   if (classesError) {
     Sentry.captureException(classesError, scope);
     throw new UserVisibleError("Error fetching classes");
   }
-  // Skip only Forgejo-only classes. A class with no live assignments still gets its GitHub org invite.
+  // The query keeps only live repo-backed assignments, since no-repo ones default to GitHub. Skip a
+  // class only when all of those are on Forgejo; a class with none still gets its GitHub org invite.
   const classes = classRows?.filter(
     (c) => !c.classes.assignments.length || c.classes.assignments.some((a) => a.git_provider === "github")
   );

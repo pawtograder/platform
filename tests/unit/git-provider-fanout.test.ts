@@ -21,13 +21,28 @@ function query(data: unknown, overrides: object = {}) {
         data = data.filter((row) => column.split(".").reduce((v, key) => v?.[key], row) === value);
       }
       return chain;
+    },
+    // Embedded `not in` filters drop nested rows, as PostgREST does.
+    not: (column: string, operator: string, value: string) => {
+      const path = column.split(".");
+      const field = path.pop()!;
+      const key = path.pop();
+      if (operator === "in" && key && Array.isArray(data)) {
+        const excluded = value.slice(1, -1).split(",");
+        for (const row of data) {
+          const parent = path.reduce((v, k) => v?.[k], row);
+          if (Array.isArray(parent?.[key]))
+            parent[key] = parent[key].filter((r: Record<string, unknown>) => !excluded.includes(String(r[field])));
+        }
+      }
+      return chain;
     }
   };
   chain.single = chain.maybeSingle = async () => ({
     data: Array.isArray(data) ? (data[0] ?? null) : data,
     error: null
   });
-  for (const method of ["select", "in", "is", "not", "lte", "limit", "update"]) chain[method] = () => chain;
+  for (const method of ["select", "in", "is", "lte", "limit", "update"]) chain[method] = () => chain;
   return Object.assign(chain, overrides);
 }
 // Execute actual function bodies with database/GitHub mocks, no copied filtering logic.
@@ -99,6 +114,71 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
     expect(syncRepoPermissions.mock.calls.map((call: unknown[]) => call[1]).sort()).toEqual(
       mode === "forgejo-only" ? [] : ["course-github-group-github", "github-group", "github-individual"]
     );
+  }
+});
+
+// No-repo assignments default to GitHub, so only repo-backed ones decide whether a class is GitHub.
+test.each([
+  ["github-user-sync", "ensureAllReposExist"],
+  ["github-user-sync", "ensureStaffOrgMembership"],
+  ["autograder-create-repos-for-student", "handleRequest"]
+])("%s %s invites by repo-backed assignment hosts", async (file, name) => {
+  const cases: [string, { git_provider: string; repo_mode: string }[], boolean][] = [
+    [
+      "Forgejo repo plus GitHub no-repo",
+      [
+        { git_provider: "forgejo", repo_mode: "template_only_staff" },
+        { git_provider: "github", repo_mode: "none" }
+      ],
+      false
+    ],
+    [
+      "only no-repo",
+      [
+        { git_provider: "github", repo_mode: "none" },
+        { git_provider: "github", repo_mode: "no_submission" }
+      ],
+      true
+    ],
+    [
+      "GitHub repo plus Forgejo repo",
+      [
+        { git_provider: "github", repo_mode: "template_with_student_forks" },
+        { git_provider: "forgejo", repo_mode: "template_only_staff" }
+      ],
+      true
+    ]
+  ];
+  for (const [label, assignments, invited] of cases) {
+    const classes = [
+      {
+        class_id: 1,
+        role: "instructor",
+        classes: { slug: "course", github_org: "org", time_zone: "UTC", assignments },
+        profiles: { repositories: [], assignment_groups_members: [] }
+      }
+    ];
+    const client = {
+      from: (table: string) =>
+        query(table === "user_roles" ? classes : table === "users" ? { github_username: "student" } : [])
+    };
+    const reinviteToOrgTeam = jest.fn(async () => true);
+    const invoke = handler(file, name, {
+      reinviteToOrgTeam,
+      UserVisibleError: Error,
+      createClient: () => client,
+      getAdminSupabase: () => client,
+      ...runtime,
+      TZDate,
+      isServiceRoleRequest: () => true,
+      isUserInOrg: async () => false,
+      isOrgInviteWindowKnownClosed: () => false,
+      Sentry: { addBreadcrumb: jest.fn(), captureException: jest.fn() },
+      console: { log: () => {} }
+    });
+    if (file === "github-user-sync") await invoke("user", "student");
+    else await invoke({ headers: new Map(), method: "POST", json: async () => ({ user_id: "user" }) });
+    expect([label, reinviteToOrgTeam.mock.calls.length]).toEqual([label, invited ? 1 : 0]);
   }
 });
 
