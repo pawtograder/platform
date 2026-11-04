@@ -12,8 +12,11 @@ import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 type StatusCallback = (status: string, err?: Error) => void;
 
+const internals = (manager: RealtimeChannelManager) =>
+  manager as unknown as Record<string, (...args: unknown[]) => unknown>;
+
 function makeClient() {
-  const channel = {
+  const channel: { on: jest.Mock; subscribe: jest.Mock; unsubscribe: jest.Mock; state: string } = {
     on: jest.fn(() => channel),
     subscribe: jest.fn((callback?: StatusCallback) => {
       callback?.("SUBSCRIBED");
@@ -53,12 +56,67 @@ describe("RealtimeChannelManager reconnect", () => {
       () => {}
     );
 
-    const registerLease = jest.spyOn(manager as never, "_registerLease").mockResolvedValue(undefined);
-    const startLeaseRefresh = jest.spyOn(manager as never, "_startLeaseRefresh").mockImplementation(() => {});
+    const registerLease = jest.spyOn(internals(manager), "_registerLease").mockImplementation(async () => undefined);
+    const startLeaseRefresh = jest.spyOn(internals(manager), "_startLeaseRefresh").mockImplementation(() => {});
 
     await (manager as unknown as { _resubscribeToChannel(topic: string): Promise<void> })._resubscribeToChannel(topic);
 
     expect(registerLease).toHaveBeenCalledTimes(1);
     expect(startLeaseRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("RealtimeChannelManager lease refresh after reconnect", () => {
+  afterEach(() => {
+    RealtimeChannelManager.getInstance().cleanup();
+    jest.restoreAllMocks();
+  });
+
+  it("stops the lease refresh when the reconnected channel closes", async () => {
+    const manager = RealtimeChannelManager.getInstance();
+    const topic = "class:7:students";
+    await manager.subscribe(
+      topic,
+      makeClient(),
+      () => {},
+      () => {}
+    );
+    const managed = (manager as unknown as { _channels: Map<string, { leaseTimer: unknown }> })._channels.get(topic)!;
+    const timer = setInterval(() => {}, 1_000_000);
+    managed.leaseTimer = timer;
+    const clearInt = jest.spyOn(global, "clearInterval");
+
+    (manager as unknown as { _handleReconnectionStateEvent(t: string, s: string): void })._handleReconnectionStateEvent(
+      topic,
+      "CLOSED"
+    );
+
+    expect(clearInt).toHaveBeenCalledWith(timer);
+    expect(managed.leaseTimer).toBeNull();
+  });
+
+  it("does not start the lease refresh for a channel torn down while registering", async () => {
+    const manager = RealtimeChannelManager.getInstance();
+    const client = makeClient();
+    const topic = "class:7:students";
+    const unsubscribe = await manager.subscribe(
+      topic,
+      client,
+      () => {},
+      () => {}
+    );
+
+    let finishRegistration: () => void = () => {};
+    jest
+      .spyOn(internals(manager), "_registerLease")
+      .mockImplementation(() => new Promise<void>((resolve) => (finishRegistration = resolve)) as unknown);
+    const startLeaseRefresh = jest.spyOn(internals(manager), "_startLeaseRefresh").mockImplementation(() => {});
+
+    await (manager as unknown as { _resubscribeToChannel(topic: string): Promise<void> })._resubscribeToChannel(topic);
+    unsubscribe();
+    finishRegistration();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(startLeaseRefresh).not.toHaveBeenCalled();
   });
 });

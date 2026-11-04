@@ -120,6 +120,14 @@ export class RealtimeChannelManager {
   }
 
   /** Refresh the lease periodically while subscribed */
+  /** Stop refreshing the lease for a channel that is no longer live. */
+  private _stopLeaseRefresh(managed: ManagedChannel) {
+    if (managed.leaseTimer) {
+      clearInterval(managed.leaseTimer);
+      managed.leaseTimer = null;
+    }
+  }
+
   private _startLeaseRefresh(managed: ManagedChannel) {
     if (managed.leaseTimer) {
       clearInterval(managed.leaseTimer);
@@ -772,7 +780,12 @@ export class RealtimeChannelManager {
             case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
               settled = true;
               // A replacement channel has no lease and no refresh timer, so register again and restart the refresh.
-              void this._registerLease(managedChannel).then(() => this._startLeaseRefresh(managedChannel));
+              void this._registerLease(managedChannel).then(() => {
+                // The channel may have been torn down while the lease was being registered.
+                if (this._channels.get(managedChannel.topic) === managedChannel) {
+                  this._startLeaseRefresh(managedChannel);
+                }
+              });
               resolve();
               break;
             case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
@@ -814,6 +827,7 @@ export class RealtimeChannelManager {
         break;
       case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
         managedChannel.isReconnecting = false;
+        this._stopLeaseRefresh(managedChannel);
         this._breadcrumb("reconnect", "channel_error", { topic }, "warning");
 
         // Only retry if we haven't exceeded max attempts
@@ -826,6 +840,7 @@ export class RealtimeChannelManager {
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
         // Do not change flags or schedule retries here.
         // The backoff controller (_resubscribeToChannelWithBackoff) manages retry lifecycle.
+        this._stopLeaseRefresh(managedChannel);
         this._breadcrumb(
           "reconnect",
           status === REALTIME_SUBSCRIBE_STATES.CLOSED ? "closed" : "timed_out",
