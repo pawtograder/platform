@@ -645,6 +645,8 @@ With `global.environment: production`, the render requires a named, replicated S
 
 Sharing this chart's Postgres puts Git and Coder downtime on every Postgres restart, and their connections count against `postgres.config.max_connections`. Move to `own` if either becomes a problem.
 
+In `pawtograder` mode the chart also puts lines at the top of `pg_hba.conf` that let the `forgejo` and `coder` roles log in only to their own database and reject them on every other database on the server, Pawtograder's included. Without them, either role's password would open a session on Pawtograder's database, because Postgres grants CONNECT to every role by default. `pg_hba.conf` is part of the primary's `checksum/config`, so an upgrade that changes which apps are in `pawtograder` mode restarts `pawtograder-postgres`, and the standby if there is one. That covers turning an app on or off and moving it between `pawtograder` and `own`. Schedule such an upgrade as a Postgres restart ([Chart versions and Postgres restarts](../../docs/operations/planned-maintenance.md#chart-versions-and-postgres-restarts)). With both apps off or both on `own`, `pg_hba.conf` is unchanged.
+
 ### Secrets
 
 Pre-create these alongside the ones under "Required Secrets" (or sync them with ESO):

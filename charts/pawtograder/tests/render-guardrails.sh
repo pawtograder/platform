@@ -2661,6 +2661,83 @@ assert_refused "posture: a user-supplied posture marker annotation is refused" \
 
 echo
 
+echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
+
+# With database: pawtograder, the forgejo and coder roles live on this chart's
+# Postgres, where CONNECT is granted to PUBLIC and `host all all` admits every
+# role from the private ranges. postgres-config.yaml puts per-app lines ahead
+# of those, so each role reaches only the database named after it and is
+# rejected on every other one. Postgres uses the first matching line, so the
+# lines must come before `local all all`, and the `reject` lines must name
+# exactly the apps in shared mode. With no app in shared mode none of it
+# renders: pg_hba.conf feeds the primary's checksum/config, and an extra line
+# would restart Postgres on every install.
+APP_HBA_OWN_CODER=(
+  --set coder.database=own --set coder-db.enabled=true
+  --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
+  --set 'coder.coder.env[0].value=postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable'
+)
+APP_HBA_OWN_FORGEJO=(
+  --set forgejo.database=own --set forgejo-db.enabled=true
+  --set forgejo.gitea.config.database.HOST=pawtograder-forgejo-db:5432
+)
+# assert_app_hba "<label>" "<comma-separated shared apps, or empty>" <helm args...>
+# Renders with release name pawtograder (the apps require it) and compares the
+# lines ahead of `local all all`, whitespace-normalized and comments dropped.
+assert_app_hba() {
+  local label="$1" apps="$2"; shift 2
+  local want="" got app cidr
+  if ! helm template pawtograder "$CHART" "$@" --show-only templates/postgres-config.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  if [ -n "$apps" ]; then
+    for app in ${apps//,/ }; do
+      for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+        want+="host $app $app $cidr md5"$'\n'
+      done
+    done
+    want+="host all $apps 0.0.0.0/0 reject"$'\n'"host all $apps ::/0 reject"$'\n'
+  fi
+  got="$(awk '
+    /^  pg_hba\.conf: \|/ { on=1; next }
+    on && /^  [^ ]/       { exit }
+    on && /^    local /   { exit }
+    on && !/^    #/       { $1=$1; print }
+  ' "$OUTFILE")"
+  if ! grep -q '^    local   all             all  ' "$OUTFILE"; then
+    echo "FAIL [$label]: pg_hba.conf has no 'local all all' line to anchor the comparison"
+    FAILED=1
+  elif [ "$got" != "${want%$'\n'}" ]; then
+    echo "FAIL [$label]: lines ahead of 'local all all' are not the expected app lines"
+    echo "       want: $(printf '%s' "${want%$'\n'}" | tr '\n' '|')"
+    echo "       got:  $(printf '%s' "$got" | tr '\n' '|')"
+    FAILED=1
+  elif [ -z "$apps" ] && grep -q 'reject' "$OUTFILE"; then
+    echo "FAIL [$label]: no app is in shared mode, but pg_hba.conf has a reject line"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+assert_app_hba "app hba: default render has no app lines" ""
+assert_app_hba "app hba: production baseline has no app lines" "" "${BASE[@]}"
+assert_app_hba "app hba: Forgejo and Coder shared get own-database lines and a reject" \
+  "forgejo,coder" -f "$CHART/examples/values-forgejo-coder.yaml"
+assert_app_hba "app hba: only Forgejo shared names only forgejo" \
+  "forgejo" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_CODER[@]}"
+assert_app_hba "app hba: only Coder shared names only coder" \
+  "coder" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}"
+assert_app_hba "app hba: both apps on own servers render no app lines" \
+  "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_CODER[@]}" "${APP_HBA_OWN_FORGEJO[@]}"
+assert_app_hba "app hba: Coder shared but disabled renders no app lines" \
+  "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}" \
+  --set coder.enabled=false --set coderBootstrap.enabled=false
+
+echo
+
 echo
 
 if [ "$FAILED" -ne 0 ]; then

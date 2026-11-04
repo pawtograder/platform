@@ -1,4 +1,12 @@
 {{- if .Values.postgres.enabled }}
+{{- /* Forgejo and Coder roles on this server (database: pawtograder). The
+app-databases Job names each one's role and database after the app. */}}
+{{- $sharedApps := list }}
+{{- range $app := list "forgejo" "coder" }}
+{{- if and (index $.Values $app).enabled (eq (index $.Values $app).database "pawtograder") }}
+{{- $sharedApps = append $sharedApps $app }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -38,6 +46,23 @@ data:
     archive_timeout = '{{ .Values.postgres.walg.archiveTimeout | default "60s" }}'
     {{- end }}
   pg_hba.conf: |
+    {{- if $sharedApps }}
+    # Forgejo and Coder share this server. Postgres grants CONNECT to PUBLIC,
+    # so without these lines their roles could log in to every database here,
+    # Pawtograder's included. The first matching line wins. Each app role may
+    # reach only its own database, from the same ranges as `host all all`
+    # below, and is rejected everywhere else. The `local` socket stays
+    # `trust`, since only the Postgres pod reaches it. These lines render only
+    # while an app uses this server, so a default install's pg_hba.conf, and
+    # the checksum that rolls Postgres, stay as they were.
+    {{- range $app := $sharedApps }}
+    {{- range $cidr := list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" }}
+    {{ printf "host    %-15s %-15s %-23s md5" $app $app $cidr }}
+    {{- end }}
+    {{- end }}
+    {{ printf "host    %-15s %-15s %-23s reject" "all" (join "," $sharedApps) "0.0.0.0/0" }}
+    {{ printf "host    %-15s %-15s %-23s reject" "all" (join "," $sharedApps) "::/0" }}
+    {{- end }}
     local   all             all                                     trust
     host    all             all             127.0.0.1/32            trust
     host    all             all             ::1/128                 trust

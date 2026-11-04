@@ -81,6 +81,10 @@ spec:
             - name: APP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $.Release.Name }}-{{ $app }}-db, key: PGPASSWORD }
+          {{- /* No REVOKE CONNECT here. On the shared server the role gets CONNECT on
+          Pawtograder's database through PUBLIC, which a per-role REVOKE doesn't take
+          away, and revoking it from PUBLIC would lock out Supabase's own roles.
+          pg_hba.conf (postgres-config.yaml) limits the role to its own database. */}}
           command:
             - sh
             - -ec
