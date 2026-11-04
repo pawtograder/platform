@@ -52,7 +52,7 @@ The privileged specs (`tests/e2e/course-gemini-key-*.spec.ts`) connect as `postg
 
 `e2e-local` runs on `pull_request_target`, so it always uses `staging`'s copy of `.github/workflows/deploy.yml`. The step that creates the marker therefore landed on its own, in #1191, before this PR could pass CI.
 
-#1160 no longer changes `deploy.yml`. It merges cleanly with `staging`, and the merged workflow has exactly one marker step, so no sync commit was needed.
+#1160 no longer changes `deploy.yml`. `e2e-local` checks out the PR head but runs `staging`'s workflow, so the branch has to contain whatever that workflow calls. `staging` now runs `npm run check:delete-paths` (added in #1175), so `staging` was merged into #1160, and then into #1161. After that merge, `deploy.yml` and `package.json` match `staging`, and the workflow has exactly one marker step.
 
 **Running the specs locally:** on a local stack without the marker they fail rather than skip; this is deliberate. To run them on a disposable stack:
 

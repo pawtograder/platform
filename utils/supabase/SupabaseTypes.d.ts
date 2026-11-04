@@ -12826,6 +12826,10 @@ export type Database = {
         Args: { p_class_id: number };
         Returns: number;
       };
+      delete_repository_rows: {
+        Args: { p_repository_ids: number[] };
+        Returns: number;
+      };
       delete_system_notifications_by_campaign: {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
