@@ -225,7 +225,11 @@ function GeminiKeyPanel({ courseId }: { courseId: number }) {
                     <Input
                       type="password"
                       name="course-gemini-api-key"
-                      autoComplete="off"
+                      // Workaround: Chrome ignores autocomplete="off" on password fields and offered to save the
+                      // key as a login password. "one-time-code" avoided that prompt in a manual Chrome check,
+                      // with type="password" kept for native and telemetry masking. It is an OTP hint, so browsers
+                      // may suggest verification codes here. See docs/course-gemini-api-key.md.
+                      autoComplete="one-time-code"
                       spellCheck={false}
                       autoCapitalize="off"
                       autoCorrect="off"
