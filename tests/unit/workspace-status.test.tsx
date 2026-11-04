@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
+import { POLL_MIN_MS } from "@/hooks/useWorkspaceStatus";
 import {
   createSimulatedWorkspaceClient,
   WORKSPACE_STEPS,
@@ -25,7 +26,9 @@ describe("createSimulatedWorkspaceClient", () => {
 
   it("walks every step in order, then is ready with the editor URL", async () => {
     const client = createSimulatedWorkspaceClient({ stepMs: 1000, editorUrl: "https://editor.example" });
-    expect(await client.open(1)).toEqual({ status: "starting", step: "git_setup" });
+    expect(await client.open(1)).toEqual({ status: "starting", step: "build" });
+    jest.advanceTimersByTime(1000);
+    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "git_setup" });
     jest.advanceTimersByTime(1000);
     expect(await client.getStatus(1)).toEqual({ status: "starting", step: "clone" });
     jest.advanceTimersByTime(1000);
@@ -58,21 +61,21 @@ describe("createSimulatedWorkspaceClient", () => {
     await client.open(1);
     jest.advanceTimersByTime(5000);
     expect(await client.getStatus(1)).toMatchObject({ status: "failed" });
-    expect(await client.open(1)).toEqual({ status: "starting", step: "git_setup" });
+    expect(await client.open(1)).toEqual({ status: "starting", step: "build" });
   });
 
   it.each([-5, 0, Infinity, NaN])("falls back to the default step length for stepMs=%s", async (stepMs) => {
     const client = createSimulatedWorkspaceClient({ stepMs });
-    expect(await client.open(1)).toEqual({ status: "starting", step: "git_setup" });
+    expect(await client.open(1)).toEqual({ status: "starting", step: "build" });
     jest.advanceTimersByTime(1500);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "clone" });
+    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "git_setup" });
   });
 
   it("keeps each assignment's workspace separate", async () => {
     const client = createSimulatedWorkspaceClient({ stepMs: 1000 });
     await client.open(1);
     jest.advanceTimersByTime(1000);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "clone" });
+    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "git_setup" });
     expect(await client.getStatus(2)).toEqual({ status: "not_started" });
   });
 
@@ -143,14 +146,14 @@ describe("WorkspaceStatus", () => {
     expect(client.open).toHaveBeenCalledWith(7);
 
     await act(async () => {
-      jest.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(POLL_MIN_MS);
     });
     expect(
       await screen.findByText(/Clone your repository/, { selector: "[data-testid=workspace-status]" })
     ).toBeVisible();
 
     await act(async () => {
-      jest.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(POLL_MIN_MS * 1.5);
     });
     const link = await screen.findByRole("link", { name: "Open in VS Code" });
     expect(link).toHaveAttribute("href", "https://editor.example");
@@ -159,9 +162,53 @@ describe("WorkspaceStatus", () => {
 
     const callsWhenReady = client.getStatus.mock.calls.length;
     await act(async () => {
-      jest.advanceTimersByTime(10_000);
+      jest.advanceTimersByTime(60_000);
     });
     expect(client.getStatus.mock.calls.length).toBe(callsWhenReady);
+  });
+
+  it("waits for each poll to settle before sending the next", async () => {
+    const pending: Array<(s: WorkspaceState) => void> = [];
+    const client: WorkspaceClient = {
+      getStatus: jest
+        .fn()
+        .mockResolvedValueOnce({ status: "starting", step: "build" })
+        .mockImplementation(() => new Promise<WorkspaceState>((resolve) => pending.push(resolve))),
+      open: jest.fn()
+    };
+    renderCard(client);
+    await screen.findByText(/Starting your workspace/);
+    await act(async () => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(client.getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a status reply that started before Retry", async () => {
+    let resolveSlow: (s: WorkspaceState) => void = () => {};
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", step: "clone", message: "Clone broke." } as WorkspaceState)
+      .mockImplementationOnce(() => new Promise<WorkspaceState>((resolve) => (resolveSlow = resolve)))
+      .mockResolvedValue({ status: "starting", step: "build" } as WorkspaceState);
+    const open = jest.fn(async () => ({ status: "starting", step: "build" }) as WorkspaceState);
+    renderCard({ getStatus, open });
+    await screen.findByRole("button", { name: "Retry" });
+
+    // A status check starts (the tab became visible), then the student presses Retry.
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText(/Starting your workspace: Prepare the workspace/);
+
+    // The old check lands with the old answer and must not flip the card back to Failed.
+    await act(async () => {
+      resolveSlow({ status: "failed", step: "clone", message: "Clone broke." });
+    });
+    expect(screen.getByTestId("workspace-status")).toHaveTextContent("Starting your workspace: Prepare the workspace");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 
   it("marks steps done, failed and pending, and retries a failed workspace", async () => {
@@ -182,11 +229,32 @@ describe("WorkspaceStatus", () => {
     expect(client.open).toHaveBeenCalledTimes(1);
   });
 
-  it("announces status changes to screen readers", async () => {
-    renderCard(stubClient({ initial: { status: "not_started" } }));
+  it("announces status changes in the same live region", async () => {
+    renderCard(stubClient({ initial: { status: "not_started" }, opened: { status: "starting", step: "build" } }));
     const status = await screen.findByRole("status");
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveTextContent("Your workspace is not running.");
+    fireEvent.click(screen.getByRole("button", { name: "Open workspace" }));
+    await screen.findByText(/Starting your workspace/);
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status).toHaveTextContent("Starting your workspace: Prepare the workspace…");
+  });
+
+  it("sends one open request for a double click", async () => {
+    let resolveOpen: (s: WorkspaceState) => void = () => {};
+    const client: WorkspaceClient & { open: jest.Mock } = {
+      getStatus: jest.fn(async () => ({ status: "not_started" }) as WorkspaceState),
+      open: jest.fn(() => new Promise<WorkspaceState>((resolve) => (resolveOpen = resolve)))
+    };
+    renderCard(client);
+    const openButton = await screen.findByRole("button", { name: "Open workspace" });
+    fireEvent.click(openButton);
+    fireEvent.click(openButton);
+    expect(client.open).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveOpen({ status: "starting", step: "build" });
+    });
+    expect(await screen.findByText(/Starting your workspace/)).toBeInTheDocument();
   });
 
   it("offers Try again when the first status lookup fails, and recovers", async () => {
@@ -210,14 +278,43 @@ describe("WorkspaceStatus", () => {
     renderCard({ getStatus, open: jest.fn() });
     await screen.findByText(/Starting your workspace/);
     await act(async () => {
-      jest.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(POLL_MIN_MS);
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("network blip");
     await act(async () => {
-      jest.advanceTimersByTime(1000);
+      jest.advanceTimersByTime(POLL_MIN_MS * 1.5);
     });
     expect(await screen.findByRole("link", { name: /Open in VS Code/ })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("checks a ready workspace again when the tab becomes visible", async () => {
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", url: "https://editor.example" } as WorkspaceState)
+      .mockResolvedValue({ status: "not_started" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    await screen.findByRole("link", { name: /Open in VS Code/ });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByText("Your workspace is not running.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open in VS Code/ })).not.toBeInTheDocument();
+  });
+
+  it("skips polls while the tab is hidden", async () => {
+    const getStatus = jest.fn(async () => ({ status: "starting", step: "build" }) as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    await screen.findByText(/Starting your workspace/);
+    const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      expect(getStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      hidden.mockRestore();
+    }
   });
 
   it("shows an error, and keeps the card usable, when the workspace can't be reached", async () => {

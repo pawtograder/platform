@@ -70,7 +70,7 @@ function statusText(state: WorkspaceState): string {
  * get the editor link once every step has passed.
  */
 export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number; client: WorkspaceClient }) {
-  const { state, error, open, reload } = useWorkspaceStatus(client, assignmentId);
+  const { state, error, pending, open, reload } = useWorkspaceStatus(client, assignmentId);
 
   return (
     <Box borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
@@ -81,7 +81,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
           // again instead of leaving the skeleton up until the page is reloaded.
           error ? (
             <HStack>
-              <Button size="sm" colorPalette="blue" variant="outline" onClick={reload}>
+              <Button size="sm" colorPalette="blue" variant="outline" loading={pending} onClick={reload}>
                 <LuRotateCcw />
                 Try again
               </Button>
@@ -108,7 +108,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
             )}
             <HStack>
               {state.status === "not_started" && (
-                <Button size="sm" colorPalette="blue" onClick={open}>
+                <Button size="sm" colorPalette="blue" loading={pending} onClick={open}>
                   <LuCodeXml />
                   Open workspace
                 </Button>
@@ -128,7 +128,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
                 </Button>
               )}
               {state.status === "failed" && (
-                <Button size="sm" colorPalette="blue" variant="outline" onClick={open}>
+                <Button size="sm" colorPalette="blue" variant="outline" loading={pending} onClick={open}>
                   <LuRotateCcw />
                   Retry
                 </Button>
