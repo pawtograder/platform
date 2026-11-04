@@ -1,4 +1,5 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
+import type { Page, Request, Response } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
 import {
@@ -27,6 +28,42 @@ let queueId: number;
 
 const HISTORICAL_CHAT_TEXT = "This is a historical chat view. New messages cannot be sent.";
 
+// Fill in the new request form, submit it, and wait for the request page to open. Returns the
+// new request's id.
+async function submitNewRequest(page: Page, description: string, { isPrivate = false } = {}): Promise<number> {
+  await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Help Request Description" }).fill(description);
+  if (isPrivate) {
+    await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
+  }
+  await page.getByRole("button", { name: "Submit Request" }).click();
+  await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
+  return Number(new URL(page.url()).pathname.split("/").pop());
+}
+
+// Matches the query the roster cache sends when the new request form page first loads.
+//
+// Two other help_request_students queries also go out after the student submits the form: the
+// lookup of the new request's rows (help_request_id=eq.) and the refetch of those rows by id
+// (id=in.). This matches neither of them.
+//
+// The course page that loginAsUser opens also sends a roster query. The browser cancels it when
+// the test goes to the form, so this skips it by checking that the query came from the form page.
+function isFormRosterFirstLoad(request: Request): boolean {
+  const url = request.url();
+  return (
+    request.method() === "GET" &&
+    url.includes("/rest/v1/help_request_students?") &&
+    url.includes("class_id=eq.") &&
+    request.frame().url().endsWith("/new")
+  );
+}
+
+// Matches the response to the form's refetch of the new request's rows by id.
+function isRefetchById(response: Response): boolean {
+  return /\/rest\/v1\/help_request_students\?.*[?&]id=in\./.test(response.url());
+}
+
 test.beforeAll(async () => {
   course = await createClass({ name: "OH Request Roster" });
   [student, otherStudent, ta] = await createUsersInClass([
@@ -54,6 +91,13 @@ test.beforeAll(async () => {
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, otherStudent, ta]);
+  // A student can have at most one open public request and one open private request in a queue.
+  // Close every request this test left open, so that the next test can submit the form.
+  await supabase
+    .from("help_requests")
+    .update({ status: "closed" })
+    .eq("class_id", course.id)
+    .in("status", ["open", "in_progress"]);
 });
 
 test.describe("Office hours request roster", () => {
@@ -69,11 +113,7 @@ test.describe("Office hours request roster", () => {
     // before the request exists, and no page load refreshes them after it is created.
     await page.goto(`/course/${course.id}/office-hours/${queueId}`);
     await page.getByRole("link", { name: "New Request" }).click();
-    await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
-    await page.getByRole("textbox", { name: "Help Request Description" }).fill("Roster check: my tests hang");
-    await page.getByRole("button", { name: "Submit Request" }).click();
-    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
-    const requestId = Number(new URL(page.url()).pathname.split("/").pop());
+    const requestId = await submitNewRequest(page, "Roster check: my tests hang");
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     const taContext = await browser.newContext();
@@ -129,5 +169,129 @@ test.describe("Office hours request roster", () => {
     await loginAsUser(page, otherStudent!, course);
     await page.goto(`/course/${course.id}/office-hours/${queueId}/${requestId}`);
     await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toBeVisible();
+  });
+
+  test("A new request keeps its roster when the first roster response arrives after the request is created", async ({
+    page
+  }) => {
+    // When the roster cache finishes its first load, it replaces all of its rows with the result.
+    // That load starts when the form page opens, before the request exists, so its result has no
+    // rows for the new request. If the result arrives after the form has already added the new
+    // request's rows, it overwrites them. The page then goes from "1 student" and a Resolve button
+    // to "0 students" and no Resolve button.
+    test.slow();
+    await loginAsUser(page, student!, course);
+
+    // Hold back the response to the form page's first roster query. The query itself runs now,
+    // before the request exists, so the response has no rows for the new request.
+    let releaseFirstLoad!: () => void;
+    const firstLoadReleased = new Promise<void>((resolve) => {
+      releaseFirstLoad = resolve;
+    });
+    let markFirstLoadDelivered!: () => void;
+    const firstLoadDelivered = new Promise<void>((resolve) => {
+      markFirstLoadDelivered = resolve;
+    });
+    let heldFirstLoad = false;
+    await page.route("**/rest/v1/help_request_students?*", async (route) => {
+      if (!heldFirstLoad && isFormRosterFirstLoad(route.request())) {
+        heldFirstLoad = true;
+        const response = await route.fetch();
+        await firstLoadReleased;
+        await route.fulfill({ response });
+        markFirstLoadDelivered();
+        return;
+      }
+      await route.continue();
+    });
+    const rosterLookup = page.waitForResponse(
+      (response) =>
+        response.url().includes("/rest/v1/help_request_students?") && response.url().includes("help_request_id=eq.")
+    );
+
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/new`);
+    await submitNewRequest(page, "Roster check: slow first load");
+    await rosterLookup;
+    expect(heldFirstLoad).toBe(true);
+    // Without the fix, the form doesn't wait for the first load, so its refetch comes back now.
+    // Wait up to 3 seconds for it, so that the held response is the one that arrives last. With
+    // the fix, the form hasn't sent the refetch yet, and this wait times out.
+    await page.waitForResponse(isRefetchById, { timeout: 3_000 }).catch(() => {});
+
+    // With the fix, the form sends its refetch only after the cache has processed the held
+    // response. So when the refetch comes back, the overwrite is already over, and the student's
+    // row should still be there. Without the fix, the refetch was already sent above, no second
+    // one comes, and the test fails here.
+    const refetchAfterRelease = page.waitForResponse(isRefetchById, { timeout: 10_000 });
+    releaseFirstLoad();
+    await firstLoadDelivered;
+    await refetchAfterRelease;
+
+    await expect(page.getByText("1 student", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
+  });
+
+  test("A new request gets its roster when the first roster query fails", async ({ page }) => {
+    // The form waits for the roster cache's first load to finish, even if it fails. Check that a
+    // failed first load doesn't stop the form from loading the new request's rows.
+    test.slow();
+    await loginAsUser(page, student!, course);
+
+    let releaseFirstLoad!: () => void;
+    const firstLoadReleased = new Promise<void>((resolve) => {
+      releaseFirstLoad = resolve;
+    });
+    let failedFirstLoad = false;
+    await page.route("**/rest/v1/help_request_students?*", async (route) => {
+      if (!failedFirstLoad && isFormRosterFirstLoad(route.request())) {
+        failedFirstLoad = true;
+        await firstLoadReleased;
+        await route.fulfill({ status: 500, contentType: "application/json", body: '{"message":"test failure"}' });
+        return;
+      }
+      await route.continue();
+    });
+    const rosterLookup = page.waitForResponse(
+      (response) =>
+        response.url().includes("/rest/v1/help_request_students?") && response.url().includes("help_request_id=eq.")
+    );
+
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/new`);
+    await submitNewRequest(page, "Roster check: failed first load");
+    await rosterLookup;
+    expect(failedFirstLoad).toBe(true);
+    releaseFirstLoad();
+
+    await expect(page.getByText("1 student", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
+  });
+
+  test("A new private request shows the student's roster and stays hidden from other students", async ({
+    page,
+    browser
+  }) => {
+    test.slow();
+    await loginAsUser(page, student!, course);
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/new`);
+    const requestId = await submitNewRequest(page, "Roster check: private request", { isPrivate: true });
+
+    await expect(page.getByText("1 student", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
+
+    // Check that a student who is not on the private request can't open it. RLS keeps the row
+    // from ever reaching this student, so this checks the page as a whole for a privacy leak. It
+    // does not test the cached-row fallback on its own.
+    const otherContext = await browser.newContext();
+    try {
+      const otherPage = await otherContext.newPage();
+      await loginAsUser(otherPage, otherStudent!, course);
+      await otherPage.goto(`/course/${course.id}/office-hours/${queueId}/${requestId}`);
+      // RLS hides the private request from this student. The page's fetch for it returns an
+      // error, so the page shows "Unable to load this request" instead of "Request not found."
+      await expect(otherPage.getByText(/^(Request not found\.|Unable to load this request)/)).toBeVisible();
+      await expect(otherPage.getByText("Roster check: private request")).toHaveCount(0);
+    } finally {
+      await otherContext.close();
+    }
   });
 });

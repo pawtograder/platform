@@ -20,6 +20,7 @@ import {
 } from "@/hooks/useOfficeHoursRealtime";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
+import * as Sentry from "@sentry/nextjs";
 import {
   Assignment,
   HelpRequest,
@@ -584,18 +585,42 @@ export default function HelpRequestForm({
             // stall router.push if the REST round-trip is slow.
             controller.loadMessagesForHelpRequest(createdHelpRequestId);
 
-            // The RPC also inserted the request's help_request_students rows, but their
-            // broadcast goes to help_request:<id>, which nobody has joined yet, so
-            // safe_broadcast drops it. Without those rows the request page shows 0 students
-            // and no Resolve button (#1003), and spins once the request is resolved (#1080).
-            // Pull them in ourselves. Not awaited, for the same router.push reason as above;
-            // the request is already saved, so a failed refresh is not an error here.
+            // The RPC also inserted this request's help_request_students rows. Their broadcast
+            // goes to the help_request:<id> channel, which no client has joined yet, so
+            // safe_broadcast drops it. Without these rows, the request page shows 0 students and
+            // no Resolve button (#1003), and it spins forever once the request is resolved
+            // (#1080). So we load the rows ourselves. We don't await this, for the same
+            // router.push reason as above.
+            //
+            // The roster cache may still be running its first load. When that load finishes, it
+            // replaces every row in the cache, which would remove the rows we add here. So wait
+            // for it to finish first, whether it succeeds or fails.
+            //
+            // The request is already saved. If loading the rows fails, the only problem is that
+            // the page shows no roster until a reload, so report the error and tell the student
+            // to reload.
             void supabase
               .from("help_request_students")
               .select("id")
               .eq("help_request_id", createdHelpRequestId)
-              .then(({ data }) => controller.helpRequestStudents.refetchByIds((data ?? []).map((row) => row.id)))
-              .then(undefined, () => {});
+              .then(async ({ data, error }) => {
+                if (error) {
+                  throw error;
+                }
+                const roster = controller.helpRequestStudents;
+                await roster.readyPromise.catch(() => {});
+                await roster.refetchByIds((data ?? []).map((row) => row.id));
+              })
+              .then(undefined, (error: unknown) => {
+                Sentry.withScope((scope) => {
+                  scope.setContext("help_request_roster_refresh", { help_request_id: createdHelpRequestId });
+                  Sentry.captureException(error);
+                });
+                toaster.error({
+                  title: "Could not load request roster",
+                  description: "Reload the page to see the students on this request."
+                });
+              });
 
             navigated = true;
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequestId}`);
