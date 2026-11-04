@@ -88,7 +88,9 @@ export function useWorkspaceStatus(client: WorkspaceClient, assignmentId: number
   useEffect(() => {
     if (!hasState) return;
     const onVisible = () => {
-      if (!document.hidden) void refresh();
+      // Skipped while Open, Retry or Try again is running: the check would take a newer request
+      // number and drop that action's reply, and the action reports a fresh state when it ends.
+      if (!document.hidden && !pendingRef.current) void refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);

@@ -347,6 +347,24 @@ describe("WorkspaceStatus", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps the reply to Open when the tab becomes visible while Open is running", async () => {
+    let finishOpen: (s: WorkspaceState) => void = () => {};
+    const getStatus = jest.fn(async () => ({ status: "not_started" }) as WorkspaceState);
+    const open = jest.fn(() => new Promise<WorkspaceState>((resolve) => (finishOpen = resolve)));
+    renderCard({ getStatus, open });
+    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
+
+    // The student switches back to the tab before Open has answered.
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      finishOpen({ status: "starting", step: "build" });
+    });
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Starting your workspace: Prepare the workspace");
+  });
+
   it("checks a ready workspace again when the tab becomes visible", async () => {
     const getStatus = jest
       .fn()
