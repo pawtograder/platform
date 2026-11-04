@@ -163,22 +163,25 @@ test("commit history never authorizes a same-named repository on another provide
 
 test.each(["github", "forgejo"])("%s group moves reach writes only for GitHub", async (provider) => {
   const rows = [{ id: 1, assignments: { git_provider: provider } }];
-  const write = jest.fn(() => {
-    throw new Error("membership write reached");
-  });
-  const client = { from: () => query(rows, { delete: write, insert: write }) };
+  const client = { from: () => query(rows) };
+  // Every membership, group and repository write happens inside the move.
+  const moveStudentBetweenGroups = jest.fn(async () => {});
   const invoke = handler("assignment-group-instructor-move-student", "handleAssignmentGroupInstructorMoveStudent", {
     createClient: () => client,
     ...runtime,
     IllegalArgumentError: Error,
+    moveStudentBetweenGroups,
+    enqueueGithubArchiveRepo: jest.fn(),
+    enqueueSyncRepoPermissions: jest.fn(),
     assertUserIsInstructor: async () => ({ supabase: client, enrollment: {} })
   });
   const response = invoke({
     headers: new Map(),
     json: async () => ({ old_assignment_group_id: 1, new_assignment_group_id: 2, profile_id: "student", class_id: 1 })
   });
-  await expect(response).rejects.toThrow(provider === "forgejo" ? "Forgejo" : "membership write reached");
-  expect(write).toHaveBeenCalledTimes(provider === "forgejo" ? 0 : 1);
+  if (provider === "forgejo") await expect(response).rejects.toThrow("Forgejo");
+  else await expect(response).resolves.toBeUndefined();
+  expect(moveStudentBetweenGroups).toHaveBeenCalledTimes(provider === "forgejo" ? 0 : 1);
 });
 
 test("Forgejo assignment copies reject before database writes", async () => {
