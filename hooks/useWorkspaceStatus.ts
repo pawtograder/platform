@@ -22,19 +22,20 @@ export function useWorkspaceStatus(client: WorkspaceClient, assignmentId: number
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
-  // Bumped by `open()` and on unmount. A reply to a request that started under an older generation
-  // is dropped, so a slow poll can't overwrite the state that a newer `open()` returned.
-  const generation = useRef(0);
+  // Numbers every request (each status check and each `open()`), and is bumped again on unmount.
+  // Only the reply to the newest request is applied, so a slow poll can't overwrite what a newer
+  // `open()` or tab-visible check returned, whether it resolves with an older state or rejects.
+  const latestRequest = useRef(0);
 
   const refresh = useCallback(async () => {
-    const gen = generation.current;
+    const seq = ++latestRequest.current;
     try {
       const next = await client.getStatus(assignmentId);
-      if (gen !== generation.current) return;
+      if (seq !== latestRequest.current) return;
       setState(next);
       setError(null);
     } catch (e) {
-      if (gen !== generation.current) return;
+      if (seq !== latestRequest.current) return;
       setError(errorMessage(e));
     }
   }, [client, assignmentId]);
@@ -57,7 +58,7 @@ export function useWorkspaceStatus(client: WorkspaceClient, assignmentId: number
     return () => {
       // A counter, not a DOM ref: bumping it here is what drops replies after unmount.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      generation.current++;
+      latestRequest.current++;
     };
   }, [refresh]);
 
@@ -96,13 +97,13 @@ export function useWorkspaceStatus(client: WorkspaceClient, assignmentId: number
   const open = useCallback(
     () =>
       runAction(async () => {
-        const gen = ++generation.current;
+        const seq = ++latestRequest.current;
         setError(null);
         try {
           const next = await client.open(assignmentId);
-          if (gen === generation.current) setState(next);
+          if (seq === latestRequest.current) setState(next);
         } catch (e) {
-          if (gen === generation.current) setError(errorMessage(e));
+          if (seq === latestRequest.current) setError(errorMessage(e));
         }
       }),
     [runAction, client, assignmentId]

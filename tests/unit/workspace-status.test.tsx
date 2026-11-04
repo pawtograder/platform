@@ -86,6 +86,8 @@ describe("createSimulatedWorkspaceClient", () => {
   });
 });
 
+type Settle = { resolve: (s: WorkspaceState) => void; reject: (e: Error) => void };
+
 describe("WorkspaceStatus", () => {
   function stubClient(states: { initial: WorkspaceState; polls?: WorkspaceState[]; opened?: WorkspaceState }) {
     const polls = [...(states.polls ?? [])];
@@ -312,6 +314,36 @@ describe("WorkspaceStatus", () => {
       jest.advanceTimersByTime(POLL_MIN_MS * 1.5);
     });
     expect(await screen.findByRole("link", { name: /Open in VS Code/ })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["resolves with an older state", (settle: Settle) => settle.resolve({ status: "starting", step: "editor" })],
+    ["rejects", (settle: Settle) => settle.reject(new Error("network blip"))]
+  ])("keeps a newer ready reply when an older poll %s after it", async (_label, finishOldPoll) => {
+    let oldPoll: Settle | undefined;
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "starting", step: "editor" } as WorkspaceState)
+      .mockImplementationOnce(() => new Promise<WorkspaceState>((resolve, reject) => (oldPoll = { resolve, reject })))
+      .mockResolvedValue({ status: "ready", url: "https://editor.example" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    await screen.findByText(/Starting your workspace/);
+
+    // A poll goes out and hangs; then the tab becomes visible and a newer check returns ready.
+    await act(async () => {
+      jest.advanceTimersByTime(POLL_MIN_MS);
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByRole("link", { name: /Open in VS Code/ })).toBeInTheDocument();
+
+    await act(async () => {
+      finishOldPoll(oldPoll!);
+    });
+    expect(screen.getByTestId("workspace-status")).toHaveTextContent("Your workspace is ready.");
+    expect(screen.getByRole("link", { name: /Open in VS Code/ })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
