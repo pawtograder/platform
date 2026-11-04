@@ -36,13 +36,27 @@ function query(data: unknown, overrides: object = {}) {
         }
       }
       return chain;
+    },
+    // Embedded `is` filters drop nested rows the same way; top-level ones are not applied.
+    is: (column: string, value: unknown) => {
+      const path = column.split(".");
+      const field = path.pop()!;
+      const key = path.pop();
+      if (key && Array.isArray(data)) {
+        for (const row of data) {
+          const parent = path.reduce((v, k) => v?.[k], row);
+          if (Array.isArray(parent?.[key]))
+            parent[key] = parent[key].filter((r: Record<string, unknown>) => r[field] === value);
+        }
+      }
+      return chain;
     }
   };
   chain.single = chain.maybeSingle = async () => ({
     data: Array.isArray(data) ? (data[0] ?? null) : data,
     error: null
   });
-  for (const method of ["select", "in", "is", "lte", "limit", "update"]) chain[method] = () => chain;
+  for (const method of ["select", "in", "lte", "limit", "update"]) chain[method] = () => chain;
   return Object.assign(chain, overrides);
 }
 // Execute actual function bodies with database/GitHub mocks, no copied filtering logic.
@@ -72,7 +86,9 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
           github_org: "org",
           time_zone: "UTC",
           assignments:
-            mode === "no-assignments" ? [] : [{ git_provider: mode === "forgejo-only" ? "forgejo" : "github" }]
+            mode === "no-assignments"
+              ? []
+              : [{ git_provider: mode === "forgejo-only" ? "forgejo" : "github", archived_at: null }]
         },
         profiles: {
           repositories: [repo("github", "individual"), repo("forgejo", "individual")],
@@ -123,7 +139,7 @@ test.each([
   ["github-user-sync", "ensureStaffOrgMembership"],
   ["autograder-create-repos-for-student", "handleRequest"]
 ])("%s %s invites by repo-backed assignment hosts", async (file, name) => {
-  const cases: [string, { git_provider: string; repo_mode: string }[], boolean][] = [
+  const cases: [string, { git_provider: string; repo_mode: string; archived_at?: string }[], boolean][] = [
     [
       "Forgejo repo plus GitHub no-repo",
       [
@@ -155,6 +171,14 @@ test.each([
         { git_provider: "forgejo", repo_mode: "template_only_staff" }
       ],
       true
+    ],
+    [
+      "archived GitHub repo plus live Forgejo repo",
+      [
+        { git_provider: "github", repo_mode: "template_with_student_forks", archived_at: "2026-10-01T00:00:00Z" },
+        { git_provider: "forgejo", repo_mode: "template_only_staff" }
+      ],
+      false
     ]
   ];
   for (const [label, assignments, invited] of cases) {
@@ -162,7 +186,13 @@ test.each([
       {
         class_id: 1,
         role: "instructor",
-        classes: { slug: "course", github_org: "org", time_zone: "UTC", assignments },
+        classes: {
+          slug: "course",
+          github_org: "org",
+          time_zone: "UTC",
+          // Assignments are live unless a case archives them.
+          assignments: assignments.map((a) => ({ archived_at: null, ...a }))
+        },
         profiles: { repositories: [], assignment_groups_members: [] }
       }
     ];
