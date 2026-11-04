@@ -189,6 +189,37 @@ describe("WorkspaceStatus", () => {
     expect(status).toHaveTextContent("Your workspace is not running.");
   });
 
+  it("offers Try again when the first status lookup fails, and recovers", async () => {
+    const getStatus = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("timed out"))
+      .mockResolvedValue({ status: "not_started" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach your workspace: timed out");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Your workspace is not running.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("clears a poll error once a later poll succeeds", async () => {
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "starting", step: "editor" } as WorkspaceState)
+      .mockRejectedValueOnce(new Error("network blip"))
+      .mockResolvedValue({ status: "ready", url: "https://editor.example" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    await screen.findByText(/Starting your workspace/);
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("network blip");
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(await screen.findByRole("link", { name: /Open in VS Code/ })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows an error, and keeps the card usable, when the workspace can't be reached", async () => {
     const client: WorkspaceClient = {
       getStatus: jest.fn(async () => ({ status: "not_started" }) as WorkspaceState),

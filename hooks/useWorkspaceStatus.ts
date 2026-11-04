@@ -1,9 +1,13 @@
 "use client";
 
 import { WorkspaceClient, WorkspaceState } from "@/lib/workspaceStatus";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 1000;
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
 
 /**
  * Tracks one assignment's workspace. Polls while it is starting and stops once it is ready or has
@@ -12,38 +16,45 @@ const POLL_INTERVAL_MS = 1000;
 export function useWorkspaceStatus(client: WorkspaceClient, assignmentId: number) {
   const [state, setState] = useState<WorkspaceState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+
+  // Every successful reply clears the error, so one failed poll doesn't leave "Could not reach
+  // your workspace" on screen after the workspace recovers.
+  const refresh = useCallback(async () => {
+    try {
+      const next = await client.getStatus(assignmentId);
+      if (!mounted.current) return;
+      setState(next);
+      setError(null);
+    } catch (e) {
+      if (!mounted.current) return;
+      setError(errorMessage(e));
+    }
+  }, [client, assignmentId]);
 
   useEffect(() => {
-    let cancelled = false;
-    client
-      .getStatus(assignmentId)
-      .then((s) => !cancelled && setState(s))
-      .catch((e: Error) => !cancelled && setError(e.message));
+    mounted.current = true;
+    void refresh();
     return () => {
-      cancelled = true;
+      mounted.current = false;
     };
-  }, [client, assignmentId]);
+  }, [refresh]);
 
   const isStarting = state?.status === "starting";
   useEffect(() => {
     if (!isStarting) return;
-    const timer = setInterval(() => {
-      client
-        .getStatus(assignmentId)
-        .then(setState)
-        .catch((e: Error) => setError(e.message));
-    }, POLL_INTERVAL_MS);
+    const timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [client, assignmentId, isStarting]);
+  }, [isStarting, refresh]);
 
   const open = useCallback(async () => {
     setError(null);
     try {
       setState(await client.open(assignmentId));
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorMessage(e));
     }
   }, [client, assignmentId]);
 
-  return { state, error, open };
+  return { state, error, open, reload: refresh };
 }

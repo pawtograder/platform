@@ -70,14 +70,25 @@ function statusText(state: WorkspaceState): string {
  * get the editor link once every step has passed.
  */
 export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number; client: WorkspaceClient }) {
-  const { state, error, open } = useWorkspaceStatus(client, assignmentId);
+  const { state, error, open, reload } = useWorkspaceStatus(client, assignmentId);
 
   return (
     <Box borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
       <VStack align="stretch" gap={3}>
         <Heading size="md">Your workspace</Heading>
         {!state ? (
-          <Skeleton height="80px" />
+          // If the first status lookup failed there is nothing to show yet, so offer a way to ask
+          // again instead of leaving the skeleton up until the page is reloaded.
+          error ? (
+            <HStack>
+              <Button size="sm" colorPalette="blue" variant="outline" onClick={reload}>
+                <LuRotateCcw />
+                Try again
+              </Button>
+            </HStack>
+          ) : (
+            <Skeleton height="80px" />
+          )
         ) : (
           <>
             <Text fontSize="sm" role="status" aria-live="polite" data-testid="workspace-status">
