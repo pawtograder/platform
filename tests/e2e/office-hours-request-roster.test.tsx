@@ -43,7 +43,7 @@ async function submitNewRequest(page: Page, description: string, { isPrivate = f
   return Number(new URL(page.url()).pathname.split("/").pop());
 }
 
-// Matches the query the roster cache sends when the new request form page first loads.
+// Matches the query the helpRequestStudents cache sends when the new request form page first loads.
 //
 // Two other help_request_students queries also go out after the student submits the form: the
 // lookup of the new request's rows (help_request_id=eq.) and the refetch of those rows by id
@@ -176,7 +176,7 @@ test.describe("Office hours request roster", () => {
   test("A new request keeps its roster when the first roster response arrives after the request is created", async ({
     page
   }) => {
-    // When the roster cache finishes its first load, it replaces all of its rows with the result.
+    // When the helpRequestStudents cache finishes its first load, it replaces all of its rows with the result.
     // That load starts when the form page opens, before the request exists, so its result has no
     // rows for the new request. If the result arrives after the form has already added the new
     // request's rows, it overwrites them. The page then goes from "1 student" and a Resolve button
@@ -254,7 +254,7 @@ test.describe("Office hours request roster", () => {
   });
 
   test("A new request gets its roster when the first roster query fails", async ({ page }) => {
-    // The form waits for the roster cache's first load to finish, even if it fails. Check that a
+    // The form waits for the helpRequestStudents cache's first load to finish, even if it fails. Check that a
     // failed first load doesn't count as a failure to load the new request's rows: the roster
     // shows, and the student gets no error toast.
     test.slow();
@@ -296,11 +296,11 @@ test.describe("Office hours request roster", () => {
     await expect.poll(() => refetches, { timeout: 10_000 }).toBe(2);
     await expect(page.getByText("1 student", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
-    await expect(page.getByText("Could not load request roster")).toHaveCount(0);
+    await expect(page.getByText("Could not load the students on this request")).toHaveCount(0);
   });
 
   test("A new request shows its roster while the first roster query is still running", async ({ page }) => {
-    // The roster cache's first load has no timeout. If it never answers, the form must not wait
+    // The helpRequestStudents cache's first load has no timeout. If it never answers, the form must not wait
     // for it before showing the new request's rows.
     test.slow();
     await loginAsUser(page, student!, course);
@@ -342,7 +342,7 @@ test.describe("Office hours request roster", () => {
 
     // Toasts are display:none in e2e runs, so check that the toast is in the page, not that it
     // is visible.
-    await expect(page.getByText("Could not load request roster")).toBeAttached();
+    await expect(page.getByText("Could not load the students on this request")).toBeAttached();
     await expect(page.getByText("0 students", { exact: true })).toBeVisible();
   });
 
