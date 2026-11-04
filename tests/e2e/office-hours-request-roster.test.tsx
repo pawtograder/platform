@@ -4,9 +4,11 @@ import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
 import {
   createClass,
+  createUserInClass,
   createUsersInClass,
   insertHelpQueueAssignment,
   insertHelpRequest,
+  insertOfficeHoursQueue,
   loginAsUser,
   supabase,
   TestingUser
@@ -293,5 +295,42 @@ test.describe("Office hours request roster", () => {
     } finally {
       await otherContext.close();
     }
+  });
+
+  test("A request from another course is not found on this course's page", async ({ page }) => {
+    // The student is enrolled in both courses, so they can read this request. Without the course
+    // check, the page would show it under the wrong course.
+    const otherCourse = await createClass({ name: "OH Request Roster Other Course" });
+    const studentInOtherCourse = await createUserInClass({
+      role: "student",
+      class_id: otherCourse.id,
+      email: student!.email,
+      useMagicLink: true
+    });
+    const { id: requestId } = await insertHelpRequest({
+      class_id: otherCourse.id,
+      student_profile_id: studentInOtherCourse.private_profile_id,
+      request: "Roster check: other course",
+      status: "resolved"
+    });
+    await loginAsUser(page, student!, course);
+    await page.goto(`/course/${course.id}/office-hours/${queueId}/${requestId}`);
+    await expect(page.getByText("Request not found.")).toBeVisible();
+    await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toHaveCount(0);
+  });
+
+  test("A request opened under another queue of its course moves to its own queue", async ({ page }) => {
+    const otherQueue = await insertOfficeHoursQueue({ class_id: course.id, name: "roster-other-queue" });
+    const { id: requestId } = await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student!.private_profile_id,
+      request: "Roster check: other queue",
+      help_queue_id: queueId,
+      status: "resolved"
+    });
+    await loginAsUser(page, otherStudent!, course);
+    await page.goto(`/course/${course.id}/office-hours/${otherQueue.id}/${requestId}`);
+    await page.waitForURL(new RegExp(`/office-hours/${queueId}/${requestId}$`));
+    await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toBeVisible();
   });
 });
