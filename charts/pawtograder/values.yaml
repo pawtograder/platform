@@ -2757,12 +2757,14 @@ forgejo-db:
 
 forgejoRunner:
   enabled: false
+  # Required: an existing namespace other than the release's for the job pods. See README "Actions runner".
+  jobNamespace: ""
   image:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
   arch: amd64
-  imagePullSecrets: []
+  imagePullSecrets: [] # used by the dispatcher and the job pods, so the Secrets must exist in both namespaces
   capacity: 2
   labels:
     - ubuntu-latest:host
@@ -2777,8 +2779,11 @@ forgejoRunner:
     requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
     limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
   dispatcher:
-    # Secret with a write:admin `token`; empty falls back to the admin password, which breaks under 2FA.
+    # Required: Secret with a Forgejo access `token`. Scope write:admin from a site admin, or with
+    # `orgs` set, write:organization from an owner of each org. See README "Actions runner".
     tokenSecret: ""
+    # Organizations whose jobs to run. Empty runs every repository's jobs through the admin API.
+    orgs: []
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { cpu: 200m, memory: 128Mi }

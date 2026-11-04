@@ -203,7 +203,9 @@ spec:
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        - podSelector:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.forgejoRunner.jobNamespace }} }
+          podSelector:
             matchLabels:
               pawtograder.net/forgejo-job: {{ include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
       ports:

@@ -33,8 +33,12 @@ forgejo:
         MINIO_LOCATION: us-east-1
         MINIO_BASE_PATH: forgejo/
 
+# Enable the runner after Forgejo is up: it needs the token Secret below (README "Actions runner").
 forgejoRunner:
   enabled: true
+  jobNamespace: pawtograder-actions # create it first
+  dispatcher:
+    tokenSecret: pawtograder-forgejo-runner-token
   image:
     repository: registry.example.com/pawtograder/forgejo-runner
     tag: 13.2.0-jdk21

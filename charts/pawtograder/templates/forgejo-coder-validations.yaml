@@ -134,9 +134,6 @@
 {{- fail (printf "%s.settings.superuser.value is ignored once existingSecret is set (the subchart reads POSTGRES_USER from the Secret); use settings.superuser.secretKey" $key) }}
 {{- end }}
 {{- end }}
-{{- if and .Values.forgejoRunner.enabled (not .Values.forgejoRunner.dispatcher.tokenSecret) (not .Values.forgejo.gitea.admin.existingSecret) }}
-{{- fail "forgejoRunner needs forgejoRunner.dispatcher.tokenSecret or forgejo.gitea.admin.existingSecret for the dispatcher's credential" }}
-{{- end }}
 {{- if and .Values.forgejo.enabled (eq (toString .Values.forgejo.image.rootless) "false") }}
 {{- fail "forgejo.image.rootless=false isn't supported: the chart runs Forgejo as uid 1000 with all capabilities dropped, and the rootful init chowns /data" }}
 {{- end }}
@@ -236,6 +233,21 @@
 {{- end }}
 {{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
 {{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- end }}
+{{- if not .Values.forgejoRunner.dispatcher.tokenSecret }}
+{{- fail "forgejoRunner.dispatcher.tokenSecret must name a Secret with a Forgejo access token (key token): install with forgejoRunner.enabled=false, create the token in Forgejo, then enable the runner. See README \"Actions runner\"" }}
+{{- end }}
+{{- range (.Values.forgejoRunner.dispatcher.orgs | default list) }}
+{{- if not (regexMatch "^[A-Za-z0-9_.-]+$" (toString .)) }}
+{{- fail (printf "forgejoRunner.dispatcher.orgs: %q isn't a Forgejo organization name" (toString .)) }}
+{{- end }}
+{{- end }}
+{{- $jobNS := .Values.forgejoRunner.jobNamespace | default "" }}
+{{- if or (not $jobNS) (eq $jobNS .Release.Namespace) }}
+{{- fail (printf "forgejoRunner.jobNamespace must name an existing namespace other than %s: the dispatcher can create pods there, and a pod can mount any Secret in its namespace" .Release.Namespace) }}
+{{- end }}
+{{- if and .Values.coder.enabled .Values.coderBootstrap.enabled (eq $jobNS (.Values.coderBootstrap.workspaceNamespace | default .Release.Namespace)) }}
+{{- fail (printf "forgejoRunner.jobNamespace and coderBootstrap.workspaceNamespace are both %s; keep them apart, or coderd's Role there reaches the job pods' runner tokens" $jobNS) }}
 {{- end }}
 {{- $protocol := dig "gitea" "config" "server" "PROTOCOL" "http" .Values.forgejo | toString }}
 {{- if ne $protocol "http" }}

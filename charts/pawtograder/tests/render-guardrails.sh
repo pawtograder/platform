@@ -2672,6 +2672,67 @@ assert_rendered_contains "kong: the ServiceMonitor follows the status port" \
 assert_refused "kong: an unknown metricsListener is refused" \
   "kong.metricsListener must be admin or status" --set kong.metricsListener=bogus
 
+echo "== forgejo runner: the job namespace and its token =="
+# These components need the release named pawtograder, so the cases render with
+# that name and the shipped overlay rather than BASE.
+APPS=(-n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml")
+apps() { helm template pawtograder "$CHART" "${APPS[@]}" "$@" 2>"$ERRFILE"; }
+apps_refused() {
+  local label="$1" want="$2"; shift 2
+  if apps "$@" >/dev/null; then
+    echo "FAIL [$label]: render SUCCEEDED but the guard should have refused it"; FAILED=1
+  elif ! grep -qF "$want" "$ERRFILE"; then
+    echo "FAIL [$label]: refused, but message missing expected text: $want"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+# apps_has "<label>" <yes|no> "<substring>" <extra args...>: the full render must (not) contain it.
+apps_has() {
+  local label="$1" expect="$2" want="$3"; shift 3
+  if ! apps "$@" >"$OUTFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  elif grep -qF -- "$want" "$OUTFILE"; then
+    if [ "$expect" = yes ]; then echo "ok   [$label]"; else echo "FAIL [$label]: rendered, but contains: $want"; FAILED=1; fi
+  else
+    if [ "$expect" = no ]; then echo "ok   [$label]"; else echo "FAIL [$label]: rendered, but missing: $want"; FAILED=1; fi
+  fi
+}
+WS_NS=(--set coderBootstrap.workspaceNamespace=pawtograder-ws
+  --set coder.coder.serviceAccount.workspacePerms=false
+  --set 'coder.coder.serviceAccount.workspaceNamespaces[0].name=pawtograder-ws'
+  --set 'coder.coder.serviceAccount.workspaceNamespaces[0].workspacePerms=true')
+
+apps_has "apps: the shipped overlay renders" yes "kind: Deployment"
+
+apps_refused "runner: no tokenSecret is refused" \
+  "forgejoRunner.dispatcher.tokenSecret must name a Secret" --set forgejoRunner.dispatcher.tokenSecret=
+apps_refused "runner: no jobNamespace is refused" \
+  "forgejoRunner.jobNamespace must name an existing namespace other than pawtograder" --set forgejoRunner.jobNamespace=
+apps_refused "runner: jobs in the release namespace are refused" \
+  "forgejoRunner.jobNamespace must name an existing namespace other than pawtograder" --set forgejoRunner.jobNamespace=pawtograder
+apps_refused "runner: jobs in the workspace namespace are refused" \
+  "keep them apart" "${WS_NS[@]}" --set forgejoRunner.jobNamespace=pawtograder-ws
+apps_refused "runner: a malformed org name is refused" \
+  "isn't a Forgejo organization name" --set 'forgejoRunner.dispatcher.orgs={cs3500,bad/org}'
+apps_has "runner: orgs reach the dispatcher" yes '{ name: ORGS, value: "cs3500,cs2500" }' \
+  --set 'forgejoRunner.dispatcher.orgs={cs3500,cs2500}' --show-only templates/forgejo-runner.yaml
+apps_has "runner: the dispatcher never mounts the Forgejo admin password" no "pawtograder-forgejo-admin" \
+  --show-only templates/forgejo-runner.yaml
+apps_has "runner: Forgejo admits job pods from the job namespace" yes \
+  "matchLabels: { kubernetes.io/metadata.name: pawtograder-actions }" \
+  --set networkPolicy.enabled=true --show-only templates/networkpolicy.yaml
+label="runner: the dispatcher's Role and RoleBinding exist only in the job namespace"
+if ! apps --show-only templates/forgejo-runner.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+else
+  rbac_ns="$(awk '/^---/ { k = "" } /^kind: Role(Binding)?$/ { k = $2 } k && /^  namespace:/ { print k, $2; k = "" }' "$OUTFILE" | sort | uniq | tr '\n' ' ')"
+  if [ "$rbac_ns" = "Role pawtograder-actions RoleBinding pawtograder-actions " ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: got $rbac_ns"; FAILED=1; fi
+fi
+
 echo
 
 echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
