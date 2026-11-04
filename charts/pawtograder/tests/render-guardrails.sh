@@ -2672,7 +2672,7 @@ assert_rendered_contains "kong: the ServiceMonitor follows the status port" \
 assert_refused "kong: an unknown metricsListener is refused" \
   "kong.metricsListener must be admin or status" --set kong.metricsListener=bogus
 
-echo "== forgejo runner: the job namespace and its token =="
+echo "== forgejo runner and coder: isolation and the job namespace =="
 # These components need the release named pawtograder, so the cases render with
 # that name and the shipped overlay rather than BASE.
 APPS=(-n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml")
@@ -2706,6 +2706,38 @@ WS_NS=(--set coderBootstrap.workspaceNamespace=pawtograder-ws
   --set 'coder.coder.serviceAccount.workspaceNamespaces[0].workspacePerms=true')
 
 apps_has "apps: the shipped overlay renders" yes "kind: Deployment"
+apps_refused "apps: postgres-meta reachable from jobs is refused" \
+  "stops their pods reaching postgres-meta" --set meta.enabled=true
+apps_refused "apps: Studio reachable from jobs is refused" \
+  "stops their pods reaching Studio" --set studio.enabled=true
+apps_refused "apps: Kong's admin API reachable from jobs is refused" \
+  "stops their pods reaching Kong's admin API" --set monitoring.enabled=true --set kong.metricsListener=admin \
+  --set monitoring.allowMissingWorkflowMetrics=true
+apps_refused "apps: coder alone is refused too" \
+  "stops their pods reaching postgres-meta" --set meta.enabled=true --set forgejoRunner.enabled=false
+apps_has "apps: metrics from Kong's status API pass the guard" yes '"0.0.0.0:8100"' \
+  --set monitoring.enabled=true --set monitoring.allowMissingWorkflowMetrics=true
+apps_has "apps: meta and Studio are allowed with the Cilium deny" yes "kind: CiliumNetworkPolicy" \
+  --set meta.enabled=true --set studio.enabled=true --set networkPolicy.cilium.enabled=true
+apps_has "apps: meta and Studio are allowed when egress is asserted enforced" yes "name: pawtograder-forgejo-runner-jobs" \
+  --set meta.enabled=true --set networkPolicy.cniEnforcesEgress=true --set networkPolicy.enabled=true
+apps_refused "apps: cniEnforcesEgress without the job egress policy is refused" \
+  "renders no egress policy for job pods" \
+  --set networkPolicy.cniEnforcesEgress=true --set networkPolicy.enabled=true --set forgejoRunner.networkPolicy.enabled=false
+apps_refused "apps: cniEnforcesEgress without the workspace egress policy is refused" \
+  "renders no egress policy for Coder workspaces" --set networkPolicy.cniEnforcesEgress=true
+apps_has "apps: no Cilium policy unless asked" no "kind: CiliumNetworkPolicy"
+apps_has "apps: the Cilium deny for job pods goes in the job namespace" yes "namespace: pawtograder-actions" \
+  --set networkPolicy.cilium.enabled=true --show-only templates/forgejo-coder-cilium.yaml
+apps_has "apps: the Cilium deny for workspaces goes in the workspace namespace" yes "namespace: pawtograder-ws" \
+  --set networkPolicy.cilium.enabled=true "${WS_NS[@]}" --show-only templates/forgejo-coder-cilium.yaml
+apps_has "apps: the Cilium deny leaves only Forgejo's HTTP port open in the release" yes \
+  '{ port: "3001", endPort: 65535, protocol: TCP }' --set networkPolicy.cilium.enabled=true --show-only templates/forgejo-coder-cilium.yaml
+apps_refused "apps: the Cilium deny needs a matchLabels ingress controller selector" \
+  "needs networkPolicy.ingressControllerNamespaceSelector as matchLabels only" \
+  --set networkPolicy.cilium.enabled=true --set networkPolicy.ingressControllerNamespaceSelector.matchLabels=null \
+  --set 'networkPolicy.ingressControllerNamespaceSelector.matchExpressions[0].key=x' \
+  --set 'networkPolicy.ingressControllerNamespaceSelector.matchExpressions[0].operator=Exists'
 
 apps_refused "runner: no tokenSecret is refused" \
   "forgejoRunner.dispatcher.tokenSecret must name a Secret" --set forgejoRunner.dispatcher.tokenSecret=

@@ -227,6 +227,26 @@
 {{- end }}
 {{- end }}
 
+{{- if or .Values.forgejoRunner.enabled .Values.coder.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- if $np.cniEnforcesEgress }}
+{{- if and .Values.forgejoRunner.enabled (not .Values.forgejoRunner.networkPolicy.enabled) }}
+{{- fail "networkPolicy.cniEnforcesEgress=true, but forgejoRunner.networkPolicy.enabled=false renders no egress policy for job pods to enforce" }}
+{{- end }}
+{{- if and .Values.coder.enabled (not $np.enabled) }}
+{{- fail "networkPolicy.cniEnforcesEgress=true, but networkPolicy.enabled=false renders no egress policy for Coder workspaces to enforce" }}
+{{- end }}
+{{- else if not (dig "cilium" "enabled" false $np) }}
+{{- $open := list }}
+{{- if .Values.meta.enabled }}{{ $open = append $open "postgres-meta (meta.enabled; it runs any SQL as postgres, with no auth)" }}{{ end }}
+{{- if .Values.studio.enabled }}{{ $open = append $open "Studio (studio.enabled; it has no auth inside the cluster)" }}{{ end }}
+{{- if and .Values.kong.enabled .Values.monitoring.enabled (ne .Values.kong.metricsListener "status") }}{{ $open = append $open "Kong's admin API (monitoring.enabled with kong.metricsListener=admin; its POST /config replaces the routes)" }}{{ end }}
+{{- if $open }}
+{{- fail (printf "forgejoRunner and coder run students' code, and nothing in these values stops their pods reaching %s. Turn those off (kong.metricsListener=status keeps Kong's metrics), or on Cilium set networkPolicy.cilium.enabled=true, or set networkPolicy.cniEnforcesEgress=true if the CNI enforces the chart's egress NetworkPolicies and nothing else allows more. See README \"Isolating jobs and workspaces\"" (join ", " $open)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- if .Values.forgejoRunner.enabled }}
 {{- if not .Values.forgejo.enabled }}
 {{- fail "forgejoRunner.enabled needs forgejo.enabled" }}

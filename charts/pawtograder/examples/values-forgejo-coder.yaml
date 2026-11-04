@@ -1,5 +1,15 @@
 # Pre-create the Secrets listed in README "Forgejo and Coder".
 
+# Job pods and workspaces run students' code, so the render refuses them while meta, Studio or
+# Kong's admin API is up. On Cilium, networkPolicy.cilium.enabled=true lets you keep those.
+# See README "Isolating jobs and workspaces".
+meta:
+  enabled: false
+studio:
+  enabled: false
+kong:
+  metricsListener: status
+
 forgejo:
   enabled: true
   database: pawtograder

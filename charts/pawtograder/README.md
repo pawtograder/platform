@@ -689,7 +689,7 @@ kubectl -n "$NS" create secret generic pawtograder-forgejo-runner-token --from-l
 
 With `forgejoRunner.dispatcher.orgs` empty, the dispatcher uses Forgejo's admin API and runs jobs from every repository, so `<user>` must be a site admin and `<scope>` is `write:admin`. With `orgs` set to the organizations whose jobs it should run, it registers runners in each organization instead (`/orgs/<org>/actions/runners`, which Forgejo 15 serves to the organization's owners). Then `<user>` can be an ordinary account that owns those organizations, and `<scope>` is `write:organization`; a site admin's token is never needed. Each new organization has to be added to `orgs`, with that account made an owner. The dispatcher polls the organizations in order, so a busy one listed first can use all of `forgejoRunner.capacity`.
 
-`forgejoRunner.networkPolicy` limits job pods to DNS, Forgejo and the public internet (`privateCidrs` excluded; add exceptions under `extraEgress`), but only on a CNI that enforces NetworkPolicy. Without one, jobs can reach every Service in the cluster, so run untrusted workflows only where it is enforced.
+`forgejoRunner.networkPolicy` limits job pods to DNS, Forgejo and the public internet (`privateCidrs` excluded; add exceptions under `extraEgress`), but only on a CNI that enforces NetworkPolicy. See "Isolating jobs and workspaces" below for what the render requires before it runs jobs.
 
 ### Coder
 
@@ -704,6 +704,34 @@ Workspace pods (`files/coder-templates/kubernetes`) run under runc as uid 1000, 
 ### NetworkPolicy
 
 With `networkPolicy.enabled`, the chart adds the same rules for Forgejo, Coder and their `*-db` Postgres, whose subchart pods the chart's own policies don't select: ingress only from this release's pods and, for Forgejo and Coder, the ingress controller, plus `networkPolicy.monitoringNamespaceSelector` to Forgejo's HTTP port when `monitoring.enabled` and `forgejo.gitea.metrics.enabled` are both on. Job pods in `forgejoRunner.jobNamespace` may reach Forgejo's HTTP port and nothing else in the release, and Forgejo or Coder may reach this chart's Postgres when they use it. That workspace policy has `helm.sh/resource-policy: keep`. Terraform creates workspace pods, so no release object owns them, and they keep running after `coder.enabled` goes off or the release is uninstalled; the policy stays to keep them confined. Remove them with `kubectl -n <workspace namespace> delete pod -l app.kubernetes.io/name=coder-workspace --wait`. The namespace is `coderBootstrap.workspaceNamespace`, or the release's. Check that `kubectl -n <workspace namespace> get pod -l app.kubernetes.io/name=coder-workspace` lists nothing before you delete `pawtograder-apps-coder-workspaces` there. Coder workspace pods, in whichever namespace they run, take no ingress; Coder then relays their traffic over each agent's outbound connection. Their egress is limited like the Actions jobs': DNS, the ingress controller's namespace (agents connect through `CODER_ACCESS_URL`), and the internet minus `coderBootstrap.workspaces.networkPolicy.privateCidrs`. If the access URL resolves to a private address that isn't the in-cluster ingress controller, allow it under `extraEgress`. Each workspace may write `coderBootstrap.workspaces.ephemeralStorageLimit` (4Gi) outside its home volume.
+
+### Isolating jobs and workspaces
+
+Actions job pods and Coder workspaces run code that students write, and a workspace gives them a shell. These pods don't carry the release's labels, so the release's own NetworkPolicies don't cover them, and only their egress policies constrain them: `forgejoRunner.networkPolicy` for job pods and the workspace policy under `networkPolicy.enabled`. Those are Kubernetes NetworkPolicies, so they hold only on a CNI that enforces them and only while no other policy allows the pods more. Cilium unions the allows of every policy that selects a pod, so one cluster-wide allow undoes them. Without that limit, a job or workspace can reach every Service in the cluster, and three in this release have no authentication of their own:
+
+- `meta` (postgres-meta) connects as `postgres`, and its `POST /query` runs any SQL, including changes to grades.
+- `studio` has no login inside the cluster; its basic auth is only on the Ingress.
+- With `monitoring.enabled` and `kong.metricsListener: admin`, Kong's admin API listens on `:8001`, and its `POST /config` replaces every route.
+
+So the render refuses `forgejoRunner.enabled` or `coder.enabled` unless one of these holds:
+
+1. `meta.enabled` and `studio.enabled` are `false`, and Kong's admin API is off (`monitoring.enabled: false`, or `kong.metricsListener: status`, which serves Kong's metrics from its read-only status API). `examples/values-forgejo-coder.yaml` does this.
+2. `networkPolicy.cilium.enabled: true`, described below.
+3. `networkPolicy.cniEnforcesEgress: true`, which asserts that the CNI enforces the chart's egress NetworkPolicies and that nothing else allows these pods more. The render then also requires those policies (`forgejoRunner.networkPolicy.enabled`, and `networkPolicy.enabled` for workspaces).
+
+| Control | Enforced by | What it does |
+| --- | --- | --- |
+| Job pod and workspace NetworkPolicies | the CNI, if it enforces them and nothing allows more | allow DNS, Forgejo (jobs) or coderd and the ingress controller (workspaces), and the internet minus `privateCidrs` |
+| `networkPolicy.cilium.enabled` | Cilium `egressDeny`, which wins over any allow | denies every pod in another namespace except kube-dns (and, for workspaces, the ingress controller's namespace), every release pod other than Forgejo's HTTP port or coderd's 8080/8443, every other pod in the job or workspace namespace, every node port but 80 and 443 (the kube-apiserver, kubelet and etcd among them), and `privateCidrs` |
+| `forgejoRunner.jobNamespace` | Kubernetes RBAC | the dispatcher can create pods, and so mount Secrets, only in the job namespace |
+| Job pod and workspace specs | the kubelet | no service account token, uid 1000, all capabilities dropped |
+| The guard above | `helm template` / `helm upgrade` | refuses the apps while nothing above covers meta, Studio and Kong's admin API |
+
+`networkPolicy.cilium.enabled` renders a `CiliumNetworkPolicy` named `pawtograder-forgejo-jobs-egress-deny` in the job namespace and `pawtograder-coder-workspaces-egress-deny` in the workspace namespace, modeled on `pawtograder-ci-egress-deny` in [`docs/operations/manifests/preview-isolation.yaml`](../../docs/operations/manifests/preview-isolation.yaml). Like the workspace NetworkPolicy, the workspace one has `helm.sh/resource-policy: keep`. It needs Cilium and a deploy credential that can manage `ciliumnetworkpolicies.cilium.io` in both namespaces; where only cluster admins can, apply the output of `helm template ... --show-only templates/forgejo-coder-cilium.yaml` through them instead, and keep it in step with the chart. Because a deny wins, `extraEgress` can't reopen an address inside `privateCidrs`; to let these pods reach a LAN host, take its range out of `privateCidrs`. With coder on, `networkPolicy.ingressControllerNamespaceSelector` must be `matchLabels` only, since the deny rules exempt that namespace by its labels.
+
+To check the deny from a job pod or workspace terminal: `pawtograder-meta.<release namespace>.svc:8080`, `pawtograder-postgres.<release namespace>.svc:5432` and `kubernetes.default.svc:443` time out, while Forgejo (from a job) or coderd (from a workspace) and `api.github.com:443` connect. Repeat it with an allow-all egress NetworkPolicy added to the job or workspace namespace; the results must not change.
+
+Ripley runs Cilium, and a probe pod there showed the runner NetworkPolicy isn't enforced. The Ripley install as configured is not safe for real students. With meta, Studio and Kong's admin API off the render accepts it, but job pods and workspaces can still reach Postgres's port, the other release pods, and whatever else on the cluster and the LAN Ripley's policies allow. Don't give it real students until the Cilium deny is in place and passes the check above.
 
 ## Realtime sizing
 

@@ -617,3 +617,24 @@ on — production and the chart default already disagree.
 {{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
 {{- end -}}
+
+{{/*
+Cilium PortProtocol entries covering every TCP port except the given ones, and all of UDP.
+Usage: {{ include "pawtograder.cilium.portsExcept" (list 80 443) }}
+*/}}
+{{- define "pawtograder.cilium.portsExcept" -}}
+{{- $from := 1 }}
+{{- $sorted := list }}
+{{- range $p := . }}{{ $sorted = append $sorted (printf "%05d" (int $p)) }}{{ end }}
+{{- range $s := sortAlpha $sorted }}
+{{- $p := atoi (regexReplaceAll "^0+" $s "") }}
+{{- if lt $from $p }}
+- { port: {{ $from | quote }}, endPort: {{ sub $p 1 }}, protocol: TCP }
+{{- end }}
+{{- $from = add1 $p }}
+{{- end }}
+{{- if le $from 65535 }}
+- { port: {{ $from | quote }}, endPort: 65535, protocol: TCP }
+{{- end }}
+- { port: "1", endPort: 65535, protocol: UDP }
+{{- end -}}

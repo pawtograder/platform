@@ -115,6 +115,21 @@ networkPolicy:
   # Extra NetworkPolicyIngressRule entries appended to a release-wide allow
   # policy (e.g. another namespace that consumes the API in-cluster).
   extraIngressRules: []
+  # forgejoRunner and coder run code from students. Their pods don't carry this
+  # release's labels, so only their own egress policies constrain them. The
+  # render refuses either one while meta, Studio or Kong's admin API is up,
+  # unless one of the two values below is set. See README "Isolating jobs and
+  # workspaces".
+  #
+  # true asserts that the CNI enforces the chart's egress NetworkPolicies for job
+  # and workspace pods, and that no other policy (a cluster-wide allow on Cilium,
+  # say) allows them more.
+  cniEnforcesEgress: false
+  cilium:
+    # Renders a CiliumNetworkPolicy with egressDeny rules for job pods and
+    # workspaces. A deny wins over any allow, so this holds whatever else the
+    # cluster allows. Needs Cilium and RBAC on ciliumnetworkpolicies.cilium.io.
+    enabled: false
 
 # -----------------------------------------------------------------------------
 # Deployment channels (A/B by course)
