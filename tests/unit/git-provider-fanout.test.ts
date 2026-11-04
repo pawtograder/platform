@@ -133,6 +133,14 @@ test.each([
       false
     ],
     [
+      "Forgejo repo plus GitHub no-submission",
+      [
+        { git_provider: "forgejo", repo_mode: "template_only_staff" },
+        { git_provider: "github", repo_mode: "no_submission" }
+      ],
+      false
+    ],
+    [
       "only no-repo",
       [
         { git_provider: "github", repo_mode: "none" },
