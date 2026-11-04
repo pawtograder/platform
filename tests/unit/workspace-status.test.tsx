@@ -209,7 +209,7 @@ describe("WorkspaceStatus", () => {
     await act(async () => {
       resolveSlow({ status: "failed", step: "clone", message: "Clone broke." });
     });
-    expect(screen.getByTestId("workspace-status")).toHaveTextContent("Starting your workspace: Prepare the workspace");
+    expect(screen.getByRole("status")).toHaveTextContent("Starting your workspace: Prepare the workspace");
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 
@@ -266,7 +266,7 @@ describe("WorkspaceStatus", () => {
     fireEvent.click(retry);
     await act(async () => {});
     expect(document.activeElement).not.toBe(document.body);
-    expect(screen.getByTestId("workspace-status").closest("div")?.contains(document.activeElement)).toBe(true);
+    expect(screen.getByRole("status").closest("div")?.contains(document.activeElement)).toBe(true);
   });
 
   it("sends one open request for a double click", async () => {
@@ -342,7 +342,7 @@ describe("WorkspaceStatus", () => {
     await act(async () => {
       finishOldPoll(oldPoll!);
     });
-    expect(screen.getByTestId("workspace-status")).toHaveTextContent("Your workspace is ready.");
+    expect(screen.getByRole("status")).toHaveTextContent("Your workspace is ready.");
     expect(screen.getByRole("link", { name: /Open in VS Code/ })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
