@@ -165,6 +165,9 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
     expect(committedStatus, "backend answered 200 (committed)").toBe(200);
     expect(await storedKeyEquals(course.id, s1), "the save did commit").toBe(true);
     await expect(page.getByTestId("gemini-key-notice")).not.toContainText("Key saved");
+    // The notice appears before the refresh runs, so it must not claim the refresh already happened.
+    await expect(page.getByTestId("gemini-key-notice")).toContainText("We'll try to refresh the status below");
+    await expect(page.getByTestId("gemini-key-notice")).not.toContainText("re-read");
     // Status was re-read from the server, without claiming which key is stored.
     await expectStatus(page, "Enabled", "Configured (not validated)");
     await expectInputCleared(page);
@@ -337,13 +340,20 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
       .analyze();
     expect(results.violations.map((v) => v.id)).toEqual([]);
     await expect(page.getByLabel("Gemini API key")).toHaveAttribute("type", "password");
-    await expect(page.getByTestId("gemini-key-notice")).toHaveAttribute("aria-live", "polite");
+    // Outcomes are announced once, by the global LiveAnnouncer; the visible notice is not a second
+    // live region (#1161 review).
+    const notice = page.getByTestId("gemini-key-notice");
+    await expect(notice).not.toHaveAttribute("aria-live");
+    await expect(notice).not.toHaveAttribute("role");
 
     // Keyboard-only: focus the field, type, submit with Enter.
     await page.getByLabel("Gemini API key").focus();
     await page.keyboard.type(syntheticKey());
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("gemini-key-notice")).toContainText("Key saved");
+    // LiveAnnouncer clears its region after 1.5s, so count live regions as soon as it has the text.
+    await expect(page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]')).toContainText("Key saved");
+    expect(await page.locator("[aria-live]").filter({ hasText: "Key saved" }).count(), "one live region").toBe(1);
+    await expect(notice).toContainText("Key saved");
     const after = await new AxeBuilder({ page: page as unknown as PlaywrightCorePage })
       .include('[data-testid="gemini-key-page"]')
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

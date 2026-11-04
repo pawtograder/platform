@@ -43,7 +43,7 @@ export const GEMINI_KEY_FAILURE_TEXT: Record<GeminiKeyFailure, string> = {
   busy: "Another change to this course was in progress. Nothing was changed; try again.",
   failed: "The change could not be completed. Nothing was changed.",
   unknown:
-    "We couldn't confirm whether the change was applied. The status below has been re-read from the server; check it before trying again."
+    "We couldn't confirm whether the change was applied. We'll try to refresh the status below. Check it before trying again."
 };
 
 export function parseGeminiKeyStatus(data: unknown): GeminiKeyStatus | null {

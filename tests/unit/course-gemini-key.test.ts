@@ -39,6 +39,11 @@ describe("classifyGeminiKeyError", () => {
     }
     expect(GEMINI_KEY_FAILURE_TEXT.unknown).toMatch(/couldn't confirm/i);
   });
+
+  it("does not claim the status was re-read before the refresh runs (it can fail)", () => {
+    expect(GEMINI_KEY_FAILURE_TEXT.unknown).not.toMatch(/(has been|was) re-read/i);
+    expect(GEMINI_KEY_FAILURE_TEXT.unknown).toMatch(/try to refresh the status below/i);
+  });
 });
 
 describe("parseGeminiKeyStatus", () => {

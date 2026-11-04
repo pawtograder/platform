@@ -146,9 +146,8 @@ function GeminiKeyPanel({ courseId }: { courseId: number }) {
           </Text>
         </Box>
 
-        <Box role="status" aria-live="polite" data-testid="gemini-key-notice">
-          {notice ? <Alert status={notice.tone} title={notice.text} /> : null}
-        </Box>
+        {/* Not a live region: finish() announces through LiveAnnouncer, which keeps failures assertive. */}
+        <Box data-testid="gemini-key-notice">{notice ? <Alert status={notice.tone} title={notice.text} /> : null}</Box>
 
         {panel.kind === "loading" ? (
           <Text data-testid="gemini-key-loading">Loading configuration status…</Text>
