@@ -329,6 +329,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         members_moved: number;
         groups_dissolved: number;
         syncs_enqueued: number;
+        repos_deferred: number;
         errors: { error: string; profile_id?: string; group_name?: string }[];
       };
 
@@ -365,6 +366,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         if (result.members_moved > 0) parts.push(`${result.members_moved} student(s) moved`);
         if (result.groups_dissolved > 0) parts.push(`${result.groups_dissolved} group(s) dissolved`);
         if (result.syncs_enqueued > 0) parts.push(`${result.syncs_enqueued} permission sync(s) queued`);
+        if (result.repos_deferred > 0) parts.push(`${result.repos_deferred} repo(s) will be created at release`);
 
         toaster.create({
           title: "Changes published",
