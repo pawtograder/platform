@@ -1,5 +1,5 @@
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
-import type { Page, Request } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -56,6 +56,22 @@ const getAuthedClient = async (user: User) => {
   await client.auth.setSession({ access_token, refresh_token: "ignore" });
   return client;
 };
+
+// A student's stored answer to q1 and whether the row is submitted, or null when there is no row.
+const storedResponse = async (surveyId: string, student: User) => {
+  const { data, error } = await supabase
+    .from("survey_responses")
+    .select("response, is_submitted")
+    .eq("survey_id", surveyId)
+    .eq("profile_id", student.private_profile_id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
+};
+
+// Past the 1 s autosave debounce. Fires it on the page's clock, so the test needs page.clock.install()
+// before it opens the survey, and the edit just made has been through the debounce when this returns.
+const passAutosaveDebounce = (page: Page) => page.clock.runFor(1_100);
 
 test.describe("Surveys Page", () => {
   test.describe.configure({ mode: "serial" });
@@ -676,19 +692,7 @@ test.describe("Surveys Page", () => {
 
       // The debounced autosave must land as a draft, not as a submission.
       await expect
-        .poll(
-          async () => {
-            const { data, error } = await supabase
-              .from("survey_responses")
-              .select("response, is_submitted")
-              .eq("survey_id", survey.id)
-              .eq("profile_id", studentA.private_profile_id)
-              .maybeSingle();
-            if (error) throw new Error(error.message);
-            return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
-          },
-          { timeout: 10_000 }
-        )
+        .poll(() => storedResponse(survey.id, studentA), { timeout: 10_000 })
         .toEqual({ q1: "Answer before reload", is_submitted: false });
 
       await page.reload();
@@ -698,18 +702,6 @@ test.describe("Surveys Page", () => {
       await expect(input).toBeEditable();
     });
   }
-
-  // studentA's stored answer to q1 and whether the row is submitted, or null when there is no row.
-  const storedResponse = async (surveyId: string) => {
-    const { data, error } = await supabase
-      .from("survey_responses")
-      .select("response, is_submitted")
-      .eq("survey_id", surveyId)
-      .eq("profile_id", studentA.private_profile_id)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
-  };
 
   test("an answered survey shows as In Progress on the list (editing off)", async ({ page }) => {
     const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
@@ -723,7 +715,7 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
     await page.getByRole("textbox", { name: "Question 1" }).fill("Answer without completing");
     await expect
-      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .poll(() => storedResponse(survey.id, studentA), { timeout: 10_000 })
       .toEqual({ q1: "Answer without completing", is_submitted: false });
 
     await page.goto(`/course/${course.id}/surveys`);
@@ -748,7 +740,9 @@ test.describe("Surveys Page", () => {
     // Let the list finish loading first: on WebKit the redirect's navigation can still be under
     // way after the URL changes, and it cuts off the goto below.
     await expect(page.getByRole("link", { name: "View Submission" })).toBeVisible();
-    await expect.poll(() => storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
+    await expect
+      .poll(() => storedResponse(survey.id, studentA))
+      .toEqual({ q1: "Submitted answer", is_submitted: true });
 
     const responseWrites: string[] = [];
     page.on("request", (request) => {
@@ -760,6 +754,7 @@ test.describe("Surveys Page", () => {
       }
     });
 
+    await page.clock.install();
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
     await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible();
     const input = page.getByRole("textbox", { name: "Question 1" });
@@ -767,122 +762,13 @@ test.describe("Surveys Page", () => {
     await expect(input).not.toBeEditable();
     await expect(page.getByRole("button", { name: "Complete" })).toHaveCount(0);
 
-    // Typing at the locked field must not reach the server. Wait past the 1 s autosave debounce.
+    // Typing at the locked field must not reach the server, even once the debounce has passed.
     await input.click();
     await page.keyboard.type(" and more");
-    await page.waitForTimeout(2000);
-    expect(responseWrites).toEqual([]);
+    await passAutosaveDebounce(page);
     await expect(input).toHaveValue("Submitted answer");
-    expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
-  });
-
-  // Each debounced autosave is its own upsert. The first one is held back until the test calls
-  // release(), so later autosaves queue behind it. With abortFirst the held request then fails as if
-  // the connection dropped. writesInServerOrder lists every request in the order it went out.
-  const holdFirstResponseWrite = async (page: Page, { abortFirst = false } = {}) => {
-    const writesInServerOrder: { is_submitted: boolean; q1?: string }[] = [];
-    let release = () => {};
-    const released = new Promise<void>((resolve) => {
-      release = () => resolve();
-    });
-    let writesSeen = 0;
-    await page.route("**/rest/v1/survey_responses*", async (route) => {
-      if (route.request().method() !== "POST") return route.fallback();
-      writesSeen += 1;
-      const isFirst = writesSeen === 1;
-      if (isFirst) await released;
-      const body = route.request().postDataJSON() as { is_submitted: boolean; response: { q1?: string } };
-      writesInServerOrder.push({ is_submitted: body.is_submitted, q1: body.response.q1 });
-      if (isFirst && abortFirst) return route.abort("failed");
-      await route.continue();
-    });
-    return { writesInServerOrder, release };
-  };
-  const isResponseWrite = (request: Request) =>
-    request.method() === "POST" && request.url().includes("/rest/v1/survey_responses");
-
-  // Each edit made while a slow autosave is in flight queues another autosave behind it, and each
-  // one sends the whole response. Only the newest queued one needs to go out, after the slow one,
-  // and a slow one that fails must not hold it up.
-  for (const slowAutosave of ["succeeds", "fails"] as const) {
-    test(`only the newest autosave queued behind a slow one is sent (slow autosave ${slowAutosave})`, async ({
-      page
-    }) => {
-      const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-        title: "Slow Autosave Survey",
-        status: "published",
-        json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
-      });
-
-      await loginAsUser(page, studentA, course);
-      const { writesInServerOrder, release } = await holdFirstResponseWrite(page, {
-        abortFirst: slowAutosave === "fails"
-      });
-
-      await page.goto(`/course/${course.id}/surveys/${survey.id}`);
-      const input = page.getByRole("textbox", { name: "Question 1" });
-      const firstWrite = page.waitForRequest(isResponseWrite);
-      await input.fill("Older answer");
-      await firstWrite;
-      // Past the 1 s debounce after each edit, so each edit queues its own autosave behind the held one.
-      await input.fill("Middle answer");
-      await page.waitForTimeout(1500);
-      await input.fill("Newer answer");
-      await page.waitForTimeout(1500);
-      release();
-
-      await expect
-        .poll(() => storedResponse(survey.id), { timeout: 15_000 })
-        .toEqual({ q1: "Newer answer", is_submitted: false });
-      expect(writesInServerOrder).toEqual([
-        { is_submitted: false, q1: "Older answer" },
-        { is_submitted: false, q1: "Newer answer" }
-      ]);
-
-      await page.reload();
-      await expect(input).toHaveValue("Newer answer");
-      await expect(input).toBeEditable();
-    });
-  }
-
-  test("no draft autosave reaches the server after Complete", async ({ page }) => {
-    // Editing on, so RLS lets a late draft write through to the survey_response_no_unsubmit
-    // trigger, which refuses it. The submission survives either way; the client must not send it.
-    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-      title: "Complete Behind Autosave Survey",
-      status: "published",
-      allow_response_editing: true,
-      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
-    });
-
-    await loginAsUser(page, studentA, course);
-    const { writesInServerOrder, release } = await holdFirstResponseWrite(page);
-
-    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
-    const input = page.getByRole("textbox", { name: "Question 1" });
-    const firstWrite = page.waitForRequest(isResponseWrite);
-    await input.fill("Older answer");
-    await firstWrite;
-    // Past the 1 s debounce after each edit, so two more drafts are queued before Complete.
-    await input.fill("Middle answer");
-    await page.waitForTimeout(1500);
-    await input.fill("Final answer");
-    await page.waitForTimeout(1500);
-    const completeButton = page.getByRole("button", { name: "Complete" });
-    await completeButton.click();
-    // SurveyJS removes the button once it has completed, so Complete is now waiting on the held request.
-    await expect(completeButton).toHaveCount(0);
-    release();
-    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
-
-    // Past the debounce again, so a draft left in the debounce timer at Complete would have gone out.
-    await page.waitForTimeout(1500);
-    expect(await storedResponse(survey.id)).toEqual({ q1: "Final answer", is_submitted: true });
-    // Only the held draft and the submission go out. The drafts queued behind the held one are dropped.
-    expect(writesInServerOrder).toEqual([
-      { is_submitted: false, q1: "Older answer" },
-      { is_submitted: true, q1: "Final answer" }
-    ]);
+    expect(await storedResponse(survey.id, studentA)).toEqual({ q1: "Submitted answer", is_submitted: true });
+    expect(responseWrites).toEqual([]);
   });
 
   test("survey questions read before their answer options (WCAG 1.3.2)", async ({ page }) => {
@@ -1214,5 +1100,125 @@ test.describe("Surveys Page", () => {
     const bool = parsed.pages[0].elements.find((el: any) => el.type === "boolean");
     expect(bool.labelTrue).toBeTruthy();
     expect(bool.labelFalse).toBeTruthy();
+  });
+});
+
+// Issue #977: autosaves go out one at a time, so an older answer can't overwrite a newer one or follow
+// Complete. Each test seeds its own survey, so they stay out of the serial describe above: one failing
+// here skips nothing else.
+test.describe("Survey autosave order", () => {
+  let course: Course;
+  let student: User;
+  let instructor: User;
+
+  test.beforeAll(async () => {
+    course = await createClass();
+    [student, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Autosave Order Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Autosave Order Instructor", useMagicLink: true }
+    ]);
+  });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student, instructor]);
+  });
+
+  const seedOneQuestionSurvey = (title: string, allowResponseEditing: boolean) =>
+    seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title,
+      status: "published",
+      allow_response_editing: allowResponseEditing,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+  // Each debounced autosave is its own upsert. The first one is held back until the test calls
+  // release(), so later autosaves queue behind it. With abortFirst the held request then fails as if
+  // the connection dropped. writesInServerOrder lists every request in the order it went out.
+  const holdFirstResponseWrite = async (page: Page, { abortFirst = false } = {}) => {
+    const writesInServerOrder: { is_submitted: boolean; q1?: string }[] = [];
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    let writesSeen = 0;
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      writesSeen += 1;
+      const isFirst = writesSeen === 1;
+      if (isFirst) await released;
+      const body = route.request().postDataJSON() as { is_submitted: boolean; response: { q1?: string } };
+      writesInServerOrder.push({ is_submitted: body.is_submitted, q1: body.response.q1 });
+      if (isFirst && abortFirst) return route.abort("failed");
+      await route.continue();
+    });
+    return { writesInServerOrder, release };
+  };
+
+  // Opens the survey and answers it three times. The first autosave goes out and is held, and each
+  // later edit passes the debounce, so it has queued behind the held one when this returns.
+  const queueAutosavesBehindHeldOne = async (page: Page, surveyId: string, lastAnswer: string) => {
+    await page.clock.install();
+    await page.goto(`/course/${course.id}/surveys/${surveyId}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    const firstWrite = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/rest/v1/survey_responses")
+    );
+    await input.fill("Older answer");
+    await passAutosaveDebounce(page);
+    await firstWrite;
+    await input.fill("Middle answer");
+    await passAutosaveDebounce(page);
+    await input.fill(lastAnswer);
+    await passAutosaveDebounce(page);
+  };
+
+  // Each edit made while a slow autosave is in flight queues another autosave behind it, and each
+  // one sends the whole response. Only the newest queued one needs to go out, after the slow one,
+  // and a slow one that fails must not hold it up.
+  for (const slowAutosave of ["succeeds", "fails"] as const) {
+    test(`only the newest autosave queued behind a slow one is sent (slow autosave ${slowAutosave})`, async ({
+      page
+    }) => {
+      const survey = await seedOneQuestionSurvey(`Slow Autosave Survey (${slowAutosave})`, false);
+      await loginAsUser(page, student, course);
+      const { writesInServerOrder, release } = await holdFirstResponseWrite(page, {
+        abortFirst: slowAutosave === "fails"
+      });
+
+      await queueAutosavesBehindHeldOne(page, survey.id, "Newer answer");
+      release();
+
+      await expect
+        .poll(() => storedResponse(survey.id, student), { timeout: 15_000 })
+        .toEqual({ q1: "Newer answer", is_submitted: false });
+      expect(writesInServerOrder).toEqual([
+        { is_submitted: false, q1: "Older answer" },
+        { is_submitted: false, q1: "Newer answer" }
+      ]);
+    });
+  }
+
+  test("no draft autosave reaches the server after Complete", async ({ page }) => {
+    // Editing on, so RLS lets a late draft write through to the survey_response_no_unsubmit
+    // trigger, which refuses it. The submission survives either way; the client must not send it.
+    const survey = await seedOneQuestionSurvey("Complete Behind Autosave Survey", true);
+    await loginAsUser(page, student, course);
+    const { writesInServerOrder, release } = await holdFirstResponseWrite(page);
+
+    await queueAutosavesBehindHeldOne(page, survey.id, "Final answer");
+    const completeButton = page.getByRole("button", { name: "Complete" });
+    await completeButton.click();
+    // SurveyJS removes the button once it has completed, so Complete is now waiting on the held request.
+    await expect(completeButton).toHaveCount(0);
+    release();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+
+    // A draft left in the debounce timer at Complete would go out now.
+    await passAutosaveDebounce(page);
+    expect(await storedResponse(survey.id, student)).toEqual({ q1: "Final answer", is_submitted: true });
+    // Only the held draft and the submission go out. The drafts queued behind the held one are dropped.
+    expect(writesInServerOrder).toEqual([
+      { is_submitted: false, q1: "Older answer" },
+      { is_submitted: true, q1: "Final answer" }
+    ]);
   });
 });
