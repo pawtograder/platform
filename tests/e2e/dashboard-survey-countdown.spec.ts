@@ -104,7 +104,7 @@ test.describe("Student dashboard survey countdown", () => {
     expect(await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument)).toBe(true);
   });
 
-  test("a hidden dashboard shows the current countdown as soon as it is shown again, and refreshes at most once a minute", async ({
+  test("a hidden dashboard shows the current countdown as soon as it is shown again, and refreshes", async ({
     page
   }) => {
     await loginAsUser(page, student, course);
@@ -126,19 +126,12 @@ test.describe("Student dashboard survey countdown", () => {
     await expect(surveys.getByText("Due in 15 minutes", { exact: true })).toBeVisible();
     await expect.poll(() => refreshes.length).toBe(1);
 
-    // Shown again within the same minute: no second refresh.
-    await setTabVisibility(page, "hidden");
-    await setTabVisibility(page, "visible");
-    await page.waitForTimeout(2_000);
-    expect(refreshes).toHaveLength(1);
-
-    // A minute later it refreshes again.
+    // A minute later it refreshes again. That no refresh goes out inside the minute can't be shown
+    // here without a fixed wait, so issue-1013-use-now.test.ts pins it, where the call is synchronous.
     await setTabVisibility(page, "hidden");
     await page.clock.setSystemTime(dueAt - 15 * 60_000 + 61_000);
     await setTabVisibility(page, "visible");
     await expect.poll(() => refreshes.length).toBe(2);
-    await page.waitForTimeout(1_000);
-    expect(refreshes).toHaveLength(2);
   });
 
   test("a dashboard opened with the browser clock past the deadline shows Overdue at once", async ({ page }) => {
