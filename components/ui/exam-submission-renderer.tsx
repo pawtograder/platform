@@ -2,6 +2,7 @@
 
 import { SubmissionArtifact } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
+import { cropAspect } from "@/lib/exam/regionMath";
 import { Box, Button, Flex, Heading, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -16,17 +17,41 @@ type ExamQuestionResult = {
 };
 type ExamArtifactData = { format: "exam_v1"; pages: ExamPageRef[]; questions: ExamQuestionResult[] };
 
-/** CSS sprite-style crop: show only `region` of the page image. */
-function RegionCrop({ url, region, height = 120 }: { url: string; region: NormRect; height?: number }) {
+/**
+ * CSS sprite-style crop: show only `region` of the page image.
+ *
+ * `height` is a target, not a guarantee. The box is sized by width plus aspectRatio with
+ * `maxWidth: 100%`, so when the flex row clamps a wide crop it scales down whole and ends up
+ * shorter than `height`. That is deliberate: setting width and height independently is what let a
+ * clamped crop distort again, which is half of #1073. Preserving the shape matters more than
+ * hitting an exact height, since the point is reading handwriting.
+ */
+function RegionCrop({
+  url,
+  region,
+  page,
+  /** Target height in px. See above: a clamped crop renders shorter than this. */
+  height = 120
+}: {
+  url: string;
+  region: NormRect;
+  page?: ExamPageRef;
+  height?: number;
+}) {
   // background-position as a percentage relative to the un-shown remainder
   const posX = region.width < 1 ? (region.x / (1 - region.width)) * 100 : 0;
   const posY = region.height < 1 ? (region.y / (1 - region.height)) * 100 : 0;
-  const aspect = region.height > 0 ? region.width / region.height : 4;
+  // The crop's true shape needs the page's pixel size: region.width and region.height are
+  // fractions of different page dimensions, so their ratio alone stretches every crop.
+  const aspect = cropAspect(region, page);
   return (
     <Box
       style={{
+        // One driver, not two. width + aspectRatio keeps the shape when the flex row clamps
+        // the box; an independent width/height pair re-introduces the distortion at that point.
         width: `${Math.round(height * aspect)}px`,
-        height: `${height}px`,
+        aspectRatio: `${aspect}`,
+        maxWidth: "100%",
         backgroundImage: `url("${url}")`,
         backgroundRepeat: "no-repeat",
         backgroundSize: `${region.width > 0 ? 100 / region.width : 100}% ${region.height > 0 ? 100 / region.height : 100}%`,
@@ -116,7 +141,7 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
             </HStack>
             <Flex gap={4} wrap="wrap" align="flex-start">
               {url ? (
-                <RegionCrop url={url} region={q.region} />
+                <RegionCrop url={url} region={q.region} page={pageByNumber[q.page_number]} />
               ) : (
                 <Text fontSize="xs" color="fg.muted">
                   (page image unavailable)
