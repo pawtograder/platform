@@ -2,6 +2,9 @@
 
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
+import { COURSE_FEATURES, courseFeatureEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
+import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "chakra-react-select";
@@ -38,6 +41,10 @@ type NavItem = {
   instructorsOnly?: boolean | "graderOrInstructor";
   types?: AssignmentType[];
   repoOnly?: boolean;
+  // Hides the entry unless this course feature is on. Read through
+  // courseFeatureEnabled, so a course with no entry falls back to the
+  // feature's own default rather than being treated as enabled.
+  feature?: CourseFeatureName;
 };
 
 const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
@@ -79,7 +86,8 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/exam`,
     icon: FaFileAlt,
     instructorsOnly: "graderOrInstructor",
-    types: ["exam"]
+    types: ["exam"],
+    feature: COURSE_FEATURES.EXAMS
   },
   {
     label: "Repository Status",
@@ -157,6 +165,8 @@ export function ManageAssignmentNav({
   const pathname = usePathname();
   const router = useRouter();
   const { assignment } = useAssignmentController();
+  const course = useCourse() as CourseWithFeatures;
+  const courseFeatures = course?.features;
   // Repo-only tools (repository status, rerun autograder, test insights,
   // security audit) don't apply when there's no git repository.
   const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
@@ -169,8 +179,9 @@ export function ManageAssignmentNav({
           if (!item.instructorsOnly) return true;
           if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
           return isInstructor;
-        }),
-    [course_id, assignment_id, isGraderOrInstructor, isInstructor, assignmentType]
+        })
+        .filter((item) => !item.feature || courseFeatureEnabled(courseFeatures, item.feature)),
+    [course_id, assignment_id, isGraderOrInstructor, isInstructor, assignmentType, courseFeatures]
   );
   // Mobile <Select> can't show disabled options, so omit repo-only items there.
   const selectOptions = React.useMemo(
