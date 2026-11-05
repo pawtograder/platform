@@ -8,17 +8,27 @@
 --   * role_capabilities  which capabilities each role has;
 --   * user_roles.class_role_id  each user's one role in each class, copied to user_privileges.
 --
--- Every class gets default instructor, grader, student and admin roles. Only instructor gets the
--- four capabilities below, which matches today: each of those actions is instructor-only. app_role
+-- Every class gets default instructor, grader, student and admin roles. Only instructor gets
+-- capabilities, which matches today: each of the four below is instructor-only. app_role
 -- stays as basic membership, and class_role_id follows it: a BEFORE trigger fills it from the
 -- class's default role, so existing insert paths (enrollment, invitations, SIS sync) need no
 -- change. 'admin' rows get the admin role, with no capabilities: authorizeforclassinstructor
 -- checks role = 'instructor' only, so a class admin can't do these actions today either.
 --
 -- Nothing reads these tables yet, so no behavior changes. Writes are default-denied by RLS;
--- the roles page will add write policies. Policies that check a capability must keep the inline
--- shape `class_id IN (SELECT up.class_id FROM user_privileges up JOIN role_capabilities ...)`,
--- since a helper function with a subquery can't be inlined and runs once per row.
+-- step 2 (20261030120000_protect_class_roles.sql) adds the write policies.
+--
+-- To check capability X in an RLS policy, write
+--   class_id IN (SELECT public.user_class_ids_with_capability('X'))
+-- in a policy TO authenticated. Never join role_capabilities or read user_privileges.class_role_id
+-- in a policy yourself: a user holds X in class C when X is on their class role or on C's default
+-- role for their app_role, and public.user_class_capabilities() (step 2) is the only code that
+-- applies that rule. See docs/capabilities.md.
+--
+-- The instructor role gets every capability that exists when the class is created (the CROSS JOIN
+-- in seed_default_class_roles). A capability added later reaches instructors of new classes on its
+-- own, but existing classes' instructors only if the migration that adds it inserts it for their
+-- default instructor role too.
 
 -- ---------------------------------------------------------------------------
 -- Tables
@@ -66,7 +76,7 @@ CREATE OR REPLACE FUNCTION public.seed_default_class_roles(p_class_id bigint)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path TO ''
 AS $$
 BEGIN
   INSERT INTO public.class_roles (class_id, name, default_for)
@@ -92,7 +102,7 @@ CREATE OR REPLACE FUNCTION public.classes_seed_default_class_roles()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path TO ''
 AS $$
 BEGIN
   PERFORM public.seed_default_class_roles(NEW.id);
@@ -106,7 +116,9 @@ CREATE TRIGGER trg_classes_seed_default_class_roles
 AFTER INSERT ON public.classes
 FOR EACH ROW EXECUTE FUNCTION public.classes_seed_default_class_roles();
 
+-- backfill:begin (tests/e2e/class-roles-db.spec.ts replays the backfill blocks)
 SELECT public.seed_default_class_roles(id) FROM public.classes;
+-- backfill:end
 
 -- ---------------------------------------------------------------------------
 -- user_roles.class_role_id
@@ -114,8 +126,13 @@ SELECT public.seed_default_class_roles(id) FROM public.classes;
 
 ALTER TABLE public.user_roles ADD COLUMN class_role_id bigint;
 
--- Pause the realtime broadcast while backfilling, so staff channels don't get one event per member.
-ALTER TABLE public.user_roles DISABLE TRIGGER broadcast_user_roles_realtime;
+-- Pause every user trigger while backfilling. The UPDATE would otherwise fire each AFTER INSERT OR
+-- UPDATE trigger on every row (realtime broadcasts, gradebook and manual-submission enrollment,
+-- GitHub and Discord sync, updated_at, cache invalidation) inside this migration's transaction.
+-- The triggers this migration needs are created below, so none of them is skipped. Foreign key
+-- checks are internal triggers and still run.
+-- backfill:begin
+ALTER TABLE public.user_roles DISABLE TRIGGER USER;
 
 UPDATE public.user_roles ur
 SET class_role_id = cr.id
@@ -123,7 +140,8 @@ FROM public.class_roles cr
 WHERE cr.class_id = ur.class_id
   AND cr.default_for = ur.role;
 
-ALTER TABLE public.user_roles ENABLE TRIGGER broadcast_user_roles_realtime;
+ALTER TABLE public.user_roles ENABLE TRIGGER USER;
+-- backfill:end
 
 ALTER TABLE public.user_roles
   ALTER COLUMN class_role_id SET NOT NULL,
@@ -132,13 +150,15 @@ ALTER TABLE public.user_roles
 
 CREATE INDEX idx_user_roles_class_role_id ON public.user_roles (class_role_id);
 
--- Fill class_role_id from the class's default role. On UPDATE, a user still on the default
--- role for their old app_role follows the new app_role; a custom role is kept.
+-- Fill class_role_id from the class's default role. On UPDATE, a user still on the default role for
+-- their old app_role follows the new app_role. Step 2 (20261030120000_protect_class_roles.sql)
+-- replaces this function: there, a change of app_role or class_id always resets class_role_id to
+-- the new default, custom role or not, and any other choice must fit the app_role.
 CREATE OR REPLACE FUNCTION public.user_roles_set_default_class_role()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path TO ''
 AS $$
 BEGIN
   IF NEW.class_role_id IS NULL
@@ -173,8 +193,12 @@ FOR EACH ROW EXECUTE FUNCTION public.user_roles_set_default_class_role();
 -- user_privileges.class_role_id
 -- ---------------------------------------------------------------------------
 
+-- No foreign key: the sync trigger below keeps it equal to user_roles.class_role_id. If it ever points
+-- at a role that no longer exists, capability checks find nothing for it and fail closed, without
+-- an error: the user just lacks those capabilities.
 ALTER TABLE public.user_privileges ADD COLUMN class_role_id bigint;
 
+-- backfill:begin
 UPDATE public.user_privileges up
 SET class_role_id = ur.class_role_id
 FROM public.user_roles ur
@@ -182,6 +206,7 @@ WHERE ur.user_id = up.user_id
   AND ur.class_id = up.class_id
   AND ur.role = up.role
   AND ur.disabled = false;
+-- backfill:end
 
 CREATE INDEX idx_user_privileges_class_role ON public.user_privileges (user_id, class_role_id);
 
@@ -239,9 +264,12 @@ BEGIN
   RETURN NULL;
 END;$$;
 
+-- class_id is new in the list too. A column-list trigger fires only for columns the UPDATE sets, not
+-- ones a BEFORE trigger changed, so `SET class_id = ...` (whose class_role_id the BEFORE trigger
+-- resets) didn't fire it, and user_privileges stayed on the old class.
 DROP TRIGGER IF EXISTS trg_user_priv_sync_upd ON public.user_roles;
 CREATE TRIGGER trg_user_priv_sync_upd
-AFTER UPDATE OF user_id, role, disabled, class_role_id ON public.user_roles
+AFTER UPDATE OF user_id, role, disabled, class_id, class_role_id ON public.user_roles
 FOR EACH ROW EXECUTE FUNCTION public.user_privileges_sync_from_user_roles();
 
 -- ---------------------------------------------------------------------------
