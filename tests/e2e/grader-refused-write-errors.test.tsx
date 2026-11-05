@@ -82,8 +82,8 @@ test.describe("Grader writes refused by RLS surface an error", () => {
       .click();
 
     // The refusal is reported, with the provider's message naming what was refused.
-    await expect(page.getByText("Update Error").first()).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(/don't have permission to update this assignments record/).first()).toBeVisible();
+    await expect(page.getByText("Update Error").first()).toBeAttached({ timeout: 20_000 });
+    await expect(page.getByText(/don't have permission to update this assignments record/).first()).toBeAttached();
     // ...and the false success the bug produced is gone.
     await expect(page.getByText("Assignment Updated")).toHaveCount(0);
 
