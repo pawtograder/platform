@@ -1,16 +1,39 @@
 /**
- * The visual builder and the survey form refuse to publish a survey whose questions share a name
- * (#1005). SurveyJS saves answers under the question name, so two questions named `question_1`
- * share one answer. The database refuses these too (survey-unique-question-names-db.spec.ts);
- * this covers what the instructor sees.
+ * What an instructor sees around duplicate question names (#1005). SurveyJS saves answers under
+ * the question's name, so two questions named `question_1` share one answer. The database decides
+ * what counts as a repeat (survey-unique-question-names-db.spec.ts). This covers the builder's
+ * warning and default names, and each way of publishing showing the database's refusal.
  */
+import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase, type TestingUser } from "./TestingUtils";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 
+const REPEATED = {
+  pages: [
+    {
+      name: "page1",
+      elements: [
+        { type: "text", name: "question_1", title: "First" },
+        { type: "text", name: "question_1", title: "Second" }
+      ]
+    }
+  ]
+};
+const UNIQUE = {
+  pages: [
+    {
+      name: "page1",
+      elements: [
+        { type: "text", name: "question_1", title: "First" },
+        { type: "text", name: "question_2", title: "Second" }
+      ]
+    }
+  ]
+};
+
 test.describe("survey builder: duplicate question names", () => {
-  test.describe.configure({ mode: "serial" });
   test.setTimeout(180_000);
 
   let course: Course;
@@ -43,7 +66,39 @@ test.describe("survey builder: duplicate question names", () => {
     return data ?? [];
   }
 
-  test("the builder names a repeated question name, and the form will not publish it", async ({ page }) => {
+  async function seedSurvey(title: string, status: "draft" | "published", json: object) {
+    const { data, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.private_profile_id,
+        assigned_to_all: true,
+        allow_response_editing: false,
+        json: JSON.stringify(json),
+        version: 1,
+        status,
+        title,
+        description: "#1005"
+      })
+      .select("id")
+      .single();
+    if (error || !data) throw new Error(`Failed to seed a survey: ${error?.message}`);
+    return data.id;
+  }
+
+  // The e2e fixture hides the toaster (data-visual-test="removed") to keep screenshots stable, so
+  // a toast is in the page but never visible here.
+  const toast = (page: Page, title: string) =>
+    page.locator('[data-scope="toast"][data-part="root"]').filter({ hasText: title });
+
+  async function expectRefusal(page: Page) {
+    const refusal = toast(page, "Cannot Publish Survey");
+    await expect(refusal, "the instructor gets one toast with the reason").toHaveCount(1);
+    await expect(refusal).toContainText('more than one question is named "question_1"');
+    await expect(refusal).toContainText("Rename the repeats");
+  }
+
+  test("the builder warns about a repeated name, and the form says why it can't be published", async ({ page }) => {
     const title = "Reused question name";
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/surveys/new`);
@@ -53,31 +108,23 @@ test.describe("survey builder: duplicate question names", () => {
     await page.getByRole("button", { name: /\+ Short Text/i }).click();
     await page.getByRole("button", { name: /\+ Short Text/i }).click();
     // The instructor gives the second question the first one's name.
-    await page.getByPlaceholder("Short Text question").nth(1).fill("question_1");
-
-    const message = '"question_1" is used by page 1, question 1 and page 1, question 2. Rename one of them.';
-    const summary = page.getByTestId("survey-builder-duplicate-names");
-    await expect(summary, "the builder says which name is repeated and where").toContainText(message);
-    await expect(summary, "and that a draft can still be saved").toContainText("save the survey as a draft");
-    await expect(page.getByRole("status").filter({ hasText: message }).first()).toBeAttached();
-
     const secondName = page.getByPlaceholder("Short Text question").nth(1);
+    await secondName.fill("question_1");
+
+    const message = '"question_1" is used by page 1, question 1 and page 1, question 2.';
+    await expect(page.getByTestId("survey-builder-duplicate-names")).toContainText(message);
+    await expect(page.getByRole("status").filter({ hasText: message }).first()).toBeAttached();
     await expect(secondName, "the repeated field is marked invalid").toHaveAttribute("aria-invalid", "true");
     await expect(secondName, "and its error is read with it").toHaveAccessibleDescription(new RegExp(message));
 
     await page.getByRole("button", { name: /Use This Survey/i }).click();
-    await expect(page.getByRole("status").filter({ hasText: message }).first()).toBeVisible();
 
-    // Publishing is refused, with the same message.
+    // Publishing is refused, and the reason isn't buried under generic errors.
     await page.getByText("Published — visible to students").click();
-    await expect(page.getByText("Two questions share a name. Rename one under Survey Questions")).toBeVisible();
     await page.getByRole("button", { name: "Publish Survey" }).click();
-    // The e2e fixture hides the toaster (data-visual-test="removed") to keep screenshots stable,
-    // so the toast is in the page but never visible here.
-    const refusal = page.locator('[data-scope="toast"][data-part="root"]').filter({ hasText: "Cannot Publish Survey" });
-    await expect(refusal.first()).toBeAttached();
-    await expect(refusal.first()).toContainText(message);
+    await expectRefusal(page);
     expect(await surveysTitled(title), "nothing was saved").toHaveLength(0);
+    await expect(toast(page, "Changes not saved")).toHaveCount(0);
 
     // Saving a draft is allowed, so work in progress is not lost.
     await page.getByText("Draft — saved but hidden from students").click();
@@ -90,68 +137,38 @@ test.describe("survey builder: duplicate question names", () => {
       .toEqual(["draft"]);
   });
 
-  test("a name SurveyJS rewrites, such as {question_1}, counts as the name it is saved under", async ({ page }) => {
-    await loginAsUser(page, instructor, course);
-    await page.goto(`/course/${course.id}/manage/surveys/new`);
-
-    await page.getByRole("button", { name: /Open Visual Builder/i }).click();
-    await page.getByRole("button", { name: /\+ Short Text/i }).click();
-    await page.getByRole("button", { name: /\+ Short Text/i }).click();
-    // SurveyJS drops the braces when it loads the survey, so both answers would land in question_1.
-    await page.getByPlaceholder("Short Text question").nth(1).fill("{question_1}");
-
-    const message =
-      '"question_1" is used by page 1, question 1 and page 1, question 2 (named "{question_1}", saved as "question_1"). Rename one of them.';
-    await expect(page.getByTestId("survey-builder-duplicate-names")).toContainText(message);
-    for (const row of [0, 1]) {
-      await expect(page.getByPlaceholder("Short Text question").nth(row)).toHaveAttribute("aria-invalid", "true");
-    }
-  });
-
-  test("editing a published survey, the copy doesn't suggest saving it as a draft", async ({ page }) => {
-    // Saving a published survey as a draft would take it away from students.
-    const { data: survey, error } = await supabase
-      .from("surveys")
-      .insert({
-        class_id: course.id,
-        created_by: instructor.private_profile_id,
-        assigned_to_all: true,
-        allow_response_editing: false,
-        json: JSON.stringify({
-          pages: [
-            {
-              name: "page1",
-              elements: [
-                { type: "text", name: "question_1", title: "First" },
-                { type: "text", name: "question_2", title: "Second" }
-              ]
-            }
-          ]
-        }),
-        version: 1,
-        status: "published",
-        title: "Published, then edited",
-        description: "#1005"
-      })
-      .select("id")
-      .single();
-    if (error || !survey) throw new Error(`Failed to seed a published survey: ${error?.message}`);
+  test("a refused edit leaves a published survey published, with its questions unchanged", async ({ page }) => {
+    const title = "Published, then edited";
+    const id = await seedSurvey(title, "published", UNIQUE);
 
     await loginAsUser(page, instructor, course);
-    await page.goto(`/course/${course.id}/manage/surveys/${survey.id}/edit`);
+    await page.goto(`/course/${course.id}/manage/surveys/${id}/edit`);
     await page.getByRole("button", { name: /Open Visual Builder/i }).click();
     await page.getByPlaceholder("Short Text question").nth(1).fill("question_1");
 
-    const summary = page.getByTestId("survey-builder-duplicate-names");
-    await expect(summary).toContainText('"question_1" is used by page 1, question 1 and page 1, question 2.');
-    await expect(summary).toContainText(
-      "The published survey keeps its current questions until every question has its own name."
-    );
-    await expect(summary).not.toContainText("draft");
+    const warning = page.getByTestId("survey-builder-duplicate-names");
+    await expect(warning).toContainText('"question_1" is used by page 1, question 1 and page 1, question 2.');
+    // Saving a published survey as a draft would take it away from students.
+    await expect(warning).not.toContainText("draft");
 
     await page.getByRole("button", { name: /Use This Survey/i }).click();
-    const note = page.locator("#survey-publish-blocked");
-    await expect(note).toHaveText("Two questions share a name. Rename one under Survey Questions.");
+    await page.getByRole("button", { name: "Publish Survey" }).click();
+    await expectRefusal(page);
+
+    expect(await surveysTitled(title)).toEqual([{ status: "published", json: JSON.stringify(UNIQUE) }]);
+  });
+
+  test("the surveys table's Publish says why it was refused", async ({ page }) => {
+    const title = "Draft published from the table";
+    await seedSurvey(title, "draft", REPEATED);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys`);
+    await page.getByRole("row").filter({ hasText: title }).getByRole("button").last().click();
+    await page.getByRole("menuitem", { name: "Publish" }).click();
+    await expectRefusal(page);
+
+    expect((await surveysTitled(title)).map((s) => s.status)).toEqual(["draft"]);
   });
 
   test("a question added on a new page gets a name no other question uses", async ({ page }) => {
@@ -162,13 +179,44 @@ test.describe("survey builder: duplicate question names", () => {
     await page.getByRole("button", { name: /\+ Short Text/i }).click();
     await page.getByRole("button", { name: /Add Page/i }).click();
     await page.getByRole("button", { name: /\+ Short Text/i }).click();
-    await page.getByRole("button", { name: /Use This Survey/i }).click();
 
+    // Default names used to restart at question_1 on every page. Check while the builder is open:
+    // closing it removes the warning, so this could never fail after "Use This Survey".
+    const newQuestion = page.getByPlaceholder("Short Text question");
+    await expect(newQuestion).toBeVisible();
+    const warning = page.getByTestId("survey-builder-duplicate-names");
+    await expect(warning).toHaveCount(0);
+    // The same locator finds the warning as soon as the names do repeat.
+    await newQuestion.fill("question_1");
+    await expect(warning).toBeVisible();
+    await newQuestion.fill("question_2");
+    await expect(warning).toHaveCount(0);
+
+    await page.getByRole("button", { name: /Use This Survey/i }).click();
     await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
     const parsed = JSON.parse(await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).inputValue());
     const names = parsed.pages.flatMap((p: { elements: { name: string }[] }) => p.elements.map((el) => el.name));
-    // Default names used to restart at question_1 on every page.
     expect(names).toEqual(["question_1", "question_2"]);
-    await expect(page.getByTestId("survey-builder-duplicate-names")).toHaveCount(0);
+  });
+
+  test("a new question's default name avoids a name used inside a panel", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    await page.getByRole("button", { name: /Edit survey definition \(JSON\)/i }).click();
+    await page.getByRole("textbox", { name: /Survey definition \(JSON\)/i }).fill(
+      JSON.stringify({
+        pages: [
+          {
+            name: "page1",
+            elements: [{ type: "panel", name: "group", elements: [{ type: "text", name: "question_2" }] }]
+          }
+        ]
+      })
+    );
+    await page.getByRole("button", { name: /Open Visual Builder/i }).click();
+    await page.getByRole("button", { name: /\+ Short Text/i }).click();
+
+    await expect(page.getByPlaceholder("Short Text question")).toHaveValue("question_3");
   });
 });
