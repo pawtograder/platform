@@ -102,7 +102,7 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
     await page.goto(`/course/${course.id}/manage/course/feature-flags`);
     const toggle = page.getByLabel("Enable Gemini API key setup for this course");
     await expect(toggle).toBeChecked();
-    await toggle.click({ force: true });
+    await page.getByText("Allow instructors to save or replace the course Gemini API key").click();
     await expect(toggle).not.toBeChecked();
     // Wait for the flag to be persisted, not just toggled in the UI.
     await expect
