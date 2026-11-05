@@ -34,7 +34,7 @@ jest.mock("@/hooks/useClassProfiles", () => ({
 }));
 
 import { CAPABILITY_REFRESH_DEBOUNCE_MS, ClassCapabilitiesProvider } from "@/hooks/useClassCapabilities";
-import { ClassCapabilitiesContext, useCapability } from "@/hooks/useClassProfiles";
+import { ClassCapabilitiesContext, useCapability, useCapabilityOnceLoaded } from "@/hooks/useClassProfiles";
 
 function respondWith(capabilities: string[]) {
   rpc.mockReturnValue({
@@ -77,6 +77,16 @@ describe("useCapability", () => {
 
     await act(async () => resolve({ data: [{ class_id: 7, capability: "publish_groups" }], error: null }));
     expect(result.current).toBe(true);
+  });
+
+  it("useCapabilityOnceLoaded is undefined while loading, then the answer", async () => {
+    let resolve: (value: unknown) => void = () => {};
+    rpc.mockReturnValue({ eq: () => new Promise((r) => (resolve = r)) });
+    const { result } = renderHook(() => useCapabilityOnceLoaded("manage_review_assignments"), { wrapper });
+    expect(result.current).toBeUndefined();
+
+    await act(async () => resolve({ data: [{ class_id: 7, capability: "publish_groups" }], error: null }));
+    expect(result.current).toBe(false);
   });
 
   it("is false without the provider, and for a capability the viewer doesn't hold", () => {

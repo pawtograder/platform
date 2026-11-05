@@ -128,6 +128,21 @@ export function useCapability(name: string) {
 }
 
 /**
+ * Like {@link useCapability}, but `undefined` until the answer is in, for a page that should
+ * wait before sending someone away.
+ */
+export function useCapabilityOnceLoaded(name: string): boolean | undefined {
+  const state = useContext(ClassCapabilitiesContext);
+  if (!state) {
+    return false;
+  }
+  if (state.isLoading) {
+    return undefined;
+  }
+  return state.capabilities.has(name);
+}
+
+/**
  * Returns whether the current user holds a global admin role (a `user_roles` row with
  * role "admin" in any class). Admins can act as instructors in any course.
  */
