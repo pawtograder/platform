@@ -276,7 +276,9 @@ export async function withFault<T>(classId: number, point: FaultPoint, fn: () =>
     return await fn();
   } finally {
     await withPrivileged(async (c) => {
-      await c.query(`DROP TRIGGER IF EXISTS zz_${schema} ON course_secrets.course_gemini_api_keys`);
+      // Dropping the schema also drops the dependent trigger (it calls ${schema}.fail()).
+      // Avoid an explicit DROP TRIGGER: under Supabase's supautils it locks auth/storage/
+      // realtime tables and can deadlock with concurrent GoTrue user creation.
       await c.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     });
   }
