@@ -257,7 +257,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     )
     .eq("disabled", false)
     .eq("user_id", userId)
-    .is("classes.assignments.archived_at", null);
+    .is("classes.assignments.archived_at", null)
+    .not("classes.assignments.repo_mode", "in", "(none,no_submission)");
 
   // If class_id is provided, filter to only that class
   if (classId) {
@@ -272,7 +273,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!classData) {
     throw new UserVisibleError("User is not a student", 400);
   }
-  // Skip only Forgejo-only classes. A class with no live assignments still gets its GitHub org invite.
+  // The query keeps only live repo-backed assignments, since no-repo ones default to GitHub. Skip a
+  // class only when all of those are on Forgejo; a class with none still gets its GitHub org invite.
   const githubClasses = classData.filter(
     (c) => !c.classes.assignments.length || c.classes.assignments.some((a) => a.git_provider === "github")
   );
