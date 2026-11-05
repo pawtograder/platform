@@ -10,10 +10,29 @@
  * The capability tables decide what a user can do, so the negative assertions matter: a grader must
  * not be able to write them or move themselves to another role.
  *
+ * The backfill only runs on real data in production, so one test replays the migration's backfill
+ * blocks on a class put back into its pre-migration state, over a direct Postgres connection.
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { Client } from "pg";
 import { test, expect } from "../global-setup";
 import { supabase, createClass, createUserInClass, createAuthenticatedClient, type TestingUser } from "./TestingUtils";
+
+// Same fallback as scripts/CheckFunctionGrants.ts.
+const DB_URL =
+  process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+const MIGRATION = path.join(__dirname, "../../supabase/migrations/20261027120000_class_roles_and_capabilities.sql");
+
+/** The statements between each `-- backfill:begin` and `-- backfill:end` marker, in order. */
+function backfillBlocks() {
+  const sql = readFileSync(MIGRATION, "utf8");
+  const blocks = [...sql.matchAll(/-- backfill:begin[^\n]*\n([\s\S]*?)-- backfill:end/g)].map((m) => m[1]);
+  expect(blocks.length, "the migration marks its backfill blocks").toBe(3);
+  return blocks;
+}
 
 const SEEDED_CAPABILITIES = ["manage_assignments", "manage_review_assignments", "manage_roles", "publish_groups"];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
@@ -125,7 +144,98 @@ test.describe("class roles and capabilities", () => {
       .from("user_roles")
       .update({ class_role_id: roleFor(rolesB, "instructor").id })
       .eq("id", row.id);
-    expect(error, "composite FK must reject a role from another class").not.toBeNull();
+    expect(error?.code, "composite FK must reject a role from another class").toBe("23503");
+  });
+
+  test("moving a user to another class moves their role and user_privileges with them", async () => {
+    const mover = await createUserInClass({ role: "student", class_id: classA.id });
+    const before = await userRole(mover);
+    const { error } = await supabase.from("user_roles").update({ class_id: classB.id }).eq("id", before.id);
+    expect(error).toBeNull();
+
+    const { data: after, error: afterError } = await supabase
+      .from("user_roles")
+      .select("class_role_id")
+      .eq("id", before.id)
+      .single();
+    expect(afterError).toBeNull();
+    expect(after!.class_role_id).toBe(roleFor(rolesB, "student").id);
+
+    const { data: privs, error: privError } = await supabase
+      .from("user_privileges")
+      .select("class_id, class_role_id")
+      .eq("user_id", mover.user_id)
+      .in("class_id", [classA.id, classB.id]);
+    expect(privError).toBeNull();
+    expect(privs, "user_privileges follows the class change").toEqual([
+      { class_id: classB.id, class_role_id: roleFor(rolesB, "student").id }
+    ]);
+  });
+
+  test("the migration's backfill gives every existing row its default role without firing triggers", async () => {
+    const backfillClass = await createClass({ name: "E2E Class Roles backfill" });
+    for (const role of ["instructor", "grader", "student", "student"] as const) {
+      await createUserInClass({ role, class_id: backfillClass.id });
+    }
+    const db = new Client({ connectionString: DB_URL });
+    await db.connect();
+    try {
+      // Everything runs in one transaction and is rolled back. The ALTER TABLEs lock user_roles
+      // until then, so keep this short.
+      await db.query("BEGIN");
+      await db.query("SET LOCAL lock_timeout = '10s'");
+      // Put the class back into its pre-migration state: no class roles, no class_role_id.
+      await db.query("ALTER TABLE public.user_roles ALTER COLUMN class_role_id DROP NOT NULL");
+      await db.query("ALTER TABLE public.user_roles DISABLE TRIGGER USER");
+      await db.query("UPDATE public.user_roles SET class_role_id = NULL WHERE class_id = $1", [backfillClass.id]);
+      await db.query("ALTER TABLE public.user_roles ENABLE TRIGGER USER");
+      await db.query("UPDATE public.user_privileges SET class_role_id = NULL WHERE class_id = $1", [backfillClass.id]);
+      await db.query("DELETE FROM public.class_roles WHERE class_id = $1", [backfillClass.id]);
+      const updatedAt = async () =>
+        (
+          await db.query("SELECT id, updated_at FROM public.user_roles WHERE class_id = $1 ORDER BY id", [
+            backfillClass.id
+          ])
+        ).rows;
+      const updatedAtBefore = await updatedAt();
+
+      for (const block of backfillBlocks()) {
+        await db.query(block);
+      }
+
+      const count = async (sql: string) => Number((await db.query(sql, [backfillClass.id])).rows[0].n);
+      expect(
+        await count("SELECT count(*) AS n FROM public.class_roles WHERE class_id = $1 AND default_for IS NOT NULL"),
+        "the class gets its four default roles"
+      ).toBe(4);
+      expect(
+        await count(`SELECT count(*) AS n FROM public.role_capabilities rc
+          JOIN public.class_roles cr ON cr.id = rc.role_id
+          WHERE cr.class_id = $1 AND cr.default_for = 'instructor'`),
+        "the instructor role gets every capability"
+      ).toBe(SEEDED_CAPABILITIES.length);
+      expect(
+        await count("SELECT count(*) AS n FROM public.user_roles WHERE class_id = $1 AND class_role_id IS NULL"),
+        "no user_roles row is left without a role"
+      ).toBe(0);
+      expect(
+        await count(`SELECT count(*) AS n FROM public.user_roles ur
+          JOIN public.class_roles cr ON cr.id = ur.class_role_id
+          WHERE ur.class_id = $1 AND (cr.class_id <> ur.class_id OR cr.default_for IS DISTINCT FROM ur.role)`),
+        "every user_roles row is on its class's default role for its app_role"
+      ).toBe(0);
+      expect(
+        await count(`SELECT count(*) AS n FROM public.user_privileges up
+          JOIN public.user_roles ur
+            ON ur.user_id = up.user_id AND ur.class_id = up.class_id AND ur.role = up.role AND NOT ur.disabled
+          WHERE up.class_id = $1 AND up.class_role_id IS DISTINCT FROM ur.class_role_id`),
+        "user_privileges matches user_roles"
+      ).toBe(0);
+      expect(await updatedAt(), "no user_roles trigger ran (updated_at is unchanged)").toEqual(updatedAtBefore);
+    } finally {
+      await db.query("ROLLBACK").catch(() => {});
+      await db.end();
+    }
   });
 
   test("a grader cannot write the capability tables or change their own role", async () => {
