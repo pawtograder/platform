@@ -3388,6 +3388,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "exam_question_regions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
             foreignKeyName: "exam_question_regions_exam_id_fkey";
             columns: ["exam_id"];
             isOneToOne: false;
@@ -3400,6 +3407,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "exam_questions";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_question_exam_fkey";
+            columns: ["exam_question_id", "exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id", "exam_id"];
           }
         ];
       };
@@ -3459,6 +3473,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_questions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "exam_questions_exam_id_fkey";
@@ -3522,6 +3543,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "exam_scan_batches_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
             foreignKeyName: "exam_scan_batches_exam_id_fkey";
             columns: ["exam_id"];
             isOneToOne: false;
@@ -3574,6 +3602,13 @@ export type Database = {
           width?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "exam_scan_pages_batch_class_fkey";
+            columns: ["batch_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id", "class_id"];
+          },
           {
             foreignKeyName: "exam_scan_pages_batch_id_fkey";
             columns: ["batch_id"];
@@ -3669,6 +3704,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "exam_scanned_submissions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
             foreignKeyName: "exam_scanned_submissions_exam_id_fkey";
             columns: ["exam_id"];
             isOneToOne: false;
@@ -3759,6 +3801,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "exam_template_pages_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
             foreignKeyName: "exam_template_pages_exam_id_fkey";
             columns: ["exam_id"];
             isOneToOne: false;
@@ -3808,6 +3857,27 @@ export type Database = {
           template_source_type?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id", "class_id"];
+          },
           {
             foreignKeyName: "exams_assignment_id_fkey";
             columns: ["assignment_id"];
@@ -8212,6 +8282,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           file: string | null;
           group: string | null;
           id: number;
@@ -8235,6 +8306,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           file?: string | null;
           group?: string | null;
           id?: number;
@@ -8258,6 +8330,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           file?: string | null;
           group?: string | null;
           id?: number;
@@ -8310,6 +8383,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "rubric_checks_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "rubric_checks_rubric_criteria_id_fkey";
             columns: ["rubric_criteria_id"];
             isOneToOne: false;
@@ -8332,6 +8412,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           id: number;
           is_additive: boolean;
           is_deduction_only: boolean;
@@ -8349,6 +8430,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_additive: boolean;
           is_deduction_only?: boolean;
@@ -8366,6 +8448,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_additive?: boolean;
           is_deduction_only?: boolean;
@@ -8414,6 +8497,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "rubric_criteria_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "rubric_criteria_rubric_id_fkey";
             columns: ["rubric_id"];
             isOneToOne: false;
@@ -8436,6 +8526,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           id: number;
           is_assign_to_student: boolean;
           is_individual_grading: boolean;
@@ -8449,6 +8540,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
@@ -8462,6 +8554,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
@@ -8503,6 +8596,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
             referencedColumns: ["id"];
           },
           {
@@ -14753,6 +14853,15 @@ export type Database = {
       survey_allows_response_editing: {
         Args: { p_survey_id: string };
         Returns: boolean;
+      };
+      survey_apply_completion: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_profile_id: string;
+          p_revoke: boolean;
+        };
+        Returns: undefined;
       };
       sync_calendar_events: {
         Args: {
