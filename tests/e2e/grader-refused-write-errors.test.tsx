@@ -76,14 +76,16 @@ test.describe("Grader writes refused by RLS surface an error", () => {
     // Wait for the loaded row to reach the form, so Save sends a real UPDATE for this id.
     await expect(page.getByLabel("Title", { exact: false }).first()).toHaveValue(assignment.title);
 
+    // The visual-test fixture hides the toaster (display:none); turn it off so the toast is visible.
+    await page.evaluate(() => document.documentElement.removeAttribute("data-visual-tests"));
     await page
       .locator("button:visible", { hasText: /^Save$/ })
       .first()
       .click();
 
     // The refusal is reported, with the provider's message naming what was refused.
-    await expect(page.getByText("Update Error").first()).toBeAttached({ timeout: 20_000 });
-    await expect(page.getByText(/don't have permission to update this assignments record/).first()).toBeAttached();
+    await expect(page.getByText("Update Error").first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/don't have permission to update this assignments record/).first()).toBeVisible();
     // ...and the false success the bug produced is gone.
     await expect(page.getByText("Assignment Updated")).toHaveCount(0);
 
