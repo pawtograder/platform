@@ -1344,7 +1344,9 @@ export async function validateOIDCToken(
   const verified = (await verify(token, key, {
     expLeeway: 3600 // 1 hour
   })) as GitHubOIDCToken;
-  // Owner names are case-insensitive on both hosts; the base, including any FORGEJO_URL path, is not.
+  // Owner names are case-insensitive on both hosts, and aud and repository_owner come from the same signed
+  // token, so ignoring case can't admit another owner; it only avoids rejecting a token the provider cased
+  // differently. The base, including any FORGEJO_URL path, is compared exactly.
   const audienceBase = `${issuer.audienceBase}/`;
   if (
     typeof verified.aud !== "string" ||
