@@ -264,6 +264,13 @@ const FOREIGN_KEYS: Record<
     target: "submissions",
     onDelete: "set null",
     note: "leaderboard keeps the score"
+  },
+  exam_scanned_submissions_submission_id_fkey: {
+    table: "exam_scanned_submissions",
+    column: "submission_id",
+    target: "submissions",
+    onDelete: "set null",
+    note: "the scanned exam outlives the submission and can be matched again; chosen deliberately, not inherited"
   }
 };
 

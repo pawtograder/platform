@@ -15,8 +15,10 @@ export default defineConfig({
   testDir: "./tests/e2e",
   /* The Canvas LTI 1.3 suite is heavy (boots a full Canvas LMS) and runs in its
      own selectively-triggered CI lane via playwright.canvas.config.ts. Keep it
-     out of the default/per-PR E2E run. */
-  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts"],
+     out of the default/per-PR E2E run. The *.vision.spec.ts suites call the real
+     Google Vision + Gemini APIs and run in exam-vision-e2e.yml via
+     playwright.vision.config.ts. */
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/*.vision.spec.ts"],
   /* One-time gate before any worker spawns: probe PostgREST until its
      schema cache is loaded. Deployed previews don't admit traffic until
      this finishes, so test setup never races a partial cache. See
