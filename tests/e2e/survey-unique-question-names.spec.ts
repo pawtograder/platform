@@ -124,7 +124,9 @@ test.describe("survey builder: duplicate question names", () => {
     await page.getByRole("button", { name: "Publish Survey" }).click();
     await expectRefusal(page);
     expect(await surveysTitled(title), "nothing was saved").toHaveLength(0);
-    await expect(toast(page, "Changes not saved")).toHaveCount(0);
+    // Counted once. A toast times out in about 5 s, so a retrying toHaveCount(0) would just wait
+    // for this one to go, and pass.
+    expect(await toast(page, "Changes not saved").count(), 'no generic "please try again" on top').toBe(0);
 
     // Saving a draft is allowed, so work in progress is not lost.
     await page.getByText("Draft — saved but hidden from students").click();
