@@ -429,6 +429,24 @@ postgres:
       resources:
         requests: { cpu: "50m",  memory: "128Mi" }
         limits:   { cpu: "1",    memory: "512Mi" }
+    # Retention CronJob (templates/walg-retention.yaml): `wal-g delete retain
+    # FULL <keepBackups>` in its own pod. Change the retained count HERE, not in
+    # baseBackup.keepBackups: that one is baked into the primary's sidecar, so
+    # editing it restarts Postgres; this one restarts nothing. Set it at or
+    # below baseBackup.keepBackups — above it, the sidecar's prune wins.
+    retention:
+      enabled: true
+      # Hourly: the prune is a listing plus deletes, and running it every hour
+      # keeps it close behind each base backup however far the sidecar's
+      # interval loop has drifted from its start time.
+      schedule: "17 * * * *"
+      # Empty = baseBackup.keepBackups. Must be >= 1.
+      keepBackups: ""
+      startingDeadlineSeconds: 1800
+      activeDeadlineSeconds: 1800
+      resources:
+        requests: { cpu: "10m",  memory: "64Mi" }
+        limits:   { cpu: "500m", memory: "256Mi" }
 
   # ---------------------------------------------------------------------------
   # Streaming standby replica. A separate StatefulSet that bootstraps from the

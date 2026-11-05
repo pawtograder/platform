@@ -1665,6 +1665,11 @@ async function deactivateRejectedSubmission(
   }
 }
 
+// Rolls back a submission this path just created. It clears only the child rows the
+// push-direct submission path writes. When it starts writing to a new table that
+// references submissions, add the table here too. The foreign keys are NO ACTION, so a
+// missed table makes the final delete fail instead of leaving orphans; see "Deleting
+// repositories and submissions" in AGENTS.md and scripts/CheckDeletePaths.ts.
 async function cleanupPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   submissionId: number,
