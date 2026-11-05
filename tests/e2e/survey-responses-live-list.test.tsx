@@ -1,52 +1,33 @@
 /**
- * Issue #977: an instructor watching a survey's responses page must not see a student's unfinished
- * draft, and must see the response appear, without a reload, once the student completes.
+ * Issue #977: the live list on a survey's responses page must hold the same rows as the page's query.
  *
- * Every survey now autosaves drafts as the student types, and each write to survey_responses is
- * broadcast to the class staff channel. The responses page's live list used to accept any
- * broadcast row for the survey, so the draft showed up as a response: Total Responses 1, Response
- * Rate 100%, and Export to CSV enabled with the draft in it.
+ * Every survey autosaves drafts, and every write to survey_responses is broadcast to the staff
+ * channel. The list used to accept any broadcast row for the survey, so an instructor saw a student's
+ * draft as a response (Total Responses, Response Rate, Export to CSV) and kept seeing a deleted one.
  *
- * The instructor page records the realtime frames it receives, so the test can wait for the
- * draft's broadcast to arrive before checking that nothing changed. Without that, a slow channel
- * join would make the "still 0" checks pass without testing anything.
+ * The writes here go straight to the table. broadcast_survey_response_change() fires the same for
+ * them, and surveys.test.tsx covers the student's page writing a draft. The page applies broadcasts
+ * in the order they arrive, so once a later write shows on the page, the draft before it was handled.
  */
-import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase, type TestingUser } from "./TestingUtils";
 
-/** Text of every realtime frame the page receives, from any websocket it opens. */
-function recordRealtimeFrames(page: Page): string[] {
-  const frames: string[] = [];
-  page.on("websocket", (ws) => {
-    ws.on("framereceived", (frame) => {
-      frames.push(typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8"));
-    });
-  });
-  return frames;
-}
-
-/** The value under one of the summary cards' labels, such as "TOTAL RESPONSES". */
-const summaryValue = (page: Page, label: string) =>
-  page.getByText(label, { exact: true }).locator("xpath=following-sibling::*[1]");
-
-test.describe("survey responses page while a student is answering", () => {
-  test.setTimeout(180_000);
+test.describe("survey responses page while students are answering", () => {
+  test.setTimeout(90_000);
 
   let student: TestingUser;
+  let classmate: TestingUser;
   let instructor: TestingUser;
 
   test.afterEach(async ({ logMagicLinksOnFailure }) => {
-    await logMagicLinksOnFailure([student, instructor]);
+    await logMagicLinksOnFailure([student, classmate, instructor]);
   });
 
-  test("a draft stays off the live list, and the response appears once the student completes", async ({
-    page,
-    browser
-  }) => {
+  test("the live list takes a submitted response, but not a draft, and drops a deleted one", async ({ page }) => {
     const course = await createClass({ name: "E2E Survey Live Responses" });
-    [student, instructor] = await createUsersInClass([
+    [student, classmate, instructor] = await createUsersInClass([
       { role: "student", class_id: course.id, name: "Lia Live", useMagicLink: true },
+      { role: "student", class_id: course.id, name: "Cam Classmate", useMagicLink: true },
       { role: "instructor", class_id: course.id, name: "Ivo Watcher", useMagicLink: true }
     ]);
     const { data: survey, error } = await supabase
@@ -66,78 +47,46 @@ test.describe("survey responses page while a student is answering", () => {
       .single();
     if (error || !survey) throw new Error(`Failed to seed survey: ${error?.message}`);
 
-    // The instructor opens the responses page before the student starts.
-    const frames = recordRealtimeFrames(page);
+    const saveResponse = async (who: TestingUser, q1: string, isSubmitted: boolean) => {
+      const { error: writeError } = await supabase
+        .from("survey_responses")
+        .upsert(
+          { survey_id: survey.id, profile_id: who.private_profile_id, response: { q1 }, is_submitted: isSubmitted },
+          { onConflict: "survey_id,profile_id" }
+        );
+      if (writeError) throw new Error(`Failed to save a response: ${writeError.message}`);
+    };
+
     await loginAsUser(page, instructor, course);
-    frames.length = 0;
     await page.goto(`/course/${course.id}/manage/surveys/${survey.survey_id}/responses`);
-    const totalResponses = summaryValue(page, "TOTAL RESPONSES");
-    const responseRate = summaryValue(page, "RESPONSE RATE");
+    const totalResponses = page.getByText("TOTAL RESPONSES", { exact: true }).locator("xpath=following-sibling::*[1]");
     const exportButton = page.getByRole("button", { name: "Export to CSV" });
     await expect(totalResponses).toHaveText("0");
     await expect(exportButton).toBeDisabled();
-    // The staff channel has joined, so the student's writes will reach this page.
-    await expect
-      .poll(
-        () =>
-          frames.some(
-            (f) =>
-              f.includes(`realtime:class:${course.id}:staff`) && f.includes("phx_reply") && f.includes('"status":"ok"')
-          ),
-        { timeout: 30_000 }
-      )
-      .toBe(true);
 
-    // The student answers without completing; autosave writes a draft.
-    const studentContext = await browser.newContext();
-    const studentPage = await studentContext.newPage();
-    await loginAsUser(studentPage, student, course);
-    await studentPage.goto(`/course/${course.id}/surveys/${survey.id}`);
-    const answer = studentPage.getByRole("textbox", { name: "Question 1" });
-    await answer.fill("Draft answer from Lia");
+    // A broadcast sent before the page joins the staff channel is lost, so write until one arrives.
+    await expect(async () => {
+      await saveResponse(classmate, "Classmate answer", true);
+      await expect(totalResponses).toHaveText("1", { timeout: 3_000 });
+    }).toPass({ timeout: 30_000 });
 
-    let draftId: string | undefined;
-    await expect
-      .poll(
-        async () => {
-          const { data, error: readError } = await supabase
-            .from("survey_responses")
-            .select("id, is_submitted, response")
-            .eq("survey_id", survey.id)
-            .eq("profile_id", student.private_profile_id)
-            .maybeSingle();
-          if (readError) throw new Error(readError.message);
-          draftId = data?.id;
-          return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
-        },
-        { timeout: 15_000 }
-      )
-      .toEqual({ q1: "Draft answer from Lia", is_submitted: false });
-
-    // The draft's broadcast reached the instructor's page...
-    await expect
-      .poll(() => frames.some((f) => f.includes(draftId!) && f.includes("Draft answer from Lia")), { timeout: 15_000 })
-      .toBe(true);
-    // ...and the list applies broadcasts after a debounce of at most 1 s. Give it 3 s.
-    await page.waitForTimeout(3_000);
+    // A student's draft, then the classmate's response soft-deleted. The count reaching 0 means both
+    // broadcasts were handled: the old filter leaves it at 2.
+    await saveResponse(student, "Draft answer", false);
+    const { error: deleteError } = await supabase
+      .from("survey_responses")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("survey_id", survey.id)
+      .eq("profile_id", classmate.private_profile_id);
+    if (deleteError) throw new Error(`Failed to delete a response: ${deleteError.message}`);
     await expect(totalResponses).toHaveText("0");
-    await expect(responseRate).toHaveText("0%");
+    await expect(page.getByText("Draft answer")).toHaveCount(0);
     await expect(exportButton).toBeDisabled();
-    await expect(page.getByText("Students haven't submitted any responses to this survey.")).toBeVisible();
-    await expect(page.getByText("Draft answer from Lia")).toHaveCount(0);
 
-    // The student completes; the response appears on the instructor's page without a reload.
-    await answer.fill("Final answer from Lia");
-    await studentPage.getByRole("button", { name: "Complete" }).click();
-    await expect(studentPage).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
-
-    await expect(totalResponses).toHaveText("1", { timeout: 15_000 });
-    await expect(responseRate).toHaveText("100%");
+    // The student completes, and the response appears without a reload.
+    await saveResponse(student, "Final answer", true);
+    await expect(totalResponses).toHaveText("1");
+    await expect(page.getByRole("row", { name: /Lia Live/ })).toContainText("Final answer");
     await expect(exportButton).toBeEnabled();
-    const row = page.getByRole("row", { name: /Lia Live/ });
-    await expect(row).toContainText("Final answer from Lia");
-    await expect(page.getByText("Draft answer from Lia")).toHaveCount(0);
-
-    await studentContext.close();
   });
 });
