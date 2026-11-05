@@ -526,6 +526,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     page.on("request", (request) => {
       if (request.method() === "POST" && request.url().includes("/rest/v1/survey_responses")) responseWrites += 1;
     });
+    await page.clock.install();
 
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
     const input = page.getByRole("textbox", { name: "Question 1" });
@@ -572,12 +573,13 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       timeout: 30_000
     });
     expect(await seenSoFar()).toEqual({ statuses: ["Saving…", REFUSED_STATUS], toasts: [] });
-    // Sending the same answers again would only be refused again, so nothing more goes out.
-    await page.waitForTimeout(2_500);
+    // Sending the same answers again would only be refused again, so nothing more goes out, even
+    // past the 1 s delay before a first retry.
+    await page.clock.runFor(1_100);
     expect(await seenSoFar()).toEqual({ statuses: ["Saving…", REFUSED_STATUS], toasts: [] });
-    expect(responseWrites).toBe(1);
     await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
     expect(await storedResponse(survey.id)).toEqual({ q1: "Submitted answer", is_submitted: true });
+    expect(responseWrites).toBe(1);
   });
 
   test("a Complete that never gets an answer and never reached the database keeps the form", async ({ page }) => {
