@@ -10,6 +10,9 @@
  * The capability tables decide what a user can do, so the negative assertions matter: a grader must
  * not be able to write them or move themselves to another role.
  *
+ * The backfill only runs on real data in production, so one test replays the migration's backfill
+ * blocks on a class put back into its pre-migration state, over a direct Postgres connection.
+ *
  * Step 2 (20261030120000_protect_class_roles.sql): holders of manage_roles (instructors) can create,
  * rename and delete custom roles and choose their capabilities, except manage_roles. Default roles
  * stay fixed, only graders can be on a custom role, and a change of app_role resets the role.
@@ -19,8 +22,24 @@
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { Client } from "pg";
 import { test, expect } from "../global-setup";
 import { supabase, createClass, createUserInClass, createAuthenticatedClient, type TestingUser } from "./TestingUtils";
+
+// Same fallback as scripts/CheckFunctionGrants.ts.
+const DB_URL =
+  process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+const MIGRATION = path.join(__dirname, "../../supabase/migrations/20261027120000_class_roles_and_capabilities.sql");
+
+/** The statements between each `-- backfill:begin` and `-- backfill:end` marker, in order. */
+function backfillBlocks() {
+  const sql = readFileSync(MIGRATION, "utf8");
+  const blocks = [...sql.matchAll(/-- backfill:begin[^\n]*\n([\s\S]*?)-- backfill:end/g)].map((m) => m[1]);
+  expect(blocks.length, "the migration marks its backfill blocks").toBe(3);
+  return blocks;
+}
 
 const SEEDED_CAPABILITIES = ["manage_assignments", "manage_review_assignments", "manage_roles", "publish_groups"];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
@@ -132,7 +151,98 @@ test.describe("class roles and capabilities", () => {
       .from("user_roles")
       .update({ class_role_id: roleFor(rolesB, "instructor").id })
       .eq("id", row.id);
-    expect(error, "composite FK must reject a role from another class").not.toBeNull();
+    expect(error?.code, "composite FK must reject a role from another class").toBe("23503");
+  });
+
+  test("moving a user to another class moves their role and user_privileges with them", async () => {
+    const mover = await createUserInClass({ role: "student", class_id: classA.id });
+    const before = await userRole(mover);
+    const { error } = await supabase.from("user_roles").update({ class_id: classB.id }).eq("id", before.id);
+    expect(error).toBeNull();
+
+    const { data: after, error: afterError } = await supabase
+      .from("user_roles")
+      .select("class_role_id")
+      .eq("id", before.id)
+      .single();
+    expect(afterError).toBeNull();
+    expect(after!.class_role_id).toBe(roleFor(rolesB, "student").id);
+
+    const { data: privs, error: privError } = await supabase
+      .from("user_privileges")
+      .select("class_id, class_role_id")
+      .eq("user_id", mover.user_id)
+      .in("class_id", [classA.id, classB.id]);
+    expect(privError).toBeNull();
+    expect(privs, "user_privileges follows the class change").toEqual([
+      { class_id: classB.id, class_role_id: roleFor(rolesB, "student").id }
+    ]);
+  });
+
+  test("the migration's backfill gives every existing row its default role without firing triggers", async () => {
+    const backfillClass = await createClass({ name: "E2E Class Roles backfill" });
+    for (const role of ["instructor", "grader", "student", "student"] as const) {
+      await createUserInClass({ role, class_id: backfillClass.id });
+    }
+    const db = new Client({ connectionString: DB_URL });
+    await db.connect();
+    try {
+      // Everything runs in one transaction and is rolled back. The ALTER TABLEs lock user_roles
+      // until then, so keep this short.
+      await db.query("BEGIN");
+      await db.query("SET LOCAL lock_timeout = '10s'");
+      // Put the class back into its pre-migration state: no class roles, no class_role_id.
+      await db.query("ALTER TABLE public.user_roles ALTER COLUMN class_role_id DROP NOT NULL");
+      await db.query("ALTER TABLE public.user_roles DISABLE TRIGGER USER");
+      await db.query("UPDATE public.user_roles SET class_role_id = NULL WHERE class_id = $1", [backfillClass.id]);
+      await db.query("ALTER TABLE public.user_roles ENABLE TRIGGER USER");
+      await db.query("UPDATE public.user_privileges SET class_role_id = NULL WHERE class_id = $1", [backfillClass.id]);
+      await db.query("DELETE FROM public.class_roles WHERE class_id = $1", [backfillClass.id]);
+      const updatedAt = async () =>
+        (
+          await db.query("SELECT id, updated_at FROM public.user_roles WHERE class_id = $1 ORDER BY id", [
+            backfillClass.id
+          ])
+        ).rows;
+      const updatedAtBefore = await updatedAt();
+
+      for (const block of backfillBlocks()) {
+        await db.query(block);
+      }
+
+      const count = async (sql: string) => Number((await db.query(sql, [backfillClass.id])).rows[0].n);
+      expect(
+        await count("SELECT count(*) AS n FROM public.class_roles WHERE class_id = $1 AND default_for IS NOT NULL"),
+        "the class gets its four default roles"
+      ).toBe(4);
+      expect(
+        await count(`SELECT count(*) AS n FROM public.role_capabilities rc
+          JOIN public.class_roles cr ON cr.id = rc.role_id
+          WHERE cr.class_id = $1 AND cr.default_for = 'instructor'`),
+        "the instructor role gets every capability"
+      ).toBe(SEEDED_CAPABILITIES.length);
+      expect(
+        await count("SELECT count(*) AS n FROM public.user_roles WHERE class_id = $1 AND class_role_id IS NULL"),
+        "no user_roles row is left without a role"
+      ).toBe(0);
+      expect(
+        await count(`SELECT count(*) AS n FROM public.user_roles ur
+          JOIN public.class_roles cr ON cr.id = ur.class_role_id
+          WHERE ur.class_id = $1 AND (cr.class_id <> ur.class_id OR cr.default_for IS DISTINCT FROM ur.role)`),
+        "every user_roles row is on its class's default role for its app_role"
+      ).toBe(0);
+      expect(
+        await count(`SELECT count(*) AS n FROM public.user_privileges up
+          JOIN public.user_roles ur
+            ON ur.user_id = up.user_id AND ur.class_id = up.class_id AND ur.role = up.role AND NOT ur.disabled
+          WHERE up.class_id = $1 AND up.class_role_id IS DISTINCT FROM ur.class_role_id`),
+        "user_privileges matches user_roles"
+      ).toBe(0);
+      expect(await updatedAt(), "no user_roles trigger ran (updated_at is unchanged)").toEqual(updatedAtBefore);
+    } finally {
+      await db.query("ROLLBACK").catch(() => {});
+      await db.end();
+    }
   });
 
   test("a grader cannot write the capability tables or change their own role", async () => {
@@ -221,6 +331,7 @@ test.describe("custom class roles", () => {
   let studentC: TestingUser;
   let instructorD: TestingUser;
   let rolesC: Awaited<ReturnType<typeof defaultRoles>>;
+  let rolesD: Awaited<ReturnType<typeof defaultRoles>>;
 
   test.beforeAll(async () => {
     classC = await createClass({ name: "E2E Custom Roles C" });
@@ -230,6 +341,7 @@ test.describe("custom class roles", () => {
     studentC = await createUserInClass({ role: "student", class_id: classC.id });
     instructorD = await createUserInClass({ role: "instructor", class_id: classD.id });
     rolesC = await defaultRoles(classC.id);
+    rolesD = await defaultRoles(classD.id);
   });
 
   const defaultC = (app_role: string) => rolesC.find((r) => r.default_for === app_role)!;
@@ -477,12 +589,67 @@ test.describe("custom class roles", () => {
       expect((await userRole(user)).class_role_id).toBe(defaultC(app_role).id);
     }
 
+    // The same refusals through the instructor's own client, so RLS and the trigger are both in play.
+    for (const [user, app_role] of [
+      [student, "student"],
+      [otherInstructor, "instructor"]
+    ] as const) {
+      const row = await userRole(user);
+      expectBlocked(
+        await instructor.from("user_roles").update({ class_role_id: customId }).eq("id", row.id).select("id"),
+        `an instructor putting a ${app_role} on a custom role`
+      );
+      expect((await userRole(user)).class_role_id).toBe(defaultC(app_role).id);
+    }
+
     const { error: toInstructorError } = await supabase
       .from("user_roles")
       .update({ class_role_id: defaultC("instructor").id })
       .eq("id", graderRow.id);
     expect(toInstructorError, "a grader must not be put on the instructor role").not.toBeNull();
     expect((await userRole(grader)).class_role_id).toBe(customId);
+  });
+
+  test("a student can't be enrolled straight onto a custom role", async () => {
+    const customId = await createCustomRole("Enrollment TA");
+    const outsider = await createUserInClass({ role: "student", class_id: classD.id });
+    const profile = async (is_private_profile: boolean) => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .insert({ name: "Insert test", class_id: classC.id, is_private_profile })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      return data!.id;
+    };
+    const { error } = await supabase.from("user_roles").insert({
+      user_id: outsider.user_id,
+      class_id: classC.id,
+      private_profile_id: await profile(true),
+      public_profile_id: await profile(false),
+      role: "student",
+      class_role_id: customId
+    });
+    expect(error?.code, "the trigger refuses a custom role for a student on insert too").toBe("23514");
+    const { data: rows, error: rowsError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", outsider.user_id)
+      .eq("class_id", classC.id);
+    expect(rowsError).toBeNull();
+    expect(rows).toHaveLength(0);
+  });
+
+  test("a grader can't move themselves onto a custom role", async () => {
+    const customId = await createCustomRole("Self-promoted TA", ["publish_groups"]);
+    const grader = await createUserInClass({ role: "grader", class_id: classC.id });
+    const row = await userRole(grader);
+    const client = await createAuthenticatedClient(grader);
+    expectBlocked(
+      await client.from("user_roles").update({ class_role_id: customId }).eq("id", row.id).select("id"),
+      "a grader moving themselves onto a custom role"
+    );
+    expect((await userRole(grader)).class_role_id).toBe(defaultC("grader").id);
   });
 
   test("changing app_role always resets the role to the new default", async () => {
@@ -513,6 +680,64 @@ test.describe("custom class roles", () => {
       defaultC("grader").id
     );
     expect(await privilegeRole()).toBe(defaultC("grader").id);
+  });
+
+  test("changing app_role and class_role_id in one update is refused", async () => {
+    const customId = await createCustomRole("Combined TA");
+    const user = await createUserInClass({ role: "student", class_id: classC.id });
+    const row = await userRole(user);
+    const { error } = await supabase
+      .from("user_roles")
+      .update({ role: "grader", class_role_id: customId })
+      .eq("id", row.id);
+    expect(error?.code, "the class role choice must not be dropped silently").toBe("23514");
+    expect(await userRole(user)).toMatchObject({ role: "student", class_role_id: defaultC("student").id });
+  });
+
+  test("moving a grader on a custom role to another class resets them to that class's grader role", async () => {
+    const customId = await createCustomRole("Travelling TA");
+    const grader = await createUserInClass({ role: "grader", class_id: classC.id });
+    const row = await userRole(grader);
+    expect((await supabase.from("user_roles").update({ class_role_id: customId }).eq("id", row.id)).error).toBeNull();
+
+    expect((await supabase.from("user_roles").update({ class_id: classD.id }).eq("id", row.id)).error).toBeNull();
+    const { data: moved, error } = await supabase.from("user_roles").select("class_role_id").eq("id", row.id).single();
+    expect(error).toBeNull();
+    expect(moved!.class_role_id).toBe(rolesD.find((r) => r.default_for === "grader")!.id);
+  });
+
+  test("role names can't be blank, and are unique ignoring case", async () => {
+    const instructor = await createAuthenticatedClient(instructorC);
+    const { error: blankError } = await instructor.from("class_roles").insert({ class_id: classC.id, name: "   " });
+    expect(blankError?.code, "a blank name is refused").toBe("23514");
+    const { error: caseError } = await instructor
+      .from("class_roles")
+      .insert({ class_id: classC.id, name: "Instructor" });
+    expect(caseError?.code, '"Instructor" can\'t sit next to the default "instructor"').toBe("23505");
+  });
+
+  test("the capability helpers only say something about the caller's own classes", async () => {
+    for (const user of [graderC, instructorD]) {
+      const client = await createAuthenticatedClient(user);
+      const { data: capabilities, error } = await client.rpc("user_class_capabilities");
+      expect(error).toBeNull();
+      const { data: own, error: ownError } = await supabase
+        .from("user_privileges")
+        .select("class_id")
+        .eq("user_id", user.user_id);
+      expect(ownError).toBeNull();
+      const ownClasses = new Set((own ?? []).map((p) => p.class_id));
+      for (const row of capabilities ?? []) {
+        expect(ownClasses.has(row.class_id), `class ${row.class_id} is one of the caller's`).toBe(true);
+      }
+    }
+    const outsider = await createAuthenticatedClient(instructorD);
+    const { data: classIds, error } = await outsider.rpc("user_class_ids_with_capability", {
+      p_capability: "manage_roles"
+    });
+    expect(error).toBeNull();
+    expect(classIds ?? []).toContain(classD.id);
+    expect(classIds ?? [], "another class's instructor learns nothing about class C").not.toContain(classC.id);
   });
 
   test("a custom role someone is on can't be deleted", async () => {
@@ -606,10 +831,23 @@ test.describe("custom roles build on the default grader role", () => {
     expect(await holds(instructorE, "manage_roles"), "the instructor keeps their own role's capabilities").toBe(true);
   });
 
+  test("a role manager can't grant a capability they don't hold", async () => {
+    const instructor = await createAuthenticatedClient(instructorE);
+    expectBlocked(
+      await instructor
+        .from("role_capabilities")
+        .insert({ role_id: headTaRoleId, capability: "publish_groups" })
+        .select("role_id"),
+      "an instructor without publish_groups granting it"
+    );
+    expect(await roleCapabilities(headTaRoleId)).toEqual(["manage_review_assignments"]);
+  });
+
   test("removing a capability from a custom role keeps it when the grader base has it", async () => {
     const instructor = await createAuthenticatedClient(instructorE);
+    // Added as a migration would: this instructor doesn't hold publish_groups, so can't add it.
     expect(
-      (await instructor.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "publish_groups" })).error
+      (await supabase.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "publish_groups" })).error
     ).toBeNull();
     const { data: removed, error } = await instructor
       .from("role_capabilities")

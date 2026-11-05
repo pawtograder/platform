@@ -5,14 +5,19 @@
 --   * class_roles        create, rename and delete custom roles (default_for IS NULL). The four
 --                        default roles are fixed: only migrations change them;
 --   * role_capabilities  add and remove capabilities on custom roles, except manage_roles, which
---                        stays with instructors;
+--                        stays with instructors. Only a capability the caller holds in that class
+--                        can be added, so nobody can give a role more than they have;
 --   * capabilities       still no app writes: only migrations add capabilities.
 --
 -- Custom roles hold graders only. The user_roles trigger now enforces that every user sits on the
 -- default role for their app_role, except graders, who may sit on a custom role, and it always
--- resets class_role_id when app_role or class_id changes: access follows the role. Who may move a
--- grader between roles stays with the existing instructor-only user_roles UPDATE policy
--- (20250507213522_add_rls_for_user_roles.sql).
+-- resets class_role_id when app_role or class_id changes: access follows the role. An update that
+-- changes app_role or class_id and also sets class_role_id is refused, so the choice isn't silently
+-- dropped. Who may move a grader between roles stays with the existing instructor-only user_roles
+-- UPDATE policy (20250507213522_add_rls_for_user_roles.sql): manage_roles doesn't include it.
+--
+-- Role names can't be blank, and are unique per class ignoring case, so "Instructor" can't sit next
+-- to the default "instructor".
 --
 -- Custom roles build on the default grader role and can only add to it: a grader on "Head TA"
 -- holds the default grader role's capabilities plus Head TA's. user_class_capabilities() is the one
@@ -20,9 +25,9 @@
 --
 -- Every policy that checks a capability uses
 --   class_id IN (SELECT public.user_class_ids_with_capability('<capability>'))
--- and never looks the capability up itself by joining user_privileges and role_capabilities:
--- that finds only the user's own class role and misses their default role's capabilities. This
--- replaces the "inline shape" advice in step 1's header. See docs/capabilities.md.
+-- in a policy TO authenticated, and never looks the capability up itself by joining
+-- user_privileges and role_capabilities: that finds only the user's own class role and misses
+-- their default role's capabilities. See docs/capabilities.md.
 --
 -- In this file there is a second reason: the manage_roles check reads role_capabilities, whose
 -- own policies read class_roles, so an inline join makes Postgres stop with "infinite recursion
@@ -54,6 +59,13 @@ GRANT INSERT (class_id, name) ON public.class_roles TO authenticated;
 REVOKE UPDATE ON public.role_capabilities FROM anon, authenticated;
 
 -- ---------------------------------------------------------------------------
+-- Role names
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.class_roles ADD CONSTRAINT class_roles_name_not_blank CHECK (btrim(name) <> '');
+CREATE UNIQUE INDEX class_roles_class_lower_name_key ON public.class_roles (class_id, lower(name));
+
+-- ---------------------------------------------------------------------------
 -- The capabilities the current user holds
 -- ---------------------------------------------------------------------------
 
@@ -68,7 +80,7 @@ RETURNS TABLE (class_id bigint, capability text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public
+SET search_path TO ''
 AS $$
   SELECT DISTINCT up.class_id, rc.capability
   FROM public.user_privileges up
@@ -128,6 +140,10 @@ CREATE POLICY "Role managers can delete custom class roles" ON public.class_role
 -- role_capabilities: custom roles only, never manage_roles
 -- ---------------------------------------------------------------------------
 
+-- The last check: only a capability the caller holds in the role's class, so a role manager can't
+-- give a custom role more than they have (for example after a migration takes a capability off the
+-- instructor role). The role's class is found through class_roles, since role_capabilities has no
+-- class_id.
 CREATE POLICY "Role managers can add capabilities to custom class roles" ON public.role_capabilities
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -136,6 +152,12 @@ CREATE POLICY "Role managers can add capabilities to custom class roles" ON publ
       SELECT cr.id FROM public.class_roles cr
       WHERE cr.default_for IS NULL
         AND cr.class_id IN (SELECT public.user_class_ids_with_capability('manage_roles'))
+    )
+    AND capability IN (
+      SELECT ucc.capability
+      FROM public.user_class_capabilities() ucc
+      JOIN public.class_roles cr ON cr.class_id = ucc.class_id
+      WHERE cr.id = role_capabilities.role_id
     )
   );
 
@@ -155,18 +177,27 @@ CREATE POLICY "Role managers can remove capabilities from custom class roles" ON
 -- ---------------------------------------------------------------------------
 
 -- Replaces step 1's version. A change of app_role or class_id now always resets class_role_id to
--- the new default (before, a custom role was kept, so a Head TA changed to student kept Head TA).
--- Any other class_role_id must be the default for NEW.role, or a custom role when NEW.role is
--- grader. This applies to migrations too.
+-- the new default (before, a custom role was kept, so a Head TA changed to student kept Head TA),
+-- and setting class_role_id in the same update is an error. Any other class_role_id must be the
+-- default for NEW.role, or a custom role when NEW.role is grader. This applies to migrations too.
 CREATE OR REPLACE FUNCTION public.user_roles_set_default_class_role()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path TO ''
 AS $$
 DECLARE
   v_default_for public.app_role;
 BEGIN
+  IF TG_OP = 'UPDATE'
+     AND (NEW.role IS DISTINCT FROM OLD.role OR NEW.class_id IS DISTINCT FROM OLD.class_id)
+     AND NEW.class_role_id IS NOT NULL
+     AND NEW.class_role_id IS DISTINCT FROM OLD.class_role_id
+  THEN
+    RAISE EXCEPTION 'change role (or class) and class_role_id in separate updates: a role or class change resets class_role_id to the new default role'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
   IF NEW.class_role_id IS NULL
      OR (TG_OP = 'UPDATE'
          AND (NEW.role IS DISTINCT FROM OLD.role OR NEW.class_id IS DISTINCT FROM OLD.class_id))
