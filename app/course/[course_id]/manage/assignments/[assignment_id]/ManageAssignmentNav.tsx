@@ -122,7 +122,8 @@ export function ManageAssignmentNav({
   const filteredLinkItems = React.useMemo(
     () =>
       LinkItems(parseInt(course_id as string), parseInt(assignment_id as string)).filter((item) => {
-        if (item.capability === "manage_assignments") return canManageAssignments;
+        // A capability the filter doesn't know hides the item rather than showing it to everyone.
+        if (item.capability) return item.capability === "manage_assignments" && canManageAssignments;
         if (!item.instructorsOnly) return true;
         if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
         return isInstructor;
