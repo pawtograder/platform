@@ -6,10 +6,13 @@
 -- total_points already had an AFTER UPDATE sync (update_gradebook_column_max_score);
 -- this folds the name into the same trigger rather than adding a second one.
 --
--- The rename is skipped when the column's name no longer equals the assignment's
--- previous title: an instructor who deliberately gave the column its own name keeps
--- it. That also means no backfill -- existing drift may be intentional, and there
--- is no way to tell from the data.
+-- A column belongs to the assignment when its score expression is exactly
+-- assignments("<slug>"), which is how create_gradebook_column_for_assignment writes it
+-- and how 20251124233922 backfilled gradebook_column_id. That holds even when
+-- gradebook_column_id is unset, and it leaves alone code-walk columns
+-- (assignments("<slug>", "code-walk")) and columns whose expression an instructor
+-- changed. A hand-renamed header on a matching column follows the title again.
+-- No backfill: existing names stay until the next rename.
 
 CREATE OR REPLACE FUNCTION public.sync_gradebook_column_from_assignment()
 RETURNS trigger
@@ -18,21 +21,19 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-    IF NEW.gradebook_column_id IS NULL THEN
-        RETURN NEW;
-    END IF;
-
-    IF OLD.total_points IS DISTINCT FROM NEW.total_points THEN
+    IF OLD.total_points IS DISTINCT FROM NEW.total_points AND NEW.gradebook_column_id IS NOT NULL THEN
         UPDATE public.gradebook_columns
         SET max_score = NEW.total_points
         WHERE id = NEW.gradebook_column_id;
     END IF;
 
+    -- OLD.slug: the expression was written with the slug the column was created under,
+    -- which is still the old one if this same update also changes the slug.
     IF OLD.title IS DISTINCT FROM NEW.title THEN
         UPDATE public.gradebook_columns
         SET name = NEW.title
-        WHERE id = NEW.gradebook_column_id
-          AND name = OLD.title;
+        WHERE class_id = NEW.class_id
+          AND score_expression = 'assignments("' || OLD.slug || '")';
     END IF;
 
     RETURN NEW;
