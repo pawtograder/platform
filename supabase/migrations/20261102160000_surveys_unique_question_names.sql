@@ -4,10 +4,10 @@
 -- name), so two questions with the same key share one answer: answering the second clears the
 -- first, a required question can be left empty while the survey still completes, and the
 -- response shows one value in both places.
--- The builder and the instructor form already refuse to publish such a survey
--- (components/survey/questionNames.ts). This is the same rule for every other writer: the
--- surveys table's Publish menu, the CLI's `surveys copy` and `assignments copy`, and any
--- direct API call.
+-- This trigger is the only place that decides what counts as a repeat, so a survey-core upgrade
+-- that changes how answers are keyed means changing these functions and nothing in the app. It
+-- covers every writer: the survey form, the surveys table's Publish menu, the CLI's
+-- `surveys copy` and `assignments copy`, and any direct API call. The app shows its message.
 --
 -- When it fires: on INSERT of a published row, on UPDATE that makes a row published, and on
 -- UPDATE that changes the questions (`json`) of a published row. It does NOT fire when other
@@ -20,8 +20,7 @@
 -- allowed while it is closed. Answers already given stay under the shared key, so in those
 -- responses the renamed question shows as unanswered.
 --
--- Scopes match SurveyJS's data model, and the walk matches findDuplicateQuestionNames in
--- components/survey/questionNames.ts:
+-- Scopes match SurveyJS's data model:
 --   * questions on every page and inside panels share the survey's scope;
 --   * each dynamic panel's templateElements are a scope of their own (their answers are stored
 --     per panel, inside the dynamic panel's value);
@@ -61,9 +60,11 @@ END;
 $$;
 
 -- The key SurveyJS (survey-core 2.3) saves an element's answer under, or NULL when it holds
--- none. Same rules as answerKey in components/survey/questionNames.ts:
+-- none:
 --   * HTML and image elements hold no answer;
---   * a non-empty string valueName is the key, exactly as written (SurveyJS doesn't clean it);
+--   * a truthy valueName is the key, as Question.getValueName does it: a non-empty string exactly
+--     as written (SurveyJS doesn't clean it), a non-zero number or `true` as its text. 0, false
+--     and "" fall through to the name. An object or array valueName isn't handled;
 --   * otherwise the name, cleaned as Question.getValidName does: trimmed, the first "|"
 --     dropped, trimmed again, every "{" and "}" dropped, then any leading "#"s dropped.
 --     Trimming is JavaScript's trim(), so Unicode spaces count.
@@ -84,23 +85,22 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  IF jsonb_typeof(p_el -> 'valueName') = 'string' AND p_el ->> 'valueName' <> '' THEN
+  IF (jsonb_typeof(p_el -> 'valueName') = 'string' AND p_el ->> 'valueName' <> '')
+     OR (jsonb_typeof(p_el -> 'valueName') = 'number' AND (p_el ->> 'valueName')::numeric <> 0)
+     OR p_el -> 'valueName' = 'true'::jsonb THEN
     RETURN p_el ->> 'valueName';
   END IF;
 
-  CASE jsonb_typeof(p_el -> 'name')
-    WHEN 'number' THEN
-      RETURN p_el ->> 'name';
-    WHEN 'string' THEN
-      v_name := btrim(p_el ->> 'name', c_js_spaces);
-      v_name := regexp_replace(v_name, '[|]', '');
-      v_name := btrim(v_name, c_js_spaces);
-      v_name := regexp_replace(v_name, '[{}]+', '', 'g');
-      v_name := regexp_replace(v_name, '^#+', '');
-      RETURN nullif(v_name, '');
-    ELSE
-      RETURN NULL;
-  END CASE;
+  IF jsonb_typeof(p_el -> 'name') IS DISTINCT FROM 'string' THEN
+    RETURN NULL;
+  END IF;
+
+  v_name := btrim(p_el ->> 'name', c_js_spaces);
+  v_name := regexp_replace(v_name, '[|]', '');
+  v_name := btrim(v_name, c_js_spaces);
+  v_name := regexp_replace(v_name, '[{}]+', '', 'g');
+  v_name := regexp_replace(v_name, '^#+', '');
+  RETURN nullif(v_name, '');
 END;
 $$;
 
@@ -119,7 +119,6 @@ DECLARE
   v_type text;
   v_name text;
   v_children jsonb;
-  v_template jsonb;
 BEGIN
   IF p_elements IS NULL OR jsonb_typeof(p_elements) <> 'array' THEN
     RETURN;
@@ -129,8 +128,9 @@ BEGIN
     CONTINUE WHEN jsonb_typeof(v_el) <> 'object';
     v_type := lower(coalesce(v_el ->> 'type', ''));
 
-    -- A panel, or anything else that only groups elements, holds no answer of its own.
-    IF v_type = 'panel' OR (jsonb_typeof(v_el -> 'elements') = 'array' AND v_type <> 'paneldynamic') THEN
+    -- Panels only group questions and hold no answer of their own. SurveyJS ignores an `elements`
+    -- property on any other type, so that question still saves an answer and is counted below.
+    IF v_type IN ('panel', 'flowpanel') THEN
       v_children := CASE
         WHEN jsonb_typeof(v_el -> 'elements') = 'array' THEN v_el -> 'elements'
         ELSE v_el -> 'questions'
@@ -146,14 +146,13 @@ BEGIN
       RETURN NEXT;
     END IF;
 
-    v_template := CASE
-      WHEN jsonb_typeof(v_el -> 'templateElements') = 'array' THEN v_el -> 'templateElements'
-      WHEN v_type = 'paneldynamic' THEN v_el -> 'questions'
-      ELSE NULL
-    END;
-    IF v_template IS NOT NULL THEN
+    IF v_type = 'paneldynamic' THEN
+      v_children := CASE
+        WHEN jsonb_typeof(v_el -> 'templateElements') = 'array' THEN v_el -> 'templateElements'
+        ELSE v_el -> 'questions'
+      END;
       RETURN QUERY SELECT * FROM public.survey_question_name_entries(
-        v_template, p_path || '/' || v_idx, p_path || '/' || v_idx
+        v_children, p_path || '/' || v_idx, p_path || '/' || v_idx
       );
     END IF;
   END LOOP;
@@ -244,15 +243,14 @@ BEGIN
   RAISE EXCEPTION USING
     ERRCODE = 'check_violation',
     MESSAGE = format(
-      'This survey cannot be published: %s %s. Each question needs its own name, because answers are saved under it. Rename the repeats, then publish again.',
+      'This survey cannot be published: %s %s. Each question needs its own name, because answers are saved under it. Rename the repeats in the Visual Builder, then publish again. A question inside a panel, or one with a valueName, is renamed in the survey''s JSON.',
       CASE WHEN cardinality(v_duplicates) = 1
         THEN 'more than one question is named'
         ELSE 'more than one question uses each of the names'
       END,
       v_names
     ),
-    DETAIL = format('surveys_reject_duplicate_question_names rejected survey %s.', NEW.id),
-    HINT = 'Open the survey in the Visual Builder: it marks each question whose name is used more than once.';
+    DETAIL = format('surveys_reject_duplicate_question_names rejected survey %s.', NEW.id);
 END;
 $$;
 
