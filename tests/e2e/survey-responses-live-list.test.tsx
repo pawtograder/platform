@@ -64,11 +64,16 @@ test.describe("survey responses page while students are answering", () => {
     await expect(totalResponses).toHaveText("0");
     await expect(exportButton).toBeDisabled();
 
-    // A broadcast sent before the page joins the staff channel is lost, so write until one arrives.
-    await expect(async () => {
-      await saveResponse(classmate, "Classmate answer", true);
-      await expect(totalResponses).toHaveText("1", { timeout: 3_000 });
-    }).toPass({ timeout: 30_000 });
+    // A broadcast sent before the list subscribes is lost, so each answer is written until it shows.
+    // The first may arrive in the list's first fetch. After that only a broadcast can show a change,
+    // so the second answer showing means broadcasts are reaching the list.
+    const writeClassmateUntilListed = (answer: string) =>
+      expect(async () => {
+        await saveResponse(classmate, answer, true);
+        await expect(page.getByRole("row", { name: /Cam Classmate/ })).toContainText(answer, { timeout: 3_000 });
+      }).toPass({ timeout: 30_000 });
+    await writeClassmateUntilListed("First classmate answer");
+    await writeClassmateUntilListed("Edited classmate answer");
 
     // A student's draft, then the classmate's response soft-deleted. The count reaching 0 means both
     // broadcasts were handled: the old filter leaves it at 2.
