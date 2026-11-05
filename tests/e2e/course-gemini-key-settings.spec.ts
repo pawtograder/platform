@@ -8,7 +8,7 @@
  * status RPC carries no key); save requests are never read or recorded.
  */
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page, Route } from "@playwright/test";
+import type { Frame, Page, Response, Route } from "@playwright/test";
 import type { Page as PlaywrightCorePage } from "playwright-core";
 import { expect, test } from "../global-setup";
 import { GEMINI_KEY_FEATURE, credentialState, storedKeyEquals, syntheticKey } from "./courseGeminiKeyDb";
@@ -60,6 +60,42 @@ async function sentinelInBrowserState(page: Page): Promise<boolean> {
   return inStorage || page.url().includes("PAWTO_SYNTH_");
 }
 
+/**
+ * Resolves once the Feature flags page's post-save router.refresh() has committed. Next fetches
+ * the current route's RSC payload (GET `?_rsc=…` with `RSC: 1`, unlike prefetches with
+ * `Next-Router-Prefetch: 1`), then replaceState's the same URL. A page.goto started before that
+ * replaceState is interrupted by it (seen in WebKit). Only a main-frame navigation after the
+ * refresh response counts, so the page's own hydration replaceState is not mistaken for it.
+ * Register before the click that triggers the save.
+ */
+function featureFlagsRefreshSettled(page: Page, path: string): Promise<void> {
+  return new Promise((resolve) => {
+    let refreshResponded = false;
+    const onResponse = (response: Response) => {
+      const url = new URL(response.url());
+      const headers = response.request().headers();
+      if (
+        response.request().method() === "GET" &&
+        url.pathname === path &&
+        url.searchParams.has("_rsc") &&
+        headers["rsc"] === "1" &&
+        !headers["next-router-prefetch"]
+      ) {
+        refreshResponded = true;
+      }
+    };
+    const onNavigated = (frame: Frame) => {
+      if (refreshResponded && frame === page.mainFrame() && new URL(frame.url()).pathname === path) {
+        page.off("response", onResponse);
+        page.off("framenavigated", onNavigated);
+        resolve();
+      }
+    };
+    page.on("response", onResponse);
+    page.on("framenavigated", onNavigated);
+  });
+}
+
 test.describe("Course Settings: Gemini API key (#1126)", () => {
   let course: Awaited<ReturnType<typeof createClass>>;
   let instructor: TestingUser;
@@ -99,9 +135,11 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
     expect(await storedKeyEquals(course.id, s2), "S2 stored").toBe(true);
 
     // Disable through the existing Feature flags page.
-    await page.goto(`/course/${course.id}/manage/course/feature-flags`);
+    const featureFlagsPath = `/course/${course.id}/manage/course/feature-flags`;
+    await page.goto(featureFlagsPath);
     const toggle = page.getByLabel("Enable Gemini API key setup for this course");
     await expect(toggle).toBeChecked();
+    const refreshSettled = featureFlagsRefreshSettled(page, featureFlagsPath);
     await page.getByText("Allow instructors to save or replace the course Gemini API key").click();
     await expect(toggle).not.toBeChecked();
     // Wait for the flag to be persisted, not just toggled in the UI.
@@ -112,6 +150,8 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
         return features.find((f) => f.name === GEMINI_KEY_FEATURE)?.enabled;
       })
       .toBe(false);
+    // Leave the page only after its router.refresh() has committed (see featureFlagsRefreshSettled).
+    await refreshSettled;
 
     await openKeyPage(page, course.id);
     await expectStatus(page, "Disabled", "Configured (not validated)");
