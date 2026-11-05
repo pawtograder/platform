@@ -60,6 +60,7 @@ import type { Monaco } from "@monaco-editor/react";
 import { FaCheck } from "react-icons/fa6";
 import * as Sentry from "@sentry/nextjs";
 import * as YAML from "yaml";
+import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
@@ -721,18 +722,7 @@ function InnerRubricPage() {
     // Expose the Monaco namespace for e2e tests that need to read/write YAML directly.
     // No-op in normal use - just a property on window.
     (window as Window & { monaco?: Monaco }).monaco = monaco;
-    window.MonacoEnvironment = {
-      getWorker(_module_id, label) {
-        switch (label) {
-          case "editorWorkerService":
-            return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
-          case "yaml":
-            return new Worker(new URL("monaco-yaml/yaml.worker", import.meta.url));
-          default:
-            throw new Error(`Unknown label ${label}`);
-        }
-      }
-    };
+    configureMonacoWorkers();
 
     configureMonacoYaml(monaco, {
       enableSchemaRequest: true,

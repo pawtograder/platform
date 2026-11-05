@@ -1,3 +1,18 @@
+# Seed for Next's incremental build cache (.next/cache), supplied as an IMAGE
+# rather than a BuildKit cache mount.
+#
+# A `--mount=type=cache` lives in the builder's local state, and CI here creates
+# a fresh `docker-container` buildx builder on every run (both the
+# pawtograder-ci runner set and Khoury's pawtograder-infra-runner-set), so such
+# a mount is empty every time and buys nothing. A registry image is pulled, so
+# it survives an ephemeral builder.
+#
+# Defaults to the `next-cache-empty` stage below, which is what a clean build
+# gets: BuildKit resolves `FROM ${NEXT_CACHE_IMAGE}` to a STAGE when the value
+# names one, and to a registry image otherwise. So this is a no-op unless a
+# caller passes a published cache image.
+ARG NEXT_CACHE_IMAGE=next-cache-empty
+
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -16,6 +31,13 @@ RUN npm config set fetch-retries 5 \
       sleep 10; \
     done \
  && test "$success" -eq 1
+
+# Empty fallback, so a build that passes no NEXT_CACHE_IMAGE still resolves.
+# Reuses the node base that deps already pulled, so it costs a mkdir, not a pull.
+FROM node:22-bookworm-slim AS next-cache-empty
+RUN mkdir -p /next-cache
+
+FROM ${NEXT_CACHE_IMAGE} AS next-cache
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
@@ -37,6 +59,13 @@ RUN apt-get -o Acquire::Retries=3 update \
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Restore the previous build's .next/cache. This does NOT make the layer cache
+# hit -- `COPY . .` above already invalidates everything below it on any source
+# change, which is exactly why layer caching cannot speed this build up. What it
+# does is let `npm run build` reuse Next's own per-module compilation cache, so
+# only the modules that actually changed are recompiled.
+COPY --from=next-cache /next-cache ./.next/cache
 
 # Build-time args that Next.js inlines into the client bundle
 ARG NEXT_PUBLIC_SUPABASE_URL=""
@@ -141,6 +170,19 @@ RUN --mount=type=secret,id=sentry_auth_token \
       echo "sentry: no auth token supplied, skipping source map upload"; \
     fi; \
     NODE_OPTIONS=--max-old-space-size=8000 npm run build
+
+# Next always writes .next/cache, but make that explicit so the export stage
+# below cannot fail on a configuration that skips it.
+RUN mkdir -p /app/.next/cache
+
+# Publishable cache image: nothing but the cache directory, on scratch. Push
+# this to a `:<branch>` tag and feed it back as NEXT_CACHE_IMAGE next run.
+#
+# Build it with `--target next-cache-export` in the SAME job as the web build:
+# the builder still holds this run's layers, so it exports the cache directory
+# without recompiling anything.
+FROM scratch AS next-cache-export
+COPY --from=builder /app/.next/cache /next-cache
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app

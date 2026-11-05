@@ -1015,7 +1015,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     throw new UserVisibleError("Authentication required");
   }
 
-  // Check admin role
+  // Check admin role with the caller's own client. authorize_for_admin() returns true for any
+  // service_role caller, so asking it through adminSupabase authorized every logged-in user.
+  const { data: isAdmin, error: adminCheckError } = await supabase.rpc("authorize_for_admin", {});
+  if (adminCheckError || !isAdmin) {
+    throw new UserVisibleError("Admin role required");
+  }
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -1040,14 +1046,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     }
 
     scope?.setTag("existingClassTitle", existingClass.course_title);
-  }
-
-  const { data: isAdmin } = await adminSupabase.rpc("authorize_for_admin", {
-    p_user_id: user.id
-  });
-
-  if (!isAdmin) {
-    throw new UserVisibleError("Admin role required");
   }
 
   scope?.setUser({ id: user.id, email: user.email });

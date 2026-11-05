@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED deterministic SR replay spec — do not edit by hand.
  * Task: gradebook__gradebook-assignment   (generator v1)
- * Source trajectory: 028e63c9c80bbcc1701484e33b237cd7ee596ae5222d131baa6c621cb8a24d3b (run eval-clean)
+ * Source trajectory: 34731b2782704280f8a3e6ab5144c20b6bd7efba293674401de798940b0bafee (run regen-915)
  * Regenerate: npm run a11y:generate-specs
  *
  * Replays the agent's SR/keyboard command sequence with milestone assertions
@@ -29,16 +29,17 @@ test.use({ bypassCSP: true, video: VIDEO ? "on" : "off" });
 
 const PLAN: ReplayPlan = {
   "generatorVersion": "1",
-  "sourceTrajectoryHash": "028e63c9c80bbcc1701484e33b237cd7ee596ae5222d131baa6c621cb8a24d3b",
+  "sourceTrajectoryHash": "34731b2782704280f8a3e6ab5144c20b6bd7efba293674401de798940b0bafee",
   "pageId": "gradebook",
   "taskId": "gradebook-assignment",
   "taskKind": "read",
   "readNeedleKeys": [
-    "assignmentName"
+    "assignmentName",
+    "gradebookSpokenScore"
   ],
   "steps": [
     {
-      "command": "moveToNextHeading"
+      "command": "restartFromTop"
     },
     {
       "command": "moveToNextHeading"
@@ -47,30 +48,32 @@ const PLAN: ReplayPlan = {
       "command": "moveToNextHeading"
     },
     {
-      "command": "moveToNextLandmark"
+      "command": "moveToNextHeading"
     },
     {
-      "command": "moveToNextLandmark"
-    },
-    {
-      "command": "moveToNextLandmark"
-    },
-    {
-      "command": "moveToPreviousLandmark"
-    },
-    {
-      "command": "moveToPreviousLandmark"
+      "command": "moveToNextHeading"
     },
     {
       "command": "readNext",
-      "arg": "20"
+      "arg": "15"
     },
     {
-      "command": "moveToPreviousHeading"
+      "command": "restartFromTop"
     },
     {
       "command": "readNext",
-      "arg": "8"
+      "arg": "25"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
+    },
+    {
+      "command": "moveToNextLandmark"
+    },
+    {
+      "command": "readNext",
+      "arg": "25"
     }
   ]
 };

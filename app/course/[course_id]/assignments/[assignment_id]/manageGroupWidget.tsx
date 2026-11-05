@@ -864,7 +864,27 @@ function GroupDetails({
   );
 }
 
-function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
+function RepositoryLabel({ repository }: { repository: Repository }) {
+  const { role } = useClassProfiles();
+  if (!role.github_org_confirmed) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {repository.repository} (requires GitHub authorization to access)
+      </Text>
+    );
+  }
+  return (
+    <Link
+      href={`https://github.com/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {repository.repository} {repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
+    </Link>
+  );
+}
+
+export function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (!repositories) {
     return <Skeleton height="100px" />;
   }
@@ -881,13 +901,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link
-          href={`https://github.com/${repositories[0].repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {repositories[0].repository} {repositories[0].is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        <RepositoryLabel repository={repositories[0]} />
       </HStack>
     );
   }
@@ -899,13 +913,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontWeight="bold" fontSize="sm">
           Current group repository:
         </Text>{" "}
-        <Link
-          href={`https://github.com/${groupRepo?.repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {groupRepo?.repository} {groupRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        {groupRepo && <RepositoryLabel repository={groupRepo} />}
       </HStack>
       <Text fontWeight="bold">
         Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
@@ -913,13 +921,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
       </Text>
       <Text>
         Individual repository (not in use, you are now in a group):{" "}
-        <Link
-          href={`https://github.com/${personalRepo?.repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {personalRepo?.repository} {personalRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        {personalRepo && <RepositoryLabel repository={personalRepo} />}
       </Text>
     </VStack>
   );

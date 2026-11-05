@@ -535,6 +535,26 @@ export async function listAppInstallations(scope?: Sentry.Scope): Promise<{
   return { orgs, installUrl };
 }
 
+/**
+ * Thrown when the GitHub App has no installation for the org that owns a repository.
+ *
+ * Distinct from a generic failure because it is a deployment-configuration state, not a fault: the
+ * result is identical on every call until somebody installs the App, so a caller that reports it
+ * per-request produces one issue per request forever. In production this was 2990 events for a
+ * single uninstalled org. Callers should report it once per org and carry on.
+ *
+ * The message is unchanged from the plain Error this replaces, so anything matching on text keeps
+ * working; `instanceof` is simply a more honest test than a substring.
+ */
+export class MissingInstallationError extends Error {
+  readonly org: string;
+  constructor(message: string, org: string) {
+    super(message);
+    this.name = "MissingInstallationError";
+    this.org = org;
+  }
+}
+
 export async function resolveRef(action_repository: string, action_ref: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "resolve_ref");
   scope?.setTag("repository", action_repository);
@@ -542,7 +562,10 @@ export async function resolveRef(action_repository: string, action_ref: string, 
 
   const octokit = await getOctoKit(action_repository, scope);
   if (!octokit) {
-    throw new Error(`Resolve ref failed: No octokit found for ${action_repository}`);
+    throw new MissingInstallationError(
+      `Resolve ref failed: No octokit found for ${action_repository}`,
+      action_repository.includes("/") ? action_repository.split("/")[0] : action_repository
+    );
   }
   async function getRefOrUndefined(ref: string) {
     if (!octokit) {

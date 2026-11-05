@@ -132,8 +132,9 @@ policy they hold, see [data-retention.md](./data-retention.md).
 - [ ] **Storage + backup buckets** created **with versioning on**
       (`storage.s3.bucket`, `backup.s3.bucket`).
 - [ ] **Noncurrent-version expiration** added to both buckets. Backup retention
-      is an `mc ilm` object-expiry rule the backup Job creates
-      (`templates/backup.yaml`, keyed off `backup.retentionDays`). On a
+      is a set of per-prefix `mc ilm` expiry rules the backup Job reconciles
+      (`templates/backup.yaml`, keyed off `backup.retention`). The Job keeps
+      rules it does not own, so this one survives. On a
       versioned bucket, object expiry only writes delete markers, so old
       noncurrent versions accumulate indefinitely and storage grows without
       bound. Add a noncurrent-version expiration rule to each bucket so

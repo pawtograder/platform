@@ -26,6 +26,7 @@ export async function getAssessmentExportPepper(supabase: SupabaseClient<Databas
     return cachedPepper;
   }
 
+  // function-grants: service-role (callers pass getAdminClient(); the pepper is revoked from users)
   const { data, error } = await supabase.rpc("get_assessment_export_pepper");
   if (error !== null) {
     throw new CLICommandError(`Failed to load assessment-export-pepper: ${error.message}`, 500);
