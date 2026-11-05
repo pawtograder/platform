@@ -244,12 +244,20 @@ export type FaultPoint =
   | "after_cleanup"; // AFTER DELETE on the mapping, named to fire after the cleanup trigger
 
 /**
+ * Fault schemas created by this worker process. Never pruned, so one whose cleanup failed is still
+ * counted by leftoverFaultObjects(). Per worker by design: the leak check must ignore the live
+ * fault objects of another Playwright project running the same suite concurrently.
+ */
+const createdFaultSchemas = new Set<string>();
+
+/**
  * Installs a disposable fault-injection trigger on the mapping table, scoped to one class so other
  * tests are unaffected, runs `fn`, and always removes it. Test-only: the schema is created and
  * dropped here and nothing in the product references it.
  */
 export async function withFault<T>(classId: number, point: FaultPoint, fn: () => PromiseLike<T>): Promise<T> {
   const schema = `byok_test_fault_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  createdFaultSchemas.add(schema);
   const timing =
     point === "after_vault_create"
       ? "BEFORE INSERT"
@@ -284,12 +292,19 @@ export async function withFault<T>(classId: number, point: FaultPoint, fn: () =>
   }
 }
 
-/** Count of leftover fault-injection objects (expected 0 after every suite). */
+/**
+ * Count of this worker's fault-injection objects still present (expected 0 after every suite).
+ * Limitation: tracking is in memory, so objects leaked by a worker process that crashed, or by an
+ * earlier run, are not counted here.
+ */
 export async function leftoverFaultObjects(): Promise<number> {
+  const schemas = [...createdFaultSchemas];
+  if (schemas.length === 0) return 0;
   return withPrivileged(async (c) => {
     const { rows } = await c.query<{ n: number }>(
-      `SELECT ((SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'byok\\_test\\_fault\\_%')
-             + (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'zz\\_byok\\_test\\_fault\\_%'))::int AS n`
+      `SELECT ((SELECT count(*) FROM pg_namespace WHERE nspname = ANY($1::text[]))
+             + (SELECT count(*) FROM pg_trigger WHERE tgname = ANY($2::text[])))::int AS n`,
+      [schemas, schemas.map((s) => `zz_${s}`)]
     );
     return rows[0].n;
   });
