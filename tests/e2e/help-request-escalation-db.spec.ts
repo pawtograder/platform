@@ -121,6 +121,10 @@ test.describe("help request escalation RPCs", () => {
     expect(
       (await taClient.rpc("escalate_help_request", { p_help_request_id: active, p_note: "   " })).error
     ).not.toBeNull();
+    // One-argument btrim strips spaces only, so tabs and newlines need their own check.
+    expect(
+      (await taClient.rpc("escalate_help_request", { p_help_request_id: active, p_note: "\t\n \r\n" })).error
+    ).not.toBeNull();
     expect((await row(active)).escalation_count).toBe(0);
   });
 
@@ -215,6 +219,19 @@ test.describe("help request escalation RPCs", () => {
     ).not.toBeNull();
   });
 
+  test("End ticket after Resolve logs the resolution once", async () => {
+    const id = await freshRequest();
+    await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false });
+    expect((await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: true })).error).toBeNull();
+    const { data: activity, error } = await supabase
+      .from("student_help_activity")
+      .select("student_profile_id")
+      .eq("help_request_id", id)
+      .eq("activity_type", "request_resolved");
+    expect(error).toBeNull();
+    expect(activity).toEqual([{ student_profile_id: student.private_profile_id }]);
+  });
+
   test("End ticket refuses a resolved ticket whose check-in has lapsed", async () => {
     const id = await freshRequest();
     await taClient.rpc("finish_help_request", { p_help_request_id: id, p_end_ticket: false });
@@ -280,6 +297,25 @@ test.describe("help request escalation RPCs", () => {
       note: "forged"
     });
     expect(insert.error).not.toBeNull();
+  });
+
+  test("staff cannot write escalation fields directly either", async () => {
+    const id = await freshRequest();
+    const bump = await taClient.from("help_requests").update({ escalation_count: 5 }).eq("id", id);
+    expect(bump.error).not.toBeNull();
+    const window = await taClient
+      .from("help_requests")
+      .update({ check_in_expires_at: new Date(Date.now() + 3_600_000).toISOString() })
+      .eq("id", id);
+    expect(window.error).not.toBeNull();
+    const r = await row(id);
+    expect(r.escalation_count).toBe(0);
+    expect(r.check_in_expires_at).toBeNull();
+
+    // Ordinary staff edits to the same row still go through.
+    expect(
+      (await taClient.from("help_requests").update({ assignee: otherTa.private_profile_id }).eq("id", id)).error
+    ).toBeNull();
   });
 
   test("a student can still resolve their own open ticket", async () => {

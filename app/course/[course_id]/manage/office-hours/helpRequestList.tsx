@@ -102,7 +102,8 @@ export default function HelpRequestList() {
     return allHelpRequestsFromController;
   }, [allHelpRequestsFromController, searchTerm, requestStudentsMap, studentNameMap]);
 
-  // Enhanced requests with queue information and students
+  // Enhanced requests with queue information and students, oldest first. Escalation priority is
+  // applied only to the Working and Unassigned groups below; Resolved and Closed stay chronological.
   const enhancedRequests = useMemo(() => {
     return allHelpRequests
       .map((request): EnhancedHelpRequest => {
@@ -123,7 +124,7 @@ export default function HelpRequestList() {
           students
         };
       })
-      .sort(compareHelpRequestQueueOrder); // escalated first, then oldest first
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // oldest first
   }, [allHelpRequests, queueMap, requestStudentsMap]);
 
   // Show loading state while data is being fetched
@@ -173,6 +174,7 @@ export default function HelpRequestList() {
             <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Working help requests">
               {enhancedRequests
                 .filter((r) => r.status === "in_progress" && r.assignee === private_profile_id)
+                .sort(compareHelpRequestQueueOrder)
                 .map((request) => (
                   <NextLink
                     href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
@@ -208,6 +210,7 @@ export default function HelpRequestList() {
             <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Unassigned help requests">
               {enhancedRequests
                 .filter((r) => r.status === "open")
+                .sort(compareHelpRequestQueueOrder)
                 .map((request) => (
                   <NextLink
                     href={`/course/${course_id}/manage/office-hours/request/${request.id}`}

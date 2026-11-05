@@ -47,7 +47,8 @@ CREATE TABLE public.help_request_escalations (
   source public.help_request_escalation_source NOT NULL,
   -- The TA who was helping (staff escalation) or who last helped (student escalation).
   previous_assignee uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
-  note text NOT NULL CHECK (char_length(btrim(note)) BETWEEN 1 AND 500),
+  -- One-argument btrim strips spaces only; this strips tabs and newlines too, like the client's trim().
+  note text NOT NULL CHECK (char_length(regexp_replace(note, '^\s+|\s+$', '', 'g')) BETWEEN 1 AND 500),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -185,9 +186,9 @@ FOR EACH ROW EXECUTE FUNCTION public.broadcast_help_request_staff_data_change();
 -- Same function as 20261014120000_help_request_write_rls_hardening.sql, plus:
 --   * a closed ticket (staff "End ticket") keeps its status for every user-JWT caller,
 --     staff included, so End ticket stays final; service-role tooling is still trusted;
--- and two checks for non-staff callers:
 --   * escalation_count, last_escalated_at and check_in_expires_at change only
---     through the RPCs in this migration;
+--     through the RPCs in this migration, for every user-JWT caller, staff included;
+-- and one check for non-staff callers:
 --   * status may only move from open/in_progress to resolved (a student resolving
 --     their own ticket). Without this, a student could PATCH a ticket staff ended
 --     back to open, which would make "End ticket" meaningless.
@@ -215,12 +216,21 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  IF public.authorizeforhelprequeststaff(OLD.class_id) THEN
+  -- The escalation RPCs validate the caller themselves and then update on their behalf.
+  IF current_setting('pawtograder.help_request_escalation_rpc', true) = 'on' THEN
     RETURN NEW;
   END IF;
 
-  -- The escalation RPCs validate the caller themselves and then update on their behalf.
-  IF current_setting('pawtograder.help_request_escalation_rpc', true) = 'on' THEN
+  -- Checked before the staff return: otherwise any instructor or grader could PATCH a ticket to
+  -- the top of the queue, or open a check-in on a ticket nobody helped.
+  IF NEW.escalation_count IS DISTINCT FROM OLD.escalation_count
+     OR NEW.last_escalated_at IS DISTINCT FROM OLD.last_escalated_at
+     OR NEW.check_in_expires_at IS DISTINCT FROM OLD.check_in_expires_at THEN
+    RAISE EXCEPTION 'escalation fields of a help request change only through the escalation functions'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF public.authorizeforhelprequeststaff(OLD.class_id) THEN
     RETURN NEW;
   END IF;
 
@@ -230,13 +240,6 @@ BEGIN
      OR (NEW.followup_to IS DISTINCT FROM OLD.followup_to AND NEW.followup_to IS NOT NULL)
      OR (NEW.template_id IS DISTINCT FROM OLD.template_id AND NEW.template_id IS NOT NULL) THEN
     RAISE EXCEPTION 'only course staff may change the creator, queue, assignee, follow-up or template of a help request'
-      USING ERRCODE = '42501';
-  END IF;
-
-  IF NEW.escalation_count IS DISTINCT FROM OLD.escalation_count
-     OR NEW.last_escalated_at IS DISTINCT FROM OLD.last_escalated_at
-     OR NEW.check_in_expires_at IS DISTINCT FROM OLD.check_in_expires_at THEN
-    RAISE EXCEPTION 'escalation fields of a help request change only through the escalation functions'
       USING ERRCODE = '42501';
   END IF;
 
@@ -317,7 +320,7 @@ AS $$
 DECLARE
   v_request public.help_requests%ROWTYPE;
   v_caller uuid;
-  v_note text := btrim(coalesce(p_note, ''));
+  v_note text := regexp_replace(coalesce(p_note, ''), '^\s+|\s+$', '', 'g');
 BEGIN
   IF auth.uid() IS NULL THEN
     RAISE EXCEPTION 'not authenticated' USING ERRCODE = '28000';
@@ -413,9 +416,13 @@ BEGIN
          END
    WHERE id = v_request.id;
 
-  PERFORM public.log_help_request_activity(
-    v_request.id, v_request.class_id, 'request_resolved',
-    CASE WHEN p_end_ticket THEN 'Request ended by staff' ELSE 'Request resolved by staff' END);
+  -- Ending a ticket that is already resolved only withdraws the check-in; the resolution was
+  -- logged when staff pressed Resolve, and student_help_activity has no uniqueness constraint.
+  IF v_request.status <> 'resolved' THEN
+    PERFORM public.log_help_request_activity(
+      v_request.id, v_request.class_id, 'request_resolved',
+      CASE WHEN p_end_ticket THEN 'Request ended by staff' ELSE 'Request resolved by staff' END);
+  END IF;
 
   PERFORM set_config('pawtograder.help_request_escalation_rpc', 'off', true);
 END;
@@ -442,7 +449,7 @@ DECLARE
   v_request public.help_requests%ROWTYPE;
   v_caller uuid;
   v_previous_assignee uuid;
-  v_note text := btrim(coalesce(p_note, ''));
+  v_note text := regexp_replace(coalesce(p_note, ''), '^\s+|\s+$', '', 'g');
 BEGIN
   IF auth.uid() IS NULL THEN
     RAISE EXCEPTION 'not authenticated' USING ERRCODE = '28000';
