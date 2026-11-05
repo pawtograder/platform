@@ -27,6 +27,12 @@ import {
 // variants in ManageAssignmentNav.tsx) and react-hook-form binds to the last-mounted one, so typed
 // edits are unreliable under Playwright (see assignment-repo-config-form.test.tsx). An unchanged
 // save still issues the UPDATE, which is all RLS needs to refuse.
+//
+// The assignment is created with repo_mode "none", so it has no handout repo. With a handout, a
+// save that the provider wrongly treats as successful goes on to call githubRepoConfigureWebhook,
+// and that call's failure also shows "Update Error". The Update Error check then passed even with
+// the fix reverted. With no handout, the unfixed page reaches "Assignment Updated", which is the
+// bug in #983.
 
 const RUN_PREFIX = getTestRunPrefix();
 const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -54,7 +60,8 @@ test.describe("Grader writes refused by RLS surface an error", () => {
       class_id: course.id,
       name: `Refused Writes Target ${RUN_PREFIX}`,
       assignment_slug: `rw-${SAFE_ID.slice(-8)}`,
-      due_date: futureDue.toUTCString()
+      due_date: futureDue.toUTCString(),
+      repo_mode: "none"
     });
   });
 
