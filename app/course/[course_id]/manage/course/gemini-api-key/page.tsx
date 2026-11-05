@@ -9,6 +9,8 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   classifyGeminiKeyError,
   GEMINI_KEY_FAILURE_TEXT,
+  GEMINI_KEY_STATUS_TIMEOUT_MS,
+  GEMINI_KEY_STATUS_UNAVAILABLE_TEXT,
   isBlankGeminiKey,
   parseGeminiKeyOutcome,
   parseGeminiKeyStatus,
@@ -62,24 +64,51 @@ function GeminiKeyPanel({ courseId }: { courseId: number }) {
     };
   }, []);
 
-  /** Reads status; only the latest request for this mounted panel may update it. */
-  const loadStatus = useCallback(async () => {
-    const requestId = ++statusRequest.current;
-    const supabase = createClient();
-    const res = await supabase.rpc("get_course_gemini_key_status", { p_class_id: courseId });
-    if (!mounted.current || requestId !== statusRequest.current) return;
-    if (res.error) {
-      setPanel(
-        classifyGeminiKeyError(res.error, res.status) === "forbidden" ? { kind: "forbidden" } : { kind: "unavailable" }
-      );
-      return;
-    }
-    const status = parseGeminiKeyStatus(res.data);
-    setPanel(status ? { kind: "ready", status } : { kind: "unavailable" });
-  }, [courseId]);
+  /**
+   * Reads status; only the latest request for this mounted panel may update it. Never rejects: a
+   * thrown error or a request with no answer by the deadline ends as "unavailable". With
+   * `announceFailure` (initial load and Retry), a failed result is also announced; after a mutation
+   * it is not, because finish() already announced the mutation's outcome.
+   */
+  const loadStatus = useCallback(
+    async (announceFailure = false) => {
+      const requestId = ++statusRequest.current;
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), GEMINI_KEY_STATUS_TIMEOUT_MS);
+      let next: PanelState;
+      try {
+        const supabase = createClient();
+        // postgrest-js reports an aborted request as an error with status 0, like any lost response.
+        const res = await supabase
+          .rpc("get_course_gemini_key_status", { p_class_id: courseId })
+          .abortSignal(controller.signal);
+        if (res.error) {
+          next =
+            classifyGeminiKeyError(res.error, res.status) === "forbidden"
+              ? { kind: "forbidden" }
+              : { kind: "unavailable" };
+        } else {
+          const status = parseGeminiKeyStatus(res.data);
+          next = status ? { kind: "ready", status } : { kind: "unavailable" };
+        }
+      } catch {
+        next = { kind: "unavailable" };
+      } finally {
+        clearTimeout(deadline);
+      }
+      if (!mounted.current || requestId !== statusRequest.current) return;
+      setPanel(next);
+      if (announceFailure && next.kind !== "ready") {
+        announce(next.kind === "forbidden" ? GEMINI_KEY_FAILURE_TEXT.forbidden : GEMINI_KEY_STATUS_UNAVAILABLE_TEXT, {
+          priority: "assertive"
+        });
+      }
+    },
+    [announce, courseId]
+  );
 
   useEffect(() => {
-    void loadStatus();
+    void loadStatus(true);
   }, [loadStatus]);
 
   const finish = useCallback(
@@ -156,10 +185,10 @@ function GeminiKeyPanel({ courseId }: { courseId: number }) {
         ) : panel.kind === "unavailable" ? (
           <Alert
             status="warning"
-            title="Configuration status is unavailable"
+            title={GEMINI_KEY_STATUS_UNAVAILABLE_TEXT}
             data-testid="gemini-key-unavailable"
             endElement={
-              <Button size="sm" variant="outline" onClick={() => void loadStatus()}>
+              <Button size="sm" variant="outline" onClick={() => void loadStatus(true)}>
                 Retry
               </Button>
             }

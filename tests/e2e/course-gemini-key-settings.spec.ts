@@ -11,6 +11,7 @@ import { AxeBuilder } from "@axe-core/playwright";
 import type { Frame, Page, Response, Route } from "@playwright/test";
 import type { Page as PlaywrightCorePage } from "playwright-core";
 import { expect, test } from "../global-setup";
+import { GEMINI_KEY_STATUS_TIMEOUT_MS, GEMINI_KEY_STATUS_UNAVAILABLE_TEXT } from "@/lib/courseGeminiKey";
 import { GEMINI_KEY_FEATURE, credentialState, storedKeyEquals, syntheticKey } from "./courseGeminiKeyDb";
 import {
   createClass,
@@ -49,6 +50,33 @@ async function expectInputCleared(page: Page) {
 async function confirmRemove(page: Page) {
   await page.getByTestId("gemini-key-remove").click();
   await page.getByRole("button", { name: "Confirm action" }).click();
+}
+
+type LiveEntry = { live: string; text: string };
+
+/**
+ * Records, in order, each non-empty text an [aria-live] region takes on, so a test can count
+ * announcements even after LiveAnnouncer clears its region. Applies to later navigations.
+ */
+async function recordLiveAnnouncements(page: Page) {
+  await page.addInitScript(() => {
+    const log: LiveEntry[] = [];
+    (window as unknown as { __liveLog: LiveEntry[] }).__liveLog = log;
+    const last = new WeakMap<Element, string>();
+    new MutationObserver(() => {
+      document.querySelectorAll("[aria-live]").forEach((el) => {
+        const text = el.textContent ?? "";
+        if (text === (last.get(el) ?? "")) return;
+        last.set(el, text);
+        if (text) log.push({ live: el.getAttribute("aria-live") ?? "", text });
+      });
+    }).observe(document, { subtree: true, childList: true, characterData: true });
+  });
+}
+
+async function announcementsOf(page: Page, text: string): Promise<LiveEntry[]> {
+  const log = await page.evaluate(() => (window as unknown as { __liveLog?: LiveEntry[] }).__liveLog ?? []);
+  return log.filter((e) => e.text.includes(text));
 }
 
 /** True if any key containing the sentinel prefix appears in web storage or the URL. */
@@ -167,19 +195,57 @@ test.describe("Course Settings: Gemini API key (#1126)", () => {
     expect(await sentinelInBrowserState(page), "no key in web storage or URL").toBe(false);
   });
 
-  test("a failed status read shows 'unavailable', never 'not configured'", async ({ page }) => {
+  test("a failed status read shows 'unavailable', never 'not configured', and is announced once per attempt", async ({
+    page
+  }) => {
     await setCourseFeature(course.id, GEMINI_KEY_FEATURE, true);
     await loginAsUser(page, instructor, course);
+    await recordLiveAnnouncements(page);
     await page.route(STATUS_RPC, (route) => route.abort("failed"));
     await openKeyPage(page, course.id);
     await expect(page.getByTestId("gemini-key-unavailable")).toBeVisible();
     await expect(page.getByText("This does not mean no key is stored.", { exact: false })).toBeVisible();
     await expect(page.getByTestId("gemini-key-configured")).toHaveCount(0);
     await expect(page.getByTestId("gemini-key-input")).toHaveCount(0);
+    // The alert is not a live region; the failure is announced once, assertively, by LiveAnnouncer.
+    const unavailable = () => announcementsOf(page, GEMINI_KEY_STATUS_UNAVAILABLE_TEXT);
+    await expect.poll(unavailable).toEqual([{ live: "assertive", text: GEMINI_KEY_STATUS_UNAVAILABLE_TEXT }]);
+
+    // A failed Retry changes nothing visible, so its announcement is the only feedback.
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect.poll(async () => (await unavailable()).length).toBe(2);
+    expect((await unavailable()).every((e) => e.live === "assertive")).toBe(true);
 
     await page.unroute(STATUS_RPC);
     await page.getByRole("button", { name: "Retry" }).click();
     await expectStatus(page, "Enabled", "Not configured");
+    expect(await unavailable(), "a successful Retry announces no failure").toHaveLength(2);
+  });
+
+  test("a status read after a save that never answers ends in 'unavailable' with Retry", async ({ page }) => {
+    await setCourseFeature(course.id, GEMINI_KEY_FEATURE, true);
+    await loginAsUser(page, instructor, course);
+    await openKeyPage(page, course.id);
+    await expectStatus(page, "Enabled", "Not configured");
+
+    // Hold every later status read without ever answering it.
+    await page.route(STATUS_RPC, () => {});
+    await page.getByTestId("gemini-key-input").fill(syntheticKey());
+    await page.getByTestId("gemini-key-save").click();
+    await expect(page.getByTestId("gemini-key-notice")).toContainText("Key saved");
+    await expect(page.getByTestId("gemini-key-input")).toBeDisabled();
+    // The status read's deadline ends the stall; the save's notice stays.
+    await expect(page.getByTestId("gemini-key-unavailable")).toBeVisible({
+      timeout: GEMINI_KEY_STATUS_TIMEOUT_MS + 10_000
+    });
+    await expect(page.getByTestId("gemini-key-notice")).toContainText("Key saved");
+
+    await page.unroute(STATUS_RPC);
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expectStatus(page, "Enabled", "Configured (not validated)");
+    await expect(page.getByTestId("gemini-key-input")).toBeEnabled();
+    await page.getByTestId("gemini-key-input").fill(syntheticKey());
+    await expect(page.getByTestId("gemini-key-save")).toBeEnabled();
   });
 
   test("a committed save whose response is lost is not shown as a success", async ({ page }) => {

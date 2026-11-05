@@ -46,6 +46,15 @@ export const GEMINI_KEY_FAILURE_TEXT: Record<GeminiKeyFailure, string> = {
     "We couldn't confirm whether the change was applied. We'll try to refresh the status below. Check it before trying again."
 };
 
+/** Title of the settings page's alert when the status can't be loaded; also announced. */
+export const GEMINI_KEY_STATUS_UNAVAILABLE_TEXT = "Configuration status is unavailable";
+
+/**
+ * Deadline for one status read. Above the database's 8 s statement_timeout, so a server-side
+ * timeout normally answers first; this bounds a request that gets no response at all.
+ */
+export const GEMINI_KEY_STATUS_TIMEOUT_MS = 10_000;
+
 export function parseGeminiKeyStatus(data: unknown): GeminiKeyStatus | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
