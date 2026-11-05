@@ -1,8 +1,8 @@
 "use client";
 
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { duplicateQuestionNamesMessage } from "@/components/survey/questionNames";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
@@ -134,13 +134,6 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         }
       }
 
-      // Two questions with one name share one answer (#1005); the database refuses these too.
-      const duplicateNames = duplicateQuestionNamesMessage(survey.json);
-      if (duplicateNames) {
-        toaster.create({ title: "Cannot Publish Survey", description: duplicateNames, type: "error" });
-        return;
-      }
-
       // Show loading toast
       const loadingToast = toaster.create({
         title: "Publishing Survey",
@@ -199,6 +192,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
       } catch (error) {
         // Dismiss loading toast and show error
         toaster.dismiss(loadingToast);
+        if (reportDuplicateNamesRefusal(error)) return;
         toaster.create({
           title: "Failed to Publish Survey",
           description: error instanceof Error ? error.message : "An unexpected error occurred",

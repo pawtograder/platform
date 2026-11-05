@@ -26,7 +26,6 @@ import type { BuilderSurvey, BuilderElement, ElementType } from "./SurveyBuilder
 import { PASSTHROUGH_TYPE, passthroughSourceType } from "./SurveyBuilderDataTypes";
 import { makeEmptySurvey, nextChoiceValue } from "./factories";
 import { toJSON, fromJSON, fromJSONString, toJSONString } from "./serde";
-import { findDuplicateQuestionNames, formatDuplicateQuestionNames, type DuplicateQuestionName } from "./questionNames";
 
 import {
   addPage as addPageOp,
@@ -59,15 +58,39 @@ const normalizeJSON = (raw?: unknown) => {
 };
 
 /**
- * The first `question_N` no question in the survey uses yet. Numbering per page, as this used
- * to, gave the first question of every page the name `question_1`, and those questions then
- * shared one answer (#1005).
+ * The first `question_N` the survey doesn't mention yet. Numbering per page, as this used to,
+ * gave the first question of every page the name `question_1`, and those questions then shared
+ * one answer (#1005). It searches the whole definition rather than the rows' names, so a question
+ * inside a panel or a valueName is avoided too, and an occasional number skipped costs nothing.
  */
 const nextQuestionName = (survey: BuilderSurvey) => {
-  const taken = new Set(survey.pages.flatMap((p) => p.elements.map((el) => (el.name ?? "").trim())));
+  const definition = JSON.stringify(toJSON(survey));
   let n = survey.pages.reduce((sum, p) => sum + p.elements.length, 0) + 1;
-  while (taken.has(`question_${n}`)) n += 1;
+  while (definition.includes(`question_${n}`)) n += 1;
   return `question_${n}`;
+};
+
+/**
+ * "Question name" fields that repeat one another, for a warning while the instructor types. This
+ * compares only the rows the builder can rename, by what is in the field. What publishing refuses
+ * is decided in one place, the trigger `surveys_reject_duplicate_question_names`, which applies
+ * SurveyJS's rules for answer keys. Don't copy those rules here.
+ */
+const findRepeatedNames = (survey: BuilderSurvey) => {
+  const rows = new Map<string, { id: string; where: string }[]>();
+  survey.pages.forEach((page, pageIdx) =>
+    page.elements.forEach((el, elIdx) => {
+      const name = (el.name ?? "").trim();
+      if (!name || el.type === PASSTHROUGH_TYPE) return;
+      rows.set(name, [...(rows.get(name) ?? []), { id: el.id, where: `page ${pageIdx + 1}, question ${elIdx + 1}` }]);
+    })
+  );
+  return [...rows]
+    .filter(([, used]) => used.length > 1)
+    .map(([name, used]) => ({
+      ids: used.map((row) => row.id),
+      message: `"${name}" is used by ${used.map((row) => row.where).join(" and ")}.`
+    }));
 };
 
 const isPlainEmptyObject = (v: unknown) =>
@@ -91,11 +114,9 @@ type Props = {
   value?: string; // JSON string
   onChange: (json: string) => void;
   initialJson?: string;
-  /** The survey being edited is published, so saving it as a draft would hide it from students. */
-  isPublished?: boolean;
 };
 
-const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Props) => {
+const SurveyBuilder = ({ value, onChange, initialJson }: Props) => {
   // Object-form source of truth
   const [survey, setSurvey] = useState<BuilderSurvey>(() => safeFromJSON(value ?? initialJson));
 
@@ -137,20 +158,11 @@ const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Pr
     onChange(json);
   }, [survey, onChange]);
 
-  // Question names used more than once in the survey's own scope. Answers are saved under the
-  // name, so these questions would share one answer; the form refuses to publish until fixed.
-  const duplicateNames = useMemo(() => findDuplicateQuestionNames(toJSON(survey)), [survey]);
-  // The duplicate each builder row is part of, keyed "page:row". A question inside a panel is
-  // edited in the JSON, so only rows that are the question itself get marked.
-  const duplicateByRow = useMemo(() => {
-    const byRow = new Map<string, DuplicateQuestionName>();
-    for (const d of duplicateNames) {
-      for (const loc of d.locations) {
-        if (!loc.inside) byRow.set(`${loc.page}:${loc.question}`, d);
-      }
-    }
-    return byRow;
-  }, [duplicateNames]);
+  const repeatedNames = useMemo(() => findRepeatedNames(survey), [survey]);
+  const repeatByRow = useMemo(
+    () => new Map(repeatedNames.flatMap((repeat) => repeat.ids.map((id) => [id, repeat] as const))),
+    [repeatedNames]
+  );
 
   // Open all accordions by default on page switch
   useEffect(() => {
@@ -385,9 +397,9 @@ const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Pr
           </Text>
         </Flex>
 
-        {/* Always mounted, so screen readers announce a duplicate name when it appears. */}
+        {/* Always mounted, so screen readers announce a repeated name when it appears. */}
         <Box role="status" aria-live="polite" aria-atomic="true">
-          {duplicateNames.length > 0 && (
+          {repeatedNames.length > 0 && (
             <Box
               mb="4"
               p="3"
@@ -398,12 +410,15 @@ const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Pr
               rounded="md"
               data-testid="survey-builder-duplicate-names"
             >
-              <Text fontWeight="semibold">Two questions can&apos;t share a name</Text>
-              <Text fontSize="sm">{formatDuplicateQuestionNames(duplicateNames)}</Text>
+              <Text fontWeight="semibold">Two questions share a name</Text>
+              {repeatedNames.map((repeat) => (
+                <Text key={repeat.ids[0]} fontSize="sm">
+                  {repeat.message}
+                </Text>
+              ))}
               <Text fontSize="sm" mt="1">
-                {isPublished
-                  ? "You can keep editing. The published survey keeps its current questions until every question has its own name."
-                  : "You can keep editing and save the survey as a draft, but it can't be published until every question has its own name."}
+                Answers are saved under the name, so each question needs its own. A survey with repeats can&apos;t be
+                published.
               </Text>
             </Box>
           )}
@@ -437,13 +452,13 @@ const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Pr
                     const atTop = idxEl === 0;
                     const atBottom = idxEl === elements.length - 1;
                     const label = elementLabel(el);
-                    const duplicate = duplicateByRow.get(`${pageIdx + 1}:${idxEl + 1}`);
+                    const repeat = repeatByRow.get(el.id);
 
                     return (
                       <Accordion.Item key={el.id} value={el.id}>
                         <Accordion.ItemTrigger>
                           <Span flex="1">{el.title?.trim() || `${label} Question`}</Span>
-                          {duplicate && (
+                          {repeat && (
                             <Badge colorPalette="red" variant="solid" mr="2">
                               Duplicate name
                             </Badge>
@@ -551,7 +566,7 @@ const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Pr
                               ) : (
                                 <>
                                   {/* Question name: also the key its answers are saved under */}
-                                  <Field.Root invalid={!!duplicate}>
+                                  <Field.Root invalid={!!repeat}>
                                     <Field.Label fontSize="sm" color="gray.600" mb="1">
                                       Question name
                                     </Field.Label>
@@ -561,9 +576,7 @@ const SurveyBuilder = ({ value, onChange, initialJson, isPublished = false }: Pr
                                       onChange={(e) => updateQuestionName(el.id, e.target.value)}
                                       placeholder={`${label} question`}
                                     />
-                                    {duplicate && (
-                                      <Field.ErrorText>{formatDuplicateQuestionNames([duplicate])}</Field.ErrorText>
-                                    )}
+                                    {repeat && <Field.ErrorText>{repeat.message}</Field.ErrorText>}
                                   </Field.Root>
 
                                   {/* Description */}

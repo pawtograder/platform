@@ -9,17 +9,9 @@ type SurveyBuilderModalProps = {
   onClose: () => void;
   onSave: (json: string) => void;
   initialJson?: string;
-  /** The survey being edited is published; passed to the builder's duplicate-name advice. */
-  isPublished?: boolean;
 };
 
-export default function SurveyBuilderModal({
-  isOpen,
-  onClose,
-  onSave,
-  initialJson,
-  isPublished
-}: SurveyBuilderModalProps) {
+export default function SurveyBuilderModal({ isOpen, onClose, onSave, initialJson }: SurveyBuilderModalProps) {
   // Local JSON buffer (so user can cancel without mutating form)
   const [draftJson, setDraftJson] = useState<string>(initialJson ?? "");
 
@@ -92,12 +84,7 @@ export default function SurveyBuilderModal({
 
         {/* Body: the builder */}
         <Box flex="1" overflow="auto" p={4}>
-          <SurveyBuilder
-            initialJson={initialJson}
-            value={draftJson}
-            onChange={setDraftJson}
-            isPublished={isPublished}
-          />
+          <SurveyBuilder initialJson={initialJson} value={draftJson} onChange={setDraftJson} />
         </Box>
       </Box>
     </Box>

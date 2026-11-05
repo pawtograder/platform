@@ -19,13 +19,13 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
-import { Controller, FieldErrors, FieldValues } from "react-hook-form";
+import { Controller, FieldValues } from "react-hook-form";
 import { Button as UIButton } from "@/components/ui/button";
 import { Field as BaseField, type FieldProps } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { SurveyPreviewModal } from "@/components/survey-preview-modal";
 import { SurveyTemplateLibraryModal } from "@/components/survey/SurveyTemplateLibraryModal";
@@ -42,7 +42,6 @@ import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { useAssignments, useSurveySeries } from "@/hooks/useCourseController";
 import { AnalyticsConfigEditor } from "@/components/survey/AnalyticsConfigEditor";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
-import { duplicateQuestionNamesMessage, publishBlockedByDuplicateNames } from "@/components/survey/questionNames";
 
 // New modal wrapper around SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
@@ -131,20 +130,13 @@ export default function SurveyForm({
   onSubmit,
   saveDraftOnly,
   isEdit = false,
-  privateProfileId,
-  publishedJson
+  privateProfileId
 }: {
   form: UseFormReturnType<SurveyFormData>;
   onSubmit: (values: FieldValues) => void;
   saveDraftOnly: (values: FieldValues, shouldRedirect?: boolean) => void;
   isEdit?: boolean;
   privateProfileId: string;
-  /**
-   * The stored questions of a survey that is already published. A survey published with
-   * duplicate question names before that was checked can still have its dates and settings
-   * edited, as long as its questions are left unchanged (the database trigger allows the same).
-   */
-  publishedJson?: unknown;
 }) {
   const {
     handleSubmit,
@@ -180,27 +172,6 @@ export default function SurveyForm({
   const watchAnalyticsConfig = watch("analytics_config");
   const currentStatus = watch("status");
   const assignedStudents = watch("assigned_students") || [];
-
-  // Two questions with one name share one answer (#1005). Drafts may have them; publishing may not.
-  const duplicateNamesMessage = useMemo(() => duplicateQuestionNamesMessage(currentJson), [currentJson]);
-  // Only the edit page of a published survey passes publishedJson. Saving that survey as a draft
-  // would hide it from students, so the advice below doesn't suggest it there.
-  const isPublishedSurvey = publishedJson !== undefined;
-  const publishBlockedMessage = useMemo(
-    () => publishBlockedByDuplicateNames({ json: currentJson, status: currentStatus, publishedJson }),
-    [currentJson, currentStatus, publishedJson]
-  );
-
-  // handleSubmit stops on a validation error without saying so near the Publish button, which can
-  // be a long way below the questions. Say why in a toast.
-  const onInvalid = useCallback((formErrors: FieldErrors<SurveyFormData>) => {
-    if (formErrors.json?.type === "uniqueQuestionNames") {
-      toaster.error({
-        title: "Cannot Publish Survey",
-        description: formErrors.json.message?.toString()
-      });
-    }
-  }, []);
 
   const validateJson = useCallback(() => {
     const jsonValue = getValues("json");
@@ -387,7 +358,7 @@ export default function SurveyForm({
 
       {/* Main Form */}
       <Box w="100%" maxW="800px">
-        <form onSubmit={handleSubmit(onSubmitWrapper, onInvalid)}>
+        <form onSubmit={handleSubmit(onSubmitWrapper)}>
           <Fieldset.Root>
             <VStack align="stretch" gap={6} w="100%">
               {/* 1. Basics */}
@@ -495,41 +466,16 @@ export default function SurveyForm({
                   </HStack>
 
                   {/* Surface the required-JSON error even when the editor is collapsed */}
-                  {errors.json && errors.json.type !== "uniqueQuestionNames" && (
+                  {errors.json && (
                     <Text mt={2} fontSize="sm" color="red.solid">
                       {errors.json.message?.toString()}
                     </Text>
                   )}
 
-                  {/* Always mounted, so screen readers announce a duplicate name when it appears. */}
-                  <Box role="status" aria-live="polite" aria-atomic="true" id="survey-duplicate-question-names">
-                    {duplicateNamesMessage && (
-                      <Box
-                        mt={2}
-                        p={3}
-                        borderWidth="1px"
-                        borderColor="border.error"
-                        bg="bg.error"
-                        color="fg.error"
-                        rounded="md"
-                      >
-                        <Text fontSize="sm" fontWeight="semibold">
-                          {publishBlockedMessage
-                            ? "This survey can't be published until two questions stop sharing a name"
-                            : "Two questions share a name"}
-                        </Text>
-                        <Text fontSize="sm">{duplicateNamesMessage}</Text>
-                        <Text fontSize="sm" mt={1}>
-                          Open the Visual Builder to rename them; it marks each question whose name is repeated.
-                        </Text>
-                      </Box>
-                    )}
-                  </Box>
-
                   <Accordion.Root
                     mt={2}
                     collapsible
-                    value={isJsonOpen || (!!errors.json && errors.json.type !== "uniqueQuestionNames") ? ["json"] : []}
+                    value={isJsonOpen || !!errors.json ? ["json"] : []}
                     onValueChange={(details) => setIsJsonOpen(details.value.includes("json"))}
                   >
                     <Accordion.Item value="json">
@@ -562,22 +508,14 @@ export default function SurveyForm({
                               _focus={{ borderColor: "blue.solid" }}
                               {...register("json", {
                                 required: "JSON configuration is required",
-                                validate: {
-                                  parseable: (value) => {
-                                    if (!value.trim()) return "JSON configuration is required";
-                                    try {
-                                      JSON.parse(value);
-                                      return true;
-                                    } catch {
-                                      return "Invalid JSON format";
-                                    }
-                                  },
-                                  uniqueQuestionNames: (value, formValues) =>
-                                    publishBlockedByDuplicateNames({
-                                      json: value,
-                                      status: formValues.status,
-                                      publishedJson
-                                    }) ?? true
+                                validate: (value) => {
+                                  if (!value.trim()) return "JSON configuration is required";
+                                  try {
+                                    JSON.parse(value);
+                                    return true;
+                                  } catch {
+                                    return "Invalid JSON format";
+                                  }
                                 }
                               })}
                             />
@@ -947,7 +885,6 @@ export default function SurveyForm({
                 <UIButton
                   type="submit"
                   loading={isSubmitting}
-                  aria-describedby={publishBlockedMessage ? "survey-publish-blocked" : undefined}
                   size="md"
                   colorPalette={currentStatus === "published" ? "green" : "blue"}
                   bg={currentStatus === "published" ? "green.solid" : "blue.solid"}
@@ -956,13 +893,6 @@ export default function SurveyForm({
                 >
                   {currentStatus === "published" ? "Publish Survey" : "Save Draft"}
                 </UIButton>
-                {publishBlockedMessage && (
-                  <Text id="survey-publish-blocked" fontSize="sm" color="fg.error" maxW="xs">
-                    {isPublishedSurvey
-                      ? "Two questions share a name. Rename one under Survey Questions."
-                      : "Two questions share a name. Rename one under Survey Questions, or save as a draft."}
-                  </Text>
-                )}
                 <Button
                   variant="outline"
                   borderColor="border.emphasized"
@@ -1068,7 +998,6 @@ export default function SurveyForm({
         isOpen={isBuilderOpen}
         onClose={() => setIsBuilderOpen(false)}
         initialJson={currentJson}
-        isPublished={isPublishedSurvey}
         onSave={(json) => setValue("json", json, { shouldDirty: true, shouldValidate: true })}
       />
 
