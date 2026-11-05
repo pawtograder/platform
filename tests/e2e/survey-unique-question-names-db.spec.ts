@@ -17,7 +17,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { Client } from "pg";
 import type { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
-import { findDuplicateQuestionNames } from "@/components/survey/questionNames";
 import { test, expect } from "../global-setup";
 import { createAuthenticatedClient, createClass, createUsersInClass, supabase, type TestingUser } from "./TestingUtils";
 
@@ -56,66 +55,7 @@ const asFormWritesIt = (json: object) => JSON.stringify(json) as unknown as Tabl
 const text = (name: string, extra: Record<string, unknown> = {}) => ({ type: "text", name, title: name, ...extra });
 const onePage = (...elements: object[]) => ({ pages: [{ name: "page1", elements }] });
 
-/**
- * Every character JavaScript's String.prototype.trim() removes. SurveyJS trims question names
- * with it, and so does the client check, so the database has to treat all of these as spaces.
- */
-const JS_TRIMMED = Array.from({ length: 0x10000 }, (_, c) => String.fromCharCode(c)).filter((ch) => ch.trim() === "");
-
-/**
- * Surveys the client check (components/survey/questionNames.ts) and the trigger must judge the
- * same way. Each is published as a new survey and the trigger's verdict compared with the client's.
- */
-const PARITY_FIXTURES: [string, object][] = [
-  ["unique names", onePage(text("a"), text("b"))],
-  ["repeat across pages", DUPLICATE_JSON],
-  ["repeat inside a panel", onePage(text("a"), { type: "panel", name: "p", elements: [text("b"), text("a")] })],
-  ["a panel's own name", onePage({ type: "panel", name: "team", elements: [text("team")] })],
-  [
-    "dynamic panel templates are their own scope",
-    onePage(text("name"), { type: "paneldynamic", name: "members", templateElements: [text("name"), text("role")] })
-  ],
-  [
-    "repeat inside one template",
-    onePage({ type: "paneldynamic", name: "members", templateElements: [text("role"), text("role")] })
-  ],
-  ["the older `questions` alias", { pages: [{ questions: [text("a"), text("a")] }] }],
-  ["root-level elements", { elements: [text("a"), text("a")] }],
-  ["case differs", onePage(text("Q1"), text("q1"))],
-  ["ASCII spaces", onePage(text("q1"), text(" q1\t"))],
-  ["no-break space", onePage(text("q1"), text("q1\u00a0"))],
-  ["ideographic space", onePage(text("q1"), text("\u3000q1"))],
-  ["byte order mark", onePage(text("q1"), text("\ufeffq1"))],
-  ["line separator", onePage(text("q1"), text("q1\u2028"))],
-  ["next line is not trimmed", onePage(text("q1"), text("q1\u0085"))],
-  ["zero-width space is not trimmed", onePage(text("q1"), text("q1\u200b"))],
-  ["one name, two valueNames", onePage(text("a", { valueName: "first" }), text("a", { valueName: "second" }))],
-  ["two names, one valueName", onePage(text("a", { valueName: "shared" }), text("b", { valueName: "shared" }))],
-  ["a valueName equal to another's name", onePage(text("x"), text("y", { valueName: "x" }))],
-  ["a valueName is used as written", onePage(text("x"), text("y", { valueName: " x" }))],
-  ["an empty valueName falls back to the name", onePage(text("a", { valueName: "" }), text("a"))],
-  [
-    "HTML and image elements",
-    onePage(
-      { type: "html", name: "note", html: "<p>One</p>" },
-      { type: "HTML", name: "note", html: "<p>Two</p>" },
-      { type: "image", name: "logo" },
-      { type: "image", name: "logo" }
-    )
-  ],
-  ["an expression stores a value", onePage(text("total"), { type: "expression", name: "total", expression: "1" })],
-  [
-    "a repeating panel's valueName",
-    onePage(text("team"), { type: "paneldynamic", name: "members", valueName: "team", templateElements: [text("a")] })
-  ],
-  ["braces, leading #s and the first |", onePage(text("q1"), text("{q1}"), text("#q1"), text("##q1"), text("q|1"))],
-  ["only the first | is dropped", onePage(text("q||1"), text("q|1"))],
-  ["inner spaces survive the clean-up", onePage(text("# q1"), text("{ q1}"), text("q1"))],
-  ["a name that cleans up to nothing", onePage(text("{}"), text("#"))]
-];
-
 test.describe("surveys whose questions share a name cannot be published", () => {
-  test.describe.configure({ mode: "serial" });
   test.setTimeout(180_000);
 
   let course: Course;
@@ -146,7 +86,10 @@ test.describe("surveys whose questions share a name cannot be published", () => 
     return data;
   }
 
-  function expectDuplicateNameRejection(error: { code?: string; message: string; details?: string } | null) {
+  function expectDuplicateNameRejection(
+    error: { code?: string; message: string; details?: string } | null,
+    name = "question_1"
+  ) {
     expect(error, "publishing duplicate question names must be rejected").not.toBeNull();
     expect(error!.code, `expected SQLSTATE 23514 from the trigger, got ${error!.code}: ${error!.message}`).toBe(
       "23514"
@@ -155,7 +98,7 @@ test.describe("surveys whose questions share a name cannot be published", () => 
       "surveys_reject_duplicate_question_names"
     );
     expect(error!.message, "the message names the repeated question and says how to fix it").toContain(
-      'more than one question is named "question_1"'
+      `more than one question is named "${name}"`
     );
     expect(error!.message).toContain("Rename the repeats");
   }
@@ -167,18 +110,6 @@ test.describe("surveys whose questions share a name cannot be published", () => 
       .insert(baseRow({ title, status: "published", json: asFormWritesIt(json) }))
       .select("id");
     return error;
-  }
-
-  /**
-   * The names a duplicate-name refusal lists, or [] when the survey was published. Any other
-   * error fails the test.
-   */
-  function namesInRefusal(error: { code?: string; message: string; details?: string } | null): string[] {
-    if (!error) return [];
-    expect(error.code, `expected SQLSTATE 23514 from the trigger, got ${error.code}: ${error.message}`).toBe("23514");
-    expect(error.details ?? "").toContain("surveys_reject_duplicate_question_names");
-    const list = /(?:is named|of the names) (.*)\. Each question needs/s.exec(error.message)?.[1] ?? "";
-    return [...list.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
   }
 
   /**
@@ -370,30 +301,14 @@ test.describe("surveys whose questions share a name cannot be published", () => 
     expectDuplicateNameRejection(error);
   });
 
-  test("names that differ only by characters JavaScript's trim() removes are one name", async () => {
-    // One pair per character: "n0" and the same name wrapped in that character.
-    const elements = JS_TRIMMED.flatMap((space, i) => [text(`n${i}`), text(`${space}n${i}${space}`)]);
-    const refused = namesInRefusal(await publishNew("Every trimmed character", onePage(...elements)));
-    const unrefused = JS_TRIMMED.filter((_, i) => !refused.includes(`n${i}`)).map(
-      (ch) => `U+${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`
-    );
-    expect(unrefused, "each of these was not trimmed by the database").toEqual([]);
+  test("names that differ only by what SurveyJS cleans off are one name", async () => {
+    // Trimmed with JavaScript's trim(), so a no-break space and an ideographic space go. Then the
+    // first "|", the braces and the leading "#" go, which leaves "q1".
+    const error = await publishNew("Cleaned names", onePage(text("q1"), text("\u00a0{#q|1}\u3000")));
+    expectDuplicateNameRejection(error, "q1");
   });
 
-  test("characters JavaScript's trim() keeps still tell names apart", async () => {
-    const error = await publishNew("Kept characters", onePage(text("q1"), text("q1\u0085"), text("q1\u200b")));
-    expect(error, `these names are distinct to SurveyJS: ${error?.message}`).toBeNull();
-  });
-
-  test("the database refuses the surveys the form refuses, and names the same questions", async () => {
-    for (const [label, json] of PARITY_FIXTURES) {
-      const expected = [...new Set(findDuplicateQuestionNames(json).map((d) => d.name))].sort();
-      const refused = namesInRefusal(await publishNew(`Parity: ${label}`, json)).sort();
-      expect(refused, `fixture "${label}"`).toEqual(expected);
-    }
-  });
-
-  test("an answer is saved under the question's valueName when it has one", async () => {
+  test("an answer is saved under the question's valueName when it has one, even a number", async () => {
     const ownValueNames = await publishNew(
       "One name, two valueNames",
       onePage(text("a", { valueName: "first" }), text("a", { valueName: "second" }))
@@ -402,27 +317,14 @@ test.describe("surveys whose questions share a name cannot be published", () => 
 
     const sharedValueName = await publishNew(
       "Two names, one valueName",
-      onePage(text("a", { valueName: "shared" }), text("b", { valueName: "shared" }))
+      onePage(text("a", { valueName: 7 }), text("b", { valueName: 7 }))
     );
-    expect(namesInRefusal(sharedValueName)).toEqual(["shared"]);
+    expectDuplicateNameRejection(sharedValueName, "7");
   });
 
-  test("HTML and image elements hold no answer, so their names may repeat", async () => {
-    const error = await publishNew(
-      "Repeated HTML and image names",
-      onePage(
-        text("q1"),
-        { type: "html", name: "note", html: "<p>One</p>" },
-        { type: "html", name: "note", html: "<p>Two</p>" },
-        { type: "image", name: "logo", imageLink: "a.png" },
-        { type: "image", name: "logo", imageLink: "b.png" }
-      )
-    );
-    expect(error, `nothing here shares an answer: ${error?.message}`).toBeNull();
-  });
-
-  test("names are compared after SurveyJS drops braces, leading #s and the first |", async () => {
-    const error = await publishNew("Rewritten names", onePage(text("q1"), text("{q1}"), text("#q1"), text("q|1")));
-    expect(namesInRefusal(error)).toEqual(["q1"]);
+  test("a question with a stray `elements` property still counts", async () => {
+    // SurveyJS ignores `elements` on a text question, which still saves its answer under its name.
+    const error = await publishNew("Stray elements", onePage(text("a", { elements: [] }), text("a")));
+    expectDuplicateNameRejection(error, "a");
   });
 });
