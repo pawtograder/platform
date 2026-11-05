@@ -4,7 +4,7 @@ Status: V1 built on `feature/oh-escalation`, revised after capstone feedback. Ow
 
 ## Problem
 
-Students told us in discovery interviews that when a TA can't resolve their question, they have no way to hand it on to another staff member along with what has already been tried. They rejoin the queue at the back and wait again, often for a question that takes two minutes once the right person sees it. Today the only staff action short of resolving is "Stop helping", which returns the ticket to the queue with no note and no priority. Every rejoin adds a ticket to the line for everyone else.
+Students and TAs told us in discovery interviews that when a TA can't resolve their question, they have no way to hand it on to another staff member along with what has already been tried. They rejoin the queue at the back and wait again, often for a question that takes two minutes once the right person sees it. Today the only staff action short of resolving is "Stop helping", which returns the ticket to the queue with no note and no priority. Every rejoin adds a ticket to the line for everyone else.
 
 ## Goals
 
@@ -86,7 +86,7 @@ Each metric has a baseline we can compute from existing tables (`help_requests`,
 
 ## Links
 
-- Interview notes and synthesis: TODO
+- Interview notes and synthesis: [`prd-oh-escalation-interviews.md`](prd-oh-escalation-interviews.md)
 - Final PRD: TODO
 - Clickable prototype (mock data): https://claude.ai/artifact/7ZB62gNYXo3iJywFkV163K
 - Migration: `supabase/migrations/20261103130000_help_request_escalation.sql`
