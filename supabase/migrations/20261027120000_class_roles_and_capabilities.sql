@@ -116,9 +116,7 @@ CREATE TRIGGER trg_classes_seed_default_class_roles
 AFTER INSERT ON public.classes
 FOR EACH ROW EXECUTE FUNCTION public.classes_seed_default_class_roles();
 
--- backfill:begin (tests/e2e/class-roles-db.spec.ts replays the backfill blocks)
 SELECT public.seed_default_class_roles(id) FROM public.classes;
--- backfill:end
 
 -- ---------------------------------------------------------------------------
 -- user_roles.class_role_id
@@ -131,7 +129,6 @@ ALTER TABLE public.user_roles ADD COLUMN class_role_id bigint;
 -- GitHub and Discord sync, updated_at, cache invalidation) inside this migration's transaction.
 -- The triggers this migration needs are created below, so none of them is skipped. Foreign key
 -- checks are internal triggers and still run.
--- backfill:begin
 ALTER TABLE public.user_roles DISABLE TRIGGER USER;
 
 UPDATE public.user_roles ur
@@ -141,7 +138,6 @@ WHERE cr.class_id = ur.class_id
   AND cr.default_for = ur.role;
 
 ALTER TABLE public.user_roles ENABLE TRIGGER USER;
--- backfill:end
 
 ALTER TABLE public.user_roles
   ALTER COLUMN class_role_id SET NOT NULL,
@@ -198,7 +194,6 @@ FOR EACH ROW EXECUTE FUNCTION public.user_roles_set_default_class_role();
 -- an error: the user just lacks those capabilities.
 ALTER TABLE public.user_privileges ADD COLUMN class_role_id bigint;
 
--- backfill:begin
 UPDATE public.user_privileges up
 SET class_role_id = ur.class_role_id
 FROM public.user_roles ur
@@ -206,7 +201,6 @@ WHERE ur.user_id = up.user_id
   AND ur.class_id = up.class_id
   AND ur.role = up.role
   AND ur.disabled = false;
--- backfill:end
 
 CREATE INDEX idx_user_privileges_class_role ON public.user_privileges (user_id, class_role_id);
 
