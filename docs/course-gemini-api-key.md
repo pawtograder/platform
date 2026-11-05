@@ -12,7 +12,7 @@ Storing a key does not validate it with Google and does not turn on AI grading. 
 - **Where the key lives:** only in Supabase Vault (`vault.secrets`). `course_secrets.course_gemini_api_keys` maps a class to the Vault secret it owns. The `course_secrets` schema is not exposed through PostgREST, and no client role has `USAGE` on it.
 - **RPCs:** `get_course_gemini_key_status`, `set_course_gemini_key` and `remove_course_gemini_key`.
   - All three are `SECURITY DEFINER` with `search_path = ''`.
-  - Each checks active instructor membership (`authorizeforclassinstructor`) before taking the class row lock, and again after it.
+  - `set_course_gemini_key` and `remove_course_gemini_key` check active instructor membership (`authorizeforclassinstructor`) before taking the class row lock and again after it. `get_course_gemini_key_status` is read-only: it checks once and takes no lock.
   - None returns key material or secret ids, and errors use fixed messages.
 - **`service_role` has no path through the RPCs.** It holds `EXECUTE`, and `migrate.sh` Phase 3.5 re-grants every `public` function to it on chart deploys. But every RPC rejects a caller without `auth.uid()`, and called as `service_role` all three return `42501 Access denied`.
 - **Concurrency and lifecycle:**

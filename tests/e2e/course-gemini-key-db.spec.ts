@@ -14,6 +14,7 @@
  *
  * Stored values are only ever compared in SQL (boolean results). Default per-PR lane.
  */
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Client } from "pg";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -319,6 +320,27 @@ test.describe("course Gemini key: failures after the Vault write roll back (#112
     expect(out.ok).toBe(false);
     expect(await classExists(course.id)).toBe(true);
     expect(await storedKeyEquals(course.id, s1)).toBe(true);
+  });
+
+  // The leak check in afterAll must not count fault objects that belong to another run: the other
+  // browser project's copy of this describe can hold one open at the same moment. A bare schema is
+  // enough to stand in for it, and unlike a trigger it takes no lock on the mapping table.
+  test("the leak check ignores another run's live fault object", async () => {
+    const foreign = `byok_test_fault_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    await withPrivileged((c) => c.query(`CREATE SCHEMA ${foreign}`));
+    try {
+      expect(await leftoverFaultObjects()).toBe(0);
+    } finally {
+      await withPrivileged((c) => c.query(`DROP SCHEMA IF EXISTS ${foreign} CASCADE`));
+    }
+  });
+
+  // Positive control: while this run's fault object is installed (the state a skipped cleanup would
+  // leave behind) the leak check counts it.
+  test("the leak check counts this run's fault object while it is installed", async () => {
+    const during = await withFault(course.id, "after_vault_create", () => leftoverFaultObjects());
+    expect(during, "schema and trigger").toBe(2);
+    expect(await leftoverFaultObjects()).toBe(0);
   });
 });
 
