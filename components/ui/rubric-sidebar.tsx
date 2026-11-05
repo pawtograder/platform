@@ -1160,6 +1160,18 @@ function SubmissionCommentForm({
   const isExamCheck = check.exam_question_id != null;
   const [pointsInput, setPointsInput] = useState(String(check.points));
   const examPoints = isExamCheck ? parseAppliedExamPoints(pointsInput, check.points) : null;
+  const selectedOption =
+    selectedOptionIndex !== undefined && isRubricCheckDataWithOptions(check.data)
+      ? check.data.options[selectedOptionIndex]
+      : undefined;
+
+  // Picking an option fills the points box with its points; the grader can still type over it.
+  const selectedOptionPoints = selectedOption?.points;
+  useEffect(() => {
+    if (selectedOptionPoints !== undefined) {
+      setPointsInput(String(selectedOptionPoints));
+    }
+  }, [selectedOptionPoints]);
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -1171,10 +1183,6 @@ function SubmissionCommentForm({
     return <></>;
   }
 
-  const selectedOption =
-    selectedOptionIndex !== undefined && isRubricCheckDataWithOptions(check.data)
-      ? check.data.options[selectedOptionIndex]
-      : undefined;
   return (
     <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%" fontSize="sm">
       <Box bg="bg.inverted" pl={1} borderTopRadius="md">

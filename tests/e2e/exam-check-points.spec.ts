@@ -11,9 +11,10 @@ import {
 
 /**
  * A graded exam with one 10-point question, an instructor's own 1-point check added to that
- * question's criterion, and a grader on the student's submission.
+ * question's criterion, and a grader on the student's submission. `options`, if given, are set on
+ * the question's generated check.
  */
-async function openExamSubmission(page: Page) {
+async function openExamSubmission(page: Page, options?: { label: string; points: number }[]) {
   const course = await createClass({ name: "Exam check points E2E" });
   const student = await createUserInClass({ role: "student", class_id: course.id });
   const grader = await createUserInClass({ role: "grader", class_id: course.id });
@@ -73,6 +74,14 @@ async function openExamSubmission(page: Page) {
     is_comment_required: false
   });
   expect(ownCheckErr).toBeNull();
+  if (options) {
+    const { error: optionsErr } = await supabase
+      .from("rubric_checks")
+      .update({ data: { options } })
+      .eq("rubric_id", rubricId)
+      .not("exam_question_id", "is", null);
+    expect(optionsErr).toBeNull();
+  }
 
   const submission = await insertPreBakedSubmission({
     student_profile_id: student.private_profile_id,
@@ -106,6 +115,36 @@ test.describe("Exam check points", () => {
       )
       .toBe(6);
     await expect(page.getByText("Q1 6/10")).toBeVisible();
+  });
+
+  test.describe("on an exam check with options", () => {
+    test.beforeEach(async ({ page }) => {
+      await openExamSubmission(page, [
+        { label: "Full", points: 10 },
+        { label: "Most", points: 7 },
+        { label: "Partial credit", points: 3 }
+      ]);
+    });
+
+    test("picking an option fills the points box", async ({ page }) => {
+      await page.getByRole("radio", { name: /Partial credit/ }).check({ force: true });
+      await expect(page.getByLabel("Points for Item 1")).toHaveValue("3");
+      await page.getByRole("button", { name: "Add Check" }).click();
+      await expect(page.getByText("Q1 3/10")).toBeVisible();
+    });
+
+    test("a typed amount overrides the option", async ({ page }) => {
+      await page.getByRole("radio", { name: /Partial credit/ }).check({ force: true });
+      await page.getByLabel("Points for Item 1").fill("4");
+      await page.getByRole("button", { name: "Add Check" }).click();
+      await expect(page.getByText("Q1 4/10")).toBeVisible();
+    });
+
+    test("switching options updates the points box", async ({ page }) => {
+      await page.getByRole("radio", { name: /Partial credit/ }).check({ force: true });
+      await page.getByRole("radio", { name: /Most/ }).check({ force: true });
+      await expect(page.getByLabel("Points for Item 1")).toHaveValue("7");
+    });
   });
 
   test("a check the instructor added has no points box", async ({ page }) => {
