@@ -59,7 +59,9 @@ The privileged specs (`tests/e2e/course-gemini-key-*.spec.ts`) connect as `postg
 1. Create the marker with the SQL from the `deploy.yml` step, `vault.create_secret(<random hex>, 'byok-disposable-db-marker', ...)`.
 2. Export `BYOK_TEST_DB_URL`, `BYOK_TEST_DB_FINGERPRINT` (the marker's sha256) and `BYOK_TEST_DB_EXPECTED_PORT`.
 
-## PostgreSQL logging (release gate)
+## PostgreSQL logging (accepted limitation)
+
+**Decision (2026-11-04).** Jon asked that the PostgreSQL logging configuration stay as it is: "Please don't change `log_parameter_max_length=0`, it's fine as it is" ([#1160 comment](https://github.com/pawtograder/platform/pull/1160#issuecomment-6637901261)). The chart is unchanged, so the disclosure below still applies. It is a documented limitation, not a merge or deployment gate for #1126. The tested mitigation and the alternatives are kept here for future infrastructure work; none of them is deployed.
 
 **The disclosure.** PostgREST sends the RPC body as bind parameter `$1`. The chart sets `log_min_duration_statement: "1000"` and leaves `log_parameter_max_length` at its default, `-1`. A successful `set_course_gemini_key` that takes a second or more is therefore logged with the key in `DETAIL: Parameters: $1 = '{..."p_api_key":"..."}'`.
 
@@ -75,7 +77,7 @@ The error paths, `RAISE LOG` lines, lock-wait lines and `pg_stat_statements` did
 
 These tests used Postgres 17.6.1.132 with a hand-rendered copy of the chart's `postgresql.conf`. They did not use the chart's image (17.4.1.075), a Helm render, or staging.
 
-**Why it is not in this PR.** The setting belongs in `postgres.config` in `charts/pawtograder/values.yaml`. Changing that block alters the Postgres pod's `checksum/config` annotation, so the primary and the replica both restart. That needs a chart minor version bump (enforced by `postgres-restart-gate.sh`) and a maintenance window (`docs/operations/planned-maintenance.md`). It applies to the shared database, so the approach and the rollout are Jon's decision.
+**Why it is not in this PR.** The setting belongs in `postgres.config` in `charts/pawtograder/values.yaml`. Changing that block alters the Postgres pod's `checksum/config` annotation, so the primary and the replica both restart. That needs a chart minor version bump (enforced by `postgres-restart-gate.sh`) and a maintenance window (`docs/operations/planned-maintenance.md`). It applies to the shared database, so the decision was Jon's (see above).
 
 **Other approaches considered, none validated for deployment:**
 
@@ -86,11 +88,10 @@ These tests used Postgres 17.6.1.132 with a hand-rendered copy of the chart's `p
 | A function-level `SET` on the RPC                           | Ineffective: the duration line is written after the function's settings are restored.                                                            |
 | An operator `ALTER SYSTEM` + reload                         | Takes effect without a restart, but leaves configuration outside git.                                                                            |
 
-Until a mitigation is live in an environment, the credential write path must not be deployed there.
+While the current configuration is in place, anyone who can read an environment's PostgreSQL server logs may see keys saved there by a slow `set_course_gemini_key` call.
 
 ## Release gates (status 2026-11-04)
 
-- [ ] **PostgreSQL logging:** Jon approves an approach; it is rolled out before this migration reaches `staging` (and later production); a staging grep of the Postgres logs after a synthetic save finds no key.
 - [ ] **CI:** `e2e-local` passes on #1160 and #1161 with #1191 on `staging`. The last runs before #1191 merged failed only on the missing marker.
 - [ ] **Vault recovery:** the restore and PITR drills mount the same `PGSODIUM_ROOT_KEY`, but assert only row counts. Decrypting a Vault secret after a restore has not been verified.
 - [ ] **Deployment permissions:** under `migrate.sh` the RPCs are owned by `supabase_admin`. That was checked on a disposable database, not on `staging`.
