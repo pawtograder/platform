@@ -1,6 +1,7 @@
 "use client";
 
 import { refreshCurrentPage } from "@/lib/refreshCurrentPage";
+import { recoverFromStaleBundle } from "@/lib/staleBundleRecovery";
 import { useEffect, useRef } from "react";
 
 /** Shortest gap between two refreshes, counting the server render of the data on screen as the first. */
@@ -29,6 +30,10 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * delivered nothing, and retrying costs one request per show. A response cut off partway is the
  * exception, described on `refreshCurrentPage`.
  *
+ * An answer other than true means this tab can't refresh in place. False is another build. Nothing
+ * at all is a page that isn't the action's reply: a build that no longer has this action, or a
+ * signed-out tab redirected to sign-in. Either way a reload fixes it, as `router.refresh()` did.
+ *
  * A tab shown while the browser knows it's offline doesn't try. It picks up changes to its list at
  * its next show or a reload, the same as a dashboard that stays visible, and its countdown stays
  * current because useNow reads the browser clock. Nothing refreshes on `online`: #977 agreed a
@@ -42,6 +47,7 @@ export function useRefreshWhenShown(
 
   useEffect(() => {
     lastRefreshAt.current = Math.max(lastRefreshAt.current, Math.min(Date.now(), renderedAt));
+    let mounted = true;
 
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
@@ -51,12 +57,21 @@ export function useRefreshWhenShown(
       const previous = lastRefreshAt.current;
       if (now - previous < minIntervalMs) return;
       lastRefreshAt.current = now;
-      refreshCurrentPage().catch(() => {
-        if (lastRefreshAt.current === now) lastRefreshAt.current = previous;
-      });
+      refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA).then(
+        (sameBuild) => {
+          // Not after a link took the student elsewhere: a reload there could lose what they're typing.
+          if (sameBuild !== true && mounted) recoverFromStaleBundle();
+        },
+        () => {
+          if (lastRefreshAt.current === now) lastRefreshAt.current = previous;
+        }
+      );
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      mounted = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [renderedAt, minIntervalMs]);
 }

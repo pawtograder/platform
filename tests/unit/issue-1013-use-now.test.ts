@@ -7,9 +7,14 @@ jest.mock("next/navigation", () => ({
   useRouter: () => mockRouter
 }));
 
-const mockRefresh = jest.fn(() => Promise.resolve());
+const mockRefresh = jest.fn<Promise<boolean | undefined>, [string | undefined]>(() => Promise.resolve(true));
 jest.mock("@/lib/refreshCurrentPage", () => ({
-  refreshCurrentPage: () => mockRefresh()
+  refreshCurrentPage: (clientBuild?: string) => mockRefresh(clientBuild)
+}));
+
+const mockRecover = jest.fn();
+jest.mock("@/lib/staleBundleRecovery", () => ({
+  recoverFromStaleBundle: () => mockRecover()
 }));
 
 const PAGE_LOAD = new Date("2026-11-01T23:30:00Z").getTime();
@@ -46,6 +51,7 @@ beforeEach(() => {
   online = true;
   mockRouter.refresh.mockClear();
   mockRefresh.mockClear();
+  mockRecover.mockClear();
   jest.useFakeTimers({ now: PAGE_LOAD });
 });
 
@@ -346,6 +352,60 @@ describe("useRefreshWhenShown", () => {
     setVisibility("visible");
 
     expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  describe("when the answer isn't a refresh", () => {
+    const showPastTheMinute = async () => {
+      setVisibility("hidden");
+      act(() => {
+        jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        setVisibility("visible");
+      });
+    };
+
+    it("sends this tab's build, so the server can say it's another one", async () => {
+      process.env.NEXT_PUBLIC_GIT_COMMIT_SHA = "this-build";
+      try {
+        renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+        await showPastTheMinute();
+        expect(mockRefresh).toHaveBeenCalledWith("this-build");
+      } finally {
+        delete process.env.NEXT_PUBLIC_GIT_COMMIT_SHA;
+      }
+    });
+
+    it.each([
+      ["another build answered", false],
+      ["the answer wasn't the action's reply, as from a stale action ID or a signed-out tab", undefined]
+    ])("reloads when %s", async (_name, answer) => {
+      mockRefresh.mockImplementationOnce(() => Promise.resolve(answer));
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      await showPastTheMinute();
+      expect(mockRecover).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the page alone after a refresh that worked, and after one that failed", async () => {
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      await showPastTheMinute();
+      mockRefresh.mockImplementationOnce(() => Promise.reject(new Error("Failed to fetch")));
+      await showPastTheMinute();
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+
+    it("doesn't reload a page the student has moved on to", async () => {
+      let answer: (value: boolean) => void = () => {};
+      mockRefresh.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const { unmount } = renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      await showPastTheMinute();
+      unmount();
+      await act(async () => {
+        answer(false);
+      });
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
   });
 
   it("stops listening after unmount", () => {

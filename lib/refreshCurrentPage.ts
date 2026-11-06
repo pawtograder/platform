@@ -11,12 +11,19 @@ import { cookies } from "next/headers";
  * the page to `app/global-error.tsx`. `router.refresh()` and a link click do the same.
  *
  * Next re-renders the page when an action changes a cookie. This deletes one that is never set, so
- * it stores nothing. `revalidatePath()` would re-render too, but would also evict the server cache
- * for that path, for every user, on every tab switch.
+ * it stores nothing. `revalidatePath()` would re-render too, but that re-render would skip the server
+ * fetch cache on every tab switch.
  *
- * It takes no input and reads no data. The re-render is the page's own, with the caller's session,
- * so it returns what a GET of that URL would.
+ * `router.refresh()` also compares builds and reloads a tab a deploy left behind, and an action
+ * doesn't, so this compares them itself. On a mismatch it returns false with no cookie changed, so
+ * no tree comes back: a tree from another build can name client modules this tab doesn't have. A
+ * build with no SHA matches any other with none, so it relies on `app/global-error.tsx` for that.
+ *
+ * Its one input is only compared, and it reads no data. The re-render is the page's own, with the
+ * caller's session, so it returns what a GET of that URL would.
  */
-export async function refreshCurrentPage(): Promise<void> {
+export async function refreshCurrentPage(clientBuild: string | undefined): Promise<boolean> {
+  if (clientBuild !== process.env.NEXT_PUBLIC_GIT_COMMIT_SHA) return false;
   (await cookies()).delete("refresh-current-page");
+  return true;
 }
