@@ -27,7 +27,12 @@
 --   * a panel's own name holds no answer and is not counted, and neither are HTML and image
 --     elements;
 --   * a question is keyed by its valueName when it has one, else by its name cleaned the way
---     SurveyJS cleans it on load (see survey_question_answer_key).
+--     SurveyJS cleans it on load (see survey_question_answer_key). Two questions that share a
+--     valueName on purpose, which SurveyJS calls merging question values, are refused too.
+--
+-- Not checked: a question nested under a choice (`choices[].elements` on radiogroup and checkbox),
+-- which saves into the survey's scope, and item-level keys (multipletext items, matrix columns).
+-- None of these can be made in the Visual Builder.
 --
 -- Rollback: DROP TRIGGER IF EXISTS surveys_reject_duplicate_question_names ON public.surveys;
 
@@ -243,7 +248,7 @@ BEGIN
   RAISE EXCEPTION USING
     ERRCODE = 'check_violation',
     MESSAGE = format(
-      'This survey cannot be published: %s %s. Each question needs its own name, because answers are saved under it. Rename the repeats in the Visual Builder, then publish again. A question inside a panel, or one with a valueName, is renamed in the survey''s JSON.',
+      'This survey cannot be published: %s %s. Each question needs its own name, because answers are saved under it. Rename the repeats in the Visual Builder, then publish again. A question the builder has no name field for, such as one inside a panel or with a valueName, is renamed in the survey''s JSON.',
       CASE WHEN cardinality(v_duplicates) = 1
         THEN 'more than one question is named'
         ELSE 'more than one question uses each of the names'
