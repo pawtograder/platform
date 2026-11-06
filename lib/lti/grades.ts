@@ -19,6 +19,7 @@ import { ensureLineItem, publishScore, retractScore } from "./ags";
 import { ltiAdminClient, type LtiDb } from "./db";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { classifySupabase, timeRpc } from "@/lib/metrics";
+import * as Sentry from "@sentry/nextjs";
 
 type GradeSyncStateInsert = Database["public"]["Tables"]["lti_grade_sync_state"]["Insert"];
 
@@ -384,16 +385,29 @@ export type DrainItemResult = {
  * it. Instead we leave a failed row queued so the safety-net cron retries; the
  * reconcile is idempotent, so the retry is safe. (Per-student failures inside a
  * successful reconcile are recorded in `lti_grade_sync_state`, not re-queued.)
+ *
+ * Failures are reported to Sentry here rather than left for the caller: the
+ * per-assignment catch keeps the drain going, so nothing would reach the route's
+ * catch. A failed queue read throws, because returning [] would look exactly like
+ * an empty queue.
  */
 export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
-  const { data: queue } = await db
+  const { data: queue, error: queueError } = await db
     .from("lti_grade_sync_queue")
     .select("class_id, assignment_id, enqueued_at")
     .order("enqueued_at", { ascending: true })
     .limit(limit);
+  if (queueError) {
+    throw new Error(`Failed to read lti_grade_sync_queue: ${queueError.message}`);
+  }
 
   const out: DrainItemResult[] = [];
   for (const item of queue ?? []) {
+    const tags = {
+      lti_stage: "grade_drain",
+      lti_class_id: String(item.class_id),
+      lti_assignment_id: String(item.assignment_id)
+    };
     try {
       const result = await syncAssignmentGrades(item.class_id, item.assignment_id, db);
       out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: true, result });
@@ -404,15 +418,27 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
       // newer enqueued_at; matching on it means that delete affects 0 rows, the
       // row survives, and the next drain reprocesses it. Without this guard the
       // re-enqueued work would be silently dropped.
-      await db
+      const { error: deleteError } = await db
         .from("lti_grade_sync_queue")
         .delete()
         .eq("class_id", item.class_id)
         .eq("assignment_id", item.assignment_id)
         .eq("enqueued_at", item.enqueued_at);
+      if (deleteError) {
+        // The grades did reach the LMS, so the item still counts as ok. The row
+        // stays queued and the next drain re-runs an idempotent reconcile, but a
+        // delete that keeps failing would re-sync this assignment every drain.
+        Sentry.captureException(deleteError, { tags, level: "warning" });
+      }
     } catch (e) {
       // Leave the row queued (do NOT delete) so the safety-net cron retries.
-      out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: false, error: (e as Error).message });
+      Sentry.captureException(e, { tags });
+      out.push({
+        classId: item.class_id,
+        assignmentId: item.assignment_id,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e)
+      });
     }
   }
   return out;

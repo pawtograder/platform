@@ -28,8 +28,15 @@ jest.mock("@/lib/lti/db", () => ({
   })
 }));
 
+jest.mock("@sentry/nextjs", () => ({
+  captureException: jest.fn()
+}));
+
+import * as Sentry from "@sentry/nextjs";
 import { syncAssignmentGrades, drainGradeSyncQueue } from "@/lib/lti/grades";
 import { ensureLineItem, publishScore, retractScore } from "@/lib/lti/ags";
+
+const captureExceptionMock = Sentry.captureException as jest.Mock;
 
 const ensureLineItemMock = ensureLineItem as jest.Mock;
 const publishScoreMock = publishScore as jest.Mock;
@@ -76,7 +83,9 @@ function makeFakeDb(fixtures: Fixtures) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       del.then = (resolve: any, reject: any) => {
         deletes.push({ table, filters });
-        return Promise.resolve({ data: null, error: null }).then(resolve, reject);
+        // `<table>__delete` fixture lets a test make the delete itself fail.
+        const deleteError = fixtures[`${table}__delete`]?.error ?? null;
+        return Promise.resolve({ data: null, error: deleteError }).then(resolve, reject);
       };
       return del;
     };
@@ -471,6 +480,61 @@ describe("drainGradeSyncQueue — concurrency-safe dequeue", () => {
     const out = await drainGradeSyncQueue(db);
     expect(out[0].ok).toBe(false);
     expect(deletes.filter((d) => d.table === "lti_grade_sync_queue")).toHaveLength(0);
+  });
+});
+
+describe("drainGradeSyncQueue — failures reach Sentry", () => {
+  const queueRow = { class_id: 100, assignment_id: 5, enqueued_at: "2026-06-26T00:00:00.000Z" };
+
+  beforeEach(() => {
+    captureExceptionMock.mockClear();
+  });
+
+  test("throws when the queue read fails, instead of reporting an empty queue", async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        lti_grade_sync_queue: { data: null, error: { message: "connection reset", code: "08006" } }
+      })
+    );
+    await expect(drainGradeSyncQueue(db)).rejects.toThrow(/lti_grade_sync_queue.*connection reset/);
+  });
+
+  test("reports an assignment-level failure with class and assignment tags", async () => {
+    const { db } = makeFakeDb(
+      baseFixtures({
+        lti_grade_sync_queue: { data: [queueRow] },
+        lti_context_links: { data: [] } // getGradeContext throws → syncAssignmentGrades throws
+      })
+    );
+    const out = await drainGradeSyncQueue(db);
+    expect(out[0].ok).toBe(false);
+    expect(captureExceptionMock).toHaveBeenCalledTimes(1);
+    expect(captureExceptionMock.mock.calls[0][1]).toEqual({
+      tags: { lti_stage: "grade_drain", lti_class_id: "100", lti_assignment_id: "5" }
+    });
+  });
+
+  test("a failed queue-row delete is reported as a warning but the item stays ok", async () => {
+    const deleteError = { message: "permission denied", code: "42501" };
+    const { db } = makeFakeDb(
+      baseFixtures({
+        lti_grade_sync_queue: { data: [queueRow] },
+        lti_grade_sync_queue__delete: { data: null, error: deleteError }
+      })
+    );
+    const out = await drainGradeSyncQueue(db);
+    expect(out[0].ok).toBe(true);
+    expect(captureExceptionMock).toHaveBeenCalledWith(deleteError, {
+      tags: { lti_stage: "grade_drain", lti_class_id: "100", lti_assignment_id: "5" },
+      level: "warning"
+    });
+  });
+
+  test("a clean drain reports nothing", async () => {
+    const { db } = makeFakeDb(baseFixtures({ lti_grade_sync_queue: { data: [queueRow] } }));
+    const out = await drainGradeSyncQueue(db);
+    expect(out[0].ok).toBe(true);
+    expect(captureExceptionMock).not.toHaveBeenCalled();
   });
 });
 
