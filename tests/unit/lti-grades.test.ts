@@ -83,7 +83,6 @@ function makeFakeDb(fixtures: Fixtures) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       del.then = (resolve: any, reject: any) => {
         deletes.push({ table, filters });
-        // `<table>__delete` fixture lets a test make the delete itself fail.
         const deleteError = fixtures[`${table}__delete`]?.error ?? null;
         return Promise.resolve({ data: null, error: deleteError }).then(resolve, reject);
       };
@@ -503,7 +502,7 @@ describe("drainGradeSyncQueue — failures reach Sentry", () => {
     const { db } = makeFakeDb(
       baseFixtures({
         lti_grade_sync_queue: { data: [queueRow] },
-        lti_context_links: { data: [] } // getGradeContext throws → syncAssignmentGrades throws
+        lti_context_links: { data: [] }
       })
     );
     const out = await drainGradeSyncQueue(db);

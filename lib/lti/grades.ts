@@ -385,11 +385,6 @@ export type DrainItemResult = {
  * it. Instead we leave a failed row queued so the safety-net cron retries; the
  * reconcile is idempotent, so the retry is safe. (Per-student failures inside a
  * successful reconcile are recorded in `lti_grade_sync_state`, not re-queued.)
- *
- * Failures are reported to Sentry here rather than left for the caller: the
- * per-assignment catch keeps the drain going, so nothing would reach the route's
- * catch. A failed queue read throws, because returning [] would look exactly like
- * an empty queue.
  */
 export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
   const { data: queue, error: queueError } = await db
@@ -425,9 +420,6 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
         .eq("assignment_id", item.assignment_id)
         .eq("enqueued_at", item.enqueued_at);
       if (deleteError) {
-        // The grades did reach the LMS, so the item still counts as ok. The row
-        // stays queued and the next drain re-runs an idempotent reconcile, but a
-        // delete that keeps failing would re-sync this assignment every drain.
         Sentry.captureException(deleteError, { tags, level: "warning" });
       }
     } catch (e) {

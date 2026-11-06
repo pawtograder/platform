@@ -36,10 +36,6 @@ async function postHandler(request: Request) {
       }
       const results = await drainGradeSyncQueue(db);
       const failed = results.filter((r) => !r.ok).length;
-      // Any failed assignment makes the response a 500 so it shows up in the
-      // web_http_* 5xx series and in pg_net's response log. The failed rows stay
-      // queued for the safety-net cron, and each failure was already sent to
-      // Sentry by drainGradeSyncQueue.
       return NextResponse.json(
         { mode: "drain", count: results.length, failed, results },
         { status: failed > 0 ? 500 : 200 }
