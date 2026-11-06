@@ -170,13 +170,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("id, slug, title, has_autograder, submission_mode, template_repo, repo_mode, classes(slug,github_org)")
+    .select("*, classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
 
   if (!assignment) {
     throw new UserVisibleError("Assignment not found", 400);
+  }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub workflow synchronization is unavailable.", 400);
   }
 
   // PR-mode assignments never have an autograder: their submissions are ingested by
@@ -260,6 +263,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .from("assignments")
       .select("id, title, class_id, has_autograder, submission_mode")
       .eq("template_repo", templateRepo)
+      .eq("git_provider", "github")
       .neq("id", assignment_id)
       .order("id", { ascending: true })
       .range(offset, offset + SHARER_PAGE_SIZE - 1);

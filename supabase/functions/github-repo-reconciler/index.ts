@@ -105,6 +105,7 @@ Deno.serve(async (req) => {
       .from("repositories")
       .select("id, class_id, assignment_id, repository, created_at, assignments!inner(repo_mode)")
       .eq("is_github_ready", false)
+      .eq("git_provider", "github")
       .lt("created_at", cutoff)
       .is("creation_error", null)
       .not("assignments.repo_mode", "in", "(none,no_submission)")
