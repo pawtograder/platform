@@ -26,7 +26,8 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * be caught. A failed `router.refresh()` is a hard navigation: Chromium replaces the dashboard with
  * its error page and stays there, and WebKit's router stays suspended. A failed refresh here leaves
  * the page as it was and gives the minute back, so the next show tries again. A refresh that failed
- * delivered nothing, and retrying costs one request per show.
+ * delivered nothing, and retrying costs one request per show. A response cut off partway is the
+ * exception, described on `refreshCurrentPage`.
  *
  * A tab shown while the browser knows it's offline doesn't try. It picks up changes to its list at
  * its next show or a reload, the same as a dashboard that stays visible, and its countdown stays

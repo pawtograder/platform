@@ -5,8 +5,10 @@ import { cookies } from "next/headers";
 /**
  * Re-renders the calling page's Server Components, like `router.refresh()`, but its failure can be
  * caught. `router.refresh()` turns any failed fetch into a hard navigation, which replaces the page
- * with the browser's error page in Chromium and leaves WebKit's router suspended. A failed action
- * only rejects its promise and leaves the router alone.
+ * with the browser's error page in Chromium and leaves WebKit's router suspended. An action that
+ * fails before its response's root row arrives only rejects its promise and leaves the router alone.
+ * A response cut after that row is different: Next has started rendering it, and the missing rows send
+ * the page to `app/global-error.tsx`. `router.refresh()` and a link click do the same.
  *
  * Next re-renders the page when an action changes a cookie. This deletes one that is never set, so
  * it stores nothing. `revalidatePath()` would re-render too, but would also evict the server cache
