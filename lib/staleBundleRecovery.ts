@@ -137,7 +137,8 @@ export function isCutResponseError(error: unknown): boolean {
 export function reloadOnceReachable(reload: () => void = defaultReload): () => void {
   const reloadIfReachable = () => {
     if (document.visibilityState !== "visible") return;
-    void fetch("/favicon.ico", { method: "HEAD", cache: "no-store" }).then(
+    // This page's own background: a static file the middleware skips, and HEAD doesn't transfer it.
+    void fetch("/error-background.jpg", { method: "HEAD", cache: "no-store" }).then(
       (response) => {
         if (response.ok) recoverFromStaleBundle(reload);
       },

@@ -54,19 +54,28 @@ describe("isCutResponseError", () => {
 });
 
 describe("reloadOnceReachable", () => {
-  it("reloads once the server answers", async () => {
-    const reload = jest.fn();
-    const uninstall = reloadOnceReachable(reload);
-    await settle();
-    expect(mockFetch).toHaveBeenCalledWith("/favicon.ico", { method: "HEAD", cache: "no-store" });
-    expect(reload).toHaveBeenCalledTimes(1);
+  const reload = jest.fn();
+  let uninstall = () => {};
+
+  beforeEach(() => {
+    reload.mockClear();
+  });
+
+  // Here and not in each test, so a failed assertion doesn't leave a listener for the next one.
+  afterEach(() => {
     uninstall();
   });
 
+  it("reloads once the server answers", async () => {
+    uninstall = reloadOnceReachable(reload);
+    await settle();
+    expect(mockFetch).toHaveBeenCalledWith("/error-background.jpg", { method: "HEAD", cache: "no-store" });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the page while the network is down, and the next show tries again", async () => {
-    const reload = jest.fn();
     mockFetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    const uninstall = reloadOnceReachable(reload);
+    uninstall = reloadOnceReachable(reload);
     await settle();
     expect(reload).not.toHaveBeenCalled();
 
@@ -74,22 +83,18 @@ describe("reloadOnceReachable", () => {
     setVisibility("visible");
     await settle();
     expect(reload).toHaveBeenCalledTimes(1);
-    uninstall();
   });
 
   it("keeps the page when something else answers for the server, such as a proxy's 502", async () => {
-    const reload = jest.fn();
     mockFetch.mockResolvedValueOnce({ ok: false });
-    const uninstall = reloadOnceReachable(reload);
+    uninstall = reloadOnceReachable(reload);
     await settle();
     expect(reload).not.toHaveBeenCalled();
-    uninstall();
   });
 
   it("waits for a hidden tab to be shown", async () => {
-    const reload = jest.fn();
     visibility = "hidden";
-    const uninstall = reloadOnceReachable(reload);
+    uninstall = reloadOnceReachable(reload);
     await settle();
     expect(mockFetch).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
@@ -97,25 +102,22 @@ describe("reloadOnceReachable", () => {
     setVisibility("visible");
     await settle();
     expect(reload).toHaveBeenCalledTimes(1);
-    uninstall();
   });
 
   it("doesn't loop on a page that keeps failing", async () => {
-    const reload = jest.fn();
     // As after each reload: a new page, the same failure, the same tab's guard.
     for (let load = 0; load < 3; load++) {
-      const uninstall = reloadOnceReachable(reload);
-      await settle();
       uninstall();
+      uninstall = reloadOnceReachable(reload);
+      await settle();
     }
     expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("stops listening once uninstalled", async () => {
-    const reload = jest.fn();
     mockFetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    const uninstall = reloadOnceReachable(reload);
+    uninstall = reloadOnceReachable(reload);
     await settle();
     uninstall();
     setVisibility("hidden");
