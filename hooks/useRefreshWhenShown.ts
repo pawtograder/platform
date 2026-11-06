@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { refreshCurrentPage } from "@/lib/refreshCurrentPage";
 import { useEffect, useRef } from "react";
 
 /** Shortest gap between two refreshes, counting the server render of the data on screen as the first. */
@@ -22,19 +22,21 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * after mount. Keeping the later of that and the last refresh this hook sent means a browser clock
  * that runs ahead costs at most one extra refresh.
  *
- * A tab shown while the browser knows it's offline doesn't refresh: router.refresh() falls back to
- * location.replace when its fetch fails, and with no network that swaps the dashboard for the
- * browser's error page. It gets new surveys at its next show or a reload, the same as a dashboard
- * that stays visible, and its countdown stays current because useNow reads the browser clock.
- * Nothing refreshes on `online`: a fetch sent the moment the browser reports a connection can fail.
- * `navigator.onLine` can still say true on Wi-Fi that has only just woken or sits behind a captive
- * portal, and a 5xx takes the same fallback, so a show on a flaky network can still reach it.
+ * It refreshes through `refreshCurrentPage`, not `router.refresh()`, because that one's failure can
+ * be caught. A failed `router.refresh()` is a hard navigation: Chromium replaces the dashboard with
+ * its error page and stays there, and WebKit's router stays suspended. A failed refresh here leaves
+ * the page as it was and gives the minute back, so the next show tries again. A refresh that failed
+ * delivered nothing, and retrying costs one request per show.
+ *
+ * A tab shown while the browser knows it's offline doesn't try. It picks up changes to its list at
+ * its next show or a reload, the same as a dashboard that stays visible, and its countdown stays
+ * current because useNow reads the browser clock. Nothing refreshes on `online`: #977 agreed a
+ * refresh on show, and a fetch sent the moment the browser reports a connection can fail.
  */
 export function useRefreshWhenShown(
   renderedAt: number,
   minIntervalMs: number = REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS
 ): void {
-  const router = useRouter();
   const lastRefreshAt = useRef(0);
 
   useEffect(() => {
@@ -45,12 +47,15 @@ export function useRefreshWhenShown(
       // Before lastRefreshAt is written, so a skipped refresh doesn't use up the minute.
       if (!navigator.onLine) return;
       const now = Date.now();
-      if (now - lastRefreshAt.current < minIntervalMs) return;
+      const previous = lastRefreshAt.current;
+      if (now - previous < minIntervalMs) return;
       lastRefreshAt.current = now;
-      router.refresh();
+      refreshCurrentPage().catch(() => {
+        if (lastRefreshAt.current === now) lastRefreshAt.current = previous;
+      });
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [router, renderedAt, minIntervalMs]);
+  }, [renderedAt, minIntervalMs]);
 }
