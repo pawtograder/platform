@@ -102,4 +102,41 @@ spec:
           resources:
             {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
         {{- end }}
+        {{- /* An app that left database: pawtograder (moved to own, or turned off while
+        the other app stays on) leaves its role on this chart's Postgres with LOGIN and
+        the old password, and pg_hba.conf drops its reject lines with it. NOLOGIN closes
+        that; the step above turns LOGIN back on if the app returns to shared mode. */}}
+        {{- if .Values.postgres.enabled }}
+        {{- range $app := list "forgejo" "coder" }}
+        {{- if not (and (index $.Values $app).enabled (eq (index $.Values $app).database "pawtograder")) }}
+        - name: {{ $app }}-shared-nologin
+          image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.postgres.image) }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ "component" $.Values.appDatabases) | nindent 10 }}
+          env:
+            - name: PGHOST
+              value: {{ include "pawtograder.postgres.host" $ }}
+            - name: PGPORT
+              value: {{ $.Values.postgres.service.port | quote }}
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $.Values.secrets.names.postgres }}, key: POSTGRES_PASSWORD }
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -q; do echo "waiting for $PGHOST"; sleep 2; done
+              psql -v ON_ERROR_STOP=1 -qAt <<'SQL'
+              SELECT format('ALTER ROLE %I NOLOGIN', '{{ $app }}')
+                FROM pg_roles WHERE rolname = '{{ $app }}' AND rolcanlogin \gexec
+              SQL
+              echo "role {{ $app }} can't log in to $PGHOST"
+          resources:
+            {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
 {{- end }}

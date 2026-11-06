@@ -2965,6 +2965,48 @@ assert_app_hba "app hba: Coder shared but disabled renders no app lines" \
   "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}" \
   --set coder.enabled=false --set coderBootstrap.enabled=false
 
+# Leaving shared mode drops the reject lines above, so the app-databases Job
+# turns off the role's LOGIN on this chart's Postgres instead.
+apps_has "app nologin: both apps shared, no NOLOGIN step" no "shared-nologin" \
+  --show-only templates/app-databases.yaml
+apps_has "app nologin: Forgejo on own gets a NOLOGIN step" yes "name: forgejo-shared-nologin" \
+  "${APP_HBA_OWN_FORGEJO[@]}" --show-only templates/app-databases.yaml
+apps_has "app nologin: Forgejo on own leaves Coder's login alone" no "coder-shared-nologin" \
+  "${APP_HBA_OWN_FORGEJO[@]}" --show-only templates/app-databases.yaml
+apps_has "app nologin: Coder turned off gets a NOLOGIN step" yes "name: coder-shared-nologin" \
+  --set coder.enabled=false --set coderBootstrap.enabled=false --show-only templates/app-databases.yaml
+apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %I NOLOGIN" \
+  "${APP_HBA_OWN_CODER[@]}" --show-only templates/app-databases.yaml
+
+echo
+
+echo "== Coder template schedule =="
+
+apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
+  --set coderBootstrap.schedule.defaultTTL=1.5h --show-only templates/coder-bootstrap.yaml
+apps_has "schedule: Go's largest whole-hour duration renders" yes "--default-ttl '2562047h'" \
+  --set coderBootstrap.schedule.defaultTTL=2562047h --show-only templates/coder-bootstrap.yaml
+apps_refused "schedule: a duration past time.Duration is refused" \
+  "coderBootstrap.schedule.defaultTTL=\"999999999999h\" is longer than Coder accepts" \
+  --set coderBootstrap.schedule.defaultTTL=999999999999h
+apps_refused "schedule: a duration that adds up past time.Duration is refused" \
+  "coderBootstrap.schedule.activityBump=\"2562047h60m\" is longer than Coder accepts" \
+  --set coderBootstrap.schedule.activityBump=2562047h60m
+apps_refused "schedule: a dormancy under a minute is refused" \
+  "coderBootstrap.schedule.dormancyThreshold=\"30s\" must be 0 (off) or at least 1m" \
+  --set coderBootstrap.schedule.dormancyThreshold=30s
+apps_has "schedule: a one-minute dormancy renders" yes "--dormancy-threshold '1m'" \
+  --set coderBootstrap.schedule.dormancyThreshold=1m --show-only templates/coder-bootstrap.yaml
+apps_refused "schedule: a malformed duration is still refused" \
+  "must be a duration such as 2h" --set coderBootstrap.schedule.defaultTTL=1.h
+label="schedule: TTL and dormancy are separate edits"
+if ! apps --show-only templates/coder-bootstrap.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'templates edit' "$OUTFILE")" -ne 2 ] \
+  || grep -A2 -e "--default-ttl" "$OUTFILE" | grep -q -e "--dormancy"; then
+  echo "FAIL [$label]: expected two edits, with no dormancy flag in the TTL edit"; FAILED=1
+else echo "ok   [$label]"; fi
+
 echo
 
 echo
