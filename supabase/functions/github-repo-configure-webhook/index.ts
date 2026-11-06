@@ -131,6 +131,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!roles) {
     throw new SecurityError("Unauthorized");
   }
+  if (autograder.assignments.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub configuration is unavailable.", 400);
+  }
   if (watch_type === "template_repo" && autograder.assignments.has_autograder === false) {
     // No autograder means the handout has no grade.yml to hash (it is stripped at
     // creation) and nothing reads workflow_sha. Hashing would 404; the catch below
