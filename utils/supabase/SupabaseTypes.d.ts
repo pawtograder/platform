@@ -14283,6 +14283,19 @@ export type Database = {
         Args: { p_survey_id: string };
         Returns: boolean;
       };
+      survey_duplicate_question_names: {
+        Args: { p_json: Json };
+        Returns: string[];
+      };
+      survey_json_unwrapped: { Args: { p_json: Json }; Returns: Json };
+      survey_question_answer_key: { Args: { p_el: Json }; Returns: string };
+      survey_question_name_entries: {
+        Args: { p_elements: Json; p_path: string; p_scope: string };
+        Returns: {
+          name: string;
+          scope: string;
+        }[];
+      };
       sync_calendar_events: {
         Args: {
           p_calendar_type: string;
