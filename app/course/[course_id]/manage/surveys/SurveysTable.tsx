@@ -1,6 +1,7 @@
 "use client";
 
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
@@ -191,6 +192,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
       } catch (error) {
         // Dismiss loading toast and show error
         toaster.dismiss(loadingToast);
+        if (reportDuplicateNamesRefusal(error)) return;
         toaster.create({
           title: "Failed to Publish Survey",
           description: error instanceof Error ? error.message : "An unexpected error occurred",

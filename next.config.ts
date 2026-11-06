@@ -45,6 +45,7 @@ const optimizePackageImports = [
 ];
 
 const nextConfig: NextConfig = {
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   output: process.env.NEXT_OUTPUT_STANDALONE === "true" ? "standalone" : undefined,
   // Shared cross-replica cache. The default Next cache is per-instance, so with
   // >1 web replica `revalidateTag()` only invalidates the pod that handled the

@@ -1087,6 +1087,7 @@ export type Database = {
           description: string | null;
           due_date: string;
           enable_repo_analytics: boolean;
+          git_provider: string;
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
@@ -1138,6 +1139,7 @@ export type Database = {
           description?: string | null;
           due_date: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1189,6 +1191,7 @@ export type Database = {
           description?: string | null;
           due_date?: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -2026,6 +2029,7 @@ export type Database = {
           end_date: string | null;
           events_ics_url: string | null;
           features: Json | null;
+          forgejo_org: string | null;
           github_org: string | null;
           gradebook_id: number | null;
           handout_template_repo: string | null;
@@ -2054,6 +2058,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -2082,6 +2087,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -6819,6 +6825,7 @@ export type Database = {
           creation_attempts: number;
           creation_error: string | null;
           desired_handout_sha: string | null;
+          git_provider: string;
           id: number;
           is_github_ready: boolean;
           last_creation_attempt_at: string | null;
@@ -6840,6 +6847,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -6861,6 +6869,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -14129,6 +14138,17 @@ export type Database = {
           roles_repaired: number;
         }[];
       };
+      reserve_github_staff_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_is_grader: boolean;
+          p_latest_template_sha?: string;
+          p_repository: string;
+          p_upstream_repo?: string;
+        };
+        Returns: undefined;
+      };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;
@@ -14262,6 +14282,19 @@ export type Database = {
       survey_allows_response_editing: {
         Args: { p_survey_id: string };
         Returns: boolean;
+      };
+      survey_duplicate_question_names: {
+        Args: { p_json: Json };
+        Returns: string[];
+      };
+      survey_json_unwrapped: { Args: { p_json: Json }; Returns: Json };
+      survey_question_answer_key: { Args: { p_el: Json }; Returns: string };
+      survey_question_name_entries: {
+        Args: { p_elements: Json; p_path: string; p_scope: string };
+        Returns: {
+          name: string;
+          scope: string;
+        }[];
       };
       sync_calendar_events: {
         Args: {

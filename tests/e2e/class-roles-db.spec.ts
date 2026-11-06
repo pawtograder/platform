@@ -17,6 +17,9 @@
  * an update or delete that RLS hides changes 0 rows without one, so each blocked write is checked
  * with expectBlocked and then confirmed through the service client.
  *
+ * Step 4b (20261106140000_assignments_save_by_capability.sql): saving New and Edit Assignment follows
+ * manage_assignments, in the database and in the edge functions those saves call.
+ *
  * Step 5 (20261105120000_review_assignments_by_capability.sql): seeing and deleting review
  * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
  *
@@ -905,6 +908,288 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     } finally {
       await instructor.removeChannel(channel);
     }
+  });
+});
+
+test.describe("saving assignments follows manage_assignments (#1010, step 4b)", () => {
+  let classH: Awaited<ReturnType<typeof createClass>>;
+  let instructorH: TestingUser;
+  let plainGrader: TestingUser;
+  let headTa: TestingUser;
+
+  test.beforeAll(async () => {
+    classH = await createClass({ name: "E2E Assignment Managers H" });
+    instructorH = await createUserInClass({ role: "instructor", class_id: classH.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classH.id });
+    headTa = await createUserInClass({ role: "grader", class_id: classH.id });
+
+    const { data: headTaRole, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "Head TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: headTaRole!.id, capability: "manage_assignments" }))
+        .error
+    ).toBeNull();
+    const row = await userRole(headTa);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: headTaRole!.id }).eq("id", row.id)).error
+    ).toBeNull();
+  });
+
+  /** What New Assignment saves, in the same order: the self-review settings, then the assignment. */
+  async function createAssignmentAs(user: TestingUser) {
+    const client = await createAuthenticatedClient(user);
+    const { data: settings, error: settingsError } = await client
+      .from("assignment_self_review_settings")
+      .insert({ class_id: classH.id, enabled: false })
+      .select("id")
+      .single();
+    if (settingsError) return { client, settingsError, assignmentError: null, id: null };
+    const slug = `e2e-h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const { data: assignment, error: assignmentError } = await client
+      .from("assignments")
+      .insert({
+        class_id: classH.id,
+        title: `Lab ${slug}`,
+        slug,
+        due_date: addDays(new Date(), 7).toISOString(),
+        group_config: "individual",
+        self_review_setting_id: settings!.id
+      })
+      .select("id, self_review_setting_id")
+      .single();
+    return { client, settingsError, assignmentError, id: assignment?.id ?? null, settingsId: settings!.id };
+  }
+
+  async function assignmentTitle(id: number) {
+    const { data, error } = await supabase.from("assignments").select("title").eq("id", id).single();
+    expect(error).toBeNull();
+    return data!.title;
+  }
+
+  test("a grader on a custom role with manage_assignments creates and edits a full assignment", async () => {
+    const { client, settingsError, assignmentError, id, settingsId } = await createAssignmentAs(headTa);
+    expect(settingsError).toBeNull();
+    expect(assignmentError).toBeNull();
+
+    // The AFTER INSERT trigger set up the autograder row and both rubrics.
+    const { data: created, error: createdError } = await supabase
+      .from("assignments")
+      .select("grading_rubric_id, self_review_rubric_id, autograder(id)")
+      .eq("id", id!)
+      .single();
+    expect(createdError).toBeNull();
+    expect(created!.grading_rubric_id).not.toBeNull();
+    expect(created!.self_review_rubric_id).not.toBeNull();
+    expect(created!.autograder, "the trigger created the autograder row").not.toBeNull();
+
+    // Edit Assignment: the assignment, its self-review settings, and the autograder row.
+    const { data: renamed, error: renameError } = await client
+      .from("assignments")
+      .update({ title: "Renamed by Head TA" })
+      .eq("id", id!)
+      .select("id");
+    expect(renameError).toBeNull();
+    expect(renamed).toHaveLength(1);
+    expect(await assignmentTitle(id!)).toBe("Renamed by Head TA");
+
+    const { data: settingsUpdated, error: settingsUpdateError } = await client
+      .from("assignment_self_review_settings")
+      .update({ enabled: true, deadline_offset: 2 })
+      .eq("id", settingsId!)
+      .select("id");
+    expect(settingsUpdateError).toBeNull();
+    expect(settingsUpdated).toHaveLength(1);
+
+    const { data: graderRow, error: graderReadError } = await client
+      .from("autograder")
+      .select("id, grader_repo")
+      .eq("id", id!)
+      .maybeSingle();
+    expect(graderReadError).toBeNull();
+    expect(graderRow, "Edit reads grader_repo before turning the autograder on").not.toBeNull();
+    const { data: configured, error: configureError } = await client
+      .from("autograder")
+      .update({ max_submissions_count: 7 })
+      .eq("id", id!)
+      .select("id");
+    expect(configureError).toBeNull();
+    expect(configured).toHaveLength(1);
+  });
+
+  test("a default grader can't create or edit an assignment", async () => {
+    const { settingsError } = await createAssignmentAs(plainGrader);
+    expect(settingsError?.code, "creating self-review settings needs manage_assignments").toBe("42501");
+
+    const existing = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-existing-${Date.now().toString(36)}`
+    });
+    // Reuses the existing assignment's settings row, so the refused insert leaves nothing behind.
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { error: insertError } = await grader.from("assignments").insert({
+      class_id: classH.id,
+      title: "Grader's assignment",
+      slug: `e2e-h-grader-${Date.now().toString(36)}`,
+      due_date: addDays(new Date(), 7).toISOString(),
+      group_config: "individual",
+      self_review_setting_id: existing.self_review_setting_id!
+    });
+    expect(insertError?.code, "creating an assignment needs manage_assignments").toBe("42501");
+
+    const titleBefore = await assignmentTitle(existing.id);
+    expectBlocked(
+      await grader.from("assignments").update({ title: "Changed by a grader" }).eq("id", existing.id).select("id"),
+      "a default grader editing an assignment"
+    );
+    expect(await assignmentTitle(existing.id)).toBe(titleBefore);
+
+    const { data: graderRows, error: graderReadError } = await grader
+      .from("autograder")
+      .select("id")
+      .eq("id", existing.id);
+    expect(graderReadError).toBeNull();
+    expect(graderRows ?? [], "a default grader can't read the autograder row").toHaveLength(0);
+    expectBlocked(
+      await grader.from("autograder").update({ max_submissions_count: 99 }).eq("id", existing.id).select("id"),
+      "a default grader editing the autograder"
+    );
+  });
+
+  test("a manage_assignments holder can queue student-repo syncs for their class, and a default grader can't", async () => {
+    // Edit Assignment queues these through assignment-sync-autograder-workflow with the editor's JWT.
+    const assignment = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-sync-${Date.now().toString(36)}`
+    });
+    const student = await createUserInClass({ role: "student", class_id: classH.id });
+    const submission = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: classH.id
+    });
+    const { data: repo, error: repoError } = await supabase
+      .from("repositories")
+      .select("id")
+      .eq("repository", submission.repository_name)
+      .single();
+    expect(repoError).toBeNull();
+
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { error: refused } = await grader.rpc("queue_repository_syncs", { p_repository_ids: [repo!.id] });
+    expect(refused?.message ?? "", "a default grader is refused").toContain("manage_assignments is required");
+
+    const client = await createAuthenticatedClient(headTa);
+    const { error } = await client.rpc("queue_repository_syncs", { p_repository_ids: [repo!.id] });
+    expect(error, "a Head TA can queue syncs for their class's repositories").toBeNull();
+  });
+
+  test("a manage_assignments holder can move release_date into the past, which creates student repos", async () => {
+    // Before this fix the assignments trigger's call to create_all_repos_for_assignment refused a
+    // Head TA and rolled back the whole save.
+    const assignment = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      release_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-release-${Date.now().toString(36)}`
+    });
+    expect(assignment.template_repo, "the trigger only creates repos when there is a handout").toBeTruthy();
+    const pastRelease = new Date(Date.now() - 5 * 60_000).toISOString();
+
+    const grader = await createAuthenticatedClient(plainGrader);
+    expectBlocked(
+      await grader.from("assignments").update({ release_date: pastRelease }).eq("id", assignment.id).select("id"),
+      "a default grader moving the release date"
+    );
+
+    const client = await createAuthenticatedClient(headTa);
+    const { data, error } = await client
+      .from("assignments")
+      .update({ release_date: pastRelease })
+      .eq("id", assignment.id)
+      .select("id");
+    expect(error, "the save succeeds").toBeNull();
+    expect(data).toHaveLength(1);
+    const { data: after, error: afterError } = await supabase
+      .from("assignments")
+      .select("release_date")
+      .eq("id", assignment.id)
+      .single();
+    expect(afterError).toBeNull();
+    expect(new Date(after!.release_date!).getTime()).toBe(new Date(pastRelease).getTime());
+  });
+
+  test("a grader with manage_assignments still can't delete an assignment", async () => {
+    const existing = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-keep-${Date.now().toString(36)}`
+    });
+    const client = await createAuthenticatedClient(headTa);
+    expectBlocked(
+      await client.from("assignments").delete().eq("id", existing.id).select("id"),
+      "a Head TA deleting an assignment"
+    );
+    const { data, error } = await supabase.from("assignments").select("id").eq("id", existing.id);
+    expect(error).toBeNull();
+    expect(data).toHaveLength(1);
+  });
+
+  test("an instructor still creates an assignment with its autograder row", async () => {
+    const { settingsError, assignmentError, id } = await createAssignmentAs(instructorH);
+    expect(settingsError).toBeNull();
+    expect(assignmentError).toBeNull();
+    const { data, error } = await supabase.from("autograder").select("id").eq("id", id!);
+    expect(error).toBeNull();
+    expect(data).toHaveLength(1);
+  });
+
+  // The edge functions New and Edit call. A missing assignment fails after the access check, so a
+  // caller who passes the check gets a different error than a refused one (401), and nothing reaches
+  // GitHub.
+  async function invokeAs(user: TestingUser, fn: string, body: Record<string, unknown>) {
+    const client = await createAuthenticatedClient(user);
+    const { error } = await client.functions.invoke(fn, { body });
+    const response = (error as { context?: Response } | null)?.context;
+    return { status: response?.status ?? null, text: response ? await response.text() : "" };
+  }
+
+  for (const fn of [
+    "assignment-create-handout-repo",
+    "assignment-create-solution-repo",
+    "assignment-sync-autograder-workflow"
+  ]) {
+    test(`${fn} lets manage_assignments holders through and refuses default graders`, async () => {
+      const body = { class_id: classH.id, assignment_id: 2_000_000_000 };
+      expect((await invokeAs(plainGrader, fn, body)).status, "a default grader is refused").toBe(401);
+      expect((await invokeAs(headTa, fn, body)).status, "a Head TA passes the access check").not.toBe(401);
+    });
+  }
+
+  test("github-repo-configure-webhook lets manage_assignments holders through and refuses default graders", async () => {
+    const assignment = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-webhook-${Date.now().toString(36)}`
+    });
+    // A repository that doesn't exist: a caller who passes the check fails reading it, with nothing written.
+    const body = {
+      assignment_id: assignment.id,
+      new_repo: "pawtograder-e2e-missing/does-not-exist",
+      watch_type: "grader_solution"
+    };
+    // A default grader can't read the autograder row, so they are refused before the capability check.
+    const refused = await invokeAs(plainGrader, "github-repo-configure-webhook", body);
+    expect(refused.text, "a default grader is refused").toContain("Autograder not found");
+    const passed = await invokeAs(headTa, "github-repo-configure-webhook", body);
+    expect(passed.status, "a Head TA passes the access check").not.toBe(401);
+    expect(passed.text, "a Head TA can read the autograder row").not.toContain("Autograder not found");
+    expect(passed.text).not.toContain("does not have manage_assignments");
   });
 });
 

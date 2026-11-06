@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261103120000_role_capabilities_broadcast.sql`, `20261105120000_review_assignments_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261105120000_review_assignments_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -71,6 +71,18 @@ SQL join) inside the policy:
 
 It isn't slow. The function takes no per-row argument, so Postgres runs it once per statement
 (a hashed subplan), not once per row.
+
+## Checking a capability in an edge function
+
+```ts
+await assertUserHasCapabilityOrServiceRole(class_id, "manage_assignments", req.headers.get("Authorization"));
+```
+
+`assertUserHasCapabilityOrServiceRole` (in `supabase/functions/_shared/HandlerUtils.ts`) asks the same
+`user_class_ids_with_capability()` as the policies, so an edge function and the tables it writes agree.
+Like `assertUserIsInstructorOrServiceRole`, which it replaces for an action a capability covers, it
+also lets through the service role and an admin of any course. Load the row's class from the database
+and filter by it, so a capability in one class can't reach another class's rows.
 
 ## Adding a capability
 
