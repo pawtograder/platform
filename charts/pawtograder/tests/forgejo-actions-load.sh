@@ -61,7 +61,6 @@ plan() {
   echo "plan: $PUSHES pushes to $REPOS repos ($ORG/$(repo_name 1) ... $ORG/$(repo_name "$REPOS")) over $MINUTES min, one every ${SPACING}s"
   if [ -n "$WORKFLOW" ]; then echo "workflow: $WORKFLOW"; else echo "workflow: built-in, runs-on $RUNS_ON, sleeps ${JOB_SECONDS}s"; fi
   if [ -n "$CAPACITY" ] && [ "$CAPACITY" -gt 0 ]; then
-    # Jobs arrive every SPACING seconds and C run at once, each for JOB_SECONDS.
     awk -v n="$PUSHES" -v c="$CAPACITY" -v j="$JOB_SECONDS" -v t="$MINUTES" 'BEGIN {
       drain = n * j / c; arrive = t * 60
       printf "estimate at capacity %d: %.1f job-minutes of work, ", c, n * j / 60
@@ -83,14 +82,12 @@ else echo "set FORGEJO_TOKEN, or FORGEJO_USER and FORGEJO_PASSWORD" >&2; exit 2;
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 BODY="$TMP/body"
-# api METHOD PATH [JSON]: sets $code to the HTTP status and leaves the body in $BODY.
 api() {
   local args=(-sS --connect-timeout 10 --max-time 120 -o "$BODY" -w '%{http_code}' -H 'Content-Type: application/json' -X "$1")
   [ $# -lt 3 ] || args+=(--data-binary "$3")
   LAST="$1 $2"
   code=$(curl "${args[@]}" "${AUTH[@]}" "$API$2") || code=000
 }
-# need CODE...: exit unless the last call returned one of them.
 need() { case " $* " in *" $code "*) ;; *) echo "$LAST returned $code: $(head -c 300 "$BODY")" >&2; exit 1 ;; esac; }
 b64() { base64 | tr -d '\n'; }
 
@@ -120,7 +117,6 @@ for i in $(seq 1 "$REPOS"); do
   if [ "$code" = 404 ]; then
     api POST "/orgs/$ORG/repos" "$(jq -nc --arg n "$(repo_name "$i")" '{name: $n, private: true, auto_init: true, default_branch: "main"}')"; need 201
   fi
-  # [skip ci] keeps setup commits from queueing runs of their own.
   path=.forgejo/workflows/load.yml
   api GET "/repos/$r/contents/$path?ref=main"; need 200 404
   if [ "$code" = 200 ]; then
@@ -131,7 +127,7 @@ for i in $(seq 1 "$REPOS"); do
   fi
 done
 
-PUSHED="$TMP/pushed"   # repo <TAB> sha <TAB> epoch
+PUSHED="$TMP/pushed"
 : >"$PUSHED"
 t0=$(date +%s)
 echo "pushing"
@@ -152,7 +148,7 @@ for k in $(seq 1 "$PUSHES"); do
   [ $((k % 10)) -ne 0 ] || echo "  $k/$PUSHES pushed"
 done
 
-# Forgejo's timestamps are RFC 3339, possibly with an offset; the epoch is "never" for started/stopped.
+# Forgejo's timestamps may carry an offset; an epoch started/stopped means never.
 # shellcheck disable=SC2016 # jq, not shell
 JQ_TS='def ts: if . == null or startswith("0001-") or startswith("1970-") then null
   else sub("\\.[0-9]+"; "") | if endswith("Z") then fromdateiso8601
@@ -173,7 +169,6 @@ while :; do
       page=$((page + 1))
     done
   done < <(cut -f1 "$PUSHED" | sort -u)
-  # Only the runs this test's pushes started.
   jq -c --rawfile p "$PUSHED" '($p | split("\n") | map(select(length > 0) | split("\t")[1])) as $shas
     | map(select(.sha as $s | $shas | index($s)))' "$RUNS" >"$TMP/ours" && mv "$TMP/ours" "$RUNS"
   read -r total finished running waiting < <(jq -r '[length,
@@ -194,7 +189,6 @@ jq -r "$JQ_TS"'
   | ($all | map(select(.s != null and .e != null))) as $done
   | ($done | map(.s - .c)) as $wait
   | ($done | map(.e - .s)) as $dur
-  # Peak concurrency: walk start (+1) and stop (-1) events in time order, stops first on a tie.
   | ([$done[] | [.s, 1], [.e, -1]] | sort | reduce .[] as $ev ({n: 0, peak: 0}; .n += $ev[1] | .peak = ([.peak, .n] | max)) | .peak) as $peak
   | "finished runs:    \($done | length) of \($all | length) (\($all | map(select(.status == "failure")) | length) failed)",
     "queue wait:       \($wait | stats)",

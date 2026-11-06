@@ -644,10 +644,6 @@ on — production and the chart default already disagree.
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
 {{- end -}}
 
-{{/*
-Cilium PortProtocol entries covering every TCP port except the given ones, and all of UDP.
-Usage: {{ include "pawtograder.cilium.portsExcept" (list 80 443) }}
-*/}}
 {{- define "pawtograder.cilium.portsExcept" -}}
 {{- $from := 1 }}
 {{- $sorted := list }}

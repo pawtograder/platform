@@ -85,6 +85,22 @@ export function resolveResponseWriteFlags(args: {
 }
 
 /**
+ * Whether a value change on the survey page should reach the debounced autosave.
+ *
+ * Drafts always autosave. `allow_response_editing` only decides whether a *submitted* response
+ * may still change; it used to gate autosave as a whole (issue #977), so on a survey without
+ * editing -- the default -- nothing was written until Complete and a refresh lost every answer.
+ * A submitted response on such a survey renders read-only and RLS refuses the update, so there
+ * is nothing to save.
+ */
+export function shouldAutosaveResponse(args: {
+  loadedState: LoadedResponseState;
+  allowResponseEditing: boolean;
+}): boolean {
+  return args.loadedState !== "submitted" || args.allowResponseEditing;
+}
+
+/**
  * Whether the survey form renders read-only.
  *
  * A submitted response locks only when the survey does not allow editing; on an editable

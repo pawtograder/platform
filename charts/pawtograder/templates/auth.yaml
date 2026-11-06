@@ -94,8 +94,15 @@ spec:
               value: {{ include "pawtograder.api.url" . }}/auth/v1
             - name: GOTRUE_SITE_URL
               value: {{ include "pawtograder.web.url" . }}
+            {{- /* GoTrue allows any path on SITE_URL's host; other hosts need `/**` since `/*` matches one segment. */}}
+            {{- $uriAllow := list (printf "%s/*" (include "pawtograder.web.url" .)) }}
+            {{- range $c := .Values.channels }}
+            {{- if $c.web }}
+            {{- $uriAllow = append $uriAllow (printf "https://%s/**" (include "pawtograder.channel.host" (dict "ctx" $ "channel" $c))) }}
+            {{- end }}
+            {{- end }}
             - name: GOTRUE_URI_ALLOW_LIST
-              value: "{{ include "pawtograder.web.url" . }}/*"
+              value: {{ join "," $uriAllow | quote }}
             - name: GOTRUE_DISABLE_SIGNUP
               value: {{ .Values.auth.disableSignup | quote }}
             - name: GOTRUE_JWT_DEFAULT_GROUP_NAME

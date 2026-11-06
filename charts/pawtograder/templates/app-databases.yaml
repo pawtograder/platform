@@ -87,10 +87,7 @@ spec:
             - name: APP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $.Release.Name }}-{{ $app }}-db, key: PGPASSWORD }
-          {{- /* No REVOKE CONNECT here. On the shared server the role gets CONNECT on
-          Pawtograder's database through PUBLIC, which a per-role REVOKE doesn't take
-          away, and revoking it from PUBLIC would lock out Supabase's own roles.
-          pg_hba.conf (postgres-config.yaml) limits the role to its own database. */}}
+          {{- /* No REVOKE CONNECT: revoking it from PUBLIC locks out Supabase's roles; pg_hba.conf confines the role. */}}
           command:
             - sh
             - -ec
@@ -107,5 +104,39 @@ spec:
               echo "database {{ $app }} ready on $PGHOST"
           resources:
             {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
+        {{- end }}
+        {{- /* A role leaving shared mode keeps LOGIN and its password while pg_hba.conf drops its reject lines. */}}
+        {{- if .Values.postgres.enabled }}
+        {{- range $app := list "forgejo" "coder" }}
+        {{- if not (and (index $.Values $app).enabled (eq (index $.Values $app).database "pawtograder")) }}
+        - name: {{ $app }}-shared-nologin
+          image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.postgres.image) }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ "component" $.Values.appDatabases) | nindent 10 }}
+          env:
+            - name: PGHOST
+              value: {{ include "pawtograder.postgres.host" $ }}
+            - name: PGPORT
+              value: {{ $.Values.postgres.service.port | quote }}
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $.Values.secrets.names.postgres }}, key: POSTGRES_PASSWORD }
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -q; do echo "waiting for $PGHOST"; sleep 2; done
+              psql -v ON_ERROR_STOP=1 -qAt <<'SQL'
+              SELECT format('ALTER ROLE %I NOLOGIN', '{{ $app }}')
+                FROM pg_roles WHERE rolname = '{{ $app }}' AND rolcanlogin \gexec
+              SQL
+              echo "role {{ $app }} can't log in to $PGHOST"
+          resources:
+            {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
+        {{- end }}
+        {{- end }}
         {{- end }}
 {{- end }}

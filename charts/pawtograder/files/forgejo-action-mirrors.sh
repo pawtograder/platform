@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Creates a pull mirror in Forgejo for each action in $MIRRORS, so bare `uses:` names resolve
-# against this Forgejo (DEFAULT_ACTIONS_URL) instead of github.com. Safe to rerun.
-#
-# Env: FORGEJO_URL (Forgejo's Service URL), MIRRORS (JSON file of {repo, url, ref}),
-#      MIRROR_INTERVAL, and AUTH_DIR holding a `token` (or, for local testing, `username` and `password`).
 set -euo pipefail
 
 FAPI="$FORGEJO_URL/api/v1"
@@ -11,7 +6,6 @@ AUTH_DIR=${AUTH_DIR:-/run/forgejo-auth}
 OUT=$(mktemp)
 trap 'rm -f "$OUT"' EXIT
 
-# fj METHOD PATH [BODY]: sets $code and leaves the response body in $OUT.
 fj() {
   local args=(-sS --connect-timeout 10 --max-time 300 -o "$OUT" -w '%{http_code}' -H 'Content-Type: application/json' -X "$1")
   if [ -f "$AUTH_DIR/token" ]; then
@@ -24,7 +18,6 @@ fj() {
   code=$(curl "${args[@]}" "$FAPI$2") || code=000
 }
 die() { echo "$*" >&2; exit 1; }
-# For a failed request: also show the start of Forgejo's answer.
 http_die() { echo "$*" >&2; head -c 500 "$OUT" >&2; echo >&2; exit 1; }
 norm() { local u=${1%/}; printf '%s' "${u%.git}"; }
 

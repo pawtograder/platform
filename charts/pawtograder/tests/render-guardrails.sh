@@ -2713,8 +2713,7 @@ assert_refused "kong: an unknown metricsListener is refused" \
   "kong.metricsListener must be admin or status" --set kong.metricsListener=bogus
 
 echo "== forgejo runner and coder: isolation and the job namespace =="
-# These components need the release named pawtograder, so the cases render with
-# that name and the shipped overlay rather than BASE.
+# These components need the release named pawtograder.
 APPS=(-n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml")
 apps() { helm template pawtograder "$CHART" "${APPS[@]}" "$@" 2>"$ERRFILE"; }
 apps_refused() {
@@ -2728,7 +2727,6 @@ apps_refused() {
     echo "ok   [$label]"
   fi
 }
-# apps_has "<label>" <yes|no> "<substring>" <extra args...>: the full render must (not) contain it.
 apps_has() {
   local label="$1" expect="$2" want="$3"; shift 3
   if ! apps "$@" >"$OUTFILE"; then
@@ -2892,15 +2890,6 @@ echo
 
 echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
 
-# With database: pawtograder, the forgejo and coder roles live on this chart's
-# Postgres, where CONNECT is granted to PUBLIC and `host all all` admits every
-# role from the private ranges. postgres-config.yaml puts per-app lines ahead
-# of those, so each role reaches only the database named after it and is
-# rejected on every other one. Postgres uses the first matching line, so the
-# lines must come before `local all all`, and the `reject` lines must name
-# exactly the apps in shared mode. With no app in shared mode none of it
-# renders: pg_hba.conf feeds the primary's checksum/config, and an extra line
-# would restart Postgres on every install.
 APP_HBA_OWN_CODER=(
   --set coder.database=own --set coder-db.enabled=true
   --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
@@ -2910,9 +2899,6 @@ APP_HBA_OWN_FORGEJO=(
   --set forgejo.database=own --set forgejo-db.enabled=true
   --set forgejo.gitea.config.database.HOST=pawtograder-forgejo-db:5432
 )
-# assert_app_hba "<label>" "<comma-separated shared apps, or empty>" <helm args...>
-# Renders with release name pawtograder (the apps require it) and compares the
-# lines ahead of `local all all`, whitespace-normalized and comments dropped.
 assert_app_hba() {
   local label="$1" apps="$2"; shift 2
   local want="" got app cidr
@@ -2964,6 +2950,46 @@ assert_app_hba "app hba: both apps on own servers render no app lines" \
 assert_app_hba "app hba: Coder shared but disabled renders no app lines" \
   "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}" \
   --set coder.enabled=false --set coderBootstrap.enabled=false
+
+apps_has "app nologin: both apps shared, no NOLOGIN step" no "shared-nologin" \
+  --show-only templates/app-databases.yaml
+apps_has "app nologin: Forgejo on own gets a NOLOGIN step" yes "name: forgejo-shared-nologin" \
+  "${APP_HBA_OWN_FORGEJO[@]}" --show-only templates/app-databases.yaml
+apps_has "app nologin: Forgejo on own leaves Coder's login alone" no "coder-shared-nologin" \
+  "${APP_HBA_OWN_FORGEJO[@]}" --show-only templates/app-databases.yaml
+apps_has "app nologin: Coder turned off gets a NOLOGIN step" yes "name: coder-shared-nologin" \
+  --set coder.enabled=false --set coderBootstrap.enabled=false --show-only templates/app-databases.yaml
+apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %I NOLOGIN" \
+  "${APP_HBA_OWN_CODER[@]}" --show-only templates/app-databases.yaml
+
+echo
+
+echo "== Coder template schedule =="
+
+apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
+  --set coderBootstrap.schedule.defaultTTL=1.5h --show-only templates/coder-bootstrap.yaml
+apps_has "schedule: Go's largest whole-hour duration renders" yes "--default-ttl '2562047h'" \
+  --set coderBootstrap.schedule.defaultTTL=2562047h --show-only templates/coder-bootstrap.yaml
+apps_refused "schedule: a duration past time.Duration is refused" \
+  "coderBootstrap.schedule.defaultTTL=\"999999999999h\" is longer than Coder accepts" \
+  --set coderBootstrap.schedule.defaultTTL=999999999999h
+apps_refused "schedule: a duration that adds up past time.Duration is refused" \
+  "coderBootstrap.schedule.activityBump=\"2562047h60m\" is longer than Coder accepts" \
+  --set coderBootstrap.schedule.activityBump=2562047h60m
+apps_refused "schedule: a dormancy under a minute is refused" \
+  "coderBootstrap.schedule.dormancyThreshold=\"30s\" must be 0 (off) or at least 1m" \
+  --set coderBootstrap.schedule.dormancyThreshold=30s
+apps_has "schedule: a one-minute dormancy renders" yes "--dormancy-threshold '1m'" \
+  --set coderBootstrap.schedule.dormancyThreshold=1m --show-only templates/coder-bootstrap.yaml
+apps_refused "schedule: a malformed duration is still refused" \
+  "must be a duration such as 2h" --set coderBootstrap.schedule.defaultTTL=1.h
+label="schedule: TTL and dormancy are separate edits"
+if ! apps --show-only templates/coder-bootstrap.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'templates edit' "$OUTFILE")" -ne 2 ] \
+  || grep -A2 -e "--default-ttl" "$OUTFILE" | grep -q -e "--dormancy"; then
+  echo "FAIL [$label]: expected two edits, with no dormancy flag in the TTL edit"; FAILED=1
+else echo "ok   [$label]"; fi
 
 echo
 

@@ -269,7 +269,6 @@ spec:
     - to:
         - namespaceSelector:
             {{- toYaml .Values.networkPolicy.ingressControllerNamespaceSelector | nindent 12 }}
-    # The subchart's default access URL is coderd's in-cluster Service.
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }

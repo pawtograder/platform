@@ -4,9 +4,7 @@ auth:
   oauthServer:
     enabled: true
 
-# Job pods and workspaces run students' code, so the render refuses them while meta, Studio or
-# Kong's admin API is up. On Cilium, networkPolicy.cilium.enabled=true lets you keep those.
-# See README "Isolating jobs and workspaces".
+# The render refuses job pods and workspaces alongside meta, Studio or Kong's admin API unless networkPolicy.cilium.enabled.
 meta:
   enabled: false
 studio:
@@ -61,7 +59,7 @@ forgejo:
         MINIO_LOCATION: us-east-1
         MINIO_BASE_PATH: forgejo/
 
-# Enable the runner after Forgejo is up: it needs the token Secrets below (README "Actions runner", "Action mirrors").
+# Enable the runner after Forgejo is up: it needs the token Secrets below.
 forgejoRunner:
   enabled: true
   jobNamespace: pawtograder-actions # create it first

@@ -152,7 +152,6 @@ resource "coder_agent" "main" {
     set -e
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
-    # Every workspace runs the same release, whatever the image or an earlier start left on PATH.
     if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
       CS="$HOME/.local/lib/code-server-$V/bin/code-server"
       if [ ! -x "$CS" ]; then

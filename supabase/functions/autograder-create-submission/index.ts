@@ -13,6 +13,7 @@ import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
+  assertJobTokenMatchesRepository,
   cloneRepository,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
@@ -560,6 +561,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
+  await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
 
   const org = repository.split("/")[0];
   scope?.setTag("org", org);

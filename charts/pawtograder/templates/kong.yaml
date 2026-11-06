@@ -104,8 +104,6 @@ spec:
             - name: KONG_PROXY_LISTEN
               value: "0.0.0.0:{{ .Values.kong.service.port }}"
             {{- if and .Values.monitoring.enabled (eq .Values.kong.metricsListener "status") }}
-            # The status API serves /metrics and /status only; it has no
-            # POST /config, so a pod that reaches it can't replace the routes.
             - name: KONG_ADMIN_LISTEN
               value: "off"
             - name: KONG_STATUS_LISTEN
