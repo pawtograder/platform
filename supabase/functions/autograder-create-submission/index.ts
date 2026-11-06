@@ -14,7 +14,6 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   assertJobTokenMatchesRepository,
-  cloneRepository,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
@@ -22,6 +21,7 @@ import {
   PrimaryRateLimitError,
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
@@ -1537,7 +1537,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // Clone the repository
         const repoToClone = getRepoToCloneConsideringE2E(repository);
         const repo = await handleGitHubApiCall(
-          () => cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
+          () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
           org,
           "cloneRepository",
           adminSupabase,
