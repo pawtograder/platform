@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addDays } from "date-fns";
-import { createClass, createUserInClass, insertAssignment, setUserSisId, supabase } from "./TestingUtils";
+import { createClass, createUserInClass, insertAssignment, loginAsUser, setUserSisId, supabase } from "./TestingUtils";
 
 // A 1x1 transparent PNG — enough bytes for storage upload; the `fake` vision
 // provider derives identity/OCR from the object path, not the pixels.
@@ -24,7 +24,7 @@ async function runExamWorker(): Promise<void> {
 }
 
 test.describe("Exam grading OCR pipeline", () => {
-  test("template -> rubric -> scan -> OCR/match -> finalize -> grader artifact", async () => {
+  test("template -> rubric -> scan -> OCR/match -> finalize -> grader artifact", async ({ page }) => {
     test.setTimeout(120_000);
 
     // --- 1) class, instructor, two students with SIS ids ---
@@ -103,9 +103,9 @@ test.describe("Exam grading OCR pipeline", () => {
 
     const { data: parts } = await supabase
       .from("rubric_parts")
-      .select("id, data")
+      .select("id, exam_question_id")
       .eq("rubric_id", assignment.grading_rubric_id as number);
-    const examParts = (parts ?? []).filter((p) => (p.data as { exam_question_id?: number } | null)?.exam_question_id);
+    const examParts = (parts ?? []).filter((p) => p.exam_question_id != null);
     expect(examParts.length).toBeGreaterThanOrEqual(1);
 
     // --- 4) seed a scan batch: 3 single-page exams (Alice=111, Bob=222, unknown=999) ---
@@ -248,6 +248,16 @@ test.describe("Exam grading OCR pipeline", () => {
       const data = examArtifact!.data as { questions: { ocr_text: string }[] };
       expect(Array.isArray(data.questions)).toBe(true);
       expect(data.questions.length).toBeGreaterThanOrEqual(1);
+      // An artifact row existing is not the same as the region having matched anything, and
+      // non-empty text is not the same as THIS student's text. Aryan tried a finalize that loads
+      // pages by batch_id instead of scanned_submission_id on review: Bob's artifact came back
+      // holding Alice's answers, so Bob would be graded on Alice's work, and a non-empty check
+      // passed anyway. The fake provider puts the page's SIS id in every word, so checking for it
+      // pins the text to the student whose page it came from.
+      const expectedSis = s.profile_id === alice.private_profile_id ? aliceSis : bobSis;
+      for (const q of data.questions) {
+        expect(q.ocr_text, `ocr_text for submission ${s.id}`).toContain(`sis-${expectedSis}`);
+      }
     }
 
     // negative: the unmatched exam was never turned into a submission
@@ -257,6 +267,29 @@ test.describe("Exam grading OCR pipeline", () => {
       .eq("id", unmatched!.id)
       .single();
     expect(stillUnmatched?.submission_id).toBeNull();
+
+    // --- 7b) a grader gives partial credit on an exam check, and the score follows ---
+    const grader = await createUserInClass({ role: "grader", class_id: course.id });
+    const graded = (submissions ?? [])[1]!;
+    await loginAsUser(page, grader, course);
+    await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${graded.id}/files`);
+    await page.getByRole("checkbox", { name: /Item 1/ }).check({ force: true });
+    await page.getByLabel("Points for Item 1").fill("3");
+    await page.getByRole("button", { name: "Add Check" }).click();
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("submission_reviews")
+            .select("total_score, total_autograde_score")
+            .eq("id", graded.grading_review_id as number)
+            .single();
+          return Number(data?.total_score) - Number(data?.total_autograde_score);
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(3);
+    await expect(page.getByText("Q1 3/5")).toBeVisible();
 
     // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
     const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
