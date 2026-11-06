@@ -582,6 +582,32 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     expect(responseWrites).toBe(1);
   });
 
+  test("pressing Try again moves keyboard focus to the save status", async ({ page }) => {
+    // The retries have to run out first: about 15 s.
+    test.setTimeout(90_000);
+    const survey = await seedSurvey("Try Again Focus Survey");
+    await loginAsUser(page, student, course);
+    let serverDown = true;
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      if (route.request().method() !== "POST" || !serverDown) return route.fallback();
+      await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Saved by Try again");
+    const tryAgain = page.getByRole("button", { name: "Try again" });
+    await expect(tryAgain).toBeVisible({ timeout: 30_000 });
+
+    serverDown = false;
+    await tryAgain.focus();
+    await page.keyboard.press("Enter");
+
+    // The button goes away as soon as the status changes, which must not send focus to the body.
+    await expect(page.getByRole("status").filter({ hasText: SAVED_STATUS })).toBeFocused();
+    await expect(tryAgain).toHaveCount(0);
+    await expect.poll(() => storedResponse(survey.id)).toEqual({ q1: "Saved by Try again", is_submitted: false });
+  });
+
   test("a Complete that never gets an answer and never reached the database keeps the form", async ({ page }) => {
     test.setTimeout(90_000);
     const survey = await seedSurvey("Unanswered Complete Survey");
