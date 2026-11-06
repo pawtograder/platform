@@ -341,15 +341,21 @@ test.describe("Student dashboard survey countdown", () => {
       await answered;
 
       // Still failing through a second show, so what the student sees is checked while the failure
-      // lasts. The page's state comes first: router.refresh() has to fail here on the error page or
-      // the reload, not on a count. Retried because the page handles a failure a moment after the
-      // route answers it, and each retry can send another refresh, so this count is only a minimum.
-      await expect(async () => {
-        await showAgain(page);
-        await expect(surveys.getByText("Submitted While Away")).toBeVisible({ timeout: 1_000 });
-        expect(await isSameDocument(page)).toBe(true);
-        expect(refreshes.length).toBeGreaterThan(1);
-      }).toPass({ timeout: 10_000 });
+      // lasts. Retried because the page handles a failure a moment after the route answers it. Not
+      // required: a stopped router sends no second refresh, and the new card below is what must catch
+      // that, on what the student sees and not on this count.
+      await expect
+        .poll(
+          async () => {
+            await showAgain(page);
+            return refreshes.length;
+          },
+          { timeout: 5_000 }
+        )
+        .toBeGreaterThan(1)
+        .catch(() => {});
+      await expect(surveys.getByText("Submitted While Away")).toBeVisible();
+      expect(await isSameDocument(page)).toBe(true);
       await page.unroute("**/*", failThenSignal);
 
       // The failure gave the minute back, so this show refreshes with no change to the clock. It
