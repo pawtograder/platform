@@ -224,7 +224,8 @@ test.describe("Student dashboard survey countdown", () => {
       await expect(surveys.getByText("Submitted While Away")).toHaveCount(0);
       expect(refreshes).toHaveLength(2);
 
-      // The router still works: a link renders the survey page, in the same document.
+      // The router still works: a link renders the survey page, in the same document. This survey
+      // opened after the page loaded, so the course controller has to find it by ID.
       await page.clock.resume();
       await surveys.getByRole("link", { name: /Opened After The Failure/ }).click();
       await expect(page.getByRole("heading", { name: "Opened After The Failure", level: 1 })).toBeVisible();

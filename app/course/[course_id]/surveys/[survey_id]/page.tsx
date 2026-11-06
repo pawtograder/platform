@@ -86,10 +86,29 @@ export default function SurveyTakingPage() {
   // refetch. Keying the loader effect on the object re-ran the fetch and handed
   // <SurveyComponent> a fresh `initialData` object mid-edit (issue #881).
   const surveyId = survey?.id;
-  // The table controller yields `undefined` both while it is still loading and
-  // for a row that does not exist, so a miss is only knowable once its initial
-  // fetch has completed.
-  const surveyMissing = surveysReady && survey == null;
+  // The table controller yields `undefined` both while it is still loading and for a row that does
+  // not exist, so a miss is only knowable once its initial fetch has completed. Even then it can be
+  // wrong: students get no realtime for surveys, so a survey created after that fetch is one the
+  // controller hasn't seen, and the dashboard's refresh links to it. The controller fetches such a
+  // row by ID but doesn't say when it finds none, so ask directly before calling it missing.
+  const [missingSurveyId, setMissingSurveyId] = useState<string | null>(null);
+  const notInController = surveysReady && survey == null;
+  useEffect(() => {
+    if (!notInController) return;
+    let cancelled = false;
+    void controller.client
+      .from("surveys")
+      .select("id")
+      .eq("id", survey_id as string)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled && !data) setMissingSurveyId(survey_id as string);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [notInController, controller.client, survey_id]);
+  const surveyMissing = notInController && missingSurveyId === survey_id;
   const allowResponseEditing = survey?.allow_response_editing ?? false;
 
   // Load existing response for this user
