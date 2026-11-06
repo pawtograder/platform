@@ -92,8 +92,20 @@ export default function SurveyTakingPage() {
   // controller hasn't seen, and the dashboard's refresh links to it. The controller fetches such a
   // row by ID but doesn't say when it finds none, so ask directly before calling it missing. It also
   // never asks again for an ID that failed or found nothing once, so a row found here is fetched again.
+  // A controller whose first fetch failed never becomes ready and never retries, so it counts as a miss
+  // too. Otherwise every survey in it would sit on the loading text until a reload.
+  const [surveysFailed, setSurveysFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    controller.surveys.readyPromise.catch(() => {
+      if (!cancelled) setSurveysFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [controller]);
   const [missingSurveyId, setMissingSurveyId] = useState<string | null>(null);
-  const notInController = surveysReady && survey == null;
+  const notInController = (surveysReady || surveysFailed) && survey == null;
   useEffect(() => {
     if (!notInController) return;
     let cancelled = false;
