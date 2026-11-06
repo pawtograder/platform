@@ -575,7 +575,7 @@ test.describe("Student dashboard survey countdown", () => {
       expect(await notFoundToasts(page).count()).toBe(0);
     });
 
-    test("goes to the list, and doesn't hang, if the survey can't be fetched either", async ({ page }) => {
+    test("leaves for the list if the survey can't be fetched either", async ({ page }) => {
       const listFailed = await openWithSurveysListFailing(page, "All Failed", () => true);
 
       await page.waitForURL(new RegExp(`/course/${course.id}/surveys$`));
