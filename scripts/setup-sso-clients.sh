@@ -49,12 +49,34 @@ curl -fsS -o /dev/null "$auth/.well-known/openid-configuration" || {
 existing="$(gotrue "$auth/admin/oauth/clients?per_page=1000")"
 
 # GoTrue returns a client secret only at creation, so register a new client and revoke old ones after rollout.
-old_ids() { echo "$existing" | jq -r --arg n "$1" '(.clients // .)[] | select(.client_name == $n) | .client_id'; }
+# Another release or app on this GoTrue may have a client with the same name, so a client counts as this
+# release's only if it sends sign-ins to this release's callback (which also catches clients left by a run
+# that stopped before revoking), or if it is the client ID in this release's Secret (which catches a changed URL).
+secret_value() {
+  kubectl -n "$NAMESPACE" get secret "$1" -o "jsonpath={.data.$2}" 2>/dev/null | base64 -d || true
+}
+old_ids() {
+  echo "$existing" | jq -r --arg n "$1" --arg r "$2" --arg cur "$3" \
+    '(if type == "array" then . else .clients end)[] | select((.client_name == $n and ((.redirect_uris // []) | index($r))) or (.client_id == $cur and $cur != "")) | .client_id'
+}
 create_client() {
   gotrue -X POST "$auth/admin/oauth/clients" \
     -d "$(jq -n --arg n "$1" --arg r "$2" '{client_name: $n, redirect_uris: [$r], client_type: "confidential"}')"
 }
-revoke() { for id in $1; do gotrue -X DELETE -o /dev/null "$auth/admin/oauth/clients/$id"; done; }
+# A failed revoke leaves an unused client behind, which shouldn't stop the other app's setup.
+# Keep going, and exit non-zero at the end. A 404 means the client is already gone.
+revoke_failed=""
+revoke() {
+  local id code
+  for id in $1; do
+    code="$(gotrue -X DELETE -o /dev/null -w '%{http_code}' "$auth/admin/oauth/clients/$id" 2>/dev/null || true)"
+    case "$code" in
+      2??|404) echo "  revoked old client $id" ;;
+      *) echo "  could not revoke old client $id (HTTP ${code:-none}); delete it by hand" >&2
+         revoke_failed=1 ;;
+    esac
+  done
+}
 
 apply_secret() {
   local name="$1"; shift
@@ -75,8 +97,9 @@ restart() {
 
 if [ -n "$forgejo_url" ]; then
   echo "Registering Forgejo ($forgejo_url)"
-  fj_old="$(old_ids Forgejo)"
-  fj="$(create_client Forgejo "$forgejo_url/user/oauth2/$FORGEJO_SOURCE_NAME/callback")"
+  fj_cb="$forgejo_url/user/oauth2/$FORGEJO_SOURCE_NAME/callback"
+  fj_old="$(old_ids Forgejo "$fj_cb" "$(secret_value "$RELEASE-forgejo-oauth" key)")"
+  fj="$(create_client Forgejo "$fj_cb")"
   apply_secret "$RELEASE-forgejo-oauth" "key=$(echo "$fj" | jq -r .client_id)" "secret=$(echo "$fj" | jq -r .client_secret)"
   restart "$RELEASE-forgejo"
   revoke "$fj_old"
@@ -84,10 +107,16 @@ fi
 
 if [ -n "$coder_url" ]; then
   echo "Registering Coder ($coder_url)"
-  cd_old="$(old_ids Coder)"
-  cd_="$(create_client Coder "$coder_url/api/v2/users/oidc/callback")"
+  cd_cb="$coder_url/api/v2/users/oidc/callback"
+  cd_old="$(old_ids Coder "$cd_cb" "$(secret_value "$RELEASE-coder-oidc" CODER_OIDC_CLIENT_ID)")"
+  cd_="$(create_client Coder "$cd_cb")"
   apply_secret "$RELEASE-coder-oidc" "CODER_OIDC_CLIENT_ID=$(echo "$cd_" | jq -r .client_id)" \
     "CODER_OIDC_CLIENT_SECRET=$(echo "$cd_" | jq -r .client_secret)"
   restart coder
   revoke "$cd_old"
+fi
+
+if [ -n "$revoke_failed" ]; then
+  echo "Both apps use their new clients, but some old clients are still registered; see above." >&2
+  exit 1
 fi
