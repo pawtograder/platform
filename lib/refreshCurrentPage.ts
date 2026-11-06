@@ -8,7 +8,8 @@ import { cookies } from "next/headers";
  * with the browser's error page in Chromium and leaves WebKit's router suspended. An action that
  * fails before its response's root row arrives only rejects its promise and leaves the router alone.
  * A response cut after that row is different: Next has started rendering it, and the missing rows send
- * the page to `app/global-error.tsx`. `router.refresh()` and a link click do the same.
+ * the page to `app/global-error.tsx`, which reloads once the server answers. `router.refresh()` and a
+ * link click do the same.
  *
  * Next re-renders the page when an action changes a cookie. This deletes one that is never set, so
  * it stores nothing. `revalidatePath()` would re-render too, but that re-render would skip the server
