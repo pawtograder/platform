@@ -24,6 +24,6 @@
       "@/global-setup": ["./tests/global-setup"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", "supabase", ".next", "charts"]
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next-sso-e2e/types/**/*.ts"],
+  "exclude": ["node_modules", "supabase", ".next", ".next-sso-e2e", "charts"]
 }
