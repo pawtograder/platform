@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261105120000_review_assignments_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261106150000_review_assignments_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
