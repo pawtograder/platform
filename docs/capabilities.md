@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -94,7 +94,16 @@ Write one migration that:
 
 Only migrations add capabilities. The app can't write `capabilities` or the default roles.
 
-## In the UI
+## For the UI: useCapability
 
-The `useCapability(name)` hook (#1010, step 3) will read the same `user_class_capabilities()`, so a
-page hides a control exactly when the policy would refuse the action.
+```tsx
+const canPublish = useCapability("publish_groups");
+```
+
+`useCapability` (in `hooks/useClassProfiles.tsx`) reads the same `user_class_capabilities()`, so a
+page hides a control exactly when the policy would refuse the action. It returns `false` while
+loading and while an instructor is viewing as a student.
+
+Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
+again when the staff channel says the viewer's own role changed or a role's capabilities changed
+(a burst of changes gives one re-ask). Other people's role changes are ignored.

@@ -775,3 +775,123 @@ test.describe("custom roles build on the default grader role", () => {
     expect(await holds(headTa, "publish_groups"), "a custom role can only add").toBe(true);
   });
 });
+
+test.describe("what useCapability reads (#1010, step 3)", () => {
+  let classF: Awaited<ReturnType<typeof createClass>>;
+  let classG: Awaited<ReturnType<typeof createClass>>;
+  let instructorF: TestingUser;
+  let studentF: TestingUser;
+  let plainGraderF: TestingUser;
+  let headTaF: TestingUser;
+  let graderG: TestingUser;
+  let headTaRoleId: number;
+
+  async function capabilitiesOf(user: TestingUser) {
+    const client = await createAuthenticatedClient(user);
+    const { data, error } = await client.rpc("user_class_capabilities");
+    expect(error).toBeNull();
+    return (data ?? []).map((row) => `${row.class_id}:${row.capability}`).sort();
+  }
+
+  // The default grader role gains publish_groups, and Head TA adds manage_review_assignments.
+  test.beforeAll(async () => {
+    classF = await createClass({ name: "E2E Use Capability F" });
+    classG = await createClass({ name: "E2E Use Capability G" });
+    instructorF = await createUserInClass({ role: "instructor", class_id: classF.id });
+    studentF = await createUserInClass({ role: "student", class_id: classF.id });
+    plainGraderF = await createUserInClass({ role: "grader", class_id: classF.id });
+    headTaF = await createUserInClass({ role: "grader", class_id: classF.id });
+    graderG = await createUserInClass({ role: "grader", class_id: classG.id });
+    const roles = await defaultRoles(classF.id);
+    const graderRoleId = roles.find((r) => r.default_for === "grader")!.id;
+
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: graderRoleId, capability: "publish_groups" })).error
+    ).toBeNull();
+    const { data: headTaRole, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classF.id, name: "Head TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    headTaRoleId = headTaRole!.id;
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .insert({ role_id: headTaRoleId, capability: "manage_review_assignments" })
+      ).error
+    ).toBeNull();
+    const row = await userRole(headTaF);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: headTaRoleId }).eq("id", row.id)).error
+    ).toBeNull();
+  });
+
+  test("user_class_capabilities() returns the role's extras plus the grader base, per class", async () => {
+    expect(await capabilitiesOf(headTaF), "Head TA: the extra plus the grader base").toEqual([
+      `${classF.id}:manage_review_assignments`,
+      `${classF.id}:publish_groups`
+    ]);
+    expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
+      `${classF.id}:publish_groups`
+    ]);
+    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([]);
+    expect(await capabilitiesOf(studentF), "a student gets nothing from the grader base").toEqual([]);
+  });
+
+  test("changing a custom role's capabilities sends a staff note for its class", async () => {
+    const instructor = await createAuthenticatedClient(instructorF);
+    const topic = `class:${classF.id}:staff`;
+    const notes: Record<string, unknown>[] = [];
+
+    // safe_broadcast only sends to channels with a live lease, as the app's RealtimeChannelManager registers.
+    expect(
+      (
+        await instructor.rpc("register_realtime_subscription", {
+          p_channel: topic,
+          p_client_id: crypto.randomUUID()
+        })
+      ).error
+    ).toBeNull();
+    // The test client doesn't persist its session, so hand the realtime socket the token itself.
+    const { data: session } = await instructor.auth.getSession();
+    await instructor.realtime.setAuth(session.session!.access_token);
+    const channel = instructor.channel(topic, { config: { private: true } });
+    channel.on("broadcast", { event: "broadcast" }, ({ payload }) => notes.push(payload));
+    await new Promise<void>((resolve, reject) =>
+      channel.subscribe((status, err) => {
+        if (status === "SUBSCRIBED") resolve();
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") reject(err ?? new Error(status));
+      })
+    );
+
+    try {
+      const capabilityNotes = (operation: string) =>
+        notes.filter((n) => n.table === "role_capabilities" && n.operation === operation);
+
+      expect(
+        (await instructor.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "manage_assignments" }))
+          .error
+      ).toBeNull();
+      await expect.poll(() => capabilityNotes("INSERT").length, { timeout: 15_000 }).toBe(1);
+
+      expect(
+        (
+          await instructor
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", headTaRoleId)
+            .eq("capability", "manage_assignments")
+        ).error
+      ).toBeNull();
+      await expect.poll(() => capabilityNotes("DELETE").length, { timeout: 15_000 }).toBe(1);
+
+      for (const note of [...capabilityNotes("INSERT"), ...capabilityNotes("DELETE")]) {
+        expect(note).toMatchObject({ type: "staff_data_change", class_id: classF.id, row_id: headTaRoleId });
+      }
+    } finally {
+      await instructor.removeChannel(channel);
+    }
+  });
+});
