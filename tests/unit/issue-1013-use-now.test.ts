@@ -251,7 +251,7 @@ describe("useRefreshWhenShown", () => {
     expect(mockRouter.refresh).not.toHaveBeenCalled();
   });
 
-  it("skips the refresh while offline, and catches up once when the network returns", () => {
+  it("skips the refresh while offline, and a skip doesn't use up the minute", () => {
     renderHook(() => useRefreshWhenShown(PAGE_LOAD));
 
     setVisibility("hidden");
@@ -263,34 +263,12 @@ describe("useRefreshWhenShown", () => {
     expect(mockRouter.refresh).not.toHaveBeenCalled();
 
     setOnline(true);
-    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
-  });
-
-  it("waits for the tab to be shown when the network returns while it is hidden", () => {
-    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
-
     setVisibility("hidden");
-    act(() => {
-      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
-    });
-    setOnline(false);
-    setOnline(true);
-    expect(mockRouter.refresh).not.toHaveBeenCalled();
-
     setVisibility("visible");
     expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("doesn't refresh when the network returns inside the minute", () => {
-    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
-
-    setOnline(false);
-    setOnline(true);
-
-    expect(mockRouter.refresh).not.toHaveBeenCalled();
-  });
-
-  it("doesn't refresh a tab that stayed visible when the network drops and returns", () => {
+  it("sends nothing on `online`, whether the tab stayed visible or was just shown", () => {
     renderHook(() => useRefreshWhenShown(PAGE_LOAD));
 
     act(() => {
@@ -298,24 +276,23 @@ describe("useRefreshWhenShown", () => {
     });
     setOnline(false);
     setOnline(true);
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
 
+    setVisibility("hidden");
+    setOnline(false);
+    setVisibility("visible");
+    setOnline(true);
     expect(mockRouter.refresh).not.toHaveBeenCalled();
   });
 
   it("stops listening after unmount", () => {
     const { unmount } = renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+    unmount();
 
-    // A refresh is skipped first, so a leaked `online` listener would have something to catch up on.
     setVisibility("hidden");
     act(() => {
       jest.advanceTimersByTime(2 * REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
     });
-    setOnline(false);
-    setVisibility("visible");
-    unmount();
-
-    setOnline(true);
-    setVisibility("hidden");
     setVisibility("visible");
 
     expect(mockRouter.refresh).not.toHaveBeenCalled();
