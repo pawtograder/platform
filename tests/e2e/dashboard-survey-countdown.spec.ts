@@ -207,17 +207,28 @@ test.describe("Student dashboard survey countdown", () => {
     return data.id;
   }
 
+  // The course controller's first fetch of the class's surveys.
+  function isSurveysList(url: string) {
+    const { pathname, searchParams } = new URL(url);
+    return pathname.endsWith("/rest/v1/surveys") && searchParams.get("class_id") === `eq.${course.id}`;
+  }
+
   // The dashboard with one survey on it, marked, and the clock past the minute, so a show refreshes it.
+  // The controller's list has answered too, which networkidle doesn't promise: on a busy machine the page
+  // goes quiet for longer than that before its client code fetches anything. Otherwise what a test does
+  // next races that fetch, so a survey it seeds may be in the list, and an outage it starts may fail it.
   async function openDashboard(page: Page, title: string, origin = "") {
     await loginAsUser(page, student, course);
     const dueAt = Date.now() + 30 * 60_000;
     await seedPublishedSurvey(title, dueAt);
     await page.clock.install();
     const refreshes = recordDashboardRefreshes(page, course.id);
+    const listAnswered = page.waitForResponse((response) => isSurveysList(response.url()));
     await page.goto(`${origin}/course/${course.id}`);
     const surveys = surveysToComplete(page);
     await expect(surveys.getByText(title)).toBeVisible();
     await page.waitForLoadState("networkidle");
+    await listAnswered;
     await markDocument(page);
     await page.clock.setSystemTime(dueAt - 15 * 60_000);
     return { surveys, refreshes, dueAt };
@@ -532,6 +543,43 @@ test.describe("Student dashboard survey countdown", () => {
       await expect(surveyHeading(page, "Fetch Failed Once")).toBeVisible();
       expect(failed).toBe(true);
       expect(await notFoundToasts(page).count()).toBe(0);
+    });
+
+    // A page that loads while the network is failing: the controller's first fetch fails, and it never
+    // asks again. This is what CI found, when that fetch landed inside the outage of a test above.
+    async function openWithSurveysListFailing(page: Page, title: string, alsoFails: (url: string) => boolean) {
+      await loginAsUser(page, student, course);
+      await seedPublishedSurvey(title, Date.now() + 30 * 60_000);
+      let listFailed = false;
+      await page.route(/\/rest\/v1\/surveys\?/, async (route) => {
+        const url = route.request().url();
+        if (isSurveysList(url)) listFailed = true;
+        if (isSurveysList(url) || alsoFails(url)) {
+          await route.abort("failed");
+          return;
+        }
+        await route.fallback();
+      });
+      await page.goto(`/course/${course.id}`);
+      await surveysToComplete(page)
+        .getByRole("link", { name: new RegExp(title) })
+        .click();
+      return () => listFailed;
+    }
+
+    test("still opens after the controller's list failed to load", async ({ page }) => {
+      const listFailed = await openWithSurveysListFailing(page, "List Failed", () => false);
+
+      await expect(surveyHeading(page, "List Failed")).toBeVisible();
+      expect(listFailed()).toBe(true);
+      expect(await notFoundToasts(page).count()).toBe(0);
+    });
+
+    test("goes to the list, and doesn't hang, if the survey can't be fetched either", async ({ page }) => {
+      const listFailed = await openWithSurveysListFailing(page, "All Failed", () => true);
+
+      await page.waitForURL(new RegExp(`/course/${course.id}/surveys$`));
+      expect(listFailed()).toBe(true);
     });
 
     test("still opens after it was visited before it opened", async ({ page }) => {
