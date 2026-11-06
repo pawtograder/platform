@@ -85,7 +85,7 @@ metadata:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 automountServiceAccountToken: false
 ---
-# Only in the job namespace: creating pods lets the dispatcher mount any Secret there, which is why nothing else lives there.
+# Pod-create lets the dispatcher mount any Secret in the job namespace, so nothing else lives there.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

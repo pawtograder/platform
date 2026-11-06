@@ -1,8 +1,4 @@
-# grade.yml for handouts hosted on this chart's Forgejo, run by forgejoRunner. It goes at
-# .github/workflows/grade.yml in the Forgejo copy of the handout (template) repository, in place of
-# the GitHub one from pawtograder/template-assignment-handout; Forgejo reads .github/workflows
-# when a repository has no .forgejo/workflows. Pawtograder compares each student's copy with the
-# handout's, so change it in the handout, never per student. README "Grade workflow on Forgejo".
+# Goes at .github/workflows/grade.yml in the Forgejo handout repo; see README "Grade workflow on Forgejo".
 #
 # To the intrepid student: You must not edit this file. Tampering with this file could
 # reveal the instructor's solution to you. Hence, Pawtograder will automatically compare
@@ -23,21 +19,17 @@ on:
   push:
     branches:
       - main
-# Without this, each push cancels the grading runs of the student's earlier pushes still waiting
-# or running, which GitHub doesn't do.
+# Forgejo otherwise cancels a student's earlier runs on each push; GitHub doesn't.
 concurrency:
   cancel-in-progress: false
 
 jobs:
   grade:
     name: Submit and Grade Assignment
-    # Any of forgejoRunner.labels. The job runs in the runner image (images/forgejo-runner), which
-    # already has JDK 21, Maven, Python 3, pip, Node 22 and git, so there are no setup-* steps:
-    # those download a toolchain from GitHub on every run. Bake anything else into the image.
+    # The runner image already has JDK 21, Maven, Python 3, Node 22 and git; setup-* steps would hit GitHub every run.
     runs-on: ubuntu-latest
     steps:
-      # Both actions resolve against the chart's mirrors (forgejoRunner.actions.mirrors). An action
-      # that isn't mirrored needs adding there, or its full https://... URL here.
+      # An action not in forgejoRunner.actions.mirrors needs its full https://... URL.
       - name: Checkout
         id: checkout
         uses: actions/checkout@v4
@@ -46,8 +38,7 @@ jobs:
       - name: Collect Submission and Run Grader
         uses: pawtograder/assignment-action@v4
         with:
-          grading_server: "https://api.pawtograder.example.com" # your API gateway origin
-          # Literals: Forgejo's runner leaves github.action_ref and github.action_repository empty
-          # in `with:`, and the action refuses empty values. Keep them in step with `uses:` above.
+          grading_server: "https://api.pawtograder.example.com"
+          # Literals: Forgejo's runner leaves github.action_ref/action_repository empty; match `uses:`.
           action_ref: "v4"
           action_repository: "pawtograder/assignment-action"

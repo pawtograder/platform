@@ -5,7 +5,6 @@ SA=/var/run/secrets/kubernetes.io/serviceaccount
 KAPI="https://kubernetes.default.svc/api/v1/namespaces/$JOB_NS"
 FAPI="$FORGEJO_URL/api/v1"
 SELECTOR="pawtograder.net/forgejo-job=$PREFIX"
-# Forgejo's runner endpoints: admin/ covers every repository, orgs/<org>/ only that organization's.
 SCOPES=admin
 [ -z "$ORGS" ] || SCOPES=$(tr ',' '\n' <<<"$ORGS" | sed 's|^|orgs/|')
 
@@ -37,7 +36,7 @@ spawn() {
 
 while true; do
   sleep "$POLL_INTERVAL"
-  # Job pods are owned by the chart's ConfigMap in the job namespace, so disabling the runner or uninstalling garbage-collects them.
+  # Job pods are owned by the job-namespace ConfigMap so uninstalling garbage-collects them.
   OWNER=$(kube "$KAPI/configmaps/$PREFIX" | jq -c --arg n "$PREFIX" '[{apiVersion: "v1", kind: "ConfigMap", name: $n, uid: .metadata.uid}]') || continue
   pods=$(kube "$KAPI/pods?labelSelector=$SELECTOR") || continue
   for p in $(jq -r '.items[] | select(.status.phase == "Succeeded" or .status.phase == "Failed") | .metadata.name' <<<"$pods"); do

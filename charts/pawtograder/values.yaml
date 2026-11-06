@@ -115,20 +115,10 @@ networkPolicy:
   # Extra NetworkPolicyIngressRule entries appended to a release-wide allow
   # policy (e.g. another namespace that consumes the API in-cluster).
   extraIngressRules: []
-  # forgejoRunner and coder run code from students. Their pods don't carry this
-  # release's labels, so only their own egress policies constrain them. The
-  # render refuses either one while meta, Studio or Kong's admin API is up,
-  # unless one of the two values below is set. See README "Isolating jobs and
-  # workspaces".
-  #
-  # true asserts that the CNI enforces the chart's egress NetworkPolicies for job
-  # and workspace pods, and that no other policy (a cluster-wide allow on Cilium,
-  # say) allows them more.
+  # true asserts the CNI enforces job/workspace egress policies and nothing else allows them more.
   cniEnforcesEgress: false
   cilium:
-    # Renders a CiliumNetworkPolicy with egressDeny rules for job pods and
-    # workspaces. A deny wins over any allow, so this holds whatever else the
-    # cluster allows. Needs Cilium and RBAC on ciliumnetworkpolicies.cilium.io.
+    # Needs Cilium and RBAC on ciliumnetworkpolicies.cilium.io.
     enabled: false
 
 # -----------------------------------------------------------------------------
@@ -1862,10 +1852,7 @@ kong:
     limits: { cpu: "2", memory: "6Gi" }
   service:
     port: 8000
-  # Where /metrics is served when monitoring.enabled. `admin` opens the admin API
-  # on 0.0.0.0:8001 with no auth; in DB-less mode its POST /config replaces every
-  # route, so any pod that reaches it can reroute the API. `status` serves
-  # /metrics from the read-only status API on :8100 and turns the admin API off.
+  # `admin` exposes Kong's unauthenticated POST /config on :8001; `status` serves /metrics on :8100 with admin off.
   metricsListener: admin
   terminationGracePeriodSeconds: 45
   preStopSleepSeconds: 10
@@ -2706,7 +2693,7 @@ forgejo:
   podSecurityContext:
     fsGroup: 1000
     seccompProfile: { type: RuntimeDefault }
-  # The subchart's documented rootless set, without SYS_CHROOT (SSH is off); applies to its init containers too.
+  # Subchart's rootless set minus SYS_CHROOT (SSH is off); also applies to its init containers.
   containerSecurityContext:
     allowPrivilegeEscalation: false
     capabilities: { drop: [ALL] }
@@ -2739,7 +2726,6 @@ forgejo:
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
-      # Where bare `uses:` names resolve, which the chart works out from forgejoRunner.actions.
       - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
@@ -2759,7 +2745,6 @@ forgejo:
         DISABLE_REGISTRATION: true
       actions:
         ENABLED: true
-        # DEFAULT_ACTIONS_URL comes from forgejoRunner.actions, through additionalConfigFromEnvs.
       session:
         PROVIDER: db
       cache:
@@ -2794,22 +2779,17 @@ forgejo-db:
 
 forgejoRunner:
   enabled: false
-  # Required: an existing namespace other than the release's for the job pods. See README "Actions runner".
+  # Required: an existing namespace other than the release's.
   jobNamespace: ""
   image:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
   arch: amd64
-  imagePullSecrets: [] # used by the dispatcher and the job pods, so the Secrets must exist in both namespaces
-  # Jobs that run at once. Size it from jobNamespace's ResourceQuota: floor(quota / per-job value)
-  # for each quota key, taking the smallest. The dispatcher and mirror hook run in the release's
-  # namespace, so no headroom is needed unless the quota is shared with other namespaces; then use
-  # the part left for jobs. Set quota below to have the render check it. README "Sizing capacity".
+  imagePullSecrets: [] # must exist in both the release and job namespaces
+  # Size from jobNamespace's ResourceQuota; see README "Sizing capacity".
   capacity: 2
-  # jobNamespace's ResourceQuota `hard` (pods, requests.cpu, limits.memory, ...), or the part of it
-  # set aside for Actions jobs. When set, capacity × each job pod's value must fit, or the render
-  # fails. Empty skips the check.
+  # jobNamespace's ResourceQuota `hard`; when set, the render fails unless capacity × per-job values fit.
   quota: {}
   labels:
     - ubuntu-latest:host
@@ -2824,38 +2804,28 @@ forgejoRunner:
     requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
     limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
   dispatcher:
-    # Required: Secret with a Forgejo access `token`. Scope write:admin from a site admin, or with
-    # `orgs` set, write:organization from an owner of each org. See README "Actions runner".
+    # Required: Secret with a Forgejo `token` (write:admin, or write:organization from each org's owner with `orgs`).
     tokenSecret: ""
-    # Organizations whose jobs to run. Empty runs every repository's jobs through the admin API.
+    # Empty uses the admin API (every repository).
     orgs: []
     resources:
       requests: { cpu: 10m, memory: 32Mi }
       limits: { cpu: 200m, memory: 128Mi }
-  # Needs a CNI that enforces NetworkPolicy.
   networkPolicy:
     enabled: true
     privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
     extraEgress: []
-  # Where jobs get the actions that bare `uses:` names (actions/checkout@v4) point at; the chart
-  # sets Forgejo's [actions] DEFAULT_ACTIONS_URL from it. README "Action mirrors".
   actions:
-    # mirrors: a post-install hook keeps a pull mirror in Forgejo of each entry below, and bare
-    #   names resolve against Forgejo's Service. A bare name that isn't listed fails to resolve;
-    #   list it, or write the full https://... URL in the workflow.
-    # upstream: no mirrors; bare names resolve against upstreamURL, and every job clones its
-    #   actions from there. With the runner off, the chart always uses upstreamURL.
+    # mirrors: unlisted bare `uses:` names fail to resolve. upstream: jobs clone from upstreamURL.
     source: mirrors
     upstreamURL: https://github.com
-    # Forgejo pulls each mirror this often (Forgejo's floor is [mirror] MIN_INTERVAL, 10m).
+    # Forgejo's floor is [mirror] MIN_INTERVAL, 10m.
     mirrorInterval: 8h
-    # repo is the bare name workflows use; url defaults to https://github.com/<repo>. The hook
-    # fails unless ref (the tag or branch workflows pin) exists in the mirror.
+    # The hook fails unless ref exists in the mirror.
     mirrors:
       - { repo: actions/checkout, ref: v4 }
       - { repo: pawtograder/assignment-action, ref: v4 }
-    # Required with source=mirrors: Secret with a Forgejo access `token` (scopes write:organization
-    # and write:repository) from an account that may create the mirrors' orgs.
+    # Required with source=mirrors: Secret with a Forgejo `token` scoped write:organization and write:repository.
     tokenSecret: ""
     resources:
       requests: { cpu: 10m, memory: 32Mi }
@@ -2896,7 +2866,7 @@ coder:
               [ "$(date +%s)" -lt "$deadline" ] || { echo "coderd not healthy after 10m" >&2; tail -50 /tmp/first-owner.log >&2; exit 1; }
               sleep 2
             done
-            # Coder answers 200 once a user exists and 404 before; anything else is an error, not "no user".
+            # Coder answers 200 once a user exists and 404 before.
             status=$(c -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
             if [ "$status" = 200 ]; then
               echo "first user exists"
@@ -2938,7 +2908,7 @@ coder:
     resources:
       requests: { cpu: 250m, memory: 512Mi }
       limits: { cpu: "1", memory: 1Gi }
-    # Merged into the subchart's defaults (non-root uid 1000, RuntimeDefault seccomp, no privilege escalation).
+    # Merged into the subchart's defaults.
     securityContext:
       capabilities: { drop: [ALL] }
     service:
@@ -2977,18 +2947,16 @@ coder-db:
 coderBootstrap:
   enabled: true
   workspaceNamespace: ""
-  # Applied to every pushed template with `coder templates edit` on each install and upgrade, so
-  # changes made in Coder's UI are reset. Go durations; "0" turns a setting off. See README "Coder".
+  # Reapplied on every install and upgrade, resetting changes made in Coder's UI.
   schedule:
-    defaultTTL: 2h # a new workspace stops this long after it starts (a template push creates has none)
-    activityBump: 1h # each time the agent reports a connection, the stop moves to at least this far out
+    defaultTTL: 2h
+    activityBump: 1h
     # Need a Coder Premium license; with either set non-zero on an unlicensed Coder the hook fails.
     dormancyThreshold: "0"
     dormancyAutoDeletion: "0" # deletes the workspace and its home volume
   workspaces:
     image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
-    # The template downloads this code-server release into the home volume on a workspace's first
-    # start, unless the image's code-server is already this version. "" uses the image's copy.
+    # "" uses the image's code-server.
     codeServerVersion: 4.143.1
     arch: amd64
     priorityClassName: ""

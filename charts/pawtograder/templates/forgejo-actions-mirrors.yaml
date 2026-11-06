@@ -1,4 +1,3 @@
-{{- /* A Kubernetes quantity in milli-units (cpu "1" -> 1000, memory "1Ki" -> 1024000), as a whole number. */}}
 {{- define "pawtograder.milliQuantity" -}}
 {{- $q := toString .q -}}
 {{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?(m|k|M|G|T|P|Ki|Mi|Gi|Ti|Pi)?$" $q) -}}
@@ -12,7 +11,7 @@
 {{- if .Values.forgejo.enabled }}
 {{- $r := .Values.forgejoRunner }}
 {{- $a := $r.actions }}
-{{- /* The FQDN the dispatcher uses too: job pods run in another namespace. */}}
+{{- /* Namespace-qualified: job pods run in another namespace. */}}
 {{- $serviceURL := printf "http://%s.%s.svc:%v" (include "pawtograder.forgejo.http" .) .Release.Namespace (include "pawtograder.forgejo.servicePort" .) }}
 {{- $cmName := printf "%s-forgejo-actions" .Release.Name }}
 {{- if not (has $a.source (list "mirrors" "upstream")) }}
@@ -42,7 +41,6 @@ data:
   # Forgejo reads this at startup, so a change takes a restart of the Forgejo pod.
   DEFAULT_ACTIONS_URL: {{ ternary $serviceURL $upstream $mirrorsOn | quote }}
 {{- if $r.enabled }}
-{{- /* Job pods are the only pods in jobNamespace, so its quota bounds them alone. */}}
 {{- with $r.quota }}
 {{- $keys := dict "cpu" (list "requests" "cpu") "memory" (list "requests" "memory") "requests.cpu" (list "requests" "cpu") "requests.memory" (list "requests" "memory") "requests.ephemeral-storage" (list "requests" "ephemeral-storage") "limits.cpu" (list "limits" "cpu") "limits.memory" (list "limits" "memory") "limits.ephemeral-storage" (list "limits" "ephemeral-storage") }}
 {{- $capacity := int $r.capacity }}
@@ -133,7 +131,6 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 2
-  # Ten minutes for Forgejo to come up, then one migrate per new mirror.
   activeDeadlineSeconds: 1200
   template:
     metadata:
@@ -161,7 +158,6 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: mirrors
-          # The runner image has curl, jq and git.
           image: "{{ $r.image.repository }}:{{ $r.image.tag }}"
           imagePullPolicy: {{ $r.image.pullPolicy }}
           command: [bash, /etc/forgejo-action-mirrors/mirrors.sh]

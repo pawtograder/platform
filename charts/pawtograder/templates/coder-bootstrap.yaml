@@ -98,9 +98,7 @@ spec:
                   --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
                   --variable code_server_version={{ .Values.coderBootstrap.workspaces.codeServerVersion | default "" | squote }} \
                   --message "chart {{ .Chart.Version }}"
-                # A template created by push never stops its workspaces; the edit gives it a schedule.
-                # Dormancy goes in a second edit: without a Premium license the CLI refuses a
-                # non-zero dormancy value before sending anything, and the TTL must land anyway.
+                # Separate edits: unlicensed, the CLI rejects non-zero dormancy before sending anything, and the TTL must still land.
                 {{- $s := .Values.coderBootstrap.schedule }}
                 /opt/coder templates edit "$name" --yes \
                   --default-ttl {{ $s.defaultTTL | toString | squote }} \

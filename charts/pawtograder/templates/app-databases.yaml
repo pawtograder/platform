@@ -81,10 +81,7 @@ spec:
             - name: APP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $.Release.Name }}-{{ $app }}-db, key: PGPASSWORD }
-          {{- /* No REVOKE CONNECT here. On the shared server the role gets CONNECT on
-          Pawtograder's database through PUBLIC, which a per-role REVOKE doesn't take
-          away, and revoking it from PUBLIC would lock out Supabase's own roles.
-          pg_hba.conf (postgres-config.yaml) limits the role to its own database. */}}
+          {{- /* No REVOKE CONNECT: revoking it from PUBLIC locks out Supabase's roles; pg_hba.conf confines the role. */}}
           command:
             - sh
             - -ec
@@ -102,10 +99,7 @@ spec:
           resources:
             {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
         {{- end }}
-        {{- /* An app that left database: pawtograder (moved to own, or turned off while
-        the other app stays on) leaves its role on this chart's Postgres with LOGIN and
-        the old password, and pg_hba.conf drops its reject lines with it. NOLOGIN closes
-        that; the step above turns LOGIN back on if the app returns to shared mode. */}}
+        {{- /* A role leaving shared mode keeps LOGIN and its password while pg_hba.conf drops its reject lines. */}}
         {{- if .Values.postgres.enabled }}
         {{- range $app := list "forgejo" "coder" }}
         {{- if not (and (index $.Values $app).enabled (eq (index $.Values $app).database "pawtograder")) }}

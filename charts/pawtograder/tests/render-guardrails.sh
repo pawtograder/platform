@@ -2713,8 +2713,7 @@ assert_refused "kong: an unknown metricsListener is refused" \
   "kong.metricsListener must be admin or status" --set kong.metricsListener=bogus
 
 echo "== forgejo runner and coder: isolation and the job namespace =="
-# These components need the release named pawtograder, so the cases render with
-# that name and the shipped overlay rather than BASE.
+# These components need the release named pawtograder.
 APPS=(-n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml")
 apps() { helm template pawtograder "$CHART" "${APPS[@]}" "$@" 2>"$ERRFILE"; }
 apps_refused() {
@@ -2728,7 +2727,6 @@ apps_refused() {
     echo "ok   [$label]"
   fi
 }
-# apps_has "<label>" <yes|no> "<substring>" <extra args...>: the full render must (not) contain it.
 apps_has() {
   local label="$1" expect="$2" want="$3"; shift 3
   if ! apps "$@" >"$OUTFILE"; then
@@ -2892,15 +2890,6 @@ echo
 
 echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
 
-# With database: pawtograder, the forgejo and coder roles live on this chart's
-# Postgres, where CONNECT is granted to PUBLIC and `host all all` admits every
-# role from the private ranges. postgres-config.yaml puts per-app lines ahead
-# of those, so each role reaches only the database named after it and is
-# rejected on every other one. Postgres uses the first matching line, so the
-# lines must come before `local all all`, and the `reject` lines must name
-# exactly the apps in shared mode. With no app in shared mode none of it
-# renders: pg_hba.conf feeds the primary's checksum/config, and an extra line
-# would restart Postgres on every install.
 APP_HBA_OWN_CODER=(
   --set coder.database=own --set coder-db.enabled=true
   --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
@@ -2910,9 +2899,6 @@ APP_HBA_OWN_FORGEJO=(
   --set forgejo.database=own --set forgejo-db.enabled=true
   --set forgejo.gitea.config.database.HOST=pawtograder-forgejo-db:5432
 )
-# assert_app_hba "<label>" "<comma-separated shared apps, or empty>" <helm args...>
-# Renders with release name pawtograder (the apps require it) and compares the
-# lines ahead of `local all all`, whitespace-normalized and comments dropped.
 assert_app_hba() {
   local label="$1" apps="$2"; shift 2
   local want="" got app cidr
@@ -2965,8 +2951,6 @@ assert_app_hba "app hba: Coder shared but disabled renders no app lines" \
   "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}" \
   --set coder.enabled=false --set coderBootstrap.enabled=false
 
-# Leaving shared mode drops the reject lines above, so the app-databases Job
-# turns off the role's LOGIN on this chart's Postgres instead.
 apps_has "app nologin: both apps shared, no NOLOGIN step" no "shared-nologin" \
   --show-only templates/app-databases.yaml
 apps_has "app nologin: Forgejo on own gets a NOLOGIN step" yes "name: forgejo-shared-nologin" \
