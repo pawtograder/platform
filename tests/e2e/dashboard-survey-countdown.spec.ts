@@ -1,4 +1,4 @@
-import type { Page, Request } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
 
@@ -22,16 +22,13 @@ async function setTabVisibility(page: Page, state: "visible" | "hidden") {
 
 // router.refresh() refetches the current page as an RSC payload. Link prefetches use the same
 // header, so they are told apart by next-router-prefetch and by the path.
-function isDashboardRefresh(request: Request, courseId: number) {
-  const headers = request.headers();
-  if (headers["rsc"] !== "1" || headers["next-router-prefetch"]) return false;
-  return new URL(request.url()).pathname === `/course/${courseId}`;
-}
-
 function recordDashboardRefreshes(page: Page, courseId: number) {
   const refreshes: string[] = [];
   page.on("request", (request) => {
-    if (isDashboardRefresh(request, courseId)) refreshes.push(request.url());
+    const headers = request.headers();
+    if (headers["rsc"] !== "1" || headers["next-router-prefetch"]) return;
+    if (new URL(request.url()).pathname !== `/course/${courseId}`) return;
+    refreshes.push(request.url());
   });
   return refreshes;
 }
@@ -125,24 +122,25 @@ test.describe("Student dashboard survey countdown", () => {
     await page.clock.pauseAt(dueAt - 25 * 60_000);
     await setTabVisibility(page, "hidden");
     await page.clock.setSystemTime(dueAt - 15 * 60_000);
-    const firstRefresh = page.waitForResponse((response) => isDashboardRefresh(response.request(), course.id));
+    // It opens while the student is away, so only the refresh can bring its card.
+    await seedPublishedSurvey("Opened While Away", dueAt + 5 * 60_000);
     await setTabVisibility(page, "visible");
     await expect(surveys.getByText("Due in 15 minutes", { exact: true })).toBeVisible();
-    await (await firstRefresh).finished();
+    await expect(surveys.getByText("Opened While Away")).toBeVisible();
     expect(refreshes).toHaveLength(1);
 
     // Shown again inside the minute: this one must not refresh.
     await setTabVisibility(page, "hidden");
     await setTabVisibility(page, "visible");
 
-    // A minute later it refreshes, and that brings a survey that opened while the student was away.
-    await seedPublishedSurvey("Opened While Away", dueAt);
+    // A minute later it refreshes again, and brings the next survey that opened.
+    await seedPublishedSurvey("Opened A Minute Later", dueAt + 10 * 60_000);
     await setTabVisibility(page, "hidden");
     await page.clock.setSystemTime(dueAt - 15 * 60_000 + 61_000);
     await setTabVisibility(page, "visible");
-    await expect(surveys.getByText("Opened While Away")).toBeVisible();
-    // The first refresh landed before the seed, so the card means the second did too. An extra
-    // refresh inside the minute would have been counted by now. The unit test pins that exactly.
+    await expect(surveys.getByText("Opened A Minute Later")).toBeVisible();
+    // With that card on screen, an extra refresh inside the minute would have been counted by now.
+    // The unit test pins the throttle exactly.
     expect(refreshes).toHaveLength(2);
   });
 
