@@ -29,6 +29,9 @@ const RELOAD_GUARD_KEY = "pawtograder:stale-bundle-reloaded-at";
 // the error (e.g. the new bundle is genuinely broken, or it's a false match),
 // we must not trap the user in an infinite reload loop.
 const RELOAD_COOLDOWN_MS = 30_000;
+// `reloadOnceReachable`'s own window. A page that keeps failing gets one more try in it, however slowly
+// it fails: the 30 s above only stops a failure faster than 30 s.
+const PAGE_RELOAD_COOLDOWN_MS = 5 * 60_000;
 
 /**
  * True when `error` looks like a stale-bundle / chunk-load failure rather than a
@@ -76,26 +79,28 @@ export function isStaleBundleError(error: unknown): boolean {
   return false;
 }
 
-function hasRecentlyReloaded(): boolean {
+function hasRecentlyReloaded(cooldownMs: number = RELOAD_COOLDOWN_MS): boolean {
   try {
     const raw = window.sessionStorage.getItem(RELOAD_GUARD_KEY);
     if (!raw) return false;
     const last = Number(raw);
     if (!Number.isFinite(last)) return false;
-    return Date.now() - last < RELOAD_COOLDOWN_MS;
+    return Date.now() - last < cooldownMs;
   } catch {
     // sessionStorage can throw (private mode / blocked storage). Fail safe by
-    // assuming we have NOT reloaded, so a real deploy skew still self-heals; the
-    // browser's own reload throttling backstops any loop.
+    // assuming we have NOT reloaded, so a real deploy skew still self-heals. Browsers
+    // don't throttle reloads enough to stop a loop, so `reloadOnceReachable`, whose
+    // error can repeat, won't reload unless it could record the reload.
     return false;
   }
 }
 
-function markReloaded(): void {
+function markReloaded(): boolean {
   try {
     window.sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
+    return true;
   } catch {
-    /* ignore */
+    return false;
   }
 }
 
@@ -128,11 +133,15 @@ export function isCutResponseError(error: unknown): boolean {
 }
 
 /**
- * For `app/global-error.tsx`, whose page has already replaced the app, so a reload can't lose anything
- * more. Only reloads a visible tab whose server answers, because a reload with the network down would
- * swap this page and its Try Again for the browser's error page. Until then, each show tries again.
- * `recoverFromStaleBundle`'s cooldown stops a page that keeps failing from looping. Returns an
- * uninstall function.
+ * For `app/global-error.tsx`, whose page has already replaced the app, so a reload costs nothing that
+ * was on screen. It can cost a save the page sent as it unmounted, if that hasn't reached the server
+ * when the new document commits. Only reloads a visible tab whose server answers, because a reload with
+ * the network down would swap this page and its Try Again for the browser's error page. Until then,
+ * each show tries again.
+ *
+ * A page can keep failing, and take any time to do it, so this reloads at most once per 5 minutes in a
+ * tab, and not at all if it can't record the reload, because the next page would never see it. Inside
+ * those 5 minutes a page that fails keeps Try Again. Returns an uninstall function.
  */
 export function reloadOnceReachable(reload: () => void = defaultReload): () => void {
   const reloadIfReachable = () => {
@@ -140,7 +149,8 @@ export function reloadOnceReachable(reload: () => void = defaultReload): () => v
     // This page's own background: a static file the middleware skips, and HEAD doesn't transfer it.
     void fetch("/error-background.jpg", { method: "HEAD", cache: "no-store" }).then(
       (response) => {
-        if (response.ok) recoverFromStaleBundle(reload);
+        if (!response.ok || hasRecentlyReloaded(PAGE_RELOAD_COOLDOWN_MS)) return;
+        if (markReloaded()) reload();
       },
       () => {}
     );

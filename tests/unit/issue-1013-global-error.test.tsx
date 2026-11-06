@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import GlobalError from "@/app/global-error";
-import { isCutResponseError, reloadOnceReachable } from "@/lib/staleBundleRecovery";
+import { isCutResponseError, recoverFromStaleBundle, reloadOnceReachable } from "@/lib/staleBundleRecovery";
 
 const mockCapture = jest.fn();
 jest.mock("@sentry/nextjs", () => ({
@@ -113,6 +113,74 @@ describe("reloadOnceReachable", () => {
     }
     expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a page that fails slowly", () => {
+    const PAGE_LOAD = 1_800_000_000_000;
+    let now: jest.SpyInstance;
+
+    beforeEach(() => {
+      now = jest.spyOn(Date, "now").mockReturnValue(PAGE_LOAD);
+    });
+    afterEach(() => {
+      now.mockRestore();
+    });
+
+    async function loadAt(msAfterFirst: number) {
+      now.mockReturnValue(PAGE_LOAD + msAfterFirst);
+      uninstall();
+      uninstall = reloadOnceReachable(reload);
+      await settle();
+    }
+
+    it("reloads once across three loads 60 s apart", async () => {
+      await loadAt(0);
+      await loadAt(60_000);
+      await loadAt(120_000);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps Try Again through a show inside the 5 minutes, and tries again after them", async () => {
+      await loadAt(0);
+      await loadAt(60_000);
+      expect(reload).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(PAGE_LOAD + 5 * 60_000 - 1);
+      setVisibility("hidden");
+      setVisibility("visible");
+      await settle();
+      expect(reload).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(PAGE_LOAD + 5 * 60_000);
+      setVisibility("hidden");
+      setVisibility("visible");
+      await settle();
+      expect(reload).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves recoverFromStaleBundle's own 30 s alone", () => {
+      expect(recoverFromStaleBundle(reload)).toBe(true);
+      now.mockReturnValue(PAGE_LOAD + 29_999);
+      expect(recoverFromStaleBundle(reload)).toBe(false);
+      now.mockReturnValue(PAGE_LOAD + 30_000);
+      expect(recoverFromStaleBundle(reload)).toBe(true);
+      expect(reload).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("doesn't reload when it can't record the reload, because the next page would never see it", async () => {
+    const setItem = jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    try {
+      uninstall = reloadOnceReachable(reload);
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it("stops listening once uninstalled", async () => {
