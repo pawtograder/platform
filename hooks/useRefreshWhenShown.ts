@@ -22,13 +22,13 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * after mount. Keeping the later of that and the last refresh this hook sent means a browser clock
  * that runs ahead costs at most one extra refresh.
  *
- * A tab shown while the browser knows it's offline doesn't refresh, and catches up when the network
- * returns. A tab that stayed on screen through a dropped connection skipped nothing, so it doesn't
- * refresh when the network returns. router.refresh() falls back to location.replace when its fetch
- * fails, and with no network that swaps the dashboard for the browser's error page.
+ * A tab shown while the browser knows it's offline doesn't refresh: router.refresh() falls back to
+ * location.replace when its fetch fails, and with no network that swaps the dashboard for the
+ * browser's error page. It gets new surveys at its next show or a reload, the same as a dashboard
+ * that stays visible, and its countdown stays current because useNow reads the browser clock.
+ * Nothing refreshes on `online`: a fetch sent the moment the browser reports a connection can fail.
  * `navigator.onLine` can still say true on Wi-Fi that has only just woken or sits behind a captive
- * portal, and a 5xx takes the same fallback. The catch-up sends its refresh as `online` fires, so it
- * can hit the first of those.
+ * portal, and a 5xx takes the same fallback, so a show on a flaky network can still reach it.
  */
 export function useRefreshWhenShown(
   renderedAt: number,
@@ -36,33 +36,21 @@ export function useRefreshWhenShown(
 ): void {
   const router = useRouter();
   const lastRefreshAt = useRef(0);
-  const skippedOffline = useRef(false);
 
   useEffect(() => {
     lastRefreshAt.current = Math.max(lastRefreshAt.current, Math.min(Date.now(), renderedAt));
 
-    const refreshIfDue = () => {
+    const onVisibilityChange = () => {
       if (document.visibilityState !== "visible") return;
       // Before lastRefreshAt is written, so a skipped refresh doesn't use up the minute.
-      if (!navigator.onLine) {
-        skippedOffline.current = true;
-        return;
-      }
-      skippedOffline.current = false;
+      if (!navigator.onLine) return;
       const now = Date.now();
       if (now - lastRefreshAt.current < minIntervalMs) return;
       lastRefreshAt.current = now;
       router.refresh();
     };
-    const catchUp = () => {
-      if (skippedOffline.current) refreshIfDue();
-    };
 
-    document.addEventListener("visibilitychange", refreshIfDue);
-    window.addEventListener("online", catchUp);
-    return () => {
-      document.removeEventListener("visibilitychange", refreshIfDue);
-      window.removeEventListener("online", catchUp);
-    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [router, renderedAt, minIntervalMs]);
 }
