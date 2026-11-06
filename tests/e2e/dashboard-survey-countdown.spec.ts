@@ -49,14 +49,15 @@ function isSameDocument(page: Page) {
 
 // A TCP proxy in front of the app, so a cut is a real one and the browser raises its own error, which
 // is what app/global-error.tsx has to recognize. The refresh it's told to cut asks for no compression,
-// so the proxy can find the response's root row. It ends the connection right after that row, and can
-// stay down afterward, like a network that's gone.
+// so the proxy can find the response's root row. It sends up to that row and holds the connection until
+// finishCut(), and can stay down afterward, like a network that's gone. The hold is because a stream
+// that errors throws away what nobody has read, so the page has to have read the row first.
 async function startCutProxy(baseURL: string) {
   const target = new URL(baseURL);
   const sockets = new Set<net.Socket>();
   let armed: { thenDown: boolean } | null = null;
   let down = false;
-  let cuts = 0;
+  let finishCut = () => {};
   const server = net.createServer((client) => {
     if (down) {
       client.destroy();
@@ -109,18 +110,17 @@ async function startCutProxy(baseURL: string) {
       let rootEnd = text.indexOf("\n", rootStart + 1);
       while (rootEnd >= 0 && text[rootEnd - 1] === "\r") rootEnd = text.indexOf("\n", rootEnd + 1);
       if (rootEnd < 0) return;
-      // A stream that errors throws away what nobody has read, so the page has to be reading first.
       cutScheduled = true;
+      client.write(body.subarray(0, rootEnd + 1));
       const { thenDown } = cutting;
-      setTimeout(() => {
-        cuts += 1;
+      finishCut = () => {
         if (thenDown) {
           down = true;
           for (const socket of sockets) if (socket !== client) socket.destroy();
         }
-        client.end(body.subarray(0, rootEnd + 1));
+        client.end();
         upstream.destroy();
-      }, 200);
+      };
     });
   });
   await new Promise<void>((resolve) => server.listen(0, target.hostname, resolve));
@@ -131,7 +131,7 @@ async function startCutProxy(baseURL: string) {
     cutNextRefresh: (options = { thenDown: false }) => {
       armed = options;
     },
-    cuts: () => cuts,
+    finishCut: () => finishCut(),
     comeBackUp: () => {
       down = false;
     },
@@ -140,6 +140,35 @@ async function startCutProxy(baseURL: string) {
       server.close();
     }
   };
+}
+
+// Resolves once the page has read the refresh's root row. Next's own read has it by then too, since a
+// read waiting on the stream gets each chunk as it arrives.
+async function watchForRootRow(page: Page) {
+  await page.evaluate(() => {
+    const real = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await real(input, init);
+      if (init?.method === "POST" && new Headers(init.headers).has("next-action")) {
+        const reader = response.clone().body!.getReader();
+        const decoder = new TextDecoder();
+        let text = "";
+        void (async () => {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            text += decoder.decode(value, { stream: true });
+            if (/(^|\n)0:/.test(text)) (window as unknown as { __rootRow?: boolean }).__rootRow = true;
+          }
+        })().catch(() => {});
+      }
+      return response;
+    };
+  });
+  return () =>
+    expect
+      .poll(() => page.evaluate(() => (window as unknown as { __rootRow?: boolean }).__rootRow === true))
+      .toBe(true);
 }
 
 function recordDashboardRefreshes(page: Page, courseId: number) {
@@ -394,11 +423,13 @@ test.describe("Student dashboard survey countdown", () => {
     try {
       const { surveys, dueAt } = await openDashboard(page, "Cut On The Wire", proxy.origin);
       await seedPublishedSurvey("Opened Before The Cut", dueAt + 5 * 60_000);
+      const rootRowRead = await watchForRootRow(page);
       proxy.cutNextRefresh();
       await showAgain(page);
+      await rootRowRead();
+      proxy.finishCut();
       // Only the reload can bring this: the refresh that would have was cut, and nothing shows the tab again.
       await expect(surveys.getByText("Opened Before The Cut")).toBeVisible();
-      expect(proxy.cuts()).toBe(1);
       expect(await isSameDocument(page)).toBe(false);
     } finally {
       proxy.close();
@@ -417,8 +448,11 @@ test.describe("Student dashboard survey countdown", () => {
         "requestfailed",
         (request) => request.url().endsWith("/error-background.jpg") && request.method() === "HEAD"
       );
+      const rootRowRead = await watchForRootRow(page);
       proxy.cutNextRefresh({ thenDown: true });
       await showAgain(page);
+      await rootRowRead();
+      proxy.finishCut();
       await checkFailed;
       // A reload now would be the browser's error page, with no way back but the student reloading.
       await expect(page.getByRole("button", { name: "Try Again" })).toBeVisible();
