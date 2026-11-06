@@ -10,6 +10,7 @@ jest.mock("next/navigation", () => ({
 const PAGE_LOAD = new Date("2026-11-01T23:30:00Z").getTime();
 
 let visibility: DocumentVisibilityState = "visible";
+let online = true;
 
 function setVisibility(state: DocumentVisibilityState) {
   visibility = state;
@@ -18,16 +19,26 @@ function setVisibility(state: DocumentVisibilityState) {
   });
 }
 
+function setOnline(next: boolean) {
+  online = next;
+  act(() => {
+    window.dispatchEvent(new Event(next ? "online" : "offline"));
+  });
+}
+
 beforeAll(() => {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+  Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
 });
 
 afterAll(() => {
   delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+  delete (navigator as { onLine?: boolean }).onLine;
 });
 
 beforeEach(() => {
   visibility = "visible";
+  online = true;
   mockRouter.refresh.mockClear();
   jest.useFakeTimers({ now: PAGE_LOAD });
 });
@@ -240,6 +251,45 @@ describe("useRefreshWhenShown", () => {
     expect(mockRouter.refresh).not.toHaveBeenCalled();
   });
 
+  it("skips the refresh while offline, and catches up once when the network returns", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setOnline(false);
+    setVisibility("visible");
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
+
+    setOnline(true);
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the tab to be shown when the network returns while it is hidden", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setOnline(false);
+    setOnline(true);
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
+
+    setVisibility("visible");
+    expect(mockRouter.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't refresh when the network returns inside the minute", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setOnline(false);
+    setOnline(true);
+
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
+  });
+
   it("stops listening after unmount", () => {
     const { unmount } = renderHook(() => useRefreshWhenShown(PAGE_LOAD));
     unmount();
@@ -249,6 +299,8 @@ describe("useRefreshWhenShown", () => {
       jest.advanceTimersByTime(2 * REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
     });
     setVisibility("visible");
+    setOnline(false);
+    setOnline(true);
 
     expect(mockRouter.refresh).not.toHaveBeenCalled();
   });
