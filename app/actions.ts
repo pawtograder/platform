@@ -115,7 +115,9 @@ export const resetPasswordAction = async (email: string) => {
   }
   return encodedRedirect("success", "/sign-in", "Password reset email sent", { email });
 };
-export const signInWithEmailAction = async (email: string, password: string, redirectPath?: string) => {
+export const signInWithEmailAction = async (email: string, password: string, unsafeRedirectPath?: string) => {
+  // Exported server actions are callable directly, so validate here too.
+  const redirectPath = safeRedirectPath(unsafeRedirectPath);
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
@@ -127,7 +129,8 @@ export const signInWithEmailAction = async (email: string, password: string, red
     return redirect(redirectPath ?? "/course");
   }
 };
-export const signUpWithEmailAction = async (email: string, password: string, redirectPath?: string) => {
+export const signUpWithEmailAction = async (email: string, password: string, unsafeRedirectPath?: string) => {
+  const redirectPath = safeRedirectPath(unsafeRedirectPath);
   const params: Record<string, string> = redirectPath ? { redirect: redirectPath } : {};
   if (!isSignupsEnabled()) {
     return encodedRedirect("error", "/sign-in", "Signups are currently disabled", params);

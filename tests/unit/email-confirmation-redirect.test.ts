@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import path from "path";
-import { confirmEmailAction, signInWithSSOAction, signUpWithEmailAction } from "@/app/actions";
+import { confirmEmailAction, signInWithEmailAction, signInWithSSOAction, signUpWithEmailAction } from "@/app/actions";
 
 const mockRedirect = jest.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT ${url}`);
@@ -10,9 +10,15 @@ jest.mock("next/navigation", () => ({ redirect: (url: string) => mockRedirect(ur
 const mockVerifyOtp = jest.fn();
 const mockSignUp = jest.fn();
 const mockSignInWithOAuth = jest.fn();
+const mockSignInWithPassword = jest.fn();
 jest.mock("@/utils/supabase/server", () => ({
   createClient: async () => ({
-    auth: { verifyOtp: mockVerifyOtp, signUp: mockSignUp, signInWithOAuth: mockSignInWithOAuth }
+    auth: {
+      verifyOtp: mockVerifyOtp,
+      signUp: mockSignUp,
+      signInWithOAuth: mockSignInWithOAuth,
+      signInWithPassword: mockSignInWithPassword
+    }
   })
 }));
 jest.mock("@/lib/branding", () => ({
@@ -60,10 +66,29 @@ describe("signUpWithEmailAction", () => {
     expect(mockSignUp.mock.calls[0][0].options.emailRedirectTo).toBe(`${APP}${CONSENT}`);
   });
 
+  it.each(["//evil.test", "/\\evil.test", "/\t/evil.test"])("ignores an unsafe redirect path %j", async (unsafe) => {
+    mockSignUp.mockResolvedValueOnce({ data: { user: { confirmed_at: "2026-01-01T00:00:00Z" } }, error: null });
+    const url = await redirectOf(() => signUpWithEmailAction("a@b.test", "pw", unsafe));
+    expect(url).toBe("/course");
+    expect(mockSignUp.mock.calls[0][0].options.emailRedirectTo).toBe(`${APP}/`);
+  });
+
   it("returns a confirmed user to the redirect path", async () => {
     mockSignUp.mockResolvedValueOnce({ data: { user: { confirmed_at: "2026-01-01T00:00:00Z" } }, error: null });
     const url = await redirectOf(() => signUpWithEmailAction("a@b.test", "pw", CONSENT));
     expect(url).toBe(CONSENT);
+  });
+});
+
+describe("signInWithEmailAction", () => {
+  beforeEach(() => mockSignInWithPassword.mockResolvedValue({ data: { user: { id: "u" } }, error: null }));
+
+  it("returns to a same-origin redirect path", async () => {
+    expect(await redirectOf(() => signInWithEmailAction("a@b.test", "pw", CONSENT))).toBe(CONSENT);
+  });
+
+  it.each(["//evil.test", "/\\evil.test", "/\t/evil.test"])("ignores an unsafe redirect path %j", async (unsafe) => {
+    expect(await redirectOf(() => signInWithEmailAction("a@b.test", "pw", unsafe))).toBe("/course");
   });
 });
 
