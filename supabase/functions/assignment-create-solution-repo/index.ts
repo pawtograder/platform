@@ -29,13 +29,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("slug,classes(slug,github_org)")
+    .select("slug,git_provider,classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
 
   if (!assignment) {
     throw new UserVisibleError("Assignment not found");
+  }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub repository setup is unavailable.", 400);
   }
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug");
@@ -45,12 +48,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
   }
-  await adminSupabase
-    .from("autograder")
-    .update({
-      grader_repo: `${solutionRepoOrg}/${solutionRepoName}`
-    })
-    .eq("id", assignment_id);
+  const { error: reservationError } = await adminSupabase.rpc("reserve_github_staff_repo", {
+    p_assignment_id: assignment_id,
+    p_class_id: class_id,
+    p_repository: `${solutionRepoOrg}/${solutionRepoName}`,
+    p_is_grader: true
+  });
+  if (reservationError) throw new UserVisibleError(reservationError.message, 400);
   const { solution: solutionTemplateRepo } = await resolveTemplateRepos(adminSupabase, class_id);
   scope.setTag("solution_template_repo", solutionTemplateRepo);
 

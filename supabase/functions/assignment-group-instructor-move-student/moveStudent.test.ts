@@ -462,6 +462,17 @@ Deno.test("archive uses everything after the first slash of a repo name that con
   );
 });
 
+Deno.test("archive targets the stored owner, not the class github_org", async () => {
+  const db = new FakeDb();
+  db.addGroup(1, { repo: "orgname/hw1-group-a" });
+  db.addMember(1, "alice");
+  const { deps, archives } = harness(db);
+
+  await moveStudentBetweenGroups(move(1, null), deps);
+
+  assertEquals(archives, [{ class_id: CLASS.id, org: "orgname", repo: "hw1-group-a" }]);
+});
+
 // ---- other members remain ------------------------------------------------
 
 Deno.test("a member leaves a group that still has members: repo synced to the rest, group untouched", async () => {

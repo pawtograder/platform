@@ -366,7 +366,12 @@ export async function wrapRequestHandler(
         Sentry.captureException(e, scope);
       }
     } else if (e instanceof SecurityError) {
-      if (recordSecurityErrors) {
+      // Job tokens are rejected before the repository is known, so nothing reaches workflow_run_error
+      // either. Report them even where ordinary denials are muted.
+      if (e instanceof JobTokenRejectedError) {
+        scope.setTag("job_token_rejected", e.reason);
+      }
+      if (recordSecurityErrors || e instanceof JobTokenRejectedError) {
         Sentry.captureException(e, scope);
       }
     } else if (!(e instanceof NotFoundError) && !(e instanceof IllegalArgumentError)) {
@@ -485,6 +490,15 @@ export class SecurityError extends Error {
   constructor(details: string) {
     super("Security Error");
     this.details = details;
+  }
+}
+
+/** An Actions job token rejected by `validateOIDCToken`. Responds like any SecurityError. */
+export class JobTokenRejectedError extends SecurityError {
+  reason: "issuer" | "provider" | "audience";
+  constructor(reason: "issuer" | "provider" | "audience", details: string) {
+    super(details);
+    this.reason = reason;
   }
 }
 

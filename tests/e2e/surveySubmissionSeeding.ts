@@ -25,8 +25,16 @@ type Course = Awaited<ReturnType<typeof createClass>>;
  * A deliberately small SurveyJS model. The browser spec renders this, and two questions are enough
  * to tell a rendered response apart from a "not started" card. `tests/fixtures/teamCollaborationSurvey.ts`
  * is the realistic 24-question model, and paging through it buys these specs nothing.
+ *
+ * It carries a title and a description like a model from the visual builder does. The panel
+ * heading shows the database title, so a rendered response must show the JSON description but
+ * never the JSON title.
  */
+export const SUBMISSION_SURVEY_JSON_TITLE = "Survey Name";
+export const SUBMISSION_SURVEY_JSON_DESCRIPTION = "Answer for the week you just finished.";
 export const SUBMISSION_SURVEY_JSON = {
+  title: SUBMISSION_SURVEY_JSON_TITLE,
+  description: SUBMISSION_SURVEY_JSON_DESCRIPTION,
   pages: [
     {
       name: "page1",

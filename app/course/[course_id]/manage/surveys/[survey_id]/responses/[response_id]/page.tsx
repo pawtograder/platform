@@ -327,6 +327,7 @@ export default function IndividualResponsePage() {
               <ViewSurveyResponse
                 surveyJson={survey.json}
                 responseData={response.response}
+                shownDescription={survey.description}
                 readOnly={true}
                 onComplete={() => {}} // No-op for display mode
                 onValueChanged={() => {}} // No-op for display mode
