@@ -5,6 +5,7 @@ import React from "react";
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
 import { GlobalSearchProvider } from "@/components/ui/global-search";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
+import { ClassCapabilitiesProvider } from "@/hooks/useClassCapabilities";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { fetchCourseControllerData, getCourse, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
@@ -71,33 +72,35 @@ const ProtectedLayout = async ({
             role={user_role.role}
             initialData={initialData}
           >
-            <OfficeHoursControllerProvider
-              classId={Number.parseInt(course_id)}
-              profileId={user_role.private_profile_id}
-              role={user_role.role}
-            >
-              <HelpDrawerProvider>
-                <GlobalSearchProvider>
-                  <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
-                    <ViewAsBanner />
-                    <DynamicCourseNav />
-                    <Box
-                      as="main"
-                      id="main-content"
-                      tabIndex={-1}
-                      pt="0"
-                      ml="0"
-                      mr="0"
-                      pb="80px"
-                      _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
-                    >
-                      {children}
-                    </Box>
-                    <FloatingHelpRequestWidget />
-                  </KeyboardShortcutsProvider>
-                </GlobalSearchProvider>
-              </HelpDrawerProvider>
-            </OfficeHoursControllerProvider>
+            <ClassCapabilitiesProvider>
+              <OfficeHoursControllerProvider
+                classId={Number.parseInt(course_id)}
+                profileId={user_role.private_profile_id}
+                role={user_role.role}
+              >
+                <HelpDrawerProvider>
+                  <GlobalSearchProvider>
+                    <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
+                      <ViewAsBanner />
+                      <DynamicCourseNav />
+                      <Box
+                        as="main"
+                        id="main-content"
+                        tabIndex={-1}
+                        pt="0"
+                        ml="0"
+                        mr="0"
+                        pb="80px"
+                        _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+                      >
+                        {children}
+                      </Box>
+                      <FloatingHelpRequestWidget />
+                    </KeyboardShortcutsProvider>
+                  </GlobalSearchProvider>
+                </HelpDrawerProvider>
+              </OfficeHoursControllerProvider>
+            </ClassCapabilitiesProvider>
           </CourseControllerProvider>
         </TimeZoneProvider>
       </NavigationProgressProvider>
