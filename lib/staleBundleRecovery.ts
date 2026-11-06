@@ -29,8 +29,9 @@ const RELOAD_GUARD_KEY = "pawtograder:stale-bundle-reloaded-at";
 // the error (e.g. the new bundle is genuinely broken, or it's a false match),
 // we must not trap the user in an infinite reload loop.
 const RELOAD_COOLDOWN_MS = 30_000;
-// `reloadOnceReachable`'s own window. A page that keeps failing gets one more try in it, however slowly
-// it fails: the 30 s above only stops a failure faster than 30 s.
+// `reloadOnceReachable`'s own window. A page that keeps failing gets one more try in it, where the 30 s
+// above only stops a failure faster than 30 s. A failure slower than this still repeats, at most 12 times
+// an hour in a visible tab.
 const PAGE_RELOAD_COOLDOWN_MS = 5 * 60_000;
 
 /**

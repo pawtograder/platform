@@ -197,7 +197,7 @@ describe("reloadOnceReachable", () => {
 });
 
 describe("GlobalError", () => {
-  // jsdom can't reload, so the guard recoverFromStaleBundle writes first stands in for one.
+  // jsdom can't reload, so the guard reloadOnceReachable writes first stands in for one.
   const reloaded = () => window.sessionStorage.getItem("pawtograder:stale-bundle-reloaded-at") !== null;
 
   // Quiet because this page has to render <html>, which a test's container can't hold, and jsdom
