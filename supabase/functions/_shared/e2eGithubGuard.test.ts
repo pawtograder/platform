@@ -73,3 +73,13 @@ Deno.test("shouldSkipRealGithubForE2eFixture: without stub, delegates to the pre
     else Deno.env.set("PAWTOGRADER_GITHUB_STUB", prev);
   }
 });
+
+Deno.test("isE2eFixtureTarget: the org comparison is case-insensitive", () => {
+  // `classes.github_org` keeps whatever capitalization was typed, and this predicate fails OPEN:
+  // an unrecognized fixture lets real GitHub mutations through, which is the outcome the module
+  // exists to prevent.
+  assertEquals(isE2eFixtureTarget({ org: "Pawtograder-Playground", courseSlug: "e2e-ignore-x" }), true);
+  assertEquals(isE2eFixtureTarget({ org: "PAWTOGRADER-PLAYGROUND", repoName: "e2e-test-class-1-solution-a" }), true);
+  // A different org is still not a fixture, whatever its casing.
+  assertEquals(isE2eFixtureTarget({ org: "Neu-CS4530", courseSlug: "e2e-ignore-x" }), false);
+});

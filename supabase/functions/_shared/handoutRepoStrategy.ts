@@ -89,4 +89,91 @@ export function resolveHandoutRepoAction(
   return { kind: "inherit_from_source", sourceAssignmentId: source.id };
 }
 
-export { TEMPLATE_HANDOUT_REPO_NAME };
+/**
+ * repo_modes that opt out of GitHub repos entirely. `assignment-create-handout-repo` actively
+ * CLEARS template_repo for these, so a NULL pointer on one of them is the correct state, not a
+ * failure to be repaired.
+ */
+const REPO_MODES_WITHOUT_REPOS: readonly AssignmentRepoMode[] = ["none", "no_submission"];
+
+/**
+ * Should this assignment have BOTH a handout and a solution ("grader") repo?
+ *
+ * repo_mode is the only input. The new-assignment page gates its two creation calls on exactly
+ * this condition and nothing else, so `has_autograder` and `submission_mode` deliberately do NOT
+ * narrow it:
+ *
+ *   - A repo-only assignment (has_autograder = false) still gets a handout — grade.yml is stripped
+ *     from it, not the repo skipped — and still needs pawtograder.yml read out of a solution repo,
+ *     because that is where `submissionFiles` comes from and the empty-submission check depends on
+ *     it whether or not an autograder ever runs.
+ *   - PR submission mode forces has_autograder off, and the same reasoning applies.
+ *   - `fork_from_prior_assignment` INHERITS its handout from the source assignment rather than
+ *     creating one, but template_repo is still expected to be non-NULL, so it still answers true
+ *     here. It gets its own solution repo normally.
+ *
+ * Exported so the repo reconciler decides "should this pointer be non-NULL?" from the same place
+ * `resolveHandoutRepoAction` decides what to create, rather than restating the matrix in a SQL
+ * filter that can drift away from it.
+ */
+export function assignmentShouldHaveRepos(mode: AssignmentRepoMode): boolean {
+  return !REPO_MODES_WITHOUT_REPOS.includes(mode);
+}
+
+/**
+ * What `assignment-create-handout-repo` would leave in `assignments.template_repo` for this
+ * assignment, or null when that cannot be determined.
+ *
+ * The reconciler uses this to tell "the handout run never finished" from "an instructor chose a
+ * custom handout" — the first is safe to rerun, the second must be left alone because the create
+ * function rebuilds the pointer and would erase their choice.
+ *
+ * It exists because that test is NOT simply the derived `<class>-handout-<assignment>` name.
+ * `fork_from_prior_assignment` creates no handout at all; it mirrors the source assignment's
+ * pointer, which can never equal the derived name. Comparing every mode against the derived name
+ * therefore reported every inherited handout as custom, so an inherit that wrote its pointer and
+ * then died before recording its workflow hash got solution creation only — publishing grader_repo,
+ * dropping the assignment out of the repair scan for good, and leaving every student submission
+ * rejected for a workflow-SHA mismatch.
+ *
+ * Lives next to `resolveHandoutRepoAction` so the two cannot drift: this must answer for the
+ * pointer whatever that decides to create.
+ */
+export function expectedHandoutRepo(args: {
+  mode: AssignmentRepoMode;
+  githubOrg: string | null | undefined;
+  classSlug: string | null | undefined;
+  assignmentSlug: string | null | undefined;
+  /** The fork source's `template_repo`. Only consulted for `fork_from_prior_assignment`. */
+  sourceTemplateRepo: string | null;
+}): string | null {
+  if (REPO_MODES_WITHOUT_REPOS.includes(args.mode)) return null;
+  if (args.mode === "fork_from_prior_assignment") return args.sourceTemplateRepo;
+  if (!args.githubOrg || !args.classSlug || !args.assignmentSlug) return null;
+  return `${args.githubOrg}/${args.classSlug}-handout-${args.assignmentSlug}`;
+}
+
+/**
+ * Is the handout pointer already on the assignment one that `assignment-create-handout-repo` would
+ * write, and therefore safe to rebuild by rerunning it?
+ *
+ * `null` stored means nothing to protect. `null` expected means the naming inputs or the fork
+ * source could not be resolved, which is NOT a match — rerunning creation on that basis is exactly
+ * what would overwrite a pointer we cannot account for.
+ *
+ * Compared case-insensitively. GitHub owner and repository names are case-insensitive, but
+ * `classes.github_org` and `classes.slug` store whatever capitalization was typed (admin_create_class
+ * and admin_update_class both keep it verbatim, and production has at least one mixed-case class).
+ * A stored pointer written under one spelling and an expectation derived under another name the
+ * same repository, so an exact comparison would call it custom — and for an assignment with no
+ * workflow_sha that means solution creation alone, which publishes grader_repo, drops the row out of
+ * every future scan and leaves submissions blocked on the missing workflow hash. The callers still
+ * pass the exact stored value to GitHub; only this ownership test is normalized.
+ */
+export function handoutPointerIsOurs(stored: string | null, expected: string | null): boolean {
+  if (stored === null) return true;
+  if (expected === null) return false;
+  return stored.toLowerCase() === expected.toLowerCase();
+}
+
+export { REPO_MODES_WITHOUT_REPOS, TEMPLATE_HANDOUT_REPO_NAME };
