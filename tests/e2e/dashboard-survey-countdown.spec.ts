@@ -64,12 +64,16 @@ async function startCutProxy(baseURL: string) {
     }
     const upstream = net.connect(Number(target.port), target.hostname);
     sockets.add(client).add(upstream);
+    let cutting: { thenDown: boolean } | null = null;
+    let headersSent = false;
+    let cutScheduled = false;
+    let body = Buffer.alloc(0);
     client.on("error", () => upstream.destroy());
     upstream.on("error", () => client.destroy());
     client.on("close", () => upstream.destroy());
-    upstream.on("close", () => client.end());
-    let cutting: { thenDown: boolean } | null = null;
-    let response = Buffer.alloc(0);
+    upstream.on("close", () => {
+      if (!cutting) client.end();
+    });
     client.on("data", (data) => {
       const head = data.toString("latin1");
       if (armed && /^POST \/course\/\d+ /.test(head) && /next-action:/i.test(head)) {
@@ -85,22 +89,38 @@ async function startCutProxy(baseURL: string) {
         client.write(data);
         return;
       }
-      response = Buffer.concat([response, data]);
-      const text = response.toString("latin1");
-      const rootStart = text.search(/\n0:/);
+      if (cutScheduled) return;
+      let chunk = data;
+      if (!headersSent) {
+        const headersEnd = chunk.indexOf("\r\n\r\n");
+        if (headersEnd < 0) {
+          client.write(chunk);
+          return;
+        }
+        client.write(chunk.subarray(0, headersEnd + 4));
+        headersSent = true;
+        chunk = chunk.subarray(headersEnd + 4);
+      }
+      body = Buffer.concat([body, chunk]);
+      const text = body.toString("latin1");
+      const rootStart = text.search(/(^|\n)0:/);
       if (rootStart < 0) return;
       // A row ends at a bare newline. Inside one, CRLF is only the chunked encoding's framing.
       let rootEnd = text.indexOf("\n", rootStart + 1);
       while (rootEnd >= 0 && text[rootEnd - 1] === "\r") rootEnd = text.indexOf("\n", rootEnd + 1);
       if (rootEnd < 0) return;
-      cuts += 1;
-      if (cutting.thenDown) {
-        down = true;
-        for (const socket of sockets) if (socket !== client) socket.destroy();
-      }
-      upstream.destroy();
-      client.end(response.subarray(0, rootEnd + 1));
-      cutting = null;
+      // A stream that errors throws away what nobody has read, so the page has to be reading first.
+      cutScheduled = true;
+      const { thenDown } = cutting;
+      setTimeout(() => {
+        cuts += 1;
+        if (thenDown) {
+          down = true;
+          for (const socket of sockets) if (socket !== client) socket.destroy();
+        }
+        client.end(body.subarray(0, rootEnd + 1));
+        upstream.destroy();
+      }, 200);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, target.hostname, resolve));
@@ -393,7 +413,10 @@ test.describe("Student dashboard survey countdown", () => {
     try {
       const { surveys } = await openDashboard(page, "Cut And Gone", proxy.origin);
       const dashboard = page.url();
-      const checkFailed = page.waitForEvent("requestfailed", (request) => request.url().endsWith("/favicon.ico"));
+      const checkFailed = page.waitForEvent(
+        "requestfailed",
+        (request) => request.url().endsWith("/error-background.jpg") && request.method() === "HEAD"
+      );
       proxy.cutNextRefresh({ thenDown: true });
       await showAgain(page);
       await checkFailed;
