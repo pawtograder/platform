@@ -14,6 +14,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import AssignmentDashboard from "./assignmentDashboard";
 import { AssignmentExportControls } from "./assignmentsTable";
+import { CreateForgejoRepos } from "./CreateForgejoRepos";
 import CreateSubmissionForStudentDialog from "./createSubmissionForStudentDialog";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
@@ -147,7 +148,10 @@ export default function AssignmentHome() {
                       Copied from a prior assignment
                     </Text>
                   ) : assignment.template_repo ? (
-                    <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
+                    <Link
+                      href={`${assignment.git_provider === "forgejo" ? process.env.NEXT_PUBLIC_FORGEJO_URL : "https://github.com"}/${assignment.template_repo}`}
+                      target="_blank"
+                    >
                       {assignment.template_repo}
                     </Link>
                   ) : (
@@ -185,6 +189,9 @@ export default function AssignmentHome() {
                   }
                 }}
               />
+            )}
+            {isInstructor && assignment.git_provider === "forgejo" && (
+              <CreateForgejoRepos courseId={assignment.class_id} assignmentId={assignment.id} />
             )}
             {isInstructor && <AssignmentExportControls assignment_id={assignment.id} class_id={assignment.class_id} />}
           </HStack>

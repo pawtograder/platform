@@ -3525,6 +3525,86 @@ export type Database = {
           }
         ];
       };
+      git_accounts: {
+        Row: {
+          created_at: string;
+          id: number;
+          instance_url: string;
+          login: string;
+          provider: string;
+          remote_user_id: number;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          login: string;
+          provider: string;
+          remote_user_id: number;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          login?: string;
+          provider?: string;
+          remote_user_id?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      git_setup_codes: {
+        Row: {
+          class_id: number;
+          code_hash: string;
+          created_at: string;
+          expires_at: string;
+          used_at: string | null;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          code_hash: string;
+          created_at?: string;
+          expires_at: string;
+          used_at?: string | null;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          code_hash?: string;
+          created_at?: string;
+          expires_at?: string;
+          used_at?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_setup_codes_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "git_setup_codes_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       github_async_errors: {
         Row: {
           created_at: string;
@@ -13038,6 +13118,27 @@ export type Database = {
         };
         Returns: number;
       };
+      enqueue_github_create_repo_unguarded: {
+        Args: {
+          p_assignment_group_id?: number;
+          p_assignment_id?: number;
+          p_branch_protection?: Json;
+          p_class_id: number;
+          p_course_slug: string;
+          p_creation_method?: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_is_template_repo?: boolean;
+          p_latest_template_sha?: string;
+          p_org: string;
+          p_profile_id?: string;
+          p_repo_name: string;
+          p_source_repo?: string;
+          p_student_team_permission?: string;
+          p_template_repo: string;
+        };
+        Returns: number;
+      };
       enqueue_github_org_reinvite: {
         Args: {
           p_class_id: number;
@@ -13050,6 +13151,17 @@ export type Database = {
         Returns: number;
       };
       enqueue_github_sync_repo_permissions: {
+        Args: {
+          p_class_id: number;
+          p_course_slug: string;
+          p_debug_id?: string;
+          p_github_usernames: string[];
+          p_org: string;
+          p_repo: string;
+        };
+        Returns: number;
+      };
+      enqueue_github_sync_repo_permissions_unguarded: {
         Args: {
           p_class_id: number;
           p_course_slug: string;
