@@ -7,7 +7,7 @@ import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { fetchManageAssignmentsOverview } from "@/lib/ssr-course-dashboard";
 import { createClient } from "@/utils/supabase/server";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Alert, Table, Text } from "@chakra-ui/react";
+import { Alert, Badge, Table, Text } from "@chakra-ui/react";
 
 export async function ManageAssignmentsTable({ courseId }: { courseId: number }) {
   const supabase = await createClient();
@@ -15,10 +15,17 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
   // `course:<id>` is now emitted by the `classes` invalidation trigger (it was emitted by nothing
   // at all before #937), but that delivery is best-effort pg_net with no retry, and a flag toggle
   // showing up an hour late here is not worth the saved query.
-  const [{ data: assignmentRows, error: overviewError }, { data: courseRow, error: courseError }] = await Promise.all([
+  const [
+    { data: assignmentRows, error: overviewError },
+    { data: courseRow, error: courseError },
+    { data: providerRows }
+  ] = await Promise.all([
     fetchManageAssignmentsOverview(supabase, courseId),
-    supabase.from("classes").select("features").eq("id", courseId).single()
+    supabase.from("classes").select("features").eq("id", courseId).single(),
+    // The overview doesn't include git_provider, so look it up separately
+    supabase.from("assignments").select("id, git_provider").eq("class_id", courseId)
   ]);
+  const providerById = new Map(providerRows?.map((a) => [a.id, a.git_provider]) ?? []);
 
   if (overviewError) {
     return (
@@ -36,7 +43,7 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
     (courseRow as Pick<CourseWithFeatures, "features"> | null)?.features,
     COURSE_FEATURES.SUGGESTED_DUE_DATE
   );
-  const columnCount = showSuggestedDueDate ? 5 : 4;
+  const columnCount = showSuggestedDueDate ? 6 : 5;
 
   return (
     <>
@@ -53,6 +60,7 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeader>Title</Table.ColumnHeader>
+            <Table.ColumnHeader>Repository Host</Table.ColumnHeader>
             <Table.ColumnHeader>Release Date</Table.ColumnHeader>
             {showSuggestedDueDate && <Table.ColumnHeader>Suggested Due Date</Table.ColumnHeader>}
             <Table.ColumnHeader>Due Date</Table.ColumnHeader>
@@ -73,6 +81,13 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
               <Table.Row key={assignment.id}>
                 <Table.Cell>
                   <Link href={`/course/${courseId}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
+                </Table.Cell>
+                <Table.Cell>
+                  {providerById.get(assignment.id!) === "forgejo" ? (
+                    <Badge colorPalette="orange">Forgejo + Coder</Badge>
+                  ) : (
+                    <Badge colorPalette="gray">GitHub</Badge>
+                  )}
                 </Table.Cell>
                 <Table.Cell>
                   {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
