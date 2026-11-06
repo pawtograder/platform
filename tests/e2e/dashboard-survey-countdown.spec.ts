@@ -1,3 +1,4 @@
+import net from "node:net";
 import type { Page, Request, Route } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
@@ -31,6 +32,96 @@ function isDashboardRefresh(request: Request, courseId: number) {
     : headers["rsc"] === "1" && !headers["next-router-prefetch"];
 }
 
+async function showAgain(page: Page) {
+  await setTabVisibility(page, "hidden");
+  await setTabVisibility(page, "visible");
+}
+
+async function markDocument(page: Page) {
+  await page.evaluate(() => {
+    (window as unknown as { __sameDocument?: boolean }).__sameDocument = true;
+  });
+}
+
+function isSameDocument(page: Page) {
+  return page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument === true);
+}
+
+// A TCP proxy in front of the app, so a cut is a real one and the browser raises its own error, which
+// is what app/global-error.tsx has to recognize. The refresh it's told to cut asks for no compression,
+// so the proxy can find the response's root row. It ends the connection right after that row, and can
+// stay down afterward, like a network that's gone.
+async function startCutProxy(baseURL: string) {
+  const target = new URL(baseURL);
+  const sockets = new Set<net.Socket>();
+  let armed: { thenDown: boolean } | null = null;
+  let down = false;
+  let cuts = 0;
+  const server = net.createServer((client) => {
+    if (down) {
+      client.destroy();
+      return;
+    }
+    const upstream = net.connect(Number(target.port), target.hostname);
+    sockets.add(client).add(upstream);
+    client.on("error", () => upstream.destroy());
+    upstream.on("error", () => client.destroy());
+    client.on("close", () => upstream.destroy());
+    upstream.on("close", () => client.end());
+    let cutting: { thenDown: boolean } | null = null;
+    let response = Buffer.alloc(0);
+    client.on("data", (data) => {
+      const head = data.toString("latin1");
+      if (armed && /^POST \/course\/\d+ /.test(head) && /next-action:/i.test(head)) {
+        cutting = armed;
+        armed = null;
+        upstream.write(Buffer.from(head.replace(/accept-encoding:[^\r]*\r\n/i, ""), "latin1"));
+        return;
+      }
+      upstream.write(data);
+    });
+    upstream.on("data", (data) => {
+      if (!cutting) {
+        client.write(data);
+        return;
+      }
+      response = Buffer.concat([response, data]);
+      const text = response.toString("latin1");
+      const rootStart = text.search(/\n0:/);
+      if (rootStart < 0) return;
+      // A row ends at a bare newline. Inside one, CRLF is only the chunked encoding's framing.
+      let rootEnd = text.indexOf("\n", rootStart + 1);
+      while (rootEnd >= 0 && text[rootEnd - 1] === "\r") rootEnd = text.indexOf("\n", rootEnd + 1);
+      if (rootEnd < 0) return;
+      cuts += 1;
+      if (cutting.thenDown) {
+        down = true;
+        for (const socket of sockets) if (socket !== client) socket.destroy();
+      }
+      upstream.destroy();
+      client.end(response.subarray(0, rootEnd + 1));
+      cutting = null;
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, target.hostname, resolve));
+  const proxied = new URL(baseURL);
+  proxied.port = String((server.address() as net.AddressInfo).port);
+  return {
+    origin: proxied.origin,
+    cutNextRefresh: (options = { thenDown: false }) => {
+      armed = options;
+    },
+    cuts: () => cuts,
+    comeBackUp: () => {
+      down = false;
+    },
+    close: () => {
+      for (const socket of sockets) socket.destroy();
+      server.close();
+    }
+  };
+}
+
 function recordDashboardRefreshes(page: Page, courseId: number) {
   const refreshes: string[] = [];
   page.on("request", (request) => {
@@ -44,21 +135,43 @@ test.describe("Student dashboard survey countdown", () => {
   let student: User;
   let instructor: User;
 
-  async function seedPublishedSurvey(title: string, dueAt: number) {
-    const { error } = await supabase.from("surveys").insert({
-      class_id: course.id,
-      created_by: instructor.public_profile_id,
-      assigned_to_all: true,
-      allow_response_editing: false,
-      json: { pages: [{ elements: [{ type: "text", name: "q1", title: "How is it going?" }] }] },
-      version: 1,
-      status: "published",
-      title,
-      due_date: new Date(dueAt).toISOString()
-    });
+  async function seedPublishedSurvey(title: string, dueAt: number, availableAt?: number) {
+    const { data, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        assigned_to_all: true,
+        allow_response_editing: false,
+        json: { pages: [{ elements: [{ type: "text", name: "q1", title: "How is it going?" }] }] },
+        version: 1,
+        status: "published",
+        title,
+        due_date: new Date(dueAt).toISOString(),
+        ...(availableAt === undefined ? {} : { available_at: new Date(availableAt).toISOString() })
+      })
+      .select("id")
+      .single();
     if (error) {
       throw new Error(`Failed to seed survey: ${error.message}`);
     }
+    return data.id;
+  }
+
+  // The dashboard with one survey on it, marked, and the clock past the minute, so a show refreshes it.
+  async function openDashboard(page: Page, title: string, origin = "") {
+    await loginAsUser(page, student, course);
+    const dueAt = Date.now() + 30 * 60_000;
+    await seedPublishedSurvey(title, dueAt);
+    await page.clock.install();
+    const refreshes = recordDashboardRefreshes(page, course.id);
+    await page.goto(`${origin}/course/${course.id}`);
+    const surveys = surveysToComplete(page);
+    await expect(surveys.getByText(title)).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    await markDocument(page);
+    await page.clock.setSystemTime(dueAt - 15 * 60_000);
+    return { surveys, refreshes, dueAt };
   }
 
   test.beforeAll(async () => {
@@ -94,9 +207,7 @@ test.describe("Student dashboard survey countdown", () => {
     await expect(surveys.getByText("Deadline Survey")).toBeVisible();
     await expect(surveys.getByText("Pending", { exact: true })).toBeVisible();
     await expect(surveys.getByText(/^Due in \d+ minutes?$/)).toBeVisible();
-    await page.evaluate(() => {
-      (window as unknown as { __sameDocument?: boolean }).__sameDocument = true;
-    });
+    await markDocument(page);
 
     // Stop the clock just before the deadline; from here on time moves only when the test moves it.
     await page.clock.pauseAt(dueAt - 5_000);
@@ -107,7 +218,7 @@ test.describe("Student dashboard survey countdown", () => {
     await expect(surveys.getByText("Overdue", { exact: true })).toBeVisible();
     await expect(surveys.getByText(/^Was due .+ ago$/)).toBeVisible();
     await expect(surveys.getByText("Pending", { exact: true })).toHaveCount(0);
-    expect(await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument)).toBe(true);
+    expect(await isSameDocument(page)).toBe(true);
   });
 
   test("a hidden dashboard shows the current countdown as soon as it is shown again, and refreshes at most once a minute", async ({
@@ -166,20 +277,7 @@ test.describe("Student dashboard survey countdown", () => {
     test(`a refresh that fails because of ${name} keeps the dashboard, and the next show and a link still work`, async ({
       page
     }) => {
-      await loginAsUser(page, student, course);
-      const dueAt = Date.now() + 30 * 60_000;
-      await seedPublishedSurvey("Submitted While Away", dueAt);
-
-      await page.clock.install();
-      const refreshes = recordDashboardRefreshes(page, course.id);
-      await page.goto(`/course/${course.id}`);
-      const surveys = surveysToComplete(page);
-      await expect(surveys.getByText("Submitted While Away")).toBeVisible();
-      await page.waitForLoadState("networkidle");
-      await page.evaluate(() => {
-        (window as unknown as { __sameDocument?: boolean }).__sameDocument = true;
-      });
-      await page.clock.setSystemTime(dueAt - 15 * 60_000);
+      const { surveys, refreshes, dueAt } = await openDashboard(page, "Submitted While Away");
 
       // Answered, not just sent, so the route can't be removed before this refresh has failed.
       let refreshAnswered = () => {};
@@ -190,10 +288,19 @@ test.describe("Student dashboard survey countdown", () => {
         if (isRefresh) refreshAnswered();
       };
       await page.route("**/*", failThenSignal);
-      await setTabVisibility(page, "hidden");
-      await setTabVisibility(page, "visible");
+      await showAgain(page);
       await answered;
-      await expect(surveys.getByText("Submitted While Away")).toBeVisible();
+
+      // Still failing through a second show, so what the student sees is checked while the failure
+      // lasts. The page's state comes first: router.refresh() has to fail here on the error page or
+      // the reload, not on a count. Retried because the page handles a failure a moment after the
+      // route answers it, and each retry can send another refresh, so this count is only a minimum.
+      await expect(async () => {
+        await showAgain(page);
+        await expect(surveys.getByText("Submitted While Away")).toBeVisible({ timeout: 1_000 });
+        expect(await isSameDocument(page)).toBe(true);
+        expect(refreshes.length).toBeGreaterThan(1);
+      }).toPass({ timeout: 10_000 });
       await page.unroute("**/*", failThenSignal);
 
       // The failure gave the minute back, so this show refreshes with no change to the clock. It
@@ -214,24 +321,183 @@ test.describe("Student dashboard survey countdown", () => {
         submitted_at: new Date().toISOString()
       });
       if (submitError) throw new Error(`Failed to submit survey: ${submitError.message}`);
-      // Retried because the page handles the failure a moment after the route answers it. A retry
-      // inside the minute sends nothing once a refresh has gone out, and the count below checks that.
+      // Retried for the same reason. The second test pins exactly how many refreshes a healthy page sends.
       await expect(async () => {
-        await setTabVisibility(page, "hidden");
-        await setTabVisibility(page, "visible");
+        await showAgain(page);
         await expect(surveys.getByText("Opened After The Failure")).toBeVisible({ timeout: 3_000 });
       }).toPass({ timeout: 20_000 });
       await expect(surveys.getByText("Submitted While Away")).toHaveCount(0);
-      expect(refreshes).toHaveLength(2);
 
       // The router still works: a link renders the survey page, in the same document. This survey
       // opened after the page loaded, so the course controller has to find it by ID.
       await page.clock.resume();
       await surveys.getByRole("link", { name: /Opened After The Failure/ }).click();
       await expect(page.getByRole("heading", { name: "Opened After The Failure", level: 1 })).toBeVisible();
-      expect(await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument)).toBe(true);
+      expect(await isSameDocument(page)).toBe(true);
     });
   }
+
+  // router.refresh() compares builds and reloads a tab a deploy left behind. The action has to do the
+  // same, for a server that's another build and for one that no longer has this action.
+  for (const [name, answerAsDeployed] of [
+    ["another build", (route: Route) => route.continue({ postData: JSON.stringify(["another-build"]) })],
+    [
+      "a build without this action",
+      (route: Route) => route.continue({ headers: { ...route.request().headers(), "next-action": "0".repeat(42) } })
+    ]
+  ] as const) {
+    test(`a dashboard left open across a deploy to ${name} reloads at the next show`, async ({ page }) => {
+      const { surveys, refreshes, dueAt } = await openDashboard(page, "Before The Deploy");
+      await seedPublishedSurvey("After The Deploy", dueAt + 5 * 60_000);
+      await page.route("**/*", (route) =>
+        isDashboardRefresh(route.request(), course.id) ? answerAsDeployed(route) : route.fallback()
+      );
+      await showAgain(page);
+      await expect(surveys.getByText("After The Deploy")).toBeVisible();
+      expect(await isSameDocument(page)).toBe(false);
+      expect(refreshes).toHaveLength(1);
+    });
+  }
+
+  test("a signed-out dashboard goes to sign-in at the next show", async ({ page, context }) => {
+    await openDashboard(page, "Signed Out");
+    await context.clearCookies();
+    await showAgain(page);
+    await page.waitForURL(/\/sign-in/);
+  });
+
+  test("a refresh cut after its root row comes back as a working dashboard, with no click", async ({
+    page,
+    baseURL
+  }) => {
+    const proxy = await startCutProxy(baseURL!);
+    try {
+      const { surveys, dueAt } = await openDashboard(page, "Cut On The Wire", proxy.origin);
+      await seedPublishedSurvey("Opened Before The Cut", dueAt + 5 * 60_000);
+      proxy.cutNextRefresh();
+      await showAgain(page);
+      // Only the reload can bring this: the refresh that would have was cut, and nothing shows the tab again.
+      await expect(surveys.getByText("Opened Before The Cut")).toBeVisible();
+      expect(proxy.cuts()).toBe(1);
+      expect(await isSameDocument(page)).toBe(false);
+    } finally {
+      proxy.close();
+    }
+  });
+
+  test("a refresh cut with the network staying down keeps Try Again, and the next show recovers", async ({
+    page,
+    baseURL
+  }) => {
+    const proxy = await startCutProxy(baseURL!);
+    try {
+      const { surveys } = await openDashboard(page, "Cut And Gone", proxy.origin);
+      const dashboard = page.url();
+      const checkFailed = page.waitForEvent("requestfailed", (request) => request.url().endsWith("/favicon.ico"));
+      proxy.cutNextRefresh({ thenDown: true });
+      await showAgain(page);
+      await checkFailed;
+      // A reload now would be the browser's error page, with no way back but the student reloading.
+      await expect(page.getByRole("button", { name: "Try Again" })).toBeVisible();
+      expect(page.url()).toBe(dashboard);
+      expect(await isSameDocument(page)).toBe(true);
+
+      proxy.comeBackUp();
+      await showAgain(page);
+      await expect(surveys.getByText("Cut And Gone")).toBeVisible();
+      expect(await isSameDocument(page)).toBe(false);
+    } finally {
+      proxy.close();
+    }
+  });
+
+  test.describe("a survey the course controller doesn't have yet", () => {
+    const surveyHeading = (page: Page, title: string) => page.getByRole("heading", { name: title, level: 1 });
+    const notFoundToasts = (page: Page) =>
+      page.locator('[data-scope="toast"][data-part="root"]').filter({ hasText: "Survey Not Found" });
+
+    function isSurveyFetch(url: string, surveyId: string, select: string) {
+      const { pathname, searchParams } = new URL(url);
+      return (
+        pathname.endsWith("/rest/v1/surveys") &&
+        searchParams.get("id") === `eq.${surveyId}` &&
+        searchParams.get("select") === select
+      );
+    }
+
+    test("isn't called missing while the controller is still fetching it", async ({ page }) => {
+      const { surveys, dueAt } = await openDashboard(page, "Already Open");
+      const surveyId = await seedPublishedSurvey("Just Opened", dueAt + 5 * 60_000);
+      await showAgain(page);
+      await expect(surveys.getByText("Just Opened")).toBeVisible();
+
+      // The controller's fetch waits until the direct check has answered, so this is the same every
+      // run: a page that decides from the controller alone has already gone to the list by then.
+      let releaseFetch = () => {};
+      const fetchReleased = new Promise<void>((resolve) => (releaseFetch = resolve));
+      await page.route(/\/rest\/v1\/surveys\?/, async (route) => {
+        if (isSurveyFetch(route.request().url(), surveyId, "*")) await fetchReleased;
+        await route.fallback();
+      });
+      const directCheck = page.waitForResponse((response) => isSurveyFetch(response.url(), surveyId, "id"));
+      await surveys.getByRole("link", { name: /Just Opened/ }).click();
+      await directCheck;
+      releaseFetch();
+
+      await expect(surveyHeading(page, "Just Opened")).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`/surveys/${surveyId}$`));
+      expect(await notFoundToasts(page).count()).toBe(0);
+    });
+
+    test("still opens after the controller's fetch failed once", async ({ page }) => {
+      const { surveys, dueAt } = await openDashboard(page, "Already Open");
+      const surveyId = await seedPublishedSurvey("Fetch Failed Once", dueAt + 5 * 60_000);
+      await showAgain(page);
+      await expect(surveys.getByText("Fetch Failed Once")).toBeVisible();
+
+      let failed = false;
+      await page.route(/\/rest\/v1\/surveys\?/, async (route) => {
+        if (!failed && isSurveyFetch(route.request().url(), surveyId, "*")) {
+          failed = true;
+          await route.abort("failed");
+          return;
+        }
+        await route.fallback();
+      });
+      await surveys.getByRole("link", { name: /Fetch Failed Once/ }).click();
+
+      await expect(surveyHeading(page, "Fetch Failed Once")).toBeVisible();
+      expect(failed).toBe(true);
+      expect(await notFoundToasts(page).count()).toBe(0);
+    });
+
+    test("still opens after it was visited before it opened", async ({ page }) => {
+      const { surveys, dueAt } = await openDashboard(page, "Already Open");
+      const surveyId = await seedPublishedSurvey("Opens Later", dueAt + 5 * 60_000, Date.now() + 60 * 60_000);
+      // A client-side navigation, so the same controller is the one that remembers it found nothing.
+      const push = (url: string) =>
+        page.evaluate((target) => {
+          (window as unknown as { next: { router: { push(href: string): void } } }).next.router.push(target);
+        }, url);
+
+      await push(`/course/${course.id}/surveys/${surveyId}`);
+      await page.waitForURL(new RegExp(`/course/${course.id}/surveys$`));
+
+      const { error } = await supabase
+        .from("surveys")
+        .update({ available_at: new Date(Date.now() - 60_000).toISOString() })
+        .eq("id", surveyId);
+      if (error) throw new Error(`Failed to open survey: ${error.message}`);
+
+      await push(`/course/${course.id}`);
+      await expect(surveys.getByText("Already Open")).toBeVisible();
+      await showAgain(page);
+      await expect(surveys.getByText("Opens Later")).toBeVisible();
+      await surveys.getByRole("link", { name: /Opens Later/ }).click();
+
+      await expect(surveyHeading(page, "Opens Later")).toBeVisible();
+    });
+  });
 
   test("a dashboard opened with the browser clock past the deadline shows Overdue at once", async ({ page }) => {
     await loginAsUser(page, student, course);
