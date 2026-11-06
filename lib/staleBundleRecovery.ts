@@ -117,6 +117,39 @@ export function recoverFromStaleBundle(reload: () => void = defaultReload): bool
 }
 
 /**
+ * True for what a page's render throws when its response was cut off. Next starts rendering a response
+ * once the root row arrives, so the rows that never came reject where only `app/global-error.tsx` can
+ * catch them. React's own message when the body ends early, then Chromium's and WebKit's when reading
+ * it fails. A fetch that fails outright never gets this far.
+ */
+export function isCutResponseError(error: unknown): boolean {
+  const message = (error as { message?: string } | null | undefined)?.message;
+  return message === "Connection closed." || message === "network error" || message === "Load failed";
+}
+
+/**
+ * For `app/global-error.tsx`, whose page has already replaced the app, so a reload can't lose anything
+ * more. Only reloads a visible tab whose server answers, because a reload with the network down would
+ * swap this page and its Try Again for the browser's error page. Until then, each show tries again.
+ * `recoverFromStaleBundle`'s cooldown stops a page that keeps failing from looping. Returns an
+ * uninstall function.
+ */
+export function reloadOnceReachable(reload: () => void = defaultReload): () => void {
+  const reloadIfReachable = () => {
+    if (document.visibilityState !== "visible") return;
+    void fetch("/favicon.ico", { method: "HEAD", cache: "no-store" }).then(
+      (response) => {
+        if (response.ok) recoverFromStaleBundle(reload);
+      },
+      () => {}
+    );
+  };
+  reloadIfReachable();
+  document.addEventListener("visibilitychange", reloadIfReachable);
+  return () => document.removeEventListener("visibilitychange", reloadIfReachable);
+}
+
+/**
  * Install global listeners that detect stale-bundle errors (from prefetch or
  * navigation) and self-heal. Safe to call once at client startup; no-ops on the
  * server. Returns an uninstall function (used by tests).
