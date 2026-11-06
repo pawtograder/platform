@@ -48,7 +48,8 @@ forgejo:
           secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
     config:
       oauth2_client:
-        ENABLE_AUTO_REGISTRATION: true
+        # Uncomment to create a Forgejo account on first sign-in for anyone who can sign in to Pawtograder.
+        # ENABLE_AUTO_REGISTRATION: true
         USERNAME: userid
         ACCOUNT_LINKING: disabled
       storage:
@@ -77,6 +78,8 @@ coder:
   database: pawtograder
   oidc:
     enabled: true
+    # Uncomment to create a Coder account, with workspace compute, on first sign-in for anyone who can sign in to Pawtograder.
+    # allowSignups: true
   coder:
     env:
       - name: CODER_PG_CONNECTION_URL

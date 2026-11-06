@@ -25,7 +25,7 @@ data:
   {{- if .Values.coder.oidc.enabled }}
   CODER_OIDC_ISSUER_URL: "{{ include "pawtograder.api.url" . }}/auth/v1"
   CODER_OIDC_SCOPES: "openid,profile,email"
-  CODER_OIDC_ALLOW_SIGNUPS: "true"
+  CODER_OIDC_ALLOW_SIGNUPS: {{ .Values.coder.oidc.allowSignups | quote }}
   CODER_OIDC_SIGN_IN_TEXT: {{ .Values.coder.oidc.signInText | quote }}
   {{- end }}
 ---

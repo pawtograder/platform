@@ -2872,6 +2872,8 @@ coder:
   oidc:
     enabled: false
     signInText: Sign in with Pawtograder
+    # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
+    allowSignups: false
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
