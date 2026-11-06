@@ -175,6 +175,7 @@ export default function SurveyTakingPage() {
   // Why the last Complete failed, shown above the form until the next attempt.
   const [submitError, setSubmitError] = useState<SubmitAlert | null>(null);
   const submitErrorRef = useRef<HTMLDivElement | null>(null);
+  const saveStatusRef = useRef<HTMLParagraphElement | null>(null);
   // The response turned out to be submitted after the page loaded it as a draft: a Complete whose
   // reply was lost, or a submit from another tab. On a survey that allows editing the form keeps the
   // student's answers, so this, not existingResponse, says it is submitted.
@@ -760,6 +761,8 @@ export default function SurveyTakingPage() {
         {!isReadOnly && (
           <HStack gap={3} minH={6} justify="flex-end">
             <Text
+              ref={saveStatusRef}
+              tabIndex={-1}
               role="status"
               aria-live="polite"
               fontSize="sm"
@@ -768,7 +771,16 @@ export default function SurveyTakingPage() {
               {saveBlocked ? UNSAVABLE_STATUS_TEXT : AUTOSAVE_STATUS_TEXT[autosaveStatus]}
             </Text>
             {autosaveStatus === "failed" && (
-              <Button size="xs" variant="outline" onClick={() => autosaveQueueRef.current?.retryNow()}>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  // Retrying changes the status, which removes this button. Without somewhere to
+                  // go, focus would fall to the body and a keyboard user back to the top of the page.
+                  saveStatusRef.current?.focus();
+                  autosaveQueueRef.current?.retryNow();
+                }}
+              >
                 Try again
               </Button>
             )}
