@@ -5,7 +5,7 @@ import AuthBrandHeader from "@/components/branding/auth-brand-header";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Container, HStack, Separator, Stack, Text } from "@chakra-ui/react";
 
-type SearchParams = Message & { token_hash?: string };
+type SearchParams = Message & { token_hash?: string; redirect_to?: string };
 export default async function ConfirmEmail(props: { searchParams: Promise<SearchParams> }) {
   const supabase = await createClient();
   //If the user is already logged in, force logout
@@ -16,7 +16,7 @@ export default async function ConfirmEmail(props: { searchParams: Promise<Search
     await supabase.auth.signOut();
   }
   const { ...message } = await props.searchParams;
-  const token_hash = message.token_hash;
+  const { token_hash, redirect_to } = message;
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">
@@ -33,6 +33,7 @@ export default async function ConfirmEmail(props: { searchParams: Promise<Search
         <Stack gap="4">
           <form action={confirmEmailAction}>
             <input type="hidden" name="token_hash" value={token_hash} />
+            {redirect_to && <input type="hidden" name="redirect_to" value={redirect_to} />}
             <FormMessage message={message} />
             <Box mt="4">
               <SubmitButton

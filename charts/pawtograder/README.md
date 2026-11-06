@@ -538,6 +538,9 @@ Defaults are the chart-bundled files under
 [`email-templates/`](./email-templates); their links route through the web
 app's own `/auth/*` pages via `token_hash` (e.g.
 `{{ .SiteURL }}/auth/reset-password?token_hash={{ .TokenHash }}&type=email`).
+The confirmation link also carries `redirect_to={{ .RedirectTo }}`, which sends
+someone who signed up partway through a sign-in (such as an OAuth consent
+request) back to it, so keep that parameter in an override.
 Override any body with raw HTML via `auth.mailer.templates.files.<name>`
 (`invite`, `confirmation`, `recovery`, `magicLink`, `emailChange`), and set
 custom subject lines via `auth.mailer.templates.subjects.<name>` (empty →
