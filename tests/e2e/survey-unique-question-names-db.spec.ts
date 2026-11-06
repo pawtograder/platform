@@ -322,9 +322,34 @@ test.describe("surveys whose questions share a name cannot be published", () => 
     expectDuplicateNameRejection(sharedValueName, "7");
   });
 
-  test("a question with a stray `elements` property still counts", async () => {
+  // What keeps a legitimate survey from being refused. The unit suite that pinned these went with
+  // the client's copy of the rules, so this SQL is the only place left to check them.
+  test("panels share the survey's scope, and a dynamic panel's template has its own", async () => {
+    const panel = (name: string, ...elements: object[]) => ({ type: "panel", name, elements });
+    const dynamic = (name: string, ...templateElements: object[]) => ({ type: "paneldynamic", name, templateElements });
+
+    const notRepeats = await publishNew(
+      "Not repeats",
+      onePage(
+        { type: "html", name: "a", html: "x" },
+        { type: "image", name: "a", imageLink: "x.png" },
+        panel("a", text("b")),
+        text("a"),
+        dynamic("d", text("a")),
+        dynamic("e", text("a"))
+      )
+    );
+    expect(notRepeats, `none of these repeat an answer key: ${notRepeats?.message}`).toBeNull();
+
+    expectDuplicateNameRejection(await publishNew("Repeat in a panel", onePage(panel("g", text("a")), text("a"))), "a");
+    expectDuplicateNameRejection(
+      await publishNew("Repeat in a template", onePage(dynamic("d", text("a"), text("a")))),
+      "a"
+    );
     // SurveyJS ignores `elements` on a text question, which still saves its answer under its name.
-    const error = await publishNew("Stray elements", onePage(text("a", { elements: [] }), text("a")));
-    expectDuplicateNameRejection(error, "a");
+    expectDuplicateNameRejection(
+      await publishNew("Stray elements", onePage(text("a", { elements: [] }), text("a"))),
+      "a"
+    );
   });
 });
