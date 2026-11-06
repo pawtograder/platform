@@ -17,7 +17,7 @@ export async function generateMetadata() {
 const SCOPE_DESCRIPTIONS: Record<string, string> = {
   openid: "Confirm that you are signed in to your account",
   email: "See your email address",
-  profile: "See your name",
+  profile: "See your name and email address",
   phone: "See your phone number"
 };
 

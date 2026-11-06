@@ -2,7 +2,9 @@
  * The OAuth consent page sends a signed-out visitor to /sign-in?redirect=/oauth/consent?..., and a
  * signup that needs email confirmation has to bring them back there once they click the link.
  */
-import { confirmEmailAction, signUpWithEmailAction } from "@/app/actions";
+import { readFileSync } from "fs";
+import path from "path";
+import { confirmEmailAction, signInWithSSOAction, signUpWithEmailAction } from "@/app/actions";
 
 const mockRedirect = jest.fn((url: string) => {
   throw new Error(`NEXT_REDIRECT ${url}`);
@@ -11,10 +13,15 @@ jest.mock("next/navigation", () => ({ redirect: (url: string) => mockRedirect(ur
 
 const mockVerifyOtp = jest.fn();
 const mockSignUp = jest.fn();
+const mockSignInWithOAuth = jest.fn();
 jest.mock("@/utils/supabase/server", () => ({
-  createClient: async () => ({ auth: { verifyOtp: mockVerifyOtp, signUp: mockSignUp } })
+  createClient: async () => ({
+    auth: { verifyOtp: mockVerifyOtp, signUp: mockSignUp, signInWithOAuth: mockSignInWithOAuth }
+  })
 }));
-jest.mock("@/lib/branding", () => ({ getBranding: () => ({ name: "Pawtograder", ssoProviders: [] }) }));
+jest.mock("@/lib/branding", () => ({
+  getBranding: () => ({ name: "Pawtograder", ssoProviders: [{ provider: "azure", label: "Microsoft" }] })
+}));
 
 const APP = "https://app.example";
 const CONSENT = "/oauth/consent?authorization_id=abc";
@@ -37,6 +44,7 @@ beforeEach(() => {
   process.env.ENABLE_SIGNUPS = "true";
   mockVerifyOtp.mockResolvedValue({ error: null });
   mockSignUp.mockResolvedValue({ data: { user: { confirmed_at: null } }, error: null });
+  mockSignInWithOAuth.mockResolvedValue({ data: { url: "https://login.example/authorize" }, error: null });
 });
 
 describe("signUpWithEmailAction", () => {
@@ -49,6 +57,47 @@ describe("signUpWithEmailAction", () => {
     await redirectOf(() => signUpWithEmailAction("a@b.test", "pw"));
     expect(mockSignUp.mock.calls[0][0].options.emailRedirectTo).toBe(`${APP}/`);
   });
+
+  it("drops a trailing slash on the web URL, so the path is not //oauth/consent", async () => {
+    process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL = `${APP}/`;
+    await redirectOf(() => signUpWithEmailAction("a@b.test", "pw", CONSENT));
+    expect(mockSignUp.mock.calls[0][0].options.emailRedirectTo).toBe(`${APP}${CONSENT}`);
+  });
+
+  it("returns a confirmed user to the redirect path", async () => {
+    mockSignUp.mockResolvedValueOnce({ data: { user: { confirmed_at: "2026-01-01T00:00:00Z" } }, error: null });
+    const url = await redirectOf(() => signUpWithEmailAction("a@b.test", "pw", CONSENT));
+    expect(url).toBe(CONSENT);
+  });
+});
+
+describe("bundled confirmation email template", () => {
+  it("passes GoTrue's RedirectTo through to /auth/confirm", () => {
+    const html = readFileSync(
+      path.join(__dirname, "../../charts/pawtograder/email-templates/confirmation.html"),
+      "utf8"
+    );
+    expect(html).toContain("redirect_to={{ .RedirectTo }}");
+  });
+});
+
+describe("signInWithSSOAction", () => {
+  function nextOf() {
+    return new URL(mockSignInWithOAuth.mock.calls[0][0].options.redirectTo).searchParams.get("next");
+  }
+
+  it("carries a same-origin redirect to the callback", async () => {
+    await redirectOf(() => signInWithSSOAction(form({ sso_index: "0", redirect: CONSENT })));
+    expect(nextOf()).toBe(CONSENT);
+  });
+
+  it.each(["//evil.test", "/\\evil.test", "/\t/evil.test", "/\n/evil.test"])(
+    "replaces %j with the site root",
+    async (redirect) => {
+      await redirectOf(() => signInWithSSOAction(form({ sso_index: "0", redirect })));
+      expect(nextOf()).toBe("/");
+    }
+  );
 });
 
 describe("confirmEmailAction", () => {

@@ -8,10 +8,12 @@ import { isSignupsEnabled } from "@/lib/features";
 import { getBranding } from "@/lib/branding";
 import { safeRedirectPath, sameOriginRedirectPath } from "@/lib/redirectPath";
 
+// Without a trailing slash, so `${webBaseUrl()}/path` never becomes `//path`.
 function webBaseUrl() {
-  return process.env.VERCEL_PROJECT_PRODUCTION_URL
+  const url = process.env.VERCEL_PROJECT_PRODUCTION_URL
     ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL
     : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL;
+  return url?.replace(/\/+$/, "");
 }
 
 export const confirmEmailAction = async (formData: FormData) => {
@@ -166,7 +168,7 @@ export const signInWithSSOAction = async (formData: FormData) => {
   const supabase = await createClient();
 
   const redirectParam = formData.get("redirect") as string | null;
-  const nextPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
+  const nextPath = safeRedirectPath(redirectParam) ?? "/";
 
   // Validate sso_index explicitly: Number(null/"") is 0, which would silently
   // select the first provider for a missing/blank field. Require a non-empty,
