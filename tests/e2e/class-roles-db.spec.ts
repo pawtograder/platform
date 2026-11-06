@@ -30,6 +30,7 @@ import {
   createUserInClass,
   createAuthenticatedClient,
   insertAssignment,
+  insertPreBakedSubmission,
   type TestingUser
 } from "./TestingUtils";
 
@@ -1018,13 +1019,14 @@ test.describe("saving assignments follows manage_assignments (#1010, step 4b)", 
 
   test("a default grader can't create or edit an assignment", async () => {
     const { settingsError } = await createAssignmentAs(plainGrader);
-    expect(settingsError, "creating self-review settings needs manage_assignments").not.toBeNull();
+    expect(settingsError?.code, "creating self-review settings needs manage_assignments").toBe("42501");
 
-    const { data: settings } = await supabase
-      .from("assignment_self_review_settings")
-      .insert({ class_id: classH.id, enabled: false })
-      .select("id")
-      .single();
+    const existing = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-existing-${Date.now().toString(36)}`
+    });
+    // Reuses the existing assignment's settings row, so the refused insert leaves nothing behind.
     const grader = await createAuthenticatedClient(plainGrader);
     const { error: insertError } = await grader.from("assignments").insert({
       class_id: classH.id,
@@ -1032,15 +1034,10 @@ test.describe("saving assignments follows manage_assignments (#1010, step 4b)", 
       slug: `e2e-h-grader-${Date.now().toString(36)}`,
       due_date: addDays(new Date(), 7).toISOString(),
       group_config: "individual",
-      self_review_setting_id: settings!.id
+      self_review_setting_id: existing.self_review_setting_id!
     });
-    expect(insertError, "creating an assignment needs manage_assignments").not.toBeNull();
+    expect(insertError?.code, "creating an assignment needs manage_assignments").toBe("42501");
 
-    const existing = await insertAssignment({
-      class_id: classH.id,
-      due_date: addDays(new Date(), 7).toISOString(),
-      assignment_slug: `e2e-h-existing-${Date.now().toString(36)}`
-    });
     const titleBefore = await assignmentTitle(existing.id);
     expectBlocked(
       await grader.from("assignments").update({ title: "Changed by a grader" }).eq("id", existing.id).select("id"),
@@ -1058,6 +1055,70 @@ test.describe("saving assignments follows manage_assignments (#1010, step 4b)", 
       await grader.from("autograder").update({ max_submissions_count: 99 }).eq("id", existing.id).select("id"),
       "a default grader editing the autograder"
     );
+  });
+
+  test("a manage_assignments holder can queue student-repo syncs for their class, and a default grader can't", async () => {
+    // Edit Assignment queues these through assignment-sync-autograder-workflow with the editor's JWT.
+    const assignment = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-sync-${Date.now().toString(36)}`
+    });
+    const student = await createUserInClass({ role: "student", class_id: classH.id });
+    const submission = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: classH.id
+    });
+    const { data: repo, error: repoError } = await supabase
+      .from("repositories")
+      .select("id")
+      .eq("repository", submission.repository_name)
+      .single();
+    expect(repoError).toBeNull();
+
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { error: refused } = await grader.rpc("queue_repository_syncs", { p_repository_ids: [repo!.id] });
+    expect(refused?.message ?? "", "a default grader is refused").toContain("manage_assignments is required");
+
+    const client = await createAuthenticatedClient(headTa);
+    const { error } = await client.rpc("queue_repository_syncs", { p_repository_ids: [repo!.id] });
+    expect(error, "a Head TA can queue syncs for their class's repositories").toBeNull();
+  });
+
+  test("a manage_assignments holder can move release_date into the past, which creates student repos", async () => {
+    // Before this fix the assignments trigger's call to create_all_repos_for_assignment refused a
+    // Head TA and rolled back the whole save.
+    const assignment = await insertAssignment({
+      class_id: classH.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      release_date: addDays(new Date(), 7).toISOString(),
+      assignment_slug: `e2e-h-release-${Date.now().toString(36)}`
+    });
+    expect(assignment.template_repo, "the trigger only creates repos when there is a handout").toBeTruthy();
+    const pastRelease = new Date(Date.now() - 5 * 60_000).toISOString();
+
+    const grader = await createAuthenticatedClient(plainGrader);
+    expectBlocked(
+      await grader.from("assignments").update({ release_date: pastRelease }).eq("id", assignment.id).select("id"),
+      "a default grader moving the release date"
+    );
+
+    const client = await createAuthenticatedClient(headTa);
+    const { data, error } = await client
+      .from("assignments")
+      .update({ release_date: pastRelease })
+      .eq("id", assignment.id)
+      .select("id");
+    expect(error, "the save succeeds").toBeNull();
+    expect(data).toHaveLength(1);
+    const { data: after, error: afterError } = await supabase
+      .from("assignments")
+      .select("release_date")
+      .eq("id", assignment.id)
+      .single();
+    expect(afterError).toBeNull();
+    expect(new Date(after!.release_date!).getTime()).toBe(new Date(pastRelease).getTime());
   });
 
   test("a grader with manage_assignments still can't delete an assignment", async () => {
