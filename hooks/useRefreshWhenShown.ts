@@ -21,6 +21,11 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * server clock that runs ahead can hold a refresh off by at most that gap, and never past a minute
  * after mount. Keeping the later of that and the last refresh this hook sent means a browser clock
  * that runs ahead costs at most one extra refresh.
+ *
+ * A tab shown while the browser knows it's offline doesn't refresh, and catches up when the network
+ * returns. router.refresh() falls back to location.replace when its fetch fails, and with no network
+ * that swaps the dashboard for the browser's error page. `navigator.onLine` can still say true on
+ * Wi-Fi that has only just woken or sits behind a captive portal, and a 5xx takes the same fallback.
  */
 export function useRefreshWhenShown(
   renderedAt: number,
@@ -32,15 +37,21 @@ export function useRefreshWhenShown(
   useEffect(() => {
     lastRefreshAt.current = Math.max(lastRefreshAt.current, Math.min(Date.now(), renderedAt));
 
-    const onVisibilityChange = () => {
+    const refreshIfDue = () => {
       if (document.visibilityState !== "visible") return;
+      // Before lastRefreshAt is written, so a skipped refresh doesn't use up the minute.
+      if (!navigator.onLine) return;
       const now = Date.now();
       if (now - lastRefreshAt.current < minIntervalMs) return;
       lastRefreshAt.current = now;
       router.refresh();
     };
 
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("visibilitychange", refreshIfDue);
+    window.addEventListener("online", refreshIfDue);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfDue);
+      window.removeEventListener("online", refreshIfDue);
+    };
   }, [router, renderedAt, minIntervalMs]);
 }
