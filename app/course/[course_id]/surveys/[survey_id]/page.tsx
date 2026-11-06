@@ -90,24 +90,30 @@ export default function SurveyTakingPage() {
   // not exist, so a miss is only knowable once its initial fetch has completed. Even then it can be
   // wrong: students get no realtime for surveys, so a survey created after that fetch is one the
   // controller hasn't seen, and the dashboard's refresh links to it. The controller fetches such a
-  // row by ID but doesn't say when it finds none, so ask directly before calling it missing.
+  // row by ID but doesn't say when it finds none, so ask directly before calling it missing. It also
+  // never asks again for an ID that failed or found nothing once, so a row found here is fetched again.
   const [missingSurveyId, setMissingSurveyId] = useState<string | null>(null);
   const notInController = surveysReady && survey == null;
   useEffect(() => {
     if (!notInController) return;
     let cancelled = false;
+    const callItMissing = () => {
+      if (!cancelled) setMissingSurveyId(survey_id as string);
+    };
     void controller.client
       .from("surveys")
       .select("id")
       .eq("id", survey_id as string)
       .maybeSingle()
       .then(({ data }) => {
-        if (!cancelled && !data) setMissingSurveyId(survey_id as string);
+        if (cancelled) return;
+        if (!data) return callItMissing();
+        return controller.surveys.invalidate(survey_id as string).catch(callItMissing);
       });
     return () => {
       cancelled = true;
     };
-  }, [notInController, controller.client, survey_id]);
+  }, [notInController, controller, survey_id]);
   const surveyMissing = notInController && missingSurveyId === survey_id;
   const allowResponseEditing = survey?.allow_response_editing ?? false;
 
