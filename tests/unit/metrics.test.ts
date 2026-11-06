@@ -155,8 +155,8 @@ describe("refreshWorkflowMetrics throttle", () => {
     release();
     await Promise.all([a, b]);
 
-    // Five aggregate RPCs, issued once — not ten.
-    expect(rpc.mock.calls.length).toBe(5);
+    // Six aggregate RPCs, issued once — not twelve.
+    expect(rpc.mock.calls.length).toBe(6);
     expect((globalThis as GlobalWithMetrics).__pawtograderMetrics?.lastWorkflowRefreshMs).toBe(Date.now());
 
     // The second caller must have WAITED for the pass rather than skipping it:
@@ -166,7 +166,7 @@ describe("refreshWorkflowMetrics throttle", () => {
     rpcSucceeds();
     jest.setSystemTime(Date.now() + 301_000);
     await refreshWorkflowMetrics();
-    expect(rpc.mock.calls.length).toBe(5);
+    expect(rpc.mock.calls.length).toBe(6);
   });
 
   it("clears the in-flight pass when the refresh throws", async () => {
@@ -184,7 +184,7 @@ describe("refreshWorkflowMetrics throttle", () => {
     rpc.mockReset();
     rpcSucceeds();
     await refreshWorkflowMetrics();
-    expect(rpc.mock.calls.length).toBe(5);
+    expect(rpc.mock.calls.length).toBe(6);
   });
 
   it("disables throttling when the interval is 0", async () => {
@@ -312,5 +312,65 @@ describe("web_workflow_metrics_last_success_timestamp_seconds", () => {
     // on a leader whose database is down — that case belongs to
     // PawtograderWorkflowMetricsRefreshFailing, which is why both rules exist.
     expect(sampleValue((await renderSentinel(mod))!)).toBe(0);
+  });
+});
+
+describe("assignment repo setup gauges", () => {
+  const OLD_ENV = process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS;
+
+  beforeEach(() => {
+    rpc.mockReset();
+    rpcSucceeds();
+    delete (globalThis as GlobalWithMetrics).__pawtograderMetrics;
+  });
+
+  afterEach(() => {
+    if (OLD_ENV === undefined) delete process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS;
+    else process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS = OLD_ENV;
+  });
+
+  it("aggregates per-class rows into closed kind/state families, zero-filled", async () => {
+    const { aggregateAssignmentRepoSetupRows } = await loadMetrics();
+    const { jobs, oldest, atRisk } = aggregateAssignmentRepoSetupRows([
+      { class_id: 1, kind: "solution", state: "failed", count: 2, at_risk: 1, oldest_seconds: 0 },
+      { class_id: 2, kind: "solution", state: "failed", count: 1, at_risk: 0, oldest_seconds: 0 },
+      { class_id: 2, kind: "handout", state: "queued", count: "3", at_risk: "2", oldest_seconds: "1800.5" },
+      // Outside the closed domains: dropped, not minted as a series.
+      { class_id: 3, kind: "grader", state: "failed", count: 9, at_risk: 9, oldest_seconds: 9 },
+      { class_id: 3, kind: "handout", state: "ready", count: 9, at_risk: 9, oldest_seconds: 9 }
+    ]);
+    expect(jobs.get("solution|failed")).toBe(3);
+    expect(jobs.get("handout|queued")).toBe(3);
+    // Every pair exists, so "nothing failing" is a 0 sample rather than an absent series.
+    expect(jobs.get("handout|failed")).toBe(0);
+    expect(jobs.size).toBe(6);
+    expect(oldest.get("handout")).toBe(1800.5);
+    expect(oldest.get("solution")).toBe(0);
+    expect(Object.fromEntries(atRisk)).toEqual({ "1|solution": 1, "2|handout": 2 });
+  });
+
+  it("exports the gauges and drops a recovered class's at-risk sample", async () => {
+    process.env.METRICS_WORKFLOW_REFRESH_INTERVAL_SECONDS = "0";
+    const mod = await loadMetrics();
+    rpc.mockImplementation(async (name: string) =>
+      name === "metrics_assignment_repo_setup"
+        ? {
+            data: [{ class_id: 653, kind: "solution", state: "failed", count: 1, at_risk: 1, oldest_seconds: 0 }],
+            error: null
+          }
+        : { data: [], error: null }
+    );
+    await mod.refreshWorkflowMetrics();
+    const registry = (await mod.getMetrics())!.registry;
+    expect(await registry.getSingleMetricAsString("web_assignment_repo_setup_at_risk")).toContain(
+      'web_assignment_repo_setup_at_risk{class_id="653",kind="solution"} 1'
+    );
+    expect(await registry.getSingleMetricAsString("web_assignment_repo_setup_jobs")).toContain(
+      'web_assignment_repo_setup_jobs{kind="solution",state="failed"} 1'
+    );
+
+    rpc.mockResolvedValue({ data: [], error: null });
+    await mod.refreshWorkflowMetrics();
+    expect(await registry.getSingleMetricAsString("web_assignment_repo_setup_at_risk")).not.toContain('class_id="653"');
   });
 });

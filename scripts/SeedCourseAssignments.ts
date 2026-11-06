@@ -393,7 +393,11 @@ async function createAssignment(
     max_late_tokens: 0,
     group_config: "individual",
     allow_not_graded_submissions: true,
-    self_review_setting_id: selfReviewSettingId
+    self_review_setting_id: selfReviewSettingId,
+    // Placeholders to configure later: inserting an assignment otherwise queues creation of its
+    // handout and solution repositories on GitHub. Retry on the assignment page creates them
+    // once the assignment is set up for real.
+    skip_repo_setup: true
   });
 
   if (error) {

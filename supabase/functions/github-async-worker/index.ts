@@ -9,6 +9,7 @@ import type {
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
   RerunAutograderArgs,
+  SetupAssignmentRepoArgs,
   SyncRepoPermissionsArgs,
   SyncRepoToHandoutArgs,
   SyncTeamArgs
@@ -40,6 +41,14 @@ import { shouldSendOrgInvitation, siblingInviteTeamSlugs } from "../_shared/orgI
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 import { notReadyRequeuePatch, planRepoNotReadyWait } from "../_shared/repoNotReadyPlan.ts";
+import {
+  type AssignmentRepoKind,
+  claimAssignmentRepoSetup,
+  recordAssignmentRepoSetupEvent,
+  releaseAssignmentRepoSetupClaim,
+  setupHandoutRepo,
+  setupSolutionRepo
+} from "../_shared/assignmentRepoSetup.ts";
 // Declare EdgeRuntime for type safety
 declare const EdgeRuntime: {
   waitUntil(promise: Promise<unknown>): void;
@@ -64,6 +73,19 @@ function toMsLatency(enqueuedAt: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * The staff-repository setup jobs, and which public.assignment_repo_setup row each one reports to.
+ * Null for every other method.
+ */
+function assignmentRepoSetupTarget(
+  envelope: GitHubAsyncEnvelope
+): { assignmentId: number; kind: AssignmentRepoKind } | null {
+  if (envelope.method !== "setup_handout_repo" && envelope.method !== "setup_solution_repo") return null;
+  const assignmentId = (envelope.args as SetupAssignmentRepoArgs).assignment_id;
+  if (typeof assignmentId !== "number") return null;
+  return { assignmentId, kind: envelope.method === "setup_handout_repo" ? "handout" : "solution" };
 }
 
 /**
@@ -687,6 +709,29 @@ async function sendToDeadLetterQueue(
     }
   });
 
+  // A dead-lettered setup job is the end of its automatic retries: put the row in front of the
+  // instructor as failed, with the reason, so the Retry button appears. reconcile_assignment_repo_setup
+  // parks it from the DLQ too, but only on its next tick.
+  const setupTarget = assignmentRepoSetupTarget(envelope);
+  if (setupTarget) {
+    const reported = await recordAssignmentRepoSetupEvent(
+      adminSupabase,
+      { ...setupTarget, event: "gave_up", error: errorMessage },
+      scope
+    );
+    if (!reported && envelope.log_id) {
+      // The job is already in the DLQ, so holding the message back would only rerun a job that
+      // has finished failing. Release the claim instead (the report was also what released it):
+      // with no live claim and the job in the DLQ, reconcile_assignment_repo_setup marks the row
+      // failed on its next tick.
+      await releaseAssignmentRepoSetupClaim(
+        adminSupabase,
+        { ...setupTarget, holder: `worker:${envelope.log_id}` },
+        scope
+      );
+    }
+  }
+
   return true;
 }
 
@@ -942,7 +987,8 @@ export async function processEnvelope(
   // Circuit breaker: check both org-level and method-specific circuits
   try {
     // THE ALLOCATOR MIRRORS THIS RESOLVER, so the two lists have to stay in step. `v_org_expr` in
-    // supabase/migrations/20260914120000_async_lease_pin_org.sql resolves the same eight methods to
+    // pgmq_public.claim_org_slot_and_read (latest definition:
+    // supabase/migrations/20261022120100_assignment_repo_setup.sql) resolves the same ten methods to
     // the same org, because the per-org slot budget has to be charged to the org the handler below
     // is going to call. Adding a method here, or changing where one of them reads its org from,
     // means editing that expression in a migration too; drift shows up as an '(unknown-method)'
@@ -962,6 +1008,8 @@ export async function processEnvelope(
         return repo.split("/")[0];
       }
       if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
+      if (envelope.method === "setup_handout_repo" || envelope.method === "setup_solution_repo")
+        return (envelope.args as SetupAssignmentRepoArgs).org;
       throw new Error(`Unknown method, ignoring circuit breaker, seems dangerous. ${envelope.method}`);
     })();
     if (org) {
@@ -1524,6 +1572,99 @@ export async function processEnvelope(
           if (resyncError) throw resyncError;
         }
 
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 200,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        return true;
+      }
+      case "setup_handout_repo":
+      case "setup_solution_repo": {
+        // An assignment's STAFF repositories, queued by public.enqueue_assignment_repo_setup when
+        // the assignment is inserted. The work is shared with the assignment-create-*-repo edge
+        // functions (_shared/assignmentRepoSetup.ts); this case adds the retry semantics and the
+        // state reports. Failures throw to the handler below like every other method: the attempt
+        // is recorded on the row there, and a dead-lettered job marks it failed in
+        // sendToDeadLetterQueue.
+        const target = assignmentRepoSetupTarget(envelope)!;
+        scope.setTag("assignment_id", String(target.assignmentId));
+        scope.setTag("setup_kind", target.kind);
+        // args.org drives the circuit check and the per-org lease above, but the setup helpers
+        // create the repository in the course's org as it is NOW. If the course's org changed
+        // while this message waited, re-route it rather than charge one org's budget and circuit
+        // for work in another: requeue immediately with the current org, which is not a failure.
+        const queuedOrg = (envelope.args as SetupAssignmentRepoArgs).org;
+        const { data: orgRow, error: orgError } = await adminSupabase
+          .from("assignments")
+          .select("classes(github_org)")
+          .eq("id", target.assignmentId)
+          .maybeSingle();
+        if (orgError) throw orgError;
+        const currentOrg = orgRow?.classes?.github_org;
+        if (currentOrg && currentOrg.toLowerCase() !== queuedOrg?.toLowerCase()) {
+          scope.setContext("setup_org_changed", { queued_org: queuedOrg, current_org: currentOrg });
+          if (
+            await requeueWithDelay(adminSupabase, envelope, 0, scope, queueName, {
+              incrementRetryCount: false,
+              patch: { args: { ...(envelope.args as SetupAssignmentRepoArgs), org: currentOrg } }
+            })
+          ) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
+          return false;
+        }
+        // Serialize with the synchronous edge-function wrappers, which a caller may invoke for the
+        // same assignment right after inserting it (the CLI's assignment copy does). A held claim
+        // is not a failure: requeue shortly without spending the retry budget. The holder is the
+        // job's log_id, which every requeue of this job carries, so a later attempt (or a
+        // redelivery after an isolate died mid-job) reclaims its own row instead of waiting out
+        // the TTL behind itself.
+        const claimed = await claimAssignmentRepoSetup(adminSupabase, {
+          ...target,
+          holder: `worker:${envelope.log_id ?? `${queueName}:${meta.msg_id}`}`
+        });
+        if (!claimed) {
+          scope.setTag("setup_claim_held", "true");
+          if (await requeueWithDelay(adminSupabase, envelope, 60, scope, queueName, { incrementRetryCount: false })) {
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+          }
+          return false;
+        }
+        const setupOptions = {
+          adminSupabase,
+          assignmentId: target.assignmentId,
+          scope,
+          // The same per-org limiter as create_repo, around createRepo only. See the comment in
+          // the create_repo case for why nothing else may go inside it.
+          scheduleCreate: <T>(createOrg: string, fn: () => Promise<T>) =>
+            getCreateContentLimiter(createOrg).schedule(fn)
+        };
+        const result =
+          target.kind === "handout" ? await setupHandoutRepo(setupOptions) : await setupSolutionRepo(setupOptions);
+        const reported = await recordAssignmentRepoSetupEvent(
+          adminSupabase,
+          {
+            ...target,
+            event: result.state === "ready" ? "succeeded" : "skipped",
+            repoFullName: result.repo_full_name
+          },
+          scope
+        );
+        if (!reported) {
+          // The work is done, but the row still says in_progress and still holds the claim: the
+          // instructor would see a stuck setup and an alert for 30 minutes. Fail the job instead,
+          // so the handler retries it. The retry reclaims under the same holder (log_id), finds
+          // the repository already there, and reports again.
+          throw new Error("Repository setup succeeded but its result could not be recorded; retrying to record it");
+        }
         recordMetric(
           adminSupabase,
           {
@@ -3312,6 +3453,14 @@ export async function processEnvelope(
     const errorId = Sentry.captureException(error, scope);
     console.log(`Recorded error with ID: ${errorId}`);
 
+    // Every failed execution of a setup job is shown to the instructor as it happens ("attempt 3
+    // failed: ..."), not only the final one. The row stays queued; whichever branch below decides
+    // the job is finished records that separately (sendToDeadLetterQueue).
+    const setupTarget = assignmentRepoSetupTarget(envelope);
+    if (setupTarget) {
+      await recordAssignmentRepoSetupEvent(adminSupabase, { ...setupTarget, event: "attempt_failed", error }, scope);
+    }
+
     // Extract org for error tracking and circuit breaker logic
     const org = ((): string | undefined => {
       if (envelope.method === "create_repo") return (envelope.args as CreateRepoArgs).org;
@@ -3328,6 +3477,8 @@ export async function processEnvelope(
         return repo.split("/")[0];
       }
       if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
+      if (envelope.method === "setup_handout_repo" || envelope.method === "setup_solution_repo")
+        return (envelope.args as SetupAssignmentRepoArgs).org;
       return undefined;
     })();
 
@@ -3429,7 +3580,13 @@ export async function processEnvelope(
         // redelivery is the only thing that gets us another attempt.
         let parked = true;
         try {
-          if (error instanceof RepositoryUnreadableError) {
+          if (setupTarget) {
+            // A staff repository has no public.repositories row: its state lives on
+            // public.assignment_repo_setup, which sendToDeadLetterQueue marks failed below. Falling
+            // through would try to park a student repository row by the staff repo's name, match
+            // nothing, and (for RepositoryMissingError) hold the message unarchived forever.
+            scope.setTag("assignment_repo_setup", setupTarget.kind);
+          } else if (error instanceof RepositoryUnreadableError) {
             // Terminal for this job, but it says nothing about the row: the repo may be alive and
             // simply not granted to this installation. Recording a creation_error here would put a
             // failure in front of an instructor for a repo that is fine, and the cause is on our

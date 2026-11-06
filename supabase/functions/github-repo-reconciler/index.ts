@@ -9,7 +9,8 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions
 /**
  * GitHub Repo Reconciler
  *
- * Invoked every 15 minutes via pg_cron. Two jobs:
+ * Invoked every 15 minutes via pg_cron. Two jobs, plus the staff-repository equivalent of the first
+ * (reconcile_assignment_repo_setup, for assignments' handout and solution repos):
  *  1. Re-enqueue TRANSIENT stuck repos — is_github_ready=false with no recorded creation_error and
  *     stale for a few minutes. These are repos whose create_repo job was lost/dropped; the RPC
  *     reconcile_stuck_repo_creations() re-enqueues them idempotently. Repos WITH a creation_error
@@ -89,6 +90,23 @@ Deno.serve(async (req) => {
     }
     console.log(`[github-repo-reconciler] Re-enqueued ${requeuedCount ?? 0} transient stuck repos`);
 
+    // 1b) The same for assignments' STAFF repositories (handout + solution). Its own try: a failure
+    // here must not cost the student-repo reconciliation above or the alerting below a cycle.
+    let setupRequeued = 0;
+    try {
+      const { data, error } = await supabase.rpc("reconcile_assignment_repo_setup", {
+        p_stale_minutes: STALE_MINUTES
+      });
+      if (error) throw error;
+      setupRequeued = data ?? 0;
+      console.log(`[github-repo-reconciler] Re-enqueued ${setupRequeued} assignment repo setup jobs`);
+    } catch (setupError) {
+      console.error("[github-repo-reconciler] reconcile_assignment_repo_setup failed:", setupError);
+      const setupScope = scope.clone();
+      setupScope.setTag("step", "reconcile_assignment_repo_setup");
+      Sentry.captureException(setupError, setupScope);
+    }
+
     // 2) Alert on repos stuck longer than the threshold.
     const cutoff = new Date(Date.now() - ALERT_AFTER_HOURS * 60 * 60 * 1000).toISOString();
     // Mirror reconcile_stuck_repo_creations, BOTH of its exclusions:
@@ -149,6 +167,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         success: true,
         requeued: requeuedCount ?? 0,
+        setup_requeued: setupRequeued,
         long_stuck_alerted: stuck.length,
         timestamp: new Date().toISOString()
       }),

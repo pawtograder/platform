@@ -6,7 +6,9 @@ export type GitHubAsyncMethod =
   | "archive_repo_and_lock"
   | "rerun_autograder"
   | "sync_repo_to_handout"
-  | "fetch_repo_analytics";
+  | "fetch_repo_analytics"
+  | "setup_handout_repo"
+  | "setup_solution_repo";
 
 export type SyncTeamArgs = {
   org: string;
@@ -137,6 +139,18 @@ export type FetchRepoAnalyticsArgs = {
   repository_ids?: number[] | null;
 };
 
+/**
+ * `setup_handout_repo` / `setup_solution_repo`: create one of an assignment's STAFF repositories.
+ * Enqueued by public.enqueue_assignment_repo_setup; state lives on public.assignment_repo_setup.
+ * `org` is the course's GitHub org, carried for per-org lease attribution and circuit checks; the
+ * handler re-reads everything else from the assignment, so a job queued before an edit uses the
+ * assignment as it is when the job runs.
+ */
+export type SetupAssignmentRepoArgs = {
+  assignment_id: number;
+  org: string;
+};
+
 export type GitHubAsyncArgs =
   | SyncTeamArgs
   | CreateRepoArgs
@@ -144,7 +158,8 @@ export type GitHubAsyncArgs =
   | ArchiveRepoAndLockArgs
   | RerunAutograderArgs
   | SyncRepoToHandoutArgs
-  | FetchRepoAnalyticsArgs;
+  | FetchRepoAnalyticsArgs
+  | SetupAssignmentRepoArgs;
 
 export type GitHubAsyncEnvelope = {
   method: GitHubAsyncMethod;

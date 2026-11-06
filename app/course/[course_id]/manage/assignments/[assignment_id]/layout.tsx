@@ -4,6 +4,7 @@ import { classScopedTableTags } from "@/lib/next-cache-tags";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ManageAssignmentNav } from "./ManageAssignmentNav";
+import { AssignmentRepoSetupAlert, AssignmentRepoSetupProvider } from "./RepoSetupStatus";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string; assignment_id: string }> }) {
   const { course_id, assignment_id } = await params;
@@ -68,7 +69,14 @@ export default async function ManageAssignmentLayout({
 
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
-      <ManageAssignmentNav assignmentTitle={assignment.title}>{children}</ManageAssignmentNav>
+      {/* Repository setup runs server-side after the assignment is created; the alert keeps a
+          missing handout or solution repo in front of staff on every tab until it is fixed. */}
+      <AssignmentRepoSetupProvider assignmentId={assignmentId}>
+        <ManageAssignmentNav assignmentTitle={assignment.title}>
+          <AssignmentRepoSetupAlert />
+          {children}
+        </ManageAssignmentNav>
+      </AssignmentRepoSetupProvider>
     </AssignmentProvider>
   );
 }

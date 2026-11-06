@@ -1,6 +1,5 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
-import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo } from "@/lib/edgeFunctions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
@@ -107,9 +106,7 @@ export default function NewAssignmentPage() {
         // Show loading toast before starting the process
         const loadingToast = toaster.create({
           title: "Creating Assignment",
-          description: willCreateRepos
-            ? "Creating GitHub repositories for handout and grader... This may take a few moments."
-            : "Setting up assignment...",
+          description: "Setting up assignment...",
           type: "loading"
         });
 
@@ -257,16 +254,12 @@ export default function NewAssignmentPage() {
               description: error?.message ?? "The assignment was not created. Please try again."
             });
           } else {
-            if (!isNoRepo) {
-              await assignmentCreateHandoutRepo(
-                { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-                supabase
-              );
-              await assignmentCreateSolutionRepo(
-                { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-                supabase
-              );
-            }
+            // The handout and solution repositories are NOT created here. The insert above queued
+            // both as server-side jobs (public.enqueue_assignment_repo_setup, run by
+            // github-async-worker), which retry on failure and report to public.assignment_repo_setup.
+            // Creating them from this page meant a slow GitHub, a closed tab or one thrown error
+            // silently skipped the solution repo, with nothing to retry it. The assignment pages
+            // show the setup state live.
 
             // Clear the timer and dismiss the loading toast
             clearTimeout(messageUpdateTimer);
@@ -274,7 +267,7 @@ export default function NewAssignmentPage() {
             toaster.create({
               title: "Assignment Created Successfully",
               description: willCreateRepos
-                ? "GitHub repositories have been created and the assignment is ready."
+                ? "The handout and solution repositories are being created on GitHub. The assignment page shows their progress."
                 : "The assignment is ready.",
               type: "success"
             });

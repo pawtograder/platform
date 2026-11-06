@@ -12,17 +12,20 @@ import {
   Button,
   Fieldset,
   Heading,
+  HStack,
   Input,
   Link,
   NativeSelectField,
   NativeSelectRoot,
-  RadioGroup
+  RadioGroup,
+  Text
 } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Controller, FieldValues } from "react-hook-form";
+import { RepoSetupStateBadge, useAssignmentRepoSetup } from "../RepoSetupStatus";
 
 export default function AutograderPage() {
   const { assignment_id, course_id } = useParams();
@@ -367,6 +370,21 @@ export default function AutograderPage() {
     typeof currentGraderRepo === "string" ? currentGraderRepo.split("/") : [];
   const graderRepoIsValid = !!graderOrg && !!graderRepoName && graderRepoExtra.length === 0;
 
+  // The solution repo is created in the background after the assignment is inserted, so this page
+  // can open before it exists and the form loads grader_repo = null. When the setup job records
+  // it (the setup provider re-reads the pointer on every setup-row broadcast), refetch the row
+  // rather than only patching the field: the save handler's rollback snapshot is built from the
+  // query data, and a stale snapshot would write the null grader_repo and config back on a failed
+  // workflow sync, undoing the setup. The field is also filled at once so the page updates without
+  // waiting on the refetch; only an empty value is ever filled, never one the instructor typed.
+  const { checks: repoSetupChecks } = useAssignmentRepoSetup();
+  const recordedGraderRepo = repoSetupChecks?.grader_repo;
+  useEffect(() => {
+    if (currentGraderRepo || !recordedGraderRepo) return;
+    setValue("grader_repo", recordedGraderRepo, { shouldDirty: false });
+    void query?.refetch();
+  }, [currentGraderRepo, recordedGraderRepo, setValue, query]);
+
   if (query?.isLoading || formLoading) {
     return <div>Loading...</div>;
   }
@@ -450,7 +468,11 @@ export default function AutograderPage() {
           </Fieldset.Content>
           <Fieldset.Content>
             <Field label="Solution Repository">
-              <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
+              {currentGraderRepo ? (
+                <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
+              ) : (
+                <SolutionRepoSetupState />
+              )}
             </Field>
           </Fieldset.Content>
         </Fieldset.Root>
@@ -483,5 +505,28 @@ export default function AutograderPage() {
         </Fieldset.Root>
       )}
     </div>
+  );
+}
+
+/** Shown in place of the link while no solution repository is recorded: why, and what is happening. */
+function SolutionRepoSetupState() {
+  const { rows, checks } = useAssignmentRepoSetup();
+  const row = rows.solution;
+  if (checks && (checks.repo_mode === "none" || checks.repo_mode === "no_submission")) {
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        Not applicable: this assignment does not use GitHub repositories.
+      </Text>
+    );
+  }
+  return (
+    <HStack>
+      <RepoSetupStateBadge row={row} />
+      <Text fontSize="sm" color="fg.muted">
+        {row?.state === "failed"
+          ? "Creation failed. See Repository setup on the assignment overview to retry."
+          : "Not created yet. It is set up in the background after the assignment is created."}
+      </Text>
+    </HStack>
   );
 }
