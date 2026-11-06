@@ -66,7 +66,7 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
           title={
             status === "resolved"
               ? "This help request has been resolved. No further actions are available."
-              : "This help request has been closed and is no longer active."
+              : "Course staff ended this help request. If you still need help, start a new request."
           }
         />
       )}

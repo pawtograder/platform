@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useStudentVisibleHelpRequests, useHelpRequestStudents, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 export interface ActiveHelpRequestInfo {
   request: HelpRequest;
@@ -55,7 +56,7 @@ export function useActiveHelpRequest() {
     // Calculate queue position
     const queueRequests = allHelpRequests
       .filter((r) => r.help_queue === request.help_queue && (r.status === "open" || r.status === "in_progress"))
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      .sort(compareHelpRequestQueueOrder);
 
     const position = queueRequests.findIndex((r) => r.id === request.id) + 1;
 

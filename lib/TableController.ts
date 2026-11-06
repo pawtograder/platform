@@ -40,6 +40,19 @@ type ChannelType =
   | "discussion_thread_root";
 
 /**
+ * Privacy-aware broadcasts send only `{ id }` as `data` (e.g. private help_requests on the class
+ * students channel). Matching that against a realtime filter fails on every missing column and
+ * drops the row, so such messages are treated as ID-only and the row is refetched under RLS.
+ */
+function idOnlyRowId(data: unknown): unknown {
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const keys = Object.keys(data);
+    if (keys.length === 1 && keys[0] === "id") return (data as { id: unknown }).id;
+  }
+  return undefined;
+}
+
+/**
  * Tables that have an updated_at column and support incremental refetching.
  * Tables in this set can use the updated_at watermark optimization for efficient reconnection refetches.
  * Tables NOT in this set will skip refetch on reconnection unless enableAutoRefetch flag is explicitly set.
@@ -1078,7 +1091,11 @@ export default class TableController<
   /**
    * Refetch multiple rows by their IDs using IN queries with batching
    */
-  private async _refetchRowsByIds(ids: IDType[]): Promise<Map<IDType, ResultOne>> {
+  /**
+   * @param queriedIds when given, receives every id whose batch query succeeded, so a caller can
+   * tell "no longer visible" (queried, absent) apart from "query failed" (not queried).
+   */
+  private async _refetchRowsByIds(ids: IDType[], queriedIds?: Set<IDType>): Promise<Map<IDType, ResultOne>> {
     const results = new Map<IDType, ResultOne>();
     const batchSize = 100;
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
@@ -1095,6 +1112,7 @@ export default class TableController<
           continue;
         }
 
+        for (const id of batch) queriedIds?.add(id);
         if (data) {
           for (const row of data) {
             const typedRow = row as unknown as ResultOne;
@@ -2039,10 +2057,11 @@ export default class TableController<
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
+        const idOnly = idOnlyRowId(message.data);
+        if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
+        } else if (message.row_id ?? idOnly) {
+          idsToRefetch.push((message.row_id ?? idOnly) as IDType);
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
@@ -2105,10 +2124,11 @@ export default class TableController<
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
+        const idOnly = idOnlyRowId(message.data);
+        if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
+        } else if (message.row_id ?? idOnly) {
+          idsToRefetch.push((message.row_id ?? idOnly) as IDType);
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
@@ -2129,7 +2149,16 @@ export default class TableController<
     // Batch refetch for messages without data and await completion
     if (idsToRefetch.length > 0) {
       try {
-        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
+        const queriedIds = new Set<IDType>();
+        const refetchedRows = await this._refetchRowsByIds(idsToRefetch, queriedIds);
+        // A successful refetch that returns nothing means the row is no longer visible to this
+        // user (e.g. a public help request made private, which non-participants receive as an
+        // ID-only payload). Failed batches are not in queriedIds, so errors never evict.
+        for (const id of queriedIds) {
+          if (!refetchedRows.has(id) && this._rows.some((r) => (r as ResultOne & { id: IDType }).id === id)) {
+            this._removeRow(id);
+          }
+        }
         for (const [id, row] of refetchedRows) {
           const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
           const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);

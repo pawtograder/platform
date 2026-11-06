@@ -6,6 +6,7 @@ import {
   useConnectionStatus
 } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 interface UseQueueDataParams {
   courseId: number;
@@ -48,7 +49,7 @@ export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
 
     return allForQueue
       .filter((request) => request.status === "open" || request.status === "in_progress")
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      .sort(compareHelpRequestQueueOrder);
   }, [allHelpRequests, queueId]);
 
   // Get user's help request associations from realtime data

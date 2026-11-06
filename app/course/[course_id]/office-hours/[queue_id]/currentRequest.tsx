@@ -7,6 +7,8 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
 import { BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import { useMemo } from "react";
+import { Alert } from "@/components/ui/alert";
+import { EscalationBadge } from "@/components/help-queue/escalation-badge";
 
 export default function CurrentRequest({ request, position }: { request: HelpRequest; position: number }) {
   const assignee = useUserProfile(request.assignee);
@@ -51,7 +53,12 @@ export default function CurrentRequest({ request, position }: { request: HelpReq
         <DataList.Root>
           <DataList.Item>
             <DataList.ItemLabel>Your position in the queue</DataList.ItemLabel>
-            <DataList.ItemValue>{positionDisplay}</DataList.ItemValue>
+            <DataList.ItemValue>
+              <HStack gap={2}>
+                <Text>{positionDisplay}</Text>
+                <EscalationBadge escalationCount={request.escalation_count} />
+              </HStack>
+            </DataList.ItemValue>
           </DataList.Item>
           <DataList.Item>
             <DataList.ItemLabel>Assignment Status:</DataList.ItemLabel>
@@ -65,6 +72,12 @@ export default function CurrentRequest({ request, position }: { request: HelpReq
             </DataList.ItemValue>
           </DataList.Item>
         </DataList.Root>
+      )}
+      {request.status === "open" && request.escalation_count > 0 && (
+        <Alert status="info" title="You're ahead of new requests" mt={3}>
+          Your request was escalated, so the next available TA will see it before normal requests, along with what was
+          already covered.
+        </Alert>
       )}
 
       <Flex
