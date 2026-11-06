@@ -3,7 +3,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import { getFileFromRepo } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { parse } from "jsr:@std/yaml";
@@ -72,8 +73,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return { repo_name: solutionRepoName, org_name: solutionRepoOrg, skipped: true };
   }
 
-  await createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
-  await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
+  await getGitProvider().createRepo(solutionRepoOrg, solutionRepoName, solutionTemplateRepo, {}, scope);
+  await getGitProvider().syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, [], scope);
   const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");
   const asObj = (await parse(graderConfig.content)) as Json;
   const { error: configError } = await adminSupabase

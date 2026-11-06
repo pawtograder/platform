@@ -3,13 +3,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import {
-  createRepo,
   deleteFileFromRepo,
   getDefaultBranchHeadSha,
   GRADE_WORKFLOW_PATH,
-  syncRepoPermissions,
   updateAutograderWorkflowHash
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -192,7 +191,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     requiredReviewers: 0
   };
 
-  await createRepo(
+  await getGitProvider().createRepo(
     handoutRepoOrg!,
     handoutRepoName,
     sourceTemplateRepo,
@@ -203,7 +202,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     },
     scope
   );
-  await syncRepoPermissions(
+  await getGitProvider().syncRepoPermissions(
     handoutRepoOrg!,
     handoutRepoName,
     assignment.classes.slug,

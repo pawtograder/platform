@@ -115,7 +115,7 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
       getAdminSupabase: () => client,
       ...runtime,
       TZDate,
-      syncRepoPermissions,
+      getGitProvider: () => ({ syncRepoPermissions }),
       isServiceRoleRequest: () => true,
       isUserInOrg: async () => true,
       isOrgInviteWindowKnownClosed: () => false,
