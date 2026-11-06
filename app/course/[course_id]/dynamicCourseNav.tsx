@@ -325,8 +325,10 @@ export default function DynamicCourseNav() {
           copy the user is actually seeing.) */}
       <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">
-          {/* Top row: Course picker, logo, course name, user menu */}
-          <HStack justifyContent="space-between" alignItems="center">
+          {/* Top row: Course picker, logo, course name, user menu. Wraps so the user menu moves
+              below the course name when both don't fit at 320px (a long title word plus the
+              time zone chip overflowed the page). */}
+          <HStack justifyContent="space-between" alignItems="center" flexWrap="wrap">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
               <NextLink href="/course" aria-label={`${branding.name} home`}>
