@@ -11,8 +11,6 @@ export async function GET(request: Request) {
   // https://supabase.com/docs/guides/auth/server-side/nextjs
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  // Same-origin paths only: `safeRedirectPath` also rejects `//host`, backslashes and control
-  // characters, which `new URL(next, redirectBase)` below would otherwise resolve off-origin.
   const next = safeRedirectPath(searchParams.get("next")) ?? "/";
   // Resolve the redirect host once: behind the load balancer, prefer X-Forwarded-Host.
   const forwardedHost = request.headers.get("x-forwarded-host"); // original origin before load balancer

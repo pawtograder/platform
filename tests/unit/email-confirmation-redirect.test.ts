@@ -1,7 +1,3 @@
-/**
- * The OAuth consent page sends a signed-out visitor to /sign-in?redirect=/oauth/consent?..., and a
- * signup that needs email confirmation has to bring them back there once they click the link.
- */
 import { readFileSync } from "fs";
 import path from "path";
 import { confirmEmailAction, signInWithSSOAction, signUpWithEmailAction } from "@/app/actions";

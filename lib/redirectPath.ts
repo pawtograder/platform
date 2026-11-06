@@ -1,9 +1,4 @@
-/**
- * Returns `value` when it is a path on this site, otherwise undefined.
- *
- * `startsWith("/")` alone is not enough: `//evil.test` is protocol-relative, and browsers drop
- * tabs/newlines and read `\` as `/`, so `/\t/evil.test` or `/\evil.test` would leave the origin too.
- */
+// Browsers drop tabs/newlines and read `\` as `/`, so those can also leave the origin.
 export function safeRedirectPath(value: string | null | undefined): string | undefined {
   if (!value || !value.startsWith("/")) return undefined;
   if ([...value].some((c) => c === "\\" || c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return undefined;
@@ -15,10 +10,6 @@ export function safeRedirectPath(value: string | null | undefined): string | und
   }
 }
 
-/**
- * Converts a URL on `appBaseUrl`'s origin, such as GoTrue's `{{ .RedirectTo }}` in an email link,
- * into a path that passes `safeRedirectPath`. Any other origin, or an unparsable value, gives undefined.
- */
 export function sameOriginRedirectPath(
   value: string | null | undefined,
   appBaseUrl: string | null | undefined

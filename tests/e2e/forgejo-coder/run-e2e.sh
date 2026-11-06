@@ -90,7 +90,6 @@ export CODER_OIDC_CLIENT_ID="$(getc CODER_OIDC_CLIENT_ID)"
 export CODER_OIDC_CLIENT_SECRET="$(getc CODER_OIDC_CLIENT_SECRET)"
 [ -n "$FORGEJO_OIDC_CLIENT_ID" ] && [ -n "$CODER_OIDC_CLIENT_ID" ] || { echo "ERROR: client registration failed"; echo "$CLIENTS"; exit 1; }
 
-# Recreate so Coder picks up the re-minted OIDC client, even when SKIP_APPS keeps Forgejo.
 if [ "${SKIP_APPS:-}" != "1" ]; then
   log "Starting Forgejo and Coder"
   $COMPOSE up -d --force-recreate
@@ -135,7 +134,6 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
   fi
   export NEXT_DIST_DIR=.next-sso-e2e
   BUILD_STAMP="$REPO/$NEXT_DIST_DIR/.sso-e2e-public-env"
-  # The NEXT_PUBLIC_* values `next build` sees, .env files included; it loads them as production.
   PUBLIC_ENV="$(NODE_ENV=production node -e '
     const { combinedEnv } = require("@next/env").loadEnvConfig(process.cwd(), false);
     const keys = Object.keys(combinedEnv).filter((k) => k.startsWith("NEXT_PUBLIC_")).sort();

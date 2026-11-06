@@ -1,7 +1,7 @@
 name: pawtograder-sso-e2e
 
 services:
-  # OIDC `iss` must match for browser and containers, so Forgejo/Coder share this netns where 127.0.0.1:${SB_API_PORT} forwards to the host.
+  # OIDC `iss` must match for browser and containers, so Forgejo/Coder share this netns.
   loopback:
     image: alpine/socat:1.8.0.3
     command:

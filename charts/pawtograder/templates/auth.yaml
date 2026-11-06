@@ -94,9 +94,7 @@ spec:
               value: {{ include "pawtograder.api.url" . }}/auth/v1
             - name: GOTRUE_SITE_URL
               value: {{ include "pawtograder.web.url" . }}
-            {{- /* GoTrue accepts any redirect on SITE_URL's hostname, so the stable host
-                   passes on its own. Channel hosts are other hostnames and need an entry:
-                   `/**` because `/*` stops at one path segment (e.g. /oauth/consent). */}}
+            {{- /* GoTrue allows any path on SITE_URL's host; other hosts need `/**` since `/*` matches one segment. */}}
             {{- $uriAllow := list (printf "%s/*" (include "pawtograder.web.url" .)) }}
             {{- range $c := .Values.channels }}
             {{- if $c.web }}

@@ -8,7 +8,6 @@ import { isSignupsEnabled } from "@/lib/features";
 import { getBranding } from "@/lib/branding";
 import { safeRedirectPath, sameOriginRedirectPath } from "@/lib/redirectPath";
 
-// Without a trailing slash, so `${webBaseUrl()}/path` never becomes `//path`.
 function webBaseUrl() {
   const url = process.env.VERCEL_PROJECT_PRODUCTION_URL
     ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL

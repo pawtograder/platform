@@ -1,4 +1,4 @@
-// Raw GoTrue admin REST (supabase-js predates `auth.admin.oauth.*`); clients are re-created because GoTrue returns the secret only at creation.
+// supabase-js predates `auth.admin.oauth.*`; GoTrue returns a client secret only at creation, so re-create.
 
 function need(name: string): string {
   const v = process.env[name];
