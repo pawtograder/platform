@@ -1767,6 +1767,21 @@ export type Database = {
           }
         ];
       };
+      capabilities: {
+        Row: {
+          description: string;
+          name: string;
+        };
+        Insert: {
+          description: string;
+          name: string;
+        };
+        Update: {
+          description?: string;
+          name?: string;
+        };
+        Relationships: [];
+      };
       class_metrics_totals: {
         Row: {
           active_graders_total: number | null;
@@ -1875,6 +1890,38 @@ export type Database = {
             foreignKeyName: "class_metrics_totals_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: true;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      class_roles: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          default_for: Database["public"]["Enums"]["app_role"] | null;
+          id: number;
+          name: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          default_for?: Database["public"]["Enums"]["app_role"] | null;
+          id?: number;
+          name: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          default_for?: Database["public"]["Enums"]["app_role"] | null;
+          id?: number;
+          name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_roles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
           }
@@ -7574,6 +7621,36 @@ export type Database = {
         };
         Relationships: [];
       };
+      role_capabilities: {
+        Row: {
+          capability: string;
+          role_id: number;
+        };
+        Insert: {
+          capability: string;
+          role_id: number;
+        };
+        Update: {
+          capability?: string;
+          role_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "role_capabilities_capability_fkey";
+            columns: ["capability"];
+            isOneToOne: false;
+            referencedRelation: "capabilities";
+            referencedColumns: ["name"];
+          },
+          {
+            foreignKeyName: "role_capabilities_role_id_fkey";
+            columns: ["role_id"];
+            isOneToOne: false;
+            referencedRelation: "class_roles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       rubric_check_references: {
         Row: {
           assignment_id: number;
@@ -10511,6 +10588,7 @@ export type Database = {
       user_privileges: {
         Row: {
           class_id: number;
+          class_role_id: number | null;
           private_profile_id: string | null;
           public_profile_id: string | null;
           role: Database["public"]["Enums"]["app_role"];
@@ -10518,6 +10596,7 @@ export type Database = {
         };
         Insert: {
           class_id: number;
+          class_role_id?: number | null;
           private_profile_id?: string | null;
           public_profile_id?: string | null;
           role: Database["public"]["Enums"]["app_role"];
@@ -10525,6 +10604,7 @@ export type Database = {
         };
         Update: {
           class_id?: number;
+          class_role_id?: number | null;
           private_profile_id?: string | null;
           public_profile_id?: string | null;
           role?: Database["public"]["Enums"]["app_role"];
@@ -10536,6 +10616,7 @@ export type Database = {
         Row: {
           canvas_id: number | null;
           class_id: number;
+          class_role_id: number;
           class_section_id: number | null;
           disabled: boolean;
           github_org_confirmed: boolean | null;
@@ -10553,6 +10634,7 @@ export type Database = {
         Insert: {
           canvas_id?: number | null;
           class_id: number;
+          class_role_id?: number;
           class_section_id?: number | null;
           disabled?: boolean;
           github_org_confirmed?: boolean | null;
@@ -10570,6 +10652,7 @@ export type Database = {
         Update: {
           canvas_id?: number | null;
           class_id?: number;
+          class_role_id?: number;
           class_section_id?: number | null;
           disabled?: boolean;
           github_org_confirmed?: boolean | null;
@@ -10598,6 +10681,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "user_roles_class_role_fkey";
+            columns: ["class_role_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "class_roles";
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "user_roles_class_section_id_fkey";
@@ -14113,6 +14203,10 @@ export type Database = {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;
       };
+      seed_default_class_roles: {
+        Args: { p_class_id: number };
+        Returns: undefined;
+      };
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
@@ -14188,6 +14282,19 @@ export type Database = {
       survey_allows_response_editing: {
         Args: { p_survey_id: string };
         Returns: boolean;
+      };
+      survey_duplicate_question_names: {
+        Args: { p_json: Json };
+        Returns: string[];
+      };
+      survey_json_unwrapped: { Args: { p_json: Json }; Returns: Json };
+      survey_question_answer_key: { Args: { p_el: Json }; Returns: string };
+      survey_question_name_entries: {
+        Args: { p_elements: Json; p_path: string; p_scope: string };
+        Returns: {
+          name: string;
+          scope: string;
+        }[];
       };
       sync_calendar_events: {
         Args: {
@@ -14364,6 +14471,17 @@ export type Database = {
           p_target_url?: string;
         };
         Returns: number;
+      };
+      user_class_capabilities: {
+        Args: never;
+        Returns: {
+          capability: string;
+          class_id: number;
+        }[];
+      };
+      user_class_ids_with_capability: {
+        Args: { p_capability: string };
+        Returns: number[];
       };
       user_is_in_help_request: {
         Args: { p_help_request_id: number; p_user_id?: string };

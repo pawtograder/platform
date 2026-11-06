@@ -6,6 +6,14 @@ import { redirect } from "next/navigation";
 import { env } from "process";
 import { isSignupsEnabled } from "@/lib/features";
 import { getBranding } from "@/lib/branding";
+import { safeRedirectPath, sameOriginRedirectPath } from "@/lib/redirectPath";
+
+function webBaseUrl() {
+  const url = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL
+    : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL;
+  return url?.replace(/\/+$/, "");
+}
 
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
@@ -17,7 +25,9 @@ export const confirmEmailAction = async (formData: FormData) => {
   if (error) {
     return encodedRedirect("error", "/auth/confirm", error.message);
   }
-  return redirect("/course");
+  // The confirmation email carries GoTrue's RedirectTo: signup's emailRedirectTo, or the site URL.
+  const redirectPath = sameOriginRedirectPath(formData.get("redirect_to") as string | null, webBaseUrl());
+  return redirect(redirectPath && redirectPath !== "/" ? redirectPath : "/course");
 };
 export const acceptInvitationAction = async (formData: FormData) => {
   const password = formData.get("password");
@@ -85,11 +95,11 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const email = data.get("email");
   const password = data.get("password");
   const redirectParam = data.get("redirect") as string | null;
-  const redirectPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : undefined;
+  const redirectPath = safeRedirectPath(redirectParam);
   if (action === "signin") {
     return signInWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "signup") {
-    return signUpWithEmailAction(email as string, password as string);
+    return signUpWithEmailAction(email as string, password as string, redirectPath);
   } else if (action === "reset-password") {
     return resetPasswordAction(email as string);
   }
@@ -98,14 +108,16 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
+    redirectTo: `${webBaseUrl()}/reset-password`
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
   }
   return encodedRedirect("success", "/sign-in", "Password reset email sent", { email });
 };
-export const signInWithEmailAction = async (email: string, password: string, redirectPath?: string) => {
+export const signInWithEmailAction = async (email: string, password: string, unsafeRedirectPath?: string) => {
+  // Exported server actions are callable directly, so validate here too.
+  const redirectPath = safeRedirectPath(unsafeRedirectPath);
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
@@ -117,9 +129,11 @@ export const signInWithEmailAction = async (email: string, password: string, red
     return redirect(redirectPath ?? "/course");
   }
 };
-export const signUpWithEmailAction = async (email: string, password: string) => {
+export const signUpWithEmailAction = async (email: string, password: string, unsafeRedirectPath?: string) => {
+  const redirectPath = safeRedirectPath(unsafeRedirectPath);
+  const params: Record<string, string> = redirectPath ? { redirect: redirectPath } : {};
   if (!isSignupsEnabled()) {
-    return encodedRedirect("error", "/sign-in", "Signups are currently disabled");
+    return encodedRedirect("error", "/sign-in", "Signups are currently disabled", params);
   }
 
   const supabase = await createClient();
@@ -127,21 +141,22 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     email,
     password,
     options: {
-      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
+      emailRedirectTo: `${webBaseUrl()}${redirectPath ?? "/"}`
     }
   });
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/sign-in", error.message, params);
   }
   if (!data.user?.confirmed_at) {
     return encodedRedirect(
       "success",
       "/sign-in",
-      "Account created successfully, but must be confirmed. Please check your email for a confirmation link."
+      "Account created successfully, but must be confirmed. Please check your email for a confirmation link.",
+      params
     );
   }
   if (data.user) {
-    return redirect("/course");
+    return redirect(redirectPath ?? "/course");
   }
 };
 /**
@@ -155,7 +170,7 @@ export const signInWithSSOAction = async (formData: FormData) => {
   const supabase = await createClient();
 
   const redirectParam = formData.get("redirect") as string | null;
-  const nextPath = redirectParam && redirectParam.startsWith("/") ? redirectParam : "/";
+  const nextPath = safeRedirectPath(redirectParam) ?? "/";
 
   // Validate sso_index explicitly: Number(null/"") is 0, which would silently
   // select the first provider for a missing/blank field. Require a non-empty,
