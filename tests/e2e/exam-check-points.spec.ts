@@ -93,6 +93,16 @@ async function openExamSubmission(page: Page, options?: { label: string; points:
   return { gradingReviewId: submission.grading_review_id };
 }
 
+/**
+ * Picks an option of a check's Chakra (Ark UI) RadioGroup the way a grader does: by clicking the
+ * option's visible item (the label wrapping the indicator and text). A forced `.check()` on the
+ * visually hidden input does not toggle it on WebKit.
+ */
+async function pickOption(page: Page, label: RegExp) {
+  await page.locator('[data-scope="radio-group"][data-part="item"]').filter({ hasText: label }).click();
+  await expect(page.getByRole("radio", { name: label })).toBeChecked();
+}
+
 test.describe("Exam check points", () => {
   test("a grader can give part of an exam question's points", async ({ page }) => {
     const { gradingReviewId } = await openExamSubmission(page);
@@ -127,22 +137,22 @@ test.describe("Exam check points", () => {
     });
 
     test("picking an option fills the points box", async ({ page }) => {
-      await page.getByRole("radio", { name: /Partial credit/ }).check({ force: true });
+      await pickOption(page, /Partial credit/);
       await expect(page.getByLabel("Points for Item 1")).toHaveValue("3");
       await page.getByRole("button", { name: "Add Check" }).click();
       await expect(page.getByText("Q1 3/10")).toBeVisible();
     });
 
     test("a typed amount overrides the option", async ({ page }) => {
-      await page.getByRole("radio", { name: /Partial credit/ }).check({ force: true });
+      await pickOption(page, /Partial credit/);
       await page.getByLabel("Points for Item 1").fill("4");
       await page.getByRole("button", { name: "Add Check" }).click();
       await expect(page.getByText("Q1 4/10")).toBeVisible();
     });
 
     test("switching options updates the points box", async ({ page }) => {
-      await page.getByRole("radio", { name: /Partial credit/ }).check({ force: true });
-      await page.getByRole("radio", { name: /Most/ }).check({ force: true });
+      await pickOption(page, /Partial credit/);
+      await pickOption(page, /Most/);
       await expect(page.getByLabel("Points for Item 1")).toHaveValue("7");
     });
   });
