@@ -67,7 +67,6 @@ function makeFakeDb(fixtures: Fixtures) {
     builder.single = chain;
     builder.maybeSingle = chain;
     builder.update = (values: unknown) => {
-      // Recorded like delete so a test can assert the drain's requeue guard.
       const filters: Record<string, unknown> = {};
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const upd: any = {};
@@ -490,8 +489,7 @@ describe("drainGradeSyncQueue — concurrency-safe dequeue", () => {
   test("KEEPS the queue row when the assignment-level sync throws, and moves it to the back", async () => {
     // An assignment-level failure throws BEFORE the per-student loop writes any
     // durable lti_grade_sync_state. Deleting the row would silently lose the
-    // whole assignment's grade push; it must survive. Bumping enqueued_at keeps
-    // a row that fails every time from filling every oldest-first batch.
+    // whole assignment's grade push; it must survive.
     const { db, deletes, updates } = makeFakeDb(
       baseFixtures({
         lti_grade_sync_queue: {
@@ -531,7 +529,6 @@ describe("drainGradeSyncQueue — concurrency-safe dequeue", () => {
 
 describe("drainGradeSyncQueue — classes with grade sync turned off", () => {
   test("leaves their rows queued and counts them as deferred, not failed", async () => {
-    // Grade sync was disabled after the row was enqueued: no enabled context.
     const { db, deletes, updates } = makeFakeDb(
       baseFixtures({
         lti_context_links: { data: [] },

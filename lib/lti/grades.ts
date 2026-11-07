@@ -377,7 +377,6 @@ export type DrainItemResult = {
 
 export type DrainResult = {
   results: DrainItemResult[];
-  /** Queue rows left untouched because their class has no grade-sync-enabled AGS context. */
   deferred: number;
 };
 
@@ -391,13 +390,9 @@ export type DrainResult = {
  * safety-net cron retries; the reconcile is idempotent, so the retry is safe.
  * (Per-student failures inside a successful reconcile are recorded in
  * `lti_grade_sync_state`, not re-queued.)
- *
- * Rows for a class whose grade sync was turned off after enqueue are not
- * selected: they would fail every drain. They stay queued (counted as
- * `deferred`) and sync once grade sync is re-enabled.
  */
 export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainResult> {
-  // Same predicate as getGradeContext, so every selected row has a context to push to.
+  // Must match getGradeContext's predicate, or disabled-sync rows fail every drain.
   const { data: contexts, error: contextError } = await db
     .from("lti_context_links")
     .select("class_id")
@@ -459,11 +454,7 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
         Sentry.captureException(deleteError, { tags, level: "warning" });
       }
     } catch (e) {
-      // Leave the row queued (do NOT delete) so the safety-net cron retries, but
-      // move it to the back: the drain reads oldest-first with a limit, so rows
-      // that keep failing would otherwise fill every batch and starve newer work.
-      // Guarded by the enqueued_at we read, like the delete, so a re-enqueue that
-      // landed mid-sync is left as is.
+      // Leave the row queued (do NOT delete) so the safety-net cron retries.
       Sentry.captureException(e, { tags });
       out.push({
         classId: item.class_id,
@@ -471,6 +462,7 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
         ok: false,
         error: e instanceof Error ? e.message : String(e)
       });
+      // Bump to the back so repeat failures don't fill every oldest-first batch.
       const { error: requeueError } = await db
         .from("lti_grade_sync_queue")
         .update({ enqueued_at: new Date().toISOString() })
