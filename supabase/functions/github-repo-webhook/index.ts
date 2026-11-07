@@ -21,12 +21,12 @@ import {
   getDefaultBranchHeadSha,
   getFileFromRepo,
   getOctoKit,
-  triggerWorkflow,
   SecondaryRateLimitError,
   PrimaryRateLimitError,
   END_TO_END_REPO_PREFIX,
   repoHasFileAtRef
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
@@ -2301,7 +2301,7 @@ async function handlePushToStudentRepo(
     if (!currentStatus.workflow_triggered_at) {
       maybeCrash("push.student.before_trigger_workflow");
       try {
-        await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+        await getGitProvider().startGrading(repoName, payload.head_commit.id);
       } catch (triggerErr) {
         console.error("Error triggering workflow:", triggerErr);
         const rt = detectRateLimitType(triggerErr);
@@ -2988,7 +2988,7 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
             );
             maybeCrash("check_run.before_trigger_workflow");
             try {
-              await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
+              await getGitProvider().startGrading(payload.repository.full_name, payload.check_run.head_sha);
             } catch (triggerErr) {
               // Log the error with proper fingerprinting to prevent notification storms
               const repoName = payload.repository.full_name;

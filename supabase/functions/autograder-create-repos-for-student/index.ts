@@ -3,13 +3,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
 import {
-  createRepo,
   getDefaultBranchHeadSha,
   isUserInOrg,
   NonRetryableRepoError,
-  reinviteToOrgTeam,
-  syncRepoPermissions
+  reinviteToOrgTeam
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -549,7 +548,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
             // jobScope (not the shared request scope) so this repo's step timings and github_*
             // tags land on an object only this job writes to.
-            const headSha = await createRepo(
+            const headSha = await getGitProvider().createRepo(
               c.classes!.github_org!,
               repoName,
               strategy.sourceRepo,
@@ -566,7 +565,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // group's real pushes would be ignored until a reconciler happened to fix
             // it. Sync first, then flag: a permission failure must leave the row
             // unready, because the reconciler only repairs is_github_ready=false rows.
-            await syncRepoPermissions(
+            await getGitProvider().syncRepoPermissions(
               c.classes!.github_org!,
               repoName,
               c.classes!.slug!,
@@ -633,7 +632,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
 
         try {
-          await syncRepoPermissions(
+          await getGitProvider().syncRepoPermissions(
             c.classes!.github_org!,
             repoName,
             c.classes!.slug!,
@@ -811,7 +810,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             .eq("id", dbRepo!.id);
           return `e2e-skip-${repoName}`;
         }
-        const new_repo_sha = await createRepo(
+        const new_repo_sha = await getGitProvider().createRepo(
           assignment.classes!.github_org!,
           repoName,
           sourceTemplateRepo,
@@ -822,7 +821,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           jobScope
         );
         console.log(`courseSlug: ${courseSlug}`);
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
+        await getGitProvider().syncRepoPermissions(
+          assignment.classes!.github_org!,
+          repoName,
+          courseSlug!,
+          [githubUsername],
+          jobScope
+        );
         const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
@@ -881,7 +886,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const [orgName, repoName] = repo.repository.split("/");
           const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
           if (classSlug) {
-            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], jobScope);
+            await getGitProvider().syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], jobScope);
             console.log(`Synced permissions for individual repo: ${repo.repository}`);
           }
         } catch (e) {
@@ -916,7 +921,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .filter((m) => m.user_roles && m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!);
 
-            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, jobScope);
+            await getGitProvider().syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, jobScope);
             console.log(`Synced permissions for group repo: ${repo.repository}`);
           }
         } catch (e) {

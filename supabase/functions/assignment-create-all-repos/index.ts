@@ -4,6 +4,7 @@ import { TZDate } from "npm:@date-fns/tz";
 import Bottleneck from "npm:bottleneck";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -167,7 +168,7 @@ async function ensureExistingRepoCreated({
           return;
         }
         // Create the repository via template-generate or fork as configured.
-        const headSha = await github.createRepo(
+        const headSha = await getGitProvider().createRepo(
           org,
           repoName,
           strategy.sourceRepo,
@@ -179,7 +180,7 @@ async function ensureExistingRepoCreated({
         );
 
         // Sync repository permissions
-        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
+        await getGitProvider().syncRepoPermissions(org, repoName, assignment.classes!.slug!, uniqueUsernames, scope);
 
         // Update the database with the new head SHA
         await adminSupabase
@@ -463,7 +464,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
           .eq("id", dbRepo.id);
         return;
       }
-      const headSha = await github.createRepo(
+      const headSha = await getGitProvider().createRepo(
         assignment.classes!.github_org!,
         repoName,
         strategy.sourceRepo,
@@ -473,7 +474,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
         },
         jobScope
       );
-      await github.syncRepoPermissions(
+      await getGitProvider().syncRepoPermissions(
         assignment.classes!.github_org!,
         repoName,
         assignment.classes!.slug!,
@@ -555,7 +556,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
             // handed, and this map runs concurrently over every existing repo.
             const jobScope = scope?.clone() ?? scope;
             jobScope?.setTag("repository", repo.repository);
-            const { removalsSkipped } = await github.syncRepoPermissions(
+            const { removalsSkipped } = await getGitProvider().syncRepoPermissions(
               org,
               repoName,
               assignment.classes!.slug!,
