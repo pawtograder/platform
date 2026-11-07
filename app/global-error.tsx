@@ -1,5 +1,4 @@
 "use client";
-import { isCutResponseError, isStaleBundleError, reloadOnceReachable } from "@/lib/staleBundleRecovery";
 import * as Sentry from "@sentry/nextjs";
 import { useEffect, useState } from "react";
 
@@ -9,13 +8,6 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
   // Call Sentry once per error
   useEffect(() => {
     setErrorID(Sentry.captureException(error));
-  }, [error]);
-
-  // These two are about the response or the bundle, not the page, so a reload can fix them. Anything
-  // else, such as a server render that threw, keeps this page.
-  useEffect(() => {
-    if (!isCutResponseError(error) && !isStaleBundleError(error)) return;
-    return reloadOnceReachable();
   }, [error]);
 
   const handleGoBack = () => {

@@ -24,17 +24,11 @@
  * leaving the user with a dead navigation and a noisy Sentry report.
  */
 
-import { pendingWritesSettled } from "@/lib/pendingWrites";
-
 const RELOAD_GUARD_KEY = "pawtograder:stale-bundle-reloaded-at";
 // Don't reload more than once per cooldown window — if a reload doesn't clear
 // the error (e.g. the new bundle is genuinely broken, or it's a false match),
 // we must not trap the user in an infinite reload loop.
 const RELOAD_COOLDOWN_MS = 30_000;
-// `reloadOnceReachable`'s own window. A page that keeps failing gets one more try in it, where the 30 s
-// above only stops a failure faster than 30 s. A failure slower than this still repeats, at most 12 times
-// an hour in a visible tab.
-const PAGE_RELOAD_COOLDOWN_MS = 5 * 60_000;
 
 /**
  * True when `error` looks like a stale-bundle / chunk-load failure rather than a
@@ -82,28 +76,26 @@ export function isStaleBundleError(error: unknown): boolean {
   return false;
 }
 
-function hasRecentlyReloaded(cooldownMs: number = RELOAD_COOLDOWN_MS): boolean {
+function hasRecentlyReloaded(): boolean {
   try {
     const raw = window.sessionStorage.getItem(RELOAD_GUARD_KEY);
     if (!raw) return false;
     const last = Number(raw);
     if (!Number.isFinite(last)) return false;
-    return Date.now() - last < cooldownMs;
+    return Date.now() - last < RELOAD_COOLDOWN_MS;
   } catch {
     // sessionStorage can throw (private mode / blocked storage). Fail safe by
-    // assuming we have NOT reloaded, so a real deploy skew still self-heals. Browsers
-    // don't throttle reloads enough to stop a loop, so `reloadOnceReachable`, whose
-    // error can repeat, won't reload unless it could record the reload.
+    // assuming we have NOT reloaded, so a real deploy skew still self-heals; the
+    // browser's own reload throttling backstops any loop.
     return false;
   }
 }
 
-function markReloaded(): boolean {
+function markReloaded(): void {
   try {
     window.sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
-    return true;
   } catch {
-    return false;
+    /* ignore */
   }
 }
 
@@ -122,61 +114,6 @@ export function recoverFromStaleBundle(reload: () => void = defaultReload): bool
   markReloaded();
   reload();
   return true;
-}
-
-/**
- * True for what a page's render throws when its response was cut off. Next starts rendering a response
- * once the root row arrives, so the rows that never came reject where only `app/global-error.tsx` can
- * catch them. React's own message when the body ends early, then Chromium's and WebKit's when reading
- * it fails. A fetch that fails outright never gets this far.
- */
-export function isCutResponseError(error: unknown): boolean {
-  const message = (error as { message?: string } | null | undefined)?.message;
-  return message === "Connection closed." || message === "network error" || message === "Load failed";
-}
-
-/**
- * For `app/global-error.tsx`, whose page has already replaced the app, so a reload costs nothing that
- * is on screen. It would cost a save still on its way from the page that unmounted, so this waits for
- * `pendingWritesSettled()` first, and a write that never settles keeps Try Again. Only reloads a visible
- * tab whose server answers for this URL, because a reload with the network down, or to a document that
- * fails, would swap this page and its Try Again for an error page with neither. Until then, each show
- * tries again.
- *
- * A page can keep failing, and take any time to do it, so this reloads at most once per 5 minutes in a
- * tab, and not at all if it can't record the reload, because the next page would never see it. Inside
- * those 5 minutes a page that fails keeps Try Again. Returns an uninstall function.
- */
-export function reloadOnceReachable(reload: () => void = defaultReload): () => void {
-  let uninstalled = false;
-  let checking = false;
-  const canReload = () => !uninstalled && document.visibilityState === "visible";
-  const reloadIfReachable = async () => {
-    if (checking || !canReload()) return;
-    checking = true;
-    try {
-      await pendingWritesSettled();
-      if (!canReload() || hasRecentlyReloaded(PAGE_RELOAD_COOLDOWN_MS)) return;
-      // The document the reload would load, so the answer is about it and not only about the host. A
-      // redirect to another channel's host rejects here, since that host sends no CORS headers, and that
-      // leaves Try Again. Stopped at the headers, so nothing is transferred, at the cost of a server render.
-      const abort = new AbortController();
-      const response = await fetch(window.location.href, { cache: "no-store", signal: abort.signal });
-      abort.abort();
-      if (response.ok && canReload() && markReloaded()) reload();
-    } catch {
-      // Not reachable. The next show tries again.
-    } finally {
-      checking = false;
-    }
-  };
-  const onVisibilityChange = () => void reloadIfReachable();
-  onVisibilityChange();
-  document.addEventListener("visibilitychange", onVisibilityChange);
-  return () => {
-    uninstalled = true;
-    document.removeEventListener("visibilitychange", onVisibilityChange);
-  };
 }
 
 /**

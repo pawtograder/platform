@@ -11,7 +11,6 @@ import { SurveyResponse, ResponseData } from "@/types/survey";
 import { Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
 import { useIsTableControllerReady } from "@/lib/TableController";
-import { trackPendingWrite } from "@/lib/pendingWrites";
 import {
   isSurveyResponseReadOnly,
   resolveResponseWriteFlags,
@@ -82,8 +81,6 @@ export default function SurveyTakingPage() {
         autosaveTimerRef.current = null;
         flushAutosaveRef.current?.();
       }
-      // The app's error page can replace this page in this same commit, and then reload.
-      if (autosaveInFlightRef.current) trackPendingWrite(autosaveInFlightRef.current);
     };
   }, []);
 
@@ -290,15 +287,10 @@ export default function SurveyTakingPage() {
       }
       flushAutosaveRef.current = null;
       try {
-        const submitted = (async () => {
-          if (autosaveInFlightRef.current) {
-            await autosaveInFlightRef.current.catch(() => {});
-          }
-          await saveResponseToDb(surveyData, true);
-        })();
-        // From here and not at unmount: a link clicked now takes the page down with nothing else holding this.
-        trackPendingWrite(submitted);
-        await submitted;
+        if (autosaveInFlightRef.current) {
+          await autosaveInFlightRef.current.catch(() => {});
+        }
+        await saveResponseToDb(surveyData, true);
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
         responseStateRef.current = "submitted";

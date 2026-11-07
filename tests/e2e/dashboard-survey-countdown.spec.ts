@@ -61,25 +61,19 @@ const isRefreshRequest = (head: string) => /^POST \/course\/\d+ /.test(head) && 
 const isSurveysLinkRequest = (head: string) =>
   /^GET \/course\/\d+\/surveys\?_rsc=/.test(head) && !/next-router-prefetch:/i.test(head);
 
-// A TCP proxy in front of the app, so a cut is a real one and the browser raises its own error, which
-// is what app/global-error.tsx has to recognize. The request it's told to cut asks for no compression,
-// so the proxy can find the response's root row. It sends up to that row and holds the connection until
-// finishCut(), and can stay down afterward, like a network that's gone. The hold is because a stream
-// that errors throws away what nobody has read, so the page has to have read the row first.
+// A TCP proxy in front of the app, so a cut is a real one and the browser raises its own error. The
+// request it's told to cut asks for no compression, so the proxy can find the response's root row. It
+// sends up to that row and holds the connection until finishCut(). The hold is because a stream that
+// errors throws away what nobody has read, so the page has to have read the row first.
 async function startCutProxy(baseURL: string) {
   const target = new URL(baseURL);
   const sockets = new Set<net.Socket>();
-  let armed: { matches: (head: string) => boolean; thenDown: boolean } | null = null;
-  let down = false;
+  let armed: ((head: string) => boolean) | null = null;
   let finishCut = () => {};
   const server = net.createServer((client) => {
-    if (down) {
-      client.destroy();
-      return;
-    }
     const upstream = net.connect(Number(target.port || 80), target.hostname);
     sockets.add(client).add(upstream);
-    let cutting: { thenDown: boolean } | null = null;
+    let cutting = false;
     let headersSent = false;
     let cutScheduled = false;
     let partialHead = Buffer.alloc(0);
@@ -98,8 +92,8 @@ async function startCutProxy(baseURL: string) {
         partialHead = chunk;
         return;
       }
-      if (armed?.matches(head)) {
-        cutting = armed;
+      if (armed?.(head)) {
+        cutting = true;
         armed = null;
         upstream.write(Buffer.from(head.replace(/accept-encoding:[^\r]*\r\n/i, ""), "latin1"));
         return;
@@ -129,12 +123,7 @@ async function startCutProxy(baseURL: string) {
       if (rootEnd < 0) return;
       cutScheduled = true;
       client.write(body.subarray(0, rootEnd + 1));
-      const { thenDown } = cutting;
       finishCut = () => {
-        if (thenDown) {
-          down = true;
-          for (const socket of sockets) if (socket !== client) socket.destroy();
-        }
         client.end();
         upstream.destroy();
       };
@@ -145,16 +134,13 @@ async function startCutProxy(baseURL: string) {
   proxied.port = String((server.address() as net.AddressInfo).port);
   return {
     origin: proxied.origin,
-    cutNextRefresh: ({ thenDown } = { thenDown: false }) => {
-      armed = { matches: isRefreshRequest, thenDown };
+    cutNextRefresh: () => {
+      armed = isRefreshRequest;
     },
     cutNextSurveysLink: () => {
-      armed = { matches: isSurveysLinkRequest, thenDown: false };
+      armed = isSurveysLinkRequest;
     },
     finishCut: () => finishCut(),
-    comeBackUp: () => {
-      down = false;
-    },
     close: () => {
       for (const socket of sockets) socket.destroy();
       server.close();
@@ -192,6 +178,11 @@ async function watchForRootRow(page: Page) {
     expect
       .poll(() => page.evaluate(() => (window as unknown as { __rootRow?: boolean }).__rootRow === true))
       .toBe(true);
+}
+
+// A round trip from the page, so anything it sent before this has been seen by the time this returns.
+function roundTrip(page: Page) {
+  return page.evaluate(() => fetch("/error-background.jpg", { cache: "no-store" }).then(() => {}));
 }
 
 function recordDashboardRefreshes(page: Page, courseId: number) {
@@ -461,7 +452,19 @@ test.describe("Student dashboard survey countdown", () => {
     await page.waitForURL(/\/sign-in/);
   });
 
-  test("a refresh cut after its root row comes back as a working dashboard, with no click", async ({
+  // What an automatic reload would send: this course's pages with no RSC header, which a link's fetch and
+  // a prefetch have, or a HEAD to see whether the server answers.
+  function recordReloadRequests(page: Page) {
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      const isPage = request.method() === "GET" && pathname.startsWith(`/course/${course.id}`);
+      if ((isPage && !request.headers()["rsc"]) || request.method() === "HEAD") requests.push(pathname);
+    });
+    return requests;
+  }
+
+  test("a refresh cut after its root row shows Try Again, stays there, and Try Again brings current data", async ({
     page,
     baseURL
   }) => {
@@ -470,12 +473,26 @@ test.describe("Student dashboard survey countdown", () => {
     try {
       const { surveys, dueAt } = await openDashboard(page, "Cut On The Wire", proxy.origin);
       await seedPublishedSurvey("Opened Before The Cut", dueAt + 5 * 60_000);
+      const reloadRequests = recordReloadRequests(page);
       const rootRowRead = await watchForRootRow(page);
       proxy.cutNextRefresh();
       await showAgain(page);
       await rootRowRead();
       proxy.finishCut();
-      // Only the reload can bring this: the refresh that would have was cut, and nothing shows the tab again.
+      const tryAgain = page.getByRole("button", { name: "Try Again" });
+      await expect(tryAgain).toBeVisible();
+
+      // Ten minutes on the page's clock, then a show, with no automatic navigation through either.
+      await page.clock.fastForward(10 * 60_000);
+      await roundTrip(page);
+      await showAgain(page);
+      await roundTrip(page);
+      expect(reloadRequests).toEqual([]);
+      expect(await isSameDocument(page)).toBe(true);
+      await expect(tryAgain).toBeVisible();
+
+      await tryAgain.click();
+      // The refresh that would have brought this was cut, so only Try Again's load can.
       await expect(surveys.getByText("Opened Before The Cut")).toBeVisible();
       expect(await isSameDocument(page)).toBe(false);
     } finally {
@@ -483,115 +500,70 @@ test.describe("Student dashboard survey countdown", () => {
     }
   });
 
-  test("a refresh cut with the network staying down keeps Try Again, and the next show recovers", async ({
-    page,
-    baseURL
-  }) => {
+  test("a link cut at its root row keeps a typed answer, and Try Again still works", async ({ page, baseURL }) => {
     test.skip(cutProxyCantRun(baseURL), CUT_PROXY_NEEDS);
     const proxy = await startCutProxy(baseURL!);
     try {
-      const { surveys } = await openDashboard(page, "Cut And Gone", proxy.origin);
-      const dashboard = page.url();
-      const checkFailed = page.waitForEvent(
-        "requestfailed",
-        (request) => request.url() === dashboard && request.method() === "GET" && !request.headers()["rsc"]
-      );
+      await loginAsUser(page, student, course);
+      const surveyId = await seedPublishedSurvey("Cut While Typing", Date.now() + 30 * 60_000);
+      await page.goto(`${proxy.origin}/course/${course.id}/surveys/${surveyId}`);
+      const input = page.getByRole("textbox", { name: /How is it going/ });
+      await expect(input).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      await markDocument(page);
+
+      // The page flushes its save as the cut takes it down. Held until the error page is up, as a slow
+      // network would, so this is the same every run: anything that loads a new document cancels it.
+      let saveArrived = () => {};
+      const saveHeld = new Promise<void>((resolve) => (saveArrived = resolve));
+      let releaseSave = () => {};
+      const saveReleased = new Promise<void>((resolve) => (releaseSave = resolve));
+      await page.route(/\/rest\/v1\/survey_responses/, async (route) => {
+        if (!["GET", "HEAD"].includes(route.request().method())) {
+          saveArrived();
+          await saveReleased;
+        }
+        await route.fallback();
+      });
+      const reloadRequests = recordReloadRequests(page);
+
+      const answer = `typed at ${Date.now()}`;
+      await input.fill(answer);
       const rootRowRead = await watchForRootRow(page);
-      proxy.cutNextRefresh({ thenDown: true });
-      await showAgain(page);
+      proxy.cutNextSurveysLink();
+      await page.getByRole("link", { name: "Surveys", exact: true }).first().click();
       await rootRowRead();
       proxy.finishCut();
-      await checkFailed;
-      // A reload now would be the browser's error page, with no way back but the student reloading.
-      await expect(page.getByRole("button", { name: "Try Again" })).toBeVisible();
-      expect(page.url()).toBe(dashboard);
+      const tryAgain = page.getByRole("button", { name: "Try Again" });
+      await expect(tryAgain).toBeVisible();
+      await saveHeld;
+      await roundTrip(page);
+      expect(reloadRequests).toEqual([]);
       expect(await isSameDocument(page)).toBe(true);
+      releaseSave();
 
-      proxy.comeBackUp();
-      await showAgain(page);
-      await expect(surveys.getByText("Cut And Gone")).toBeVisible();
-      expect(await isSameDocument(page)).toBe(false);
-    } finally {
-      proxy.close();
-    }
-  });
-
-  // The survey page flushes its save as the cut takes it down, so the save is on its way when the error
-  // page mounts. Held here, this is the same every run: a reload that doesn't wait cancels the save.
-  for (const [what, complete] of [
-    ["a typed answer", false],
-    ["a Complete", true]
-  ] as const) {
-    test(`a link cut at its root row waits for ${what} to reach the server, then reloads`, async ({
-      page,
-      baseURL
-    }) => {
-      test.skip(cutProxyCantRun(baseURL), CUT_PROXY_NEEDS);
-      const proxy = await startCutProxy(baseURL!);
-      try {
-        await loginAsUser(page, student, course);
-        const surveyId = await seedPublishedSurvey(`Cut With ${what}`, Date.now() + 30 * 60_000);
-        await page.goto(`${proxy.origin}/course/${course.id}/surveys/${surveyId}`);
-        const input = page.getByRole("textbox", { name: /How is it going/ });
-        await expect(input).toBeVisible();
-        await page.waitForLoadState("networkidle");
-
-        let saveArrived = () => {};
-        const saveHeld = new Promise<void>((resolve) => (saveArrived = resolve));
-        let releaseSave = () => {};
-        const saveReleased = new Promise<void>((resolve) => (releaseSave = resolve));
-        await page.route(/\/rest\/v1\/survey_responses/, async (route) => {
-          if (!["GET", "HEAD"].includes(route.request().method())) {
-            saveArrived();
-            await saveReleased;
-          }
-          await route.fallback();
-        });
-        // The reload and its check of the document, which a link's fetch and a prefetch aren't.
-        const reloadRequests: string[] = [];
-        page.on("request", (request) => {
-          const { pathname } = new URL(request.url());
-          if (request.method() === "GET" && pathname.startsWith(`/course/${course.id}`) && !request.headers()["rsc"]) {
-            reloadRequests.push(pathname);
-          }
-        });
-
-        const answer = `typed at ${Date.now()}`;
-        await input.fill(answer);
-        if (complete) {
-          await page.getByRole("button", { name: "Complete" }).click();
-          await saveHeld;
-        }
-        const rootRowRead = await watchForRootRow(page);
-        proxy.cutNextSurveysLink();
-        await page.getByRole("link", { name: "Surveys", exact: true }).first().click();
-        await rootRowRead();
-        proxy.finishCut();
-        await expect(page.getByRole("button", { name: "Try Again" })).toBeVisible();
-        await saveHeld;
-        // A round trip from the page, so what it sent as the error page mounted has been seen by now.
-        await page.evaluate(() => fetch("/error-background.jpg", { method: "HEAD" }).then(() => {}));
-        expect(reloadRequests).toEqual([]);
-
-        const reloaded = page.waitForRequest((request) => request.isNavigationRequest());
-        releaseSave();
-        await reloaded;
-        await expect(page.getByRole("button", { name: "Try Again" })).toBeHidden();
-
+      const storedResponse = async () => {
         const { data, error } = await supabase
           .from("survey_responses")
           .select("response, is_submitted")
           .eq("survey_id", surveyId)
           .eq("profile_id", student.private_profile_id)
           .maybeSingle();
-        expect(error).toBeNull();
-        expect(JSON.stringify(data?.response)).toContain(answer);
-        expect(data?.is_submitted).toBe(complete);
-      } finally {
-        proxy.close();
-      }
-    });
-  }
+        if (error) throw new Error(`Failed to read the response: ${error.message}`);
+        return data;
+      };
+      await expect.poll(async () => JSON.stringify((await storedResponse())?.response)).toContain(answer);
+
+      await tryAgain.click();
+      await expect(tryAgain).toBeHidden();
+      expect(await isSameDocument(page)).toBe(false);
+      const stored = await storedResponse();
+      expect(JSON.stringify(stored?.response)).toContain(answer);
+      expect(stored?.is_submitted).toBe(false);
+    } finally {
+      proxy.close();
+    }
+  });
 
   test.describe("a survey the course controller doesn't have yet", () => {
     const surveyHeading = (page: Page, title: string) => page.getByRole("heading", { name: title, level: 1 });
