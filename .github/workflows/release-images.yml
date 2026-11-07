@@ -605,7 +605,8 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup, build-forgejo-runner]
+    needs:
+      [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup, build-forgejo-runner]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable

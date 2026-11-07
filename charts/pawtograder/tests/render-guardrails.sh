@@ -2991,6 +2991,16 @@ elif [ "$(grep -c 'templates edit' "$OUTFILE")" -ne 2 ] \
   echo "FAIL [$label]: expected two edits, with no dormancy flag in the TTL edit"; FAILED=1
 else echo "ok   [$label]"; fi
 
+# examples/values-forgejo-coder.yaml: env[2] is CODER_WILDCARD_ACCESS_URL, wildcardHost is *.example.com.
+apps_has "coder wildcard: a one-label suffix form under the Ingress wildcard renders" yes "kind: Deployment" \
+  --set 'coder.coder.env[2].value=*-coder.example.com'
+apps_refused "coder wildcard: a suffix form two labels deep is refused" "or app URLs have no route" \
+  --set 'coder.coder.env[2].value=*.coder.example.com'
+apps_refused "coder wildcard: a suffix form under another domain is refused" "or app URLs have no route" \
+  --set 'coder.coder.env[2].value=*-coder.example.org'
+apps_refused "coder wildcard: a suffix form needs a whole-label Ingress wildcard" "or app URLs have no route" \
+  --set 'coder.coder.env[2].value=*-coder.example.com' --set 'coder.coder.ingress.wildcardHost=*-apps.example.com'
+
 echo
 
 echo
