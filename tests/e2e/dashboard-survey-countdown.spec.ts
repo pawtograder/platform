@@ -214,15 +214,17 @@ test.describe("Student dashboard survey countdown", () => {
   }
 
   // The dashboard with one survey on it, marked, and the clock past the minute, so a show refreshes it.
-  // The controller's list has answered too, which networkidle doesn't promise: on a busy machine the page
-  // goes quiet for longer than that before its client code fetches anything. Otherwise what a test does
-  // next races that fetch, so a survey it seeds may be in the list, and an outage it starts may fail it.
+  // This document's controller has its list too, which networkidle doesn't promise: on a busy machine the
+  // page goes quiet for longer than that before its client code fetches anything. Otherwise what a test
+  // does next races that fetch, so a survey it seeds may be in the list, and an outage it starts may fail
+  // it. The wait matches on URL, so the login page goes first: its own list could answer it instead.
   async function openDashboard(page: Page, title: string, origin = "") {
     await loginAsUser(page, student, course);
     const dueAt = Date.now() + 30 * 60_000;
     await seedPublishedSurvey(title, dueAt);
     await page.clock.install();
     const refreshes = recordDashboardRefreshes(page, course.id);
+    await page.goto("about:blank");
     const listAnswered = page.waitForResponse((response) => isSurveysList(response.url()));
     await page.goto(`${origin}/course/${course.id}`);
     const surveys = surveysToComplete(page);
