@@ -146,6 +146,16 @@ export class RealtimeChannelManager {
     }, 120000); // refresh every 120s to reduce churn; server lease >= 150s
   }
 
+  /** Registers the lease for a channel that just joined, then restarts its refresh if it is still the live channel. */
+  private _restoreLease(managed: ManagedChannel, channel: ManagedChannel["channel"]) {
+    void this._registerLease(managed).then(() => {
+      // The channel may have been torn down or replaced while the lease was being registered.
+      if (this._channels.get(managed.topic) === managed && managed.channel === channel) {
+        this._startLeaseRefresh(managed);
+      }
+    });
+  }
+
   /** Stop refreshing lease and unregister */
   private async _stopAndUnregisterLease(managed: ManagedChannel) {
     if (managed.leaseTimer) {
@@ -775,17 +785,15 @@ export class RealtimeChannelManager {
         newChannel.subscribe((status, err) => {
           // Notify listeners of status changes
           this._handleReconnectionStateEvent(topic, status, err);
+          // A replacement channel has no lease and no refresh timer. A rejoin after TIMED_OUT stops the timer,
+          // so restore the lease on every SUBSCRIBED, not only the first one.
+          if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+            this._restoreLease(managedChannel, newChannel);
+          }
           if (settled) return;
           switch (status) {
             case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
               settled = true;
-              // A replacement channel has no lease and no refresh timer, so register again and restart the refresh.
-              void this._registerLease(managedChannel).then(() => {
-                // The channel may have been torn down while the lease was being registered.
-                if (this._channels.get(managedChannel.topic) === managedChannel) {
-                  this._startLeaseRefresh(managedChannel);
-                }
-              });
               resolve();
               break;
             case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:

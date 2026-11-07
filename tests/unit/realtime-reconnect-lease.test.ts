@@ -120,3 +120,43 @@ describe("RealtimeChannelManager lease refresh after reconnect", () => {
     expect(startLeaseRefresh).not.toHaveBeenCalled();
   });
 });
+
+describe("RealtimeChannelManager lease refresh after a rejoin", () => {
+  afterEach(() => {
+    RealtimeChannelManager.getInstance().cleanup();
+    jest.restoreAllMocks();
+  });
+
+  it("restarts the lease refresh when a replacement channel rejoins after timing out", async () => {
+    const manager = RealtimeChannelManager.getInstance();
+    const client = makeClient();
+    const topic = "class:7:students";
+    await manager.subscribe(
+      topic,
+      client,
+      () => {},
+      () => {}
+    );
+
+    // The replacement channel joins, times out, then rejoins on the same channel object.
+    const rejoining: { on: jest.Mock; subscribe: jest.Mock; unsubscribe: jest.Mock; state: string } = {
+      on: jest.fn(() => rejoining),
+      subscribe: jest.fn((callback?: StatusCallback) => {
+        callback?.("SUBSCRIBED");
+        callback?.("TIMED_OUT");
+        callback?.("SUBSCRIBED");
+        return rejoining;
+      }),
+      unsubscribe: jest.fn(),
+      state: "joined"
+    };
+    (client.channel as unknown as jest.Mock).mockImplementation(() => rejoining);
+    jest.spyOn(internals(manager), "_registerLease").mockImplementation(async () => undefined);
+    const startLeaseRefresh = jest.spyOn(internals(manager), "_startLeaseRefresh").mockImplementation(() => {});
+
+    await (manager as unknown as { _resubscribeToChannel(topic: string): Promise<void> })._resubscribeToChannel(topic);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(startLeaseRefresh).toHaveBeenCalledTimes(2);
+  });
+});
