@@ -378,7 +378,8 @@ jobs:
             tests/unit/exam-pdf-winansi.test.ts \
             tests/unit/exam-region-math.test.ts \
             tests/unit/exam-split.test.ts \
-            tests/unit/exam-to-surveyjs.test.ts
+            tests/unit/exam-to-surveyjs.test.ts \
+            tests/unit/useCapability.test.tsx
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
   # dangerous production values combination (e2e bypasses, plaintext/

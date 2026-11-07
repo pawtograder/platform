@@ -6,6 +6,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
+import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
@@ -368,6 +369,10 @@ export default function NewSurveyPage() {
         error = result.error;
         if (data) setCurrentSurveyId(data.id);
       }
+
+      // Nothing was saved and the form stays open. Throwing would add two generic toasts on top
+      // of the database's reason, ending in "Please try again", which would be refused again.
+      if (reportDuplicateNamesRefusal(error)) return { data: null, error };
 
       if (error || !data) {
         console.error("[saveSurvey] save error:", error);
