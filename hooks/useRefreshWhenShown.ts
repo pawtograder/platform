@@ -44,6 +44,7 @@ export function useRefreshWhenShown(
   minIntervalMs: number = REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS
 ): void {
   const lastRefreshAt = useRef(0);
+  const refreshInFlight = useRef(false);
 
   useEffect(() => {
     lastRefreshAt.current = Math.max(lastRefreshAt.current, Math.min(Date.now(), renderedAt));
@@ -53,19 +54,28 @@ export function useRefreshWhenShown(
       if (document.visibilityState !== "visible") return;
       // Before lastRefreshAt is written, so a skipped refresh doesn't use up the minute.
       if (!navigator.onLine) return;
+      // Next runs server actions one at a time, so another would only queue behind a stalled one.
+      if (refreshInFlight.current) return;
       const now = Date.now();
       const previous = lastRefreshAt.current;
-      if (now - previous < minIntervalMs) return;
+      // Negative when the clock was set back, which says nothing about how long ago the last one was.
+      const sinceLast = now - previous;
+      if (sinceLast >= 0 && sinceLast < minIntervalMs) return;
       lastRefreshAt.current = now;
-      refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA).then(
-        (sameBuild) => {
-          // Not after a link took the student elsewhere: a reload there could lose what they're typing.
-          if (sameBuild !== true && mounted) recoverFromStaleBundle();
-        },
-        () => {
-          if (lastRefreshAt.current === now) lastRefreshAt.current = previous;
-        }
-      );
+      refreshInFlight.current = true;
+      refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA)
+        .then(
+          (sameBuild) => {
+            // Not after a link took the student elsewhere: a reload there could lose what they're typing.
+            if (sameBuild !== true && mounted) recoverFromStaleBundle();
+          },
+          () => {
+            if (lastRefreshAt.current === now) lastRefreshAt.current = previous;
+          }
+        )
+        .finally(() => {
+          refreshInFlight.current = false;
+        });
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
