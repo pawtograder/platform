@@ -249,6 +249,8 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const courseController = useCourseController();
   // Every change here needs publish_groups (#1010); without it the page is read-only.
   const canEditGroups = useCapability("publish_groups");
+  // The (Edit) link opens the assignment form, which needs manage_assignments.
+  const canManageAssignments = useCapability("manage_assignments");
   const { assignmentGroupsWithMembers, assignments, userRolesWithProfiles } = courseController;
 
   const groupsPredicate = useCallback(
@@ -424,8 +426,13 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     <Box>
       <Flex justifyContent="space-between" alignItems="center" gap={3} wrap="wrap">
         <Text fontSize="sm" color="text.muted">
-          Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (
-          <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
+          Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size}
+          {canManageAssignments && (
+            <>
+              {" "}
+              (<Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
+            </>
+          )}
         </Text>
         {canEditGroups && (
           <CopyGroupsFromAssignmentDialog
