@@ -33,26 +33,9 @@ REVOKE EXECUTE ON FUNCTION public.set_course_gemini_key(bigint, text) FROM authe
 
 Status and removal keep working, and stored keys and deletion cleanup are unchanged. To stop all browser access, also revoke `get_course_gemini_key_status(bigint)` and `remove_course_gemini_key(bigint)` from `authenticated`.
 
-## Why the migration timestamp was kept
-
-`20261028160000` sorts before `20261031120000_fail_safe_group_repo_deletes.sql`, which reached `staging` first. It was not renamed. Each claim below was checked on a disposable stack (Supabase CLI 2.105.0) built from `staging` at `3c3e3e78`:
-
-| Path                                                                                                     | Behavior                                                                                                                                                                                                                                                                  |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Deployment migrator (`charts/pawtograder/images/migrations/migrate.sh`, used for staging and production) | Applies every version missing from `supabase_migrations.schema_migrations`, in filename order, and never compares against the newest applied version. Against a database at staging's state, run as `supabase_admin`: `applied=1 skipped=440`. A rerun gives `applied=0`. |
-| CI (`e2e-local` starts a fresh stack)                                                                    | Replays all migrations in filename order with no errors.                                                                                                                                                                                                                  |
-| Supabase CLI upgrading an existing local database                                                        | `supabase migration up` refuses: "Found local migration files to be inserted before the last migration". Run `supabase migration up --include-all`, or use the fresh-start sequence in `AGENTS.md`.                                                                       |
-| Renaming the file                                                                                        | The previews for #1160 and #1161 already applied `20261028160000`. A renamed copy re-runs `CREATE SCHEMA course_secrets` and fails with `schema "course_secrets" already exists`. Drift detection only checks files on disk, so `resetOnDrift` does not recover it.       |
-
-Out-of-order timestamps are routine here: `staging`'s history has more than a hundred migrations merged after a newer one.
-
-## CI: the disposable-database marker (#1191)
+## Privileged database tests
 
 The privileged specs (`tests/e2e/course-gemini-key-*.spec.ts`) connect as `postgres`. They refuse any database without the `byok-disposable-db-marker` Vault secret and the matching `BYOK_TEST_DB_*` variables.
-
-`e2e-local` runs on `pull_request_target`, so it always uses `staging`'s copy of `.github/workflows/deploy.yml`. The step that creates the marker therefore landed on its own, in #1191, before this PR could pass CI.
-
-#1160 no longer changes `deploy.yml`. `e2e-local` checks out the PR head but runs `staging`'s workflow, so the branch has to contain whatever that workflow calls. `staging` now runs `npm run check:delete-paths` (added in #1175), so `staging` was merged into #1160, and then into #1161. After that merge, `deploy.yml` and `package.json` match `staging`, and the workflow has exactly one marker step.
 
 **Running the specs locally:** on a local stack without the marker they fail rather than skip; this is deliberate. To run them on a disposable stack:
 
@@ -123,11 +106,3 @@ While the current configuration is in place, anyone who can read an environment'
 
 - `one-time-code` is meant for one-time verification codes. Browsers or the OS may offer to fill codes from SMS or email into this field.
 - The result was observed in one Chrome setup. Other Chrome versions, other browsers and third-party password managers may behave differently, so this is a workaround, not a guarantee.
-
-## Release gates (status 2026-11-04)
-
-- [ ] **CI:** `e2e-local` passes on #1160 and #1161 with #1191 on `staging`. The last runs before #1191 merged failed only on the missing marker.
-- [ ] **Vault recovery:** the restore and PITR drills mount the same `PGSODIUM_ROOT_KEY`, but assert only row counts. Decrypting a Vault secret after a restore has not been verified.
-- [ ] **Deployment permissions:** under `migrate.sh` the RPCs are owned by `supabase_admin`. That was checked on a disposable database, not on `staging`.
-- [ ] **Merge order:** #1160 first, then #1161, retargeted to `staging`.
-- [ ] **Staging verification:** with a synthetic key, save, refresh, replace, disable and remove. Confirm students, graders and other courses' instructors cannot read or change the configuration. Record the deployed revision and results on #1126.

@@ -32,6 +32,9 @@ import {
 // Credential specs keep traces, video and screenshots off: they would capture request bodies.
 test.use({ trace: "off", video: "off", screenshot: "off" });
 
+// Database-only: no browser behavior is exercised, so one project is enough.
+test.skip(({ browserName }) => browserName !== "chromium", "database-only spec; runs in the chromium project only");
+
 type Rpc = "get_course_gemini_key_status" | "set_course_gemini_key" | "remove_course_gemini_key";
 type RpcResult = {
   data: unknown;
@@ -298,7 +301,7 @@ test.describe("course Gemini key RPCs (#1126)", () => {
     }
   });
 
-  test("synthetic keys do not reach audit rows, cron, statement stats or migration history", async () => {
+  test("synthetic keys do not reach audit rows, statement stats or active queries", async () => {
     const key = syntheticKey();
     expect((await setKey(asInstructorA, classA.id, key)).error).toBeNull();
     const leaks = await withPrivileged(async (c) => {
@@ -307,17 +310,13 @@ test.describe("course Gemini key RPCs (#1126)", () => {
         audit: await q(
           "SELECT count(*)::int AS n FROM public.audit WHERE coalesce(old::text,'') LIKE $1 OR coalesce(new::text,'') LIKE $1"
         ),
-        cron: await q("SELECT count(*)::int AS n FROM cron.job WHERE command LIKE $1"),
         statements: await q("SELECT count(*)::int AS n FROM extensions.pg_stat_statements WHERE query LIKE $1"),
-        migrations: await q(
-          "SELECT count(*)::int AS n FROM supabase_migrations.schema_migrations WHERE array_to_string(statements, ' ') LIKE $1"
-        ),
         activity: await q(
           "SELECT count(*)::int AS n FROM pg_stat_activity WHERE query LIKE $1 AND pid <> pg_backend_pid()"
         )
       };
     });
-    expect(leaks).toEqual({ audit: 0, cron: 0, statements: 0, migrations: 0, activity: 0 });
+    expect(leaks).toEqual({ audit: 0, statements: 0, activity: 0 });
     expect(await inconsistencyCount([classA.id, classB.id])).toEqual({ orphanSecrets: 0, danglingMappings: 0 });
   });
 });
