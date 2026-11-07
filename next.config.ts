@@ -55,6 +55,7 @@ const optimizePackageImports = [
 ];
 
 const nextConfig: NextConfig = {
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   output: process.env.NEXT_OUTPUT_STANDALONE === "true" ? "standalone" : undefined,
   // Shared cross-replica cache. The default Next cache is per-instance, so with
   // >1 web replica `revalidateTag()` only invalidates the pod that handled the
@@ -241,6 +242,26 @@ const sentryConfig = {
   sourcemaps: {
     disable: disableSentrySourcemaps
   },
+  // Upload maps for EVERY client chunk, not just the per-route ones.
+  //
+  // The SDK default is false, and `getWebpackPluginOptions` then narrows the
+  // client upload to `static/chunks/pages/**` + `static/chunks/app/**`. Shared
+  // and vendor chunks — `static/chunks/*`, where monaco, react, chakra and all
+  // our shared components live — are excluded. Measured against the live
+  // 146759be release: route chunks 163/261 covered (62%), shared+vendor 2/406
+  // (0.5%). So page-level crashes symbolicated and library-level ones never
+  // did, which is why the Monaco `toUrl` worker bug had to be diagnosed from
+  // minified frames plus the monaco-editor source.
+  //
+  // Cost: those shared chunks are ~28.5 MB of JS per build plus their maps,
+  // roughly 9x the client-side upload volume. That is only safe because Bugsink
+  // now vacuums. It has no retention of its own — MAX_STORED_FILE_BYTES and
+  // MAX_STORED_FILE_COUNT both default to None — and unbounded artifact growth
+  // is exactly what filled its PVC and took error ingestion down for 3.7 days
+  // in September. The daily `bugsink-vacuum` CronJob (k8s repo,
+  // apps/bugsink/vacuum-cronjob.yaml) is what keeps this bounded; if that ever
+  // goes away, turn this back off at the same time.
+  widenClientFileUpload: true,
   useRunAfterProductionCompileHook: useSentryRunAfterProductionCompileHook,
   release: {
     create: !disableSentryReleaseCreate,

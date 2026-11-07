@@ -24,6 +24,7 @@
   "discord-list-guilds": ["listDiscordGuilds"],
   "enrollments-add": ["enrollmentAdd"],
   "enrollments-sync-canvas": ["enrollmentSyncCanvas"],
+  "exam-extract-template": ["examExtractTemplate"],
   "get-pr-base-files": ["getPrBaseFiles"],
   "github-check-app-installation": ["checkAppInstallation"],
   "github-repo-configure-webhook": ["githubRepoConfigureWebhook"],

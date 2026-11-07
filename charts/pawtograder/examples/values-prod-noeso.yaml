@@ -266,7 +266,12 @@ backup:
     repository: ghcr.io/pawtograder/backup
     tag: ""             # ← pin per release
   schedule: "0 4 * * *"
-  retentionDays: 30
+  # 7 nightly + ~3 monthly. legacyRootDays carries the old retentionDays: 30
+  # so dumps written before chart 0.3.28 still expire; 0 once the root is empty.
+  retention:
+    dailyDays: 7
+    monthlyDays: 90
+    legacyRootDays: 30
   s3:
     endpoint: ""        # ← your S3 endpoint
     region: us-east-1

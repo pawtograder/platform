@@ -12,7 +12,7 @@ import { RETENTION_GRACE_DAYS, SENTRY_LOOKBACK_DAYS, SentryPurgeApi, runPurge } 
 /**
  * Bug report retention purge (ADR 1, package 6b).
  *
- * Invoked daily via pg_cron (see 20260929120000_bug_reporter.sql). Deletes the Sentry feedback and
+ * Invoked daily via pg_cron (see 20261107180000_bug_reporter.sql). Deletes the Sentry feedback and
  * replays tagged with the `class_id` of every class whose end_date is more than 30 days past. The
  * rules that keep it from deleting anything else are in purge.ts.
  *

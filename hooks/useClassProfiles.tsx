@@ -109,6 +109,40 @@ export function useIsReadOnly() {
   return isReadOnly;
 }
 
+/** The viewer's capabilities in the current class, fetched once per class page by `ClassCapabilitiesProvider`. */
+export type ClassCapabilitiesState = { capabilities: ReadonlySet<string>; isLoading: boolean };
+
+export const ClassCapabilitiesContext = createContext<ClassCapabilitiesState | undefined>(undefined);
+
+/**
+ * Whether the viewer holds capability `name` in the current class, as decided by
+ * `user_class_capabilities()` — the same rule RLS uses (docs/capabilities.md). Returns `false`
+ * while loading, so a control never flashes on for someone who can't use it, and `false` while
+ * an instructor is viewing as a student, like {@link useIsInstructor}.
+ */
+export function useCapability(name: string) {
+  const state = useContext(ClassCapabilitiesContext);
+  if (!state || state.isLoading) {
+    return false;
+  }
+  return state.capabilities.has(name);
+}
+
+/**
+ * Like {@link useCapability}, but `undefined` until the answer is in, for a page that should
+ * wait before sending someone away.
+ */
+export function useCapabilityOnceLoaded(name: string): boolean | undefined {
+  const state = useContext(ClassCapabilitiesContext);
+  if (!state) {
+    return false;
+  }
+  if (state.isLoading) {
+    return undefined;
+  }
+  return state.capabilities.has(name);
+}
+
 /**
  * Returns whether the current user holds a global admin role (a `user_roles` row with
  * role "admin" in any class). Admins can act as instructors in any course.

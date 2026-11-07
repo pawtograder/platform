@@ -259,7 +259,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
     await assertStudentPageAccessible(page, "grading self-review completed");
@@ -339,8 +339,17 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
+    // "Complete" stays on this submission ("Complete and go to next" is the button that moves on).
     await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await expect(page.getByText("Completed by")).toBeVisible();
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("completed_at")
+        .eq("submission_id", submission_id!)
+        .eq("rubric_id", assignment!.grading_rubric_id!)
+        .not("completed_at", "is", null);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
 
     // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
@@ -686,6 +695,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
-    await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
   });
 });

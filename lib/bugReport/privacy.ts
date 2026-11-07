@@ -141,12 +141,16 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "assignments.allow_not_graded_submissions": "none",
   "assignments.allow_student_formed_groups": "none",
   "assignments.archived_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "assignments.assignment_type": "none",
   "assignments.autograder_points": "none",
   "assignments.class_id": "none",
   "assignments.created_at": "none",
   "assignments.description": "none",
   "assignments.due_date": "none",
   "assignments.enable_repo_analytics": "none",
+  // DRAFT: new entry, review and remove this comment
+  "assignments.git_provider": "none",
   "assignments.gradebook_column_id": "none",
   "assignments.grader_pseudonymous_mode": "none",
   "assignments.grading_rubric_id": "none",
@@ -326,6 +330,11 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "calendar_sync_state.last_sync_at": "none",
   // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
   "calendar_sync_state.sync_error": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "capabilities.description": "none",
+  // UNCERTAIN: `name` on a relation not known to hold people; check that it never holds a person's name
+  // DRAFT: new entry, review and remove this comment
+  "capabilities.name": "none",
   "class_metrics_totals.active_graders_total": "none",
   "class_metrics_totals.active_instructors_total": "none",
   "class_metrics_totals.active_students_total": "none",
@@ -358,6 +367,17 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "class_metrics_totals.workflow_errors_total": "none",
   "class_metrics_totals.workflow_runs_completed": "none",
   "class_metrics_totals.workflow_runs_failed": "none",
+  // DRAFT: new entry, review and remove this comment
+  "class_roles.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "class_roles.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "class_roles.default_for": "none",
+  // DRAFT: new entry, review and remove this comment
+  "class_roles.id": "none",
+  // UNCERTAIN: `name` on a relation not known to hold people; check that it never holds a person's name
+  // DRAFT: new entry, review and remove this comment
+  "class_roles.name": "none",
   "class_sections.campus": "none",
   "class_sections.canvas_course_id": "none",
   "class_sections.canvas_course_section_id": "none",
@@ -390,6 +410,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "classes.end_date": "none",
   "classes.events_ics_url": "none",
   "classes.features": "none",
+  // DRAFT: new entry, review and remove this comment
+  "classes.forgejo_org": "none",
   "classes.github_org": "none",
   "classes.gradebook_id": "none",
   "classes.handout_template_repo": "none",
@@ -608,6 +630,196 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "error_pins.enabled": "none",
   "error_pins.id": "none",
   "error_pins.rule_logic": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.debug_id": "none",
+  // UNCERTAIN: Json column with no known shape; free_text taints every string inside it
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.envelope": "free_text",
+  // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.error_message": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.error_type": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.id": "none",
+  // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.last_error_context": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.method": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.original_msg_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_async_worker_dlq_messages.retry_count": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.exam_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.exam_question_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.height": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.kind": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.page_number": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.width": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.x": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_question_regions.y": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.answer_type": "none",
+  // UNCERTAIN: Json column with no known shape; free_text taints every string inside it
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.choices": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.class_id": "none",
+  // UNCERTAIN: Json column with no known shape; free_text taints every string inside it
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.correct_answer": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.exam_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.grading_tolerance": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.label": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.level": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.ordinal": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.parent_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.points": "grade",
+  // DRAFT: new entry, review and remove this comment
+  "exam_questions.prompt": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.created_at": "none",
+  // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.error": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.exam_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.original_pdf_path": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.pages_per_exam": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.status": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.total_pages": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_batches.uploaded_by": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.batch_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.exam_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.height": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.image_path": "none",
+  // UNCERTAIN: Json column with no known shape; free_text taints every string inside it
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.ocr_data": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.ocr_text": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.page_index": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.scanned_submission_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scan_pages.width": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.batch_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.detected_name": "name",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.detected_sis_id": "handle",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.exam_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.exam_index": "none",
+  // UNCERTAIN: Json column with no known shape; free_text taints every string inside it
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.extracted": "free_text",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.finalized_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.match_confidence": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.match_status": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.matched_profile_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_scanned_submissions.submission_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.exam_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.height": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.image_path": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.page_number": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exam_template_pages.width": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.assignment_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.created_at": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.created_by": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.delivery_mode": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.num_pages": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.status": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.template_markdown": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.template_pdf_path": "none",
+  // DRAFT: new entry, review and remove this comment
+  "exams.template_source_type": "none",
   "flashcard_card_analytics.answer_viewed_count": "none",
   "flashcard_card_analytics.avg_answer_time_ms": "none",
   "flashcard_card_analytics.avg_got_it_time_ms": "none",
@@ -1201,6 +1413,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
   "repositories.creation_error": "free_text",
   "repositories.desired_handout_sha": "none",
+  // DRAFT: new entry, review and remove this comment
+  "repositories.git_provider": "none",
   "repositories.id": "none",
   "repositories.is_github_ready": "none",
   "repositories.last_creation_attempt_at": "none",
@@ -1301,6 +1515,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "review_assignments_summary_by_assignee.total_reviews": "none",
   "revoked_token_ids.revoked_at": "none",
   "revoked_token_ids.token_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "role_capabilities.capability": "none",
+  // DRAFT: new entry, review and remove this comment
+  "role_capabilities.role_id": "none",
   "rubric_check_references.assignment_id": "none",
   "rubric_check_references.class_id": "none",
   "rubric_check_references.created_at": "none",
@@ -1315,6 +1533,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "rubric_checks.created_at": "none",
   "rubric_checks.data": "none",
   "rubric_checks.description": "none",
+  // DRAFT: new entry, review and remove this comment
+  "rubric_checks.exam_question_id": "none",
   "rubric_checks.file": "none",
   "rubric_checks.group": "none",
   "rubric_checks.id": "none",
@@ -1334,6 +1554,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "rubric_criteria.created_at": "none",
   "rubric_criteria.data": "none",
   "rubric_criteria.description": "none",
+  // DRAFT: new entry, review and remove this comment
+  "rubric_criteria.exam_question_id": "none",
   "rubric_criteria.id": "none",
   "rubric_criteria.is_additive": "none",
   "rubric_criteria.is_deduction_only": "none",
@@ -1349,6 +1571,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "rubric_parts.created_at": "none",
   "rubric_parts.data": "none",
   "rubric_parts.description": "none",
+  // DRAFT: new entry, review and remove this comment
+  "rubric_parts.exam_question_id": "none",
   "rubric_parts.id": "none",
   "rubric_parts.is_assign_to_student": "none",
   "rubric_parts.is_individual_grading": "none",
@@ -1657,6 +1881,12 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "submissions_with_grades_for_assignment_nice.class_id": "none",
   "submissions_with_grades_for_assignment_nice.class_section_id": "none",
   "submissions_with_grades_for_assignment_nice.class_section_name": "none",
+  // DRAFT: new entry, review and remove this comment
+  "submissions_with_grades_for_assignment_nice.code_walk_completed": "none",
+  // DRAFT: new entry, review and remove this comment
+  "submissions_with_grades_for_assignment_nice.code_walk_released": "none",
+  // DRAFT: new entry, review and remove this comment
+  "submissions_with_grades_for_assignment_nice.code_walk_review_count": "none",
   "submissions_with_grades_for_assignment_nice.completed_at": "none",
   "submissions_with_grades_for_assignment_nice.completed_by": "none",
   "submissions_with_grades_for_assignment_nice.created_at": "none",
@@ -1766,12 +1996,16 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "tags.updated_at": "none",
   "tags.visible": "none",
   "user_privileges.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "user_privileges.class_role_id": "none",
   "user_privileges.private_profile_id": "none",
   "user_privileges.public_profile_id": "none",
   "user_privileges.role": "none",
   "user_privileges.user_id": "none",
   "user_roles.canvas_id": "handle",
   "user_roles.class_id": "none",
+  // DRAFT: new entry, review and remove this comment
+  "user_roles.class_role_id": "none",
   "user_roles.class_section_id": "none",
   "user_roles.disabled": "none",
   "user_roles.github_org_confirmed": "none",
@@ -1889,7 +2123,12 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
 };
 
 export const RPCS: Readonly<Record<string, RpcClassification>> = {
+  // UNCERTAIN: returns string; shape not reviewed, free_text taints every string in it
+  // DRAFT: new entry, review and remove this comment
+  _calculate_effective_due_date: "free_text",
   _cli_resolve_submission_file_id: "none",
+  // DRAFT: new entry, review and remove this comment
+  _due_date_lookup_allowed: "none",
   _eval_rubric_report_filter: "none",
   _grade_targets_for_submission: "none",
   _help_request_public_payload: { $: "none", "$.data": { $table: "help_requests" } },
@@ -2032,10 +2271,16 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   authorizeforclass: "none",
   authorizeforclassgrader: "none",
   authorizeforclassinstructor: "none",
+  // DRAFT: new entry, review and remove this comment
+  authorizeforhelprequestparticipant: "none",
+  // DRAFT: new entry, review and remove this comment
+  authorizeforhelprequeststaff: "none",
   authorizeforinstructorofstudent: "none",
   authorizeforinstructororgraderofstudent: "none",
   authorizeforpoll: "none",
   authorizeforprofile: "none",
+  // DRAFT: new entry, review and remove this comment
+  authorizeforprofile_in_class: "none",
   // UNCERTAIN: $.error is SQLERRM from a WHEN OTHERS handler. The raised messages only interpolate ids, but other SQL errors pass through, so it is marked free_text to be safe.
   bulk_assign_reviews: { $: "none", "$.error": "free_text" },
   // UNCERTAIN: errors[*].identifier holds an email in email mode and a SIS user id (handle) in sis_id mode. It is classified as email; both are PII.
@@ -2050,11 +2295,14 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   can_access_help_request: "none",
   can_access_poll_response: "none",
   can_access_submission_storage_path: "none",
+  // DRAFT: new entry, review and remove this comment
+  can_add_profile_to_help_request: "none",
+  // DRAFT: new entry, review and remove this comment
+  can_follow_up_help_request: "none",
   can_respond_to_survey: "none",
   channel_has_subscribers: "none",
   check_assignment_deadlines_passed: "none",
   check_assignment_release_dates: "none",
-  check_can_add_to_help_request: "none",
   check_can_remove_from_help_request: "none",
   check_discord_error_threshold: "none",
   check_discord_role_sync_after_link: "none",
@@ -2132,6 +2380,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   delete_assignment_with_all_data: { $: "none", "$.message": "free_text" },
   delete_queued_messages_for_class: { "$[*].deleted_count": "none", "$[*].deleted_message_ids": "none" },
   delete_queued_messages_for_class_simple: "none",
+  // DRAFT: new entry, review and remove this comment
+  delete_repository_rows: "none",
   delete_system_notifications_by_campaign: "none",
   disconnect_discord_guild: { "$[*].class_id": "none", "$[*].previous_guild_id": "none" },
   discord_student_join_enabled: "none",
@@ -2153,6 +2403,10 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   enqueue_discord_role_creation: "none",
   enqueue_discord_role_sync: "none",
   enqueue_discord_roles_creation: "none",
+  // DRAFT: new entry, review and remove this comment
+  enqueue_exam_finalize: "none",
+  // DRAFT: new entry, review and remove this comment
+  enqueue_exam_process_batch: "none",
   enqueue_github_archive_repo: "none",
   enqueue_github_create_repo: "none",
   enqueue_github_org_reinvite: "none",
@@ -2164,6 +2418,14 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   enqueue_repo_analytics_fetch: "none",
   enqueue_sync_repo_permissions_for_repo: "none",
   evaluate_error_pin_rule: "none",
+  // DRAFT: new entry, review and remove this comment
+  exam_create: "none",
+  // DRAFT: new entry, review and remove this comment
+  exam_create_submission: "none",
+  // DRAFT: new entry, review and remove this comment
+  exam_sync_rubric_from_questions: "none",
+  // DRAFT: new entry, review and remove this comment
+  exam_upsert_questions_and_regions: "none",
   finalize_submission_early: "none",
   fix_assignment_repo_permissions: {
     $: "none",
@@ -2503,6 +2765,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   invoke_discord_discussion_stats_update: "none",
   invoke_discord_reconciler_background_task: "none",
   invoke_email_batch_processor_background_task: "none",
+  // DRAFT: new entry, review and remove this comment
+  invoke_exam_async_worker_background_task: "none",
   invoke_github_async_worker_background_task: "none",
   invoke_github_membership_reconciler_background_task: "none",
   invoke_github_repo_reconciler_background_task: "none",
@@ -2552,6 +2816,13 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.errors[*].group_name": "free_text"
   },
   queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
+  // DRAFT: new entry, review and remove this comment
+  quiz_autograde: "none",
+  // UNCERTAIN: returns Json; shape not reviewed, free_text taints every string in it
+  // DRAFT: new entry, review and remove this comment
+  quiz_get_for_student: "free_text",
+  // DRAFT: new entry, review and remove this comment
+  quiz_submit: "none",
   recalculate_discussion_thread_children_counts: "none",
   recalculate_gradebook_columns_in_range: "none",
   reconcile_stale_org_invitations: "none",
@@ -2564,12 +2835,16 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",
   release_all_grading_reviews_for_assignment: "none",
+  // DRAFT: new entry, review and remove this comment
+  release_code_walk_reviews_for_assignment: "none",
   release_grading_reviews_for_submissions: "none",
   release_instructor_only_gradebook_column: "none",
   reorder_surveys_in_series: "none",
   repo_ids_with_dead_lettered_create: { "$[*].dead_lettered_at": "none", "$[*].repo_id": "none" },
   repo_ids_with_queued_create: "none",
   request_discord_reinvite: { "$[*].channels_repaired": "none", "$[*].queued": "none", "$[*].roles_repaired": "none" },
+  // DRAFT: new entry, review and remove this comment
+  reserve_github_staff_repo: "none",
   reset_all_flashcard_progress: "none",
   reset_error_pin_matches: "none",
   resolve_calendar_event_queues: "none",
@@ -2583,6 +2858,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // UNCERTAIN: pure helper; output is a sanitized fragment of a repo name (group name, slug, or possibly username)
   sanitize_repo_name_component: "handle",
   save_error_pin: "none",
+  // DRAFT: new entry, review and remove this comment
+  seed_default_class_roles: "none",
   send_signup_welcome_message: "none",
   set_class_template_overrides: "none",
   set_discussion_thread_topic: "none",
@@ -2595,6 +2872,20 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   submission_set_active: "none",
   submit_ai_help_feedback: "none",
   survey_allows_response_editing: "none",
+  // DRAFT: new entry, review and remove this comment
+  survey_apply_completion: "none",
+  // UNCERTAIN: returns string[]; shape not reviewed, free_text taints every string in it
+  // DRAFT: new entry, review and remove this comment
+  survey_duplicate_question_names: "free_text",
+  // UNCERTAIN: returns Json; shape not reviewed, free_text taints every string in it
+  // DRAFT: new entry, review and remove this comment
+  survey_json_unwrapped: "free_text",
+  // UNCERTAIN: returns string; shape not reviewed, free_text taints every string in it
+  // DRAFT: new entry, review and remove this comment
+  survey_question_answer_key: "free_text",
+  // UNCERTAIN: name: `name` in an RPC result; name assumes it is a person, set none if it names course content
+  // DRAFT: new entry, review and remove this comment
+  survey_question_name_entries: { "$[*].name": "name", "$[*].scope": "none" },
   sync_calendar_events: { $: "none", "$.errors[*]": "free_text" },
   sync_discord_users_if_roles_complete: "none",
   sync_existing_users_after_roles_created: "none",
@@ -2613,6 +2904,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   trigger_sis_sync: "none",
   unregister_realtime_subscription: "none",
   unrelease_all_grading_reviews_for_assignment: "none",
+  // DRAFT: new entry, review and remove this comment
+  unrelease_code_walk_reviews_for_assignment: "none",
   unrelease_grading_reviews_for_submissions: "none",
   update_api_gateway_call: "none",
   update_card_progress: "none",
@@ -2628,6 +2921,10 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   update_sis_sync_status: "none",
   upsert_assignment_leaderboard_entry: "none",
   upsert_github_deployment: "none",
+  // DRAFT: new entry, review and remove this comment
+  user_class_capabilities: { "$[*].capability": "none", "$[*].class_id": "none" },
+  // DRAFT: new entry, review and remove this comment
+  user_class_ids_with_capability: "none",
   user_is_in_help_request: "none",
   // UNCERTAIN: detail: error or sync message; free_text assumes upstream errors can echo usernames or emails
   vacuum_health_check: {
@@ -2695,6 +2992,9 @@ export const EDGE_FUNCTIONS: Readonly<Record<string, JsonPathMap>> = {
   },
   enrollmentAdd: { $: "none", "$.error": "free_text" },
   enrollmentSyncCanvas: { $: "none", "$.message": "free_text", "$.error": "free_text" },
+  // UNCERTAIN: new wrapper for exam-extract-template; classify its response shape
+  // DRAFT: new entry, review and remove this comment
+  examExtractTemplate: { $: "free_text" },
   // UNCERTAIN: upstream base files are the instructor's handout code, not the student's; none assumes that
   getPrBaseFiles: { $: "none", "$.files": "none", "$.error": "free_text" },
   githubRepoConfigureWebhook: { $: "none", "$.message": "free_text", "$.error": "free_text" },
