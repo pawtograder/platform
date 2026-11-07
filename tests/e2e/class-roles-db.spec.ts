@@ -20,6 +20,9 @@
  * Step 4b (20261106140000_assignments_save_by_capability.sql): saving New and Edit Assignment follows
  * manage_assignments, in the database and in the edge functions those saves call.
  *
+ * Step 5 (20261106150000_review_assignments_by_capability.sql): seeing and deleting review
+ * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -1187,5 +1190,160 @@ test.describe("saving assignments follows manage_assignments (#1010, step 4b)", 
     expect(passed.status, "a Head TA passes the access check").not.toBe(401);
     expect(passed.text, "a Head TA can read the autograder row").not.toContain("Autograder not found");
     expect(passed.text).not.toContain("does not have manage_assignments");
+  });
+});
+
+test.describe("review assignments follow manage_review_assignments (#1010, step 5)", () => {
+  let classG: Awaited<ReturnType<typeof createClass>>;
+  let instructorG: TestingUser;
+  let plainGrader: TestingUser;
+  let headTa: TestingUser;
+  let assignment: Awaited<ReturnType<typeof insertAssignment>>;
+
+  test.beforeAll(async () => {
+    classG = await createClass({ name: "E2E Review Assignments G" });
+    instructorG = await createUserInClass({ role: "instructor", class_id: classG.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classG.id });
+    headTa = await createUserInClass({ role: "grader", class_id: classG.id });
+    assignment = await insertAssignment({
+      class_id: classG.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      assignment_slug: `e2e-review-g-${Date.now().toString(36)}`
+    });
+
+    const { data: headTaRole, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classG.id, name: "Head TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .insert({ role_id: headTaRole!.id, capability: "manage_review_assignments" })
+      ).error
+    ).toBeNull();
+    const row = await userRole(headTa);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: headTaRole!.id }).eq("id", row.id)).error
+    ).toBeNull();
+  });
+
+  /**
+   * A submission by a new student. A person can have only one review assignment per submission
+   * review, and a student's submissions share one, so each review assignment gets its own student.
+   */
+  async function newSubmission() {
+    const student = await createUserInClass({ role: "student", class_id: classG.id });
+    return insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: classG.id
+    });
+  }
+
+  async function reviewAssignmentFor(assignee: TestingUser) {
+    const submission = await newSubmission();
+    const { data, error } = await supabase
+      .from("review_assignments")
+      .insert({
+        assignee_profile_id: assignee.private_profile_id,
+        class_id: classG.id,
+        assignment_id: assignment.id,
+        submission_id: submission.submission_id,
+        submission_review_id: submission.grading_review_id,
+        rubric_id: assignment.grading_rubric_id!,
+        due_date: addDays(new Date(), 1).toISOString()
+      })
+      .select("id, due_date")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  async function reviewAssignmentExists(id: number) {
+    const { data, error } = await supabase.from("review_assignments").select("id").eq("id", id);
+    expect(error).toBeNull();
+    return (data ?? []).length === 1;
+  }
+
+  async function visibleIds(user: TestingUser) {
+    const client = await createAuthenticatedClient(user);
+    const { data, error } = await client.from("review_assignments").select("id").eq("class_id", classG.id);
+    expect(error).toBeNull();
+    return (data ?? []).map((ra) => ra.id).sort((a, b) => a - b);
+  }
+
+  test("an instructor sees and deletes any review assignment in the class", async () => {
+    const forGrader = await reviewAssignmentFor(plainGrader);
+    const forHeadTa = await reviewAssignmentFor(headTa);
+    expect(await visibleIds(instructorG)).toEqual(expect.arrayContaining([forGrader.id, forHeadTa.id]));
+
+    const instructor = await createAuthenticatedClient(instructorG);
+    const { data, error } = await instructor.from("review_assignments").delete().eq("id", forGrader.id).select("id");
+    expect(error).toBeNull();
+    expect(data).toHaveLength(1);
+    expect(await reviewAssignmentExists(forGrader.id)).toBe(false);
+  });
+
+  test("a default grader sees only their own review assignments and can't delete any", async () => {
+    const own = await reviewAssignmentFor(plainGrader);
+    const other = await reviewAssignmentFor(instructorG);
+    const visible = await visibleIds(plainGrader);
+    expect(visible).toContain(own.id);
+    expect(visible).not.toContain(other.id);
+
+    const grader = await createAuthenticatedClient(plainGrader);
+    for (const id of [own.id, other.id]) {
+      expectBlocked(
+        await grader.from("review_assignments").delete().eq("id", id).select("id"),
+        "a default grader deleting a review assignment"
+      );
+      expect(await reviewAssignmentExists(id), "the review assignment is still there").toBe(true);
+    }
+  });
+
+  test("a grader on a custom role with manage_review_assignments sees and deletes the class's review assignments", async () => {
+    const other = await reviewAssignmentFor(plainGrader);
+    expect(await visibleIds(headTa)).toContain(other.id);
+
+    const client = await createAuthenticatedClient(headTa);
+    const { data, error } = await client.from("review_assignments").delete().eq("id", other.id).select("id");
+    expect(error).toBeNull();
+    expect(data).toHaveLength(1);
+    expect(await reviewAssignmentExists(other.id)).toBe(false);
+  });
+
+  test("that grader still can't create or edit review assignments", async () => {
+    const client = await createAuthenticatedClient(headTa);
+    const submission = await newSubmission();
+    const { error: insertError } = await client.from("review_assignments").insert({
+      assignee_profile_id: plainGrader.private_profile_id,
+      class_id: classG.id,
+      assignment_id: assignment.id,
+      submission_id: submission.submission_id,
+      submission_review_id: submission.grading_review_id,
+      rubric_id: assignment.grading_rubric_id!,
+      due_date: addDays(new Date(), 1).toISOString()
+    });
+    expect(insertError, "creating a review assignment stays instructor-only").not.toBeNull();
+
+    const existing = await reviewAssignmentFor(plainGrader);
+    expectBlocked(
+      await client
+        .from("review_assignments")
+        .update({ due_date: addDays(new Date(), 7).toISOString() })
+        .eq("id", existing.id)
+        .select("id"),
+      "a Head TA editing a review assignment"
+    );
+    const { data: after, error } = await supabase
+      .from("review_assignments")
+      .select("due_date")
+      .eq("id", existing.id)
+      .single();
+    expect(error).toBeNull();
+    expect(after!.due_date, "the due date is unchanged").toBe(existing.due_date);
   });
 });
