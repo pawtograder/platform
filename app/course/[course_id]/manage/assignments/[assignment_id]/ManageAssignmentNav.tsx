@@ -38,6 +38,8 @@ type NavItem = {
   instructorsOnly?: boolean | "graderOrInstructor";
   types?: AssignmentType[];
   repoOnly?: boolean;
+  // Shows the item from the capability tables instead of the app role (#1010).
+  capability?: string;
 };
 
 const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
