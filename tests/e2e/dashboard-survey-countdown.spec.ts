@@ -1,7 +1,7 @@
 import net from "node:net";
 import type { Page, Request, Route } from "@playwright/test";
 import { test, expect } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
+import { createClass, createUserInClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -47,15 +47,29 @@ function isSameDocument(page: Page) {
   return page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument === true);
 }
 
+// The proxy below reads plain HTTP and listens on the target's own address, so it only works in front of
+// a local http:// app. That's every run of these tests: deploy.yml's is http://localhost:3001, and
+// test:e2e:local's is http://localhost:3000. The https:// targets in other workflows run their own specs.
+const CUT_PROXY_NEEDS = "the cut proxy reads plain HTTP on a local address, so it can't sit in front of this BASE_URL";
+function cutProxyCantRun(baseURL: string | undefined) {
+  const { protocol, hostname } = new URL(baseURL!);
+  return protocol !== "http:" || !["localhost", "127.0.0.1"].includes(hostname);
+}
+
+const isRefreshRequest = (head: string) => /^POST \/course\/\d+ /.test(head) && /next-action:/i.test(head);
+// A click on the Surveys link, and not its prefetch, which is the same URL with one more header.
+const isSurveysLinkRequest = (head: string) =>
+  /^GET \/course\/\d+\/surveys\?_rsc=/.test(head) && !/next-router-prefetch:/i.test(head);
+
 // A TCP proxy in front of the app, so a cut is a real one and the browser raises its own error, which
-// is what app/global-error.tsx has to recognize. The refresh it's told to cut asks for no compression,
+// is what app/global-error.tsx has to recognize. The request it's told to cut asks for no compression,
 // so the proxy can find the response's root row. It sends up to that row and holds the connection until
 // finishCut(), and can stay down afterward, like a network that's gone. The hold is because a stream
 // that errors throws away what nobody has read, so the page has to have read the row first.
 async function startCutProxy(baseURL: string) {
   const target = new URL(baseURL);
   const sockets = new Set<net.Socket>();
-  let armed: { thenDown: boolean } | null = null;
+  let armed: { matches: (head: string) => boolean; thenDown: boolean } | null = null;
   let down = false;
   let finishCut = () => {};
   const server = net.createServer((client) => {
@@ -63,11 +77,12 @@ async function startCutProxy(baseURL: string) {
       client.destroy();
       return;
     }
-    const upstream = net.connect(Number(target.port), target.hostname);
+    const upstream = net.connect(Number(target.port || 80), target.hostname);
     sockets.add(client).add(upstream);
     let cutting: { thenDown: boolean } | null = null;
     let headersSent = false;
     let cutScheduled = false;
+    let partialHead = Buffer.alloc(0);
     let body = Buffer.alloc(0);
     client.on("error", () => upstream.destroy());
     upstream.on("error", () => client.destroy());
@@ -76,14 +91,20 @@ async function startCutProxy(baseURL: string) {
       if (!cutting) client.end();
     });
     client.on("data", (data) => {
-      const head = data.toString("latin1");
-      if (armed && /^POST \/course\/\d+ /.test(head) && /next-action:/i.test(head)) {
+      const chunk = Buffer.concat([partialHead, data]);
+      partialHead = Buffer.alloc(0);
+      const head = chunk.toString("latin1");
+      if (armed && /^(GET|POST) /.test(head) && !head.includes("\r\n\r\n")) {
+        partialHead = chunk;
+        return;
+      }
+      if (armed?.matches(head)) {
         cutting = armed;
         armed = null;
         upstream.write(Buffer.from(head.replace(/accept-encoding:[^\r]*\r\n/i, ""), "latin1"));
         return;
       }
-      upstream.write(data);
+      upstream.write(chunk);
     });
     upstream.on("data", (data) => {
       if (!cutting) {
@@ -91,18 +112,14 @@ async function startCutProxy(baseURL: string) {
         return;
       }
       if (cutScheduled) return;
-      let chunk = data;
+      body = Buffer.concat([body, data]);
       if (!headersSent) {
-        const headersEnd = chunk.indexOf("\r\n\r\n");
-        if (headersEnd < 0) {
-          client.write(chunk);
-          return;
-        }
-        client.write(chunk.subarray(0, headersEnd + 4));
+        const headersEnd = body.indexOf("\r\n\r\n");
+        if (headersEnd < 0) return;
+        client.write(body.subarray(0, headersEnd + 4));
         headersSent = true;
-        chunk = chunk.subarray(headersEnd + 4);
+        body = body.subarray(headersEnd + 4);
       }
-      body = Buffer.concat([body, chunk]);
       const text = body.toString("latin1");
       const rootStart = text.search(/(^|\n)0:/);
       if (rootStart < 0) return;
@@ -128,8 +145,11 @@ async function startCutProxy(baseURL: string) {
   proxied.port = String((server.address() as net.AddressInfo).port);
   return {
     origin: proxied.origin,
-    cutNextRefresh: (options = { thenDown: false }) => {
-      armed = options;
+    cutNextRefresh: ({ thenDown } = { thenDown: false }) => {
+      armed = { matches: isRefreshRequest, thenDown };
+    },
+    cutNextSurveysLink: () => {
+      armed = { matches: isSurveysLinkRequest, thenDown: false };
     },
     finishCut: () => finishCut(),
     comeBackUp: () => {
@@ -142,14 +162,17 @@ async function startCutProxy(baseURL: string) {
   };
 }
 
-// Resolves once the page has read the refresh's root row. Next's own read has it by then too, since a
-// read waiting on the stream gets each chunk as it arrives.
+// Resolves once the page has read the root row of a refresh or a link's fetch. Next's own read has it by
+// then too, since a read waiting on the stream gets each chunk as it arrives.
 async function watchForRootRow(page: Page) {
   await page.evaluate(() => {
     const real = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const response = await real(input, init);
-      if (init?.method === "POST" && new Headers(init.headers).has("next-action")) {
+      const headers = new Headers(init?.headers);
+      const isRefresh = init?.method === "POST" && headers.has("next-action");
+      const isLinkFetch = headers.has("rsc") && !headers.has("next-router-prefetch");
+      if (isRefresh || isLinkFetch) {
         const reader = response.clone().body!.getReader();
         const decoder = new TextDecoder();
         let text = "";
@@ -184,11 +207,11 @@ test.describe("Student dashboard survey countdown", () => {
   let student: User;
   let instructor: User;
 
-  async function seedPublishedSurvey(title: string, dueAt: number, availableAt?: number) {
+  async function seedPublishedSurvey(title: string, dueAt: number, availableAt?: number, classId = course.id) {
     const { data, error } = await supabase
       .from("surveys")
       .insert({
-        class_id: course.id,
+        class_id: classId,
         created_by: instructor.public_profile_id,
         assigned_to_all: true,
         allow_response_editing: false,
@@ -210,7 +233,11 @@ test.describe("Student dashboard survey countdown", () => {
   // The course controller's first fetch of the class's surveys.
   function isSurveysList(url: string) {
     const { pathname, searchParams } = new URL(url);
-    return pathname.endsWith("/rest/v1/surveys") && searchParams.get("class_id") === `eq.${course.id}`;
+    return (
+      pathname.endsWith("/rest/v1/surveys") &&
+      searchParams.get("class_id") === `eq.${course.id}` &&
+      !searchParams.has("id")
+    );
   }
 
   // The dashboard with one survey on it, marked, and the clock past the minute, so a show refreshes it.
@@ -438,6 +465,7 @@ test.describe("Student dashboard survey countdown", () => {
     page,
     baseURL
   }) => {
+    test.skip(cutProxyCantRun(baseURL), CUT_PROXY_NEEDS);
     const proxy = await startCutProxy(baseURL!);
     try {
       const { surveys, dueAt } = await openDashboard(page, "Cut On The Wire", proxy.origin);
@@ -459,13 +487,14 @@ test.describe("Student dashboard survey countdown", () => {
     page,
     baseURL
   }) => {
+    test.skip(cutProxyCantRun(baseURL), CUT_PROXY_NEEDS);
     const proxy = await startCutProxy(baseURL!);
     try {
       const { surveys } = await openDashboard(page, "Cut And Gone", proxy.origin);
       const dashboard = page.url();
       const checkFailed = page.waitForEvent(
         "requestfailed",
-        (request) => request.url().endsWith("/error-background.jpg") && request.method() === "HEAD"
+        (request) => request.url() === dashboard && request.method() === "GET" && !request.headers()["rsc"]
       );
       const rootRowRead = await watchForRootRow(page);
       proxy.cutNextRefresh({ thenDown: true });
@@ -486,6 +515,83 @@ test.describe("Student dashboard survey countdown", () => {
       proxy.close();
     }
   });
+
+  // The survey page flushes its save as the cut takes it down, so the save is on its way when the error
+  // page mounts. Held here, this is the same every run: a reload that doesn't wait cancels the save.
+  for (const [what, complete] of [
+    ["a typed answer", false],
+    ["a Complete", true]
+  ] as const) {
+    test(`a link cut at its root row waits for ${what} to reach the server, then reloads`, async ({
+      page,
+      baseURL
+    }) => {
+      test.skip(cutProxyCantRun(baseURL), CUT_PROXY_NEEDS);
+      const proxy = await startCutProxy(baseURL!);
+      try {
+        await loginAsUser(page, student, course);
+        const surveyId = await seedPublishedSurvey(`Cut With ${what}`, Date.now() + 30 * 60_000);
+        await page.goto(`${proxy.origin}/course/${course.id}/surveys/${surveyId}`);
+        const input = page.getByRole("textbox", { name: /How is it going/ });
+        await expect(input).toBeVisible();
+        await page.waitForLoadState("networkidle");
+
+        let saveArrived = () => {};
+        const saveHeld = new Promise<void>((resolve) => (saveArrived = resolve));
+        let releaseSave = () => {};
+        const saveReleased = new Promise<void>((resolve) => (releaseSave = resolve));
+        await page.route(/\/rest\/v1\/survey_responses/, async (route) => {
+          if (!["GET", "HEAD"].includes(route.request().method())) {
+            saveArrived();
+            await saveReleased;
+          }
+          await route.fallback();
+        });
+        // The reload and its check of the document, which a link's fetch and a prefetch aren't.
+        const reloadRequests: string[] = [];
+        page.on("request", (request) => {
+          const { pathname } = new URL(request.url());
+          if (request.method() === "GET" && pathname.startsWith(`/course/${course.id}`) && !request.headers()["rsc"]) {
+            reloadRequests.push(pathname);
+          }
+        });
+
+        const answer = `typed at ${Date.now()}`;
+        await input.fill(answer);
+        if (complete) {
+          await page.getByRole("button", { name: "Complete" }).click();
+          await saveHeld;
+        }
+        const rootRowRead = await watchForRootRow(page);
+        proxy.cutNextSurveysLink();
+        await page.getByRole("link", { name: "Surveys", exact: true }).first().click();
+        await rootRowRead();
+        proxy.finishCut();
+        await expect(page.getByRole("button", { name: "Try Again" })).toBeVisible();
+        await saveHeld;
+        // A round trip from the page, so what it sent as the error page mounted has been seen by now.
+        await page.evaluate(() => fetch("/error-background.jpg", { method: "HEAD" }).then(() => {}));
+        expect(reloadRequests).toEqual([]);
+
+        const reloaded = page.waitForRequest((request) => request.isNavigationRequest());
+        releaseSave();
+        await reloaded;
+        await expect(page.getByRole("button", { name: "Try Again" })).toBeHidden();
+
+        const { data, error } = await supabase
+          .from("survey_responses")
+          .select("response, is_submitted")
+          .eq("survey_id", surveyId)
+          .eq("profile_id", student.private_profile_id)
+          .maybeSingle();
+        expect(error).toBeNull();
+        expect(JSON.stringify(data?.response)).toContain(answer);
+        expect(data?.is_submitted).toBe(complete);
+      } finally {
+        proxy.close();
+      }
+    });
+  }
 
   test.describe("a survey the course controller doesn't have yet", () => {
     const surveyHeading = (page: Page, title: string) => page.getByRole("heading", { name: title, level: 1 });
@@ -577,11 +683,58 @@ test.describe("Student dashboard survey countdown", () => {
       expect(await notFoundToasts(page).count()).toBe(0);
     });
 
-    test("leaves for the list if the survey can't be fetched either", async ({ page }) => {
-      const listFailed = await openWithSurveysListFailing(page, "All Failed", () => true);
+    for (const [name, select] of [
+      ["the direct check", "id"],
+      ["the fetch after it", "*"]
+    ] as const) {
+      test(`keeps the student here with a retry when ${name} fails, and the retry opens the survey`, async ({
+        page
+      }) => {
+        let failing = true;
+        const listFailed = await openWithSurveysListFailing(
+          page,
+          "Lookup Failed",
+          (url) => failing && new URL(url).searchParams.get("select") === select
+        );
 
+        await expect(page.getByRole("heading", { name: "Couldn't load this survey" })).toBeVisible();
+        await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/[^/]+$`));
+        expect(await notFoundToasts(page).count()).toBe(0);
+        expect(listFailed()).toBe(true);
+
+        failing = false;
+        await page.getByRole("button", { name: "Try again" }).click();
+        await expect(surveyHeading(page, "Lookup Failed")).toBeVisible();
+        expect(await notFoundToasts(page).count()).toBe(0);
+      });
+    }
+
+    for (const [name, surveyId] of [
+      ["a survey that doesn't exist", "00000000-0000-4000-8000-000000000000"],
+      ["an ID that can't be a survey's", "not-a-uuid"]
+    ]) {
+      test(`says Not Found and leaves for the list on ${name}`, async ({ page }) => {
+        await loginAsUser(page, student, course);
+        await page.goto(`/course/${course.id}/surveys/${surveyId}`);
+
+        await page.waitForURL(new RegExp(`/course/${course.id}/surveys$`));
+        await expect(notFoundToasts(page).first()).toBeVisible();
+      });
+    }
+
+    test("won't open another of the student's courses' surveys under this course's URL", async ({ page }) => {
+      const otherCourse = await createClass({ name: "Survey Countdown Other Course" });
+      await createUserInClass({ role: "student", class_id: otherCourse.id, email: student.email });
+      const surveyId = await seedPublishedSurvey("Other Course", Date.now() + 30 * 60_000, undefined, otherCourse.id);
+      await loginAsUser(page, student, course);
+
+      // The student can read it, so what follows isn't only RLS saying no.
+      await page.goto(`/course/${otherCourse.id}/surveys/${surveyId}`);
+      await expect(surveyHeading(page, "Other Course")).toBeVisible();
+
+      await page.goto(`/course/${course.id}/surveys/${surveyId}`);
       await page.waitForURL(new RegExp(`/course/${course.id}/surveys$`));
-      expect(listFailed()).toBe(true);
+      await expect(notFoundToasts(page).first()).toBeVisible();
     });
 
     test("still opens after it was visited before it opened", async ({ page }) => {

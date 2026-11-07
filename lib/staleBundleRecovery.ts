@@ -24,6 +24,8 @@
  * leaving the user with a dead navigation and a noisy Sentry report.
  */
 
+import { pendingWritesSettled } from "@/lib/pendingWrites";
+
 const RELOAD_GUARD_KEY = "pawtograder:stale-bundle-reloaded-at";
 // Don't reload more than once per cooldown window — if a reload doesn't clear
 // the error (e.g. the new bundle is genuinely broken, or it's a false match),
@@ -135,30 +137,46 @@ export function isCutResponseError(error: unknown): boolean {
 
 /**
  * For `app/global-error.tsx`, whose page has already replaced the app, so a reload costs nothing that
- * was on screen. It can cost a save the page sent as it unmounted, if that hasn't reached the server
- * when the new document commits. Only reloads a visible tab whose server answers, because a reload with
- * the network down would swap this page and its Try Again for the browser's error page. Until then,
- * each show tries again.
+ * is on screen. It would cost a save still on its way from the page that unmounted, so this waits for
+ * `pendingWritesSettled()` first, and a write that never settles keeps Try Again. Only reloads a visible
+ * tab whose server answers for this URL, because a reload with the network down, or to a document that
+ * fails, would swap this page and its Try Again for an error page with neither. Until then, each show
+ * tries again.
  *
  * A page can keep failing, and take any time to do it, so this reloads at most once per 5 minutes in a
  * tab, and not at all if it can't record the reload, because the next page would never see it. Inside
  * those 5 minutes a page that fails keeps Try Again. Returns an uninstall function.
  */
 export function reloadOnceReachable(reload: () => void = defaultReload): () => void {
-  const reloadIfReachable = () => {
-    if (document.visibilityState !== "visible") return;
-    // This page's own background: a static file the middleware skips, and HEAD doesn't transfer it.
-    void fetch("/error-background.jpg", { method: "HEAD", cache: "no-store" }).then(
-      (response) => {
-        if (!response.ok || hasRecentlyReloaded(PAGE_RELOAD_COOLDOWN_MS)) return;
-        if (markReloaded()) reload();
-      },
-      () => {}
-    );
+  let uninstalled = false;
+  let checking = false;
+  const canReload = () => !uninstalled && document.visibilityState === "visible";
+  const reloadIfReachable = async () => {
+    if (checking || !canReload()) return;
+    checking = true;
+    try {
+      await pendingWritesSettled();
+      if (!canReload() || hasRecentlyReloaded(PAGE_RELOAD_COOLDOWN_MS)) return;
+      // The document the reload would load, so the answer is about it and not only about the host. A
+      // redirect to another channel's host rejects here, since that host sends no CORS headers, and that
+      // leaves Try Again. Stopped at the headers, so nothing is transferred, at the cost of a server render.
+      const abort = new AbortController();
+      const response = await fetch(window.location.href, { cache: "no-store", signal: abort.signal });
+      abort.abort();
+      if (response.ok && canReload() && markReloaded()) reload();
+    } catch {
+      // Not reachable. The next show tries again.
+    } finally {
+      checking = false;
+    }
   };
-  reloadIfReachable();
-  document.addEventListener("visibilitychange", reloadIfReachable);
-  return () => document.removeEventListener("visibilitychange", reloadIfReachable);
+  const onVisibilityChange = () => void reloadIfReachable();
+  onVisibilityChange();
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  return () => {
+    uninstalled = true;
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+  };
 }
 
 /**

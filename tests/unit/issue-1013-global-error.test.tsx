@@ -1,5 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
+import { Component, type ReactNode, useEffect } from "react";
 import GlobalError from "@/app/global-error";
+import { trackPendingWrite } from "@/lib/pendingWrites";
 import { isCutResponseError, recoverFromStaleBundle, reloadOnceReachable } from "@/lib/staleBundleRecovery";
 
 const mockCapture = jest.fn();
@@ -66,11 +68,164 @@ describe("reloadOnceReachable", () => {
     uninstall();
   });
 
-  it("reloads once the server answers", async () => {
+  it("reloads once the server answers for this document", async () => {
     uninstall = reloadOnceReachable(reload);
     await settle();
-    expect(mockFetch).toHaveBeenCalledWith("/error-background.jpg", { method: "HEAD", cache: "no-store" });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith(window.location.href, expect.objectContaining({ cache: "no-store" }));
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the check at its headers, so the page isn't transferred", async () => {
+    uninstall = reloadOnceReachable(reload);
+    await settle();
+    const { signal } = mockFetch.mock.calls[0][1] as { signal: AbortSignal };
+    expect(signal.aborted).toBe(true);
+  });
+
+  describe("a write still on its way", () => {
+    function pendingWrite() {
+      let resolve = () => {};
+      let reject: (error: Error) => void = () => {};
+      const write = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      trackPendingWrite(write);
+      return { resolve, reject };
+    }
+
+    it("sends no check and doesn't reload until it has settled", async () => {
+      const write = pendingWrite();
+      uninstall = reloadOnceReachable(reload);
+      await settle();
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+
+      write.resolve();
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts a failed write as settled", async () => {
+      const write = pendingWrite();
+      uninstall = reloadOnceReachable(reload);
+      write.reject(new Error("Failed to fetch"));
+      await settle();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for every write, including one tracked during the wait", async () => {
+      const first = pendingWrite();
+      const second = pendingWrite();
+      uninstall = reloadOnceReachable(reload);
+      first.resolve();
+      await settle();
+      const third = pendingWrite();
+      second.resolve();
+      await settle();
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      third.resolve();
+      await settle();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds through shows, and sends one check when it settles", async () => {
+      const write = pendingWrite();
+      uninstall = reloadOnceReachable(reload);
+      setVisibility("hidden");
+      setVisibility("visible");
+      setVisibility("hidden");
+      setVisibility("visible");
+      await settle();
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      write.resolve();
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("never checks if it was uninstalled during the wait", async () => {
+      const write = pendingWrite();
+      uninstall = reloadOnceReachable(reload);
+      uninstall();
+      write.resolve();
+      await settle();
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("waits for the next show if the tab was hidden when it settled", async () => {
+      const write = pendingWrite();
+      uninstall = reloadOnceReachable(reload);
+      setVisibility("hidden");
+      write.resolve();
+      await settle();
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      setVisibility("visible");
+      await settle();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a check still out", () => {
+    function checkOut() {
+      let answer: (response: { ok: boolean }) => void = () => {};
+      mockFetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          })
+      );
+      return (response: { ok: boolean }) => answer(response);
+    }
+
+    it("doesn't reload if it was uninstalled before the answer", async () => {
+      const answer = checkOut();
+      uninstall = reloadOnceReachable(reload);
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      uninstall();
+      answer({ ok: true });
+      await settle();
+      expect(reload).not.toHaveBeenCalled();
+      expect(window.sessionStorage.length).toBe(0);
+    });
+
+    it("doesn't reload if the tab was hidden before the answer, and the next show tries again", async () => {
+      const answer = checkOut();
+      uninstall = reloadOnceReachable(reload);
+      await settle();
+
+      setVisibility("hidden");
+      answer({ ok: true });
+      await settle();
+      expect(reload).not.toHaveBeenCalled();
+      expect(window.sessionStorage.length).toBe(0);
+
+      setVisibility("visible");
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends no second check for a show before the answer", async () => {
+      const answer = checkOut();
+      uninstall = reloadOnceReachable(reload);
+      await settle();
+      setVisibility("hidden");
+      setVisibility("visible");
+      await settle();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      answer({ ok: true });
+      await settle();
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("keeps the page while the network is down, and the next show tries again", async () => {
@@ -111,7 +266,8 @@ describe("reloadOnceReachable", () => {
       uninstall = reloadOnceReachable(reload);
       await settle();
     }
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    // One check: inside the 5 minutes there's no reload to check for, so the server isn't asked to render.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
@@ -137,7 +293,7 @@ describe("reloadOnceReachable", () => {
       await loadAt(0);
       await loadAt(60_000);
       await loadAt(120_000);
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(reload).toHaveBeenCalledTimes(1);
     });
 
@@ -243,6 +399,48 @@ describe("GlobalError", () => {
     expect(reloaded()).toBe(false);
     expect(mockCapture).toHaveBeenCalledWith(error);
     expect(screen.getByRole("button", { name: "Try Again" })).toBeTruthy();
+  });
+
+  // The order this rests on: the page's passive cleanup runs before the error page's mount effect in the
+  // same commit, so the wait sees what the cleanup tracked. In the same order in Next's own copy of React.
+  it("waits for a write the page tracks as it unmounts, in the commit that mounts this page", async () => {
+    class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+      state = { error: null };
+      static getDerivedStateFromError(error: Error) {
+        return { error };
+      }
+      render() {
+        return this.state.error ? <GlobalError error={this.state.error} /> : this.props.children;
+      }
+    }
+    let settleWrite = () => {};
+    const write = new Promise<void>((resolve) => {
+      settleWrite = resolve;
+    });
+    function SurveyPage({ crash }: { crash: boolean }) {
+      useEffect(() => () => trackPendingWrite(write), []);
+      if (crash) throw new Error("Connection closed.");
+      return null;
+    }
+    const { rerender } = render(
+      <Boundary>
+        <SurveyPage crash={false} />
+      </Boundary>
+    );
+    rerender(
+      <Boundary>
+        <SurveyPage crash={true} />
+      </Boundary>
+    );
+    await settle();
+    expect(screen.getByRole("button", { name: "Try Again" })).toBeTruthy();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(reloaded()).toBe(false);
+
+    settleWrite();
+    await settle();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(reloaded()).toBe(true);
   });
 
   it("stops checking when the page goes away", async () => {
