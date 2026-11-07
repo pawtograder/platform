@@ -197,7 +197,6 @@
 {{- if not (and $wildcardHost $wildcardEnv) }}
 {{- fail "the pushed workspace template serves VS Code on a subdomain: set coder.coder.ingress.wildcardHost and CODER_WILDCARD_ACCESS_URL in coder.coder.env" }}
 {{- end }}
-{{- /* Coder's suffix form (*-coder.example.com) is routed by a whole-label Ingress wildcard (*.example.com) one level up. */}}
 {{- $domain := trimPrefix "*" $wildcardHost }}
 {{- $suffix := trimSuffix $domain (trimPrefix "*" $wildcardEnv) }}
 {{- $suffixForm := and (hasPrefix "*." $wildcardHost) (hasPrefix "*" $wildcardEnv) (hasSuffix $domain $wildcardEnv) (regexMatch "^[-a-z0-9]*$" $suffix) }}

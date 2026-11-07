@@ -522,7 +522,6 @@ coder:
     tolerations:
       - { key: tier, operator: Equal, value: prod-staging, effect: NoSchedule }
     env:
-      # Setting the list replaces values.yaml's, so keep its connection URL.
       - name: CODER_PG_CONNECTION_URL
         value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
       - name: CODER_ACCESS_URL

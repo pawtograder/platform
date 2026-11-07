@@ -63,8 +63,6 @@ pw() {
   printf '%s' "$v"
 }
 
-# A failed read counts as "absent" only when the CLI says there's no value;
-# anything else (permission denied, network) stops before any write.
 for app in forgejo coder; do
   path="$PREFIX/$app-$ENV_NAME"
   if out="$($CLI kv get -mount="$BAO_MOUNT" "$path" 2>&1 >/dev/null)"; then
@@ -83,8 +81,6 @@ FORGEJO_DB_PW="$(pw)"
 CODER_ADMIN_PW="$(pw)"
 CODER_DB_PW="$(pw)"
 
-# Without --rotate, -cas=0 makes each write create-only, so a path that
-# appeared since the check above is left alone.
 CAS=()
 [ "$ROTATE" -eq 1 ] || CAS=(-cas=0)
 

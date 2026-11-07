@@ -605,10 +605,7 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    # build-forgejo-runner isn't a dependency while values-staging.yaml keeps
-    # forgejoRunner disabled, so a failed runner build can't block the deploy.
-    # When staging enables the runner, add it here and pin
-    # forgejoRunner.image.tag="$VERSION" in the upgrade below.
+    # Add build-forgejo-runner (and pin forgejoRunner.image.tag) once values-staging.yaml enables the runner.
     needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
