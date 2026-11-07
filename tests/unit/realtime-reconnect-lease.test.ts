@@ -160,3 +160,46 @@ describe("RealtimeChannelManager lease refresh after a rejoin", () => {
     expect(startLeaseRefresh).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("RealtimeChannelManager lease refresh when a timeout overlaps registration", () => {
+  afterEach(() => {
+    RealtimeChannelManager.getInstance().cleanup();
+    jest.restoreAllMocks();
+  });
+
+  it("does not start the lease refresh if the channel times out while its lease is registering", async () => {
+    const manager = RealtimeChannelManager.getInstance();
+    const client = makeClient();
+    const topic = "class:7:students";
+    await manager.subscribe(
+      topic,
+      client,
+      () => {},
+      () => {}
+    );
+
+    // The replacement channel joins, then times out before its lease registration finishes.
+    const timingOut: { on: jest.Mock; subscribe: jest.Mock; unsubscribe: jest.Mock; state: string } = {
+      on: jest.fn(() => timingOut),
+      subscribe: jest.fn((callback?: StatusCallback) => {
+        callback?.("SUBSCRIBED");
+        callback?.("TIMED_OUT");
+        return timingOut;
+      }),
+      unsubscribe: jest.fn(),
+      state: "joined"
+    };
+    (client.channel as unknown as jest.Mock).mockImplementation(() => timingOut);
+    let finishRegistration: () => void = () => {};
+    jest
+      .spyOn(internals(manager), "_registerLease")
+      .mockImplementation(() => new Promise<void>((resolve) => (finishRegistration = resolve)) as unknown);
+    const startLeaseRefresh = jest.spyOn(internals(manager), "_startLeaseRefresh").mockImplementation(() => {});
+
+    await (manager as unknown as { _resubscribeToChannel(topic: string): Promise<void> })._resubscribeToChannel(topic);
+    finishRegistration();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(startLeaseRefresh).not.toHaveBeenCalled();
+  });
+});

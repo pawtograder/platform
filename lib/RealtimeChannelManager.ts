@@ -147,10 +147,10 @@ export class RealtimeChannelManager {
   }
 
   /** Registers the lease for a channel that just joined, then restarts its refresh if it is still the live channel. */
-  private _restoreLease(managed: ManagedChannel, channel: ManagedChannel["channel"]) {
+  private _restoreLease(managed: ManagedChannel, channel: ManagedChannel["channel"], isJoined: () => boolean) {
     void this._registerLease(managed).then(() => {
-      // The channel may have been torn down or replaced while the lease was being registered.
-      if (this._channels.get(managed.topic) === managed && managed.channel === channel) {
+      // The channel may have been torn down, replaced, or timed out while the lease was being registered.
+      if (this._channels.get(managed.topic) === managed && managed.channel === channel && isJoined()) {
         this._startLeaseRefresh(managed);
       }
     });
@@ -782,13 +782,15 @@ export class RealtimeChannelManager {
       // Subscribe and wait for a definitive outcome
       await new Promise<void>((resolve, reject) => {
         let settled = false;
+        let joined = false;
         newChannel.subscribe((status, err) => {
           // Notify listeners of status changes
           this._handleReconnectionStateEvent(topic, status, err);
+          joined = status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
           // A replacement channel has no lease and no refresh timer. A rejoin after TIMED_OUT stops the timer,
           // so restore the lease on every SUBSCRIBED, not only the first one.
-          if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
-            this._restoreLease(managedChannel, newChannel);
+          if (joined) {
+            this._restoreLease(managedChannel, newChannel, () => joined);
           }
           if (settled) return;
           switch (status) {
