@@ -718,8 +718,7 @@ test.describe("Student dashboard survey countdown", () => {
         await page.goto(`/course/${course.id}/surveys/${surveyId}`);
 
         await page.waitForURL(new RegExp(`/course/${course.id}/surveys$`));
-        // Counted, and not checked for visibility: created during a document's first load, this toast is in
-        // the page with no height, so a student sees only the list.
+        // Counted, since this suite's visual test styles hide the toaster (tests/global-setup.ts).
         await expect(notFoundToasts(page)).toHaveCount(1);
       });
     }
