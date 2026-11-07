@@ -56,21 +56,52 @@ $CLI status >/dev/null 2>&1 || {
 }
 
 # Alphanumeric: Coder's connection settings don't escape passwords.
-pw() { openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32; }
+pw() {
+  local v
+  v="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32)"
+  [[ "$v" =~ ^[A-Za-z0-9]{32}$ ]] || { echo "ERROR: password generation failed" >&2; return 1; }
+  printf '%s' "$v"
+}
 
+# A failed read counts as "absent" only when the CLI says there's no value;
+# anything else (permission denied, network) stops before any write.
 for app in forgejo coder; do
-  if $CLI kv get -mount="$BAO_MOUNT" "$PREFIX/$app-$ENV_NAME" >/dev/null 2>&1 && [ "$ROTATE" -ne 1 ]; then
-    echo "ERROR: ${BAO_MOUNT}/${PREFIX}/${app}-${ENV_NAME} already exists. Pass --rotate to overwrite." >&2
+  path="$PREFIX/$app-$ENV_NAME"
+  if out="$($CLI kv get -mount="$BAO_MOUNT" "$path" 2>&1 >/dev/null)"; then
+    if [ "$ROTATE" -ne 1 ]; then
+      echo "ERROR: ${BAO_MOUNT}/${path} already exists. Pass --rotate to overwrite." >&2
+      exit 1
+    fi
+  elif ! grep -q 'No value found' <<<"$out"; then
+    echo "ERROR: could not read ${BAO_MOUNT}/${path}: $out" >&2
     exit 1
   fi
 done
 
-jq -n --arg a "$(pw)" --arg d "$(pw)" \
+FORGEJO_ADMIN_PW="$(pw)"
+FORGEJO_DB_PW="$(pw)"
+CODER_ADMIN_PW="$(pw)"
+CODER_DB_PW="$(pw)"
+
+# Without --rotate, -cas=0 makes each write create-only, so a path that
+# appeared since the check above is left alone.
+CAS=()
+[ "$ROTATE" -eq 1 ] || CAS=(-cas=0)
+
+jq -n --arg a "$FORGEJO_ADMIN_PW" --arg d "$FORGEJO_DB_PW" \
   '{admin_username: "forgejo-admin", admin_password: $a, db_password: $d}' \
-  | $CLI kv put -mount="$BAO_MOUNT" "$PREFIX/forgejo-$ENV_NAME" - >/dev/null
-jq -n --arg e "$CODER_EMAIL" --arg a "$(pw)" --arg d "$(pw)" \
+  | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$PREFIX/forgejo-$ENV_NAME" - >/dev/null
+if ! jq -n --arg e "$CODER_EMAIL" --arg a "$CODER_ADMIN_PW" --arg d "$CODER_DB_PW" \
   '{admin_email: $e, admin_username: "coder-admin", admin_password: $a, db_password: $d}' \
-  | $CLI kv put -mount="$BAO_MOUNT" "$PREFIX/coder-$ENV_NAME" - >/dev/null
+  | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$PREFIX/coder-$ENV_NAME" - >/dev/null; then
+  {
+    echo "ERROR: wrote ${BAO_MOUNT}/${PREFIX}/forgejo-${ENV_NAME} but not ${BAO_MOUNT}/${PREFIX}/coder-${ENV_NAME}."
+    echo "If Forgejo is already deployed, its db_password just changed: finish the rotation in"
+    echo "charts/pawtograder/README.md (helm upgrade --wait --wait-for-jobs, then restart Forgejo)."
+    echo "Rerun with --rotate to write the Coder path; that rotates Forgejo's passwords again."
+  } >&2
+  exit 1
+fi
 
 {
   echo "Wrote ${BAO_MOUNT}/${PREFIX}/forgejo-${ENV_NAME} and ${BAO_MOUNT}/${PREFIX}/coder-${ENV_NAME}."
