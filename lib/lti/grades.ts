@@ -375,21 +375,57 @@ export type DrainItemResult = {
   error?: string;
 };
 
+export type DrainResult = {
+  results: DrainItemResult[];
+  /** Queue rows left untouched because their class has no grade-sync-enabled AGS context. */
+  deferred: number;
+};
+
 /**
  * Process the on-release work queue: reconcile each enqueued assignment, then
  * remove its queue row ONLY on success. An assignment-level failure (token mint,
- * ensureLineItem, a transient platform error, a momentarily-missing grade-sync
- * context) throws BEFORE the per-student loop writes any durable
- * `lti_grade_sync_state`, so dropping the row on failure would silently lose the
- * whole assignment's grade push until an unrelated future grade edit re-enqueues
- * it. Instead we leave a failed row queued so the safety-net cron retries; the
- * reconcile is idempotent, so the retry is safe. (Per-student failures inside a
- * successful reconcile are recorded in `lti_grade_sync_state`, not re-queued.)
+ * ensureLineItem, a transient platform error) throws BEFORE the per-student loop
+ * writes any durable `lti_grade_sync_state`, so dropping the row on failure would
+ * silently lose the whole assignment's grade push until an unrelated future
+ * grade edit re-enqueues it. Instead we leave a failed row queued so the
+ * safety-net cron retries; the reconcile is idempotent, so the retry is safe.
+ * (Per-student failures inside a successful reconcile are recorded in
+ * `lti_grade_sync_state`, not re-queued.)
+ *
+ * Rows for a class whose grade sync was turned off after enqueue are not
+ * selected: they would fail every drain. They stay queued (counted as
+ * `deferred`) and sync once grade sync is re-enabled.
  */
-export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
+export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainResult> {
+  // Same predicate as getGradeContext, so every selected row has a context to push to.
+  const { data: contexts, error: contextError } = await db
+    .from("lti_context_links")
+    .select("class_id")
+    .eq("grade_sync_enabled", true)
+    .not("ags_lineitems_url", "is", null);
+  if (contextError) {
+    throw new Error(`Failed to read lti_context_links: ${contextError.message}`);
+  }
+  const enabledClassIds = [
+    ...new Set((contexts ?? []).map((c) => c.class_id).filter((id): id is number => id !== null))
+  ];
+
+  const deferredQuery = db.from("lti_grade_sync_queue").select("assignment_id", { count: "exact", head: true });
+  const { count: deferred, error: deferredError } = await (enabledClassIds.length > 0
+    ? deferredQuery.not("class_id", "in", `(${enabledClassIds.join(",")})`)
+    : deferredQuery);
+  if (deferredError) {
+    throw new Error(`Failed to count deferred lti_grade_sync_queue rows: ${deferredError.message}`);
+  }
+
+  if (enabledClassIds.length === 0) {
+    return { results: [], deferred: deferred ?? 0 };
+  }
+
   const { data: queue, error: queueError } = await db
     .from("lti_grade_sync_queue")
     .select("class_id, assignment_id, enqueued_at")
+    .in("class_id", enabledClassIds)
     .order("enqueued_at", { ascending: true })
     .limit(limit);
   if (queueError) {
@@ -423,7 +459,11 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
         Sentry.captureException(deleteError, { tags, level: "warning" });
       }
     } catch (e) {
-      // Leave the row queued (do NOT delete) so the safety-net cron retries.
+      // Leave the row queued (do NOT delete) so the safety-net cron retries, but
+      // move it to the back: the drain reads oldest-first with a limit, so rows
+      // that keep failing would otherwise fill every batch and starve newer work.
+      // Guarded by the enqueued_at we read, like the delete, so a re-enqueue that
+      // landed mid-sync is left as is.
       Sentry.captureException(e, { tags });
       out.push({
         classId: item.class_id,
@@ -431,9 +471,18 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
         ok: false,
         error: e instanceof Error ? e.message : String(e)
       });
+      const { error: requeueError } = await db
+        .from("lti_grade_sync_queue")
+        .update({ enqueued_at: new Date().toISOString() })
+        .eq("class_id", item.class_id)
+        .eq("assignment_id", item.assignment_id)
+        .eq("enqueued_at", item.enqueued_at);
+      if (requeueError) {
+        Sentry.captureException(requeueError, { tags, level: "warning" });
+      }
     }
   }
-  return out;
+  return { results: out, deferred: deferred ?? 0 };
 }
 
 async function resolveSubsByProfile(
