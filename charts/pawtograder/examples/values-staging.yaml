@@ -488,8 +488,7 @@ forgejoCoderSecrets:
     forgejoPath: apps/pawtograder/forgejo-staging
     coderPath: apps/pawtograder/coder-staging
 
-# Jobs and workspaces run students' code beside meta and Studio, and Ripley's
-# Cilium doesn't enforce the plain NetworkPolicies; its egressDeny does.
+# Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
 networkPolicy:
   cilium:
     enabled: true
@@ -511,8 +510,6 @@ forgejo:
         hosts: [git.staging.pawtograder.net]
 
 forgejoRunner:
-  # Off until Forgejo is up and its dispatcher token Secret exists; then set
-  # dispatcher.tokenSecret and turn this on (README "Actions runner").
   enabled: false
   image:
     repository: ghcr.io/pawtograder/forgejo-runner
@@ -534,7 +531,6 @@ coder:
         value: "*-coder.staging.pawtograder.net" # suffix form stays one label deep for the wildcard cert
     ingress:
       host: coder.staging.pawtograder.net
-      # Ingress hosts allow only a whole-label wildcard; exact hosts still win.
       wildcardHost: "*.staging.pawtograder.net"
       tls:
         enable: true
