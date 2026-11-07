@@ -99,16 +99,6 @@ While the current configuration is in place, anyone who can read an environment'
 - **Clearing the input:** the field is cleared after every request, including uncertain ones.
 - **Error text:** all messages come from fixed text in `lib/courseGeminiKey.ts`; server messages are never echoed.
 
-### Review follow-ups
-
-| Concern                                                                                                                                   | Change                                                                                                                  | Verification                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Nour: each outcome was announced twice. `finish()` calls `LiveAnnouncer`, and the notice box was also `role="status" aria-live="polite"`. | The notice box is no longer a live region. `LiveAnnouncer` still announces failures assertively and successes politely. | The settings spec asserts the notice is not a live region, and that exactly one live region carries "Key saved". It failed on the previous code and passes now (Chromium). |
-| Nour: the unknown-outcome message said the status "has been re-read" before the refresh ran, and the refresh can fail.                    | The message now says the page will try to refresh the status, and to check it before trying again.                      | The new unit and E2E assertions failed on the old text and pass now.                                                                                                       |
-| Abhinav: the input clears after an unknown outcome.                                                                                       | No change; this is intended. #1126 requires the key to be cleared after completion.                                     | Existing E2E `expectInputCleared`.                                                                                                                                         |
-
-Not yet run: WebKit and a manual screen-reader pass.
-
 ### Chrome password manager
 
 **Reproduced.** In desktop Chrome with password saving on, saving a synthetic key on this page made Chrome offer its native "Save password?" prompt. Chrome ignores `autocomplete="off"` on password fields. Storing the key in the browser's password store would violate #1126's "never persisted in browser storage".
@@ -129,21 +119,12 @@ Not yet run: WebKit and a manual screen-reader pass.
 
 **CSS masking was rejected.** A text input styled to look masked exposes the value as ordinary text to assistive technology and to telemetry capture. The masking property is also non-standard.
 
-**Verification:**
-
-- Unit: 35/35.
-- Chromium settings E2E: 9/9.
-- A focused browser check: the input is `type="password"` with `autocomplete="one-time-code"`; a first save by keyboard and a replace by click both work; the field clears each time.
-- Manual check in desktop Chrome: no save-password prompt appeared after either Save or Replace.
-
 **Limitations:**
 
 - `one-time-code` is meant for one-time verification codes. Browsers or the OS may offer to fill codes from SMS or email into this field.
 - The result was observed in one Chrome setup. Other Chrome versions, other browsers and third-party password managers may behave differently, so this is a workaround, not a guarantee.
 
 ## Release gates (status 2026-11-04)
-
-- [ ] **`lint.yml`:** #1161 adds `tests/unit/course-gemini-key.test.ts` to the explicit Jest list in `.github/workflows/lint.yml`. Whether that workflow change needs Jon's sign-off is open.
 
 - [ ] **CI:** `e2e-local` passes on #1160 and #1161 with #1191 on `staging`. The last runs before #1191 merged failed only on the missing marker.
 - [ ] **Vault recovery:** the restore and PITR drills mount the same `PGSODIUM_ROOT_KEY`, but assert only row counts. Decrypting a Vault secret after a restore has not been verified.
