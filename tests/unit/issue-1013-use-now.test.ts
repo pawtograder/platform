@@ -1,0 +1,500 @@
+import { act, renderHook } from "@testing-library/react";
+import { NOW_TICK_MS, useNow } from "@/hooks/useNow";
+import { REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS, useRefreshWhenShown } from "@/hooks/useRefreshWhenShown";
+
+const mockRouter = { refresh: jest.fn() };
+jest.mock("next/navigation", () => ({
+  useRouter: () => mockRouter
+}));
+
+const mockRefresh = jest.fn<Promise<boolean | undefined>, [string | undefined]>(() => Promise.resolve(true));
+jest.mock("@/lib/refreshCurrentPage", () => ({
+  refreshCurrentPage: (clientBuild?: string) => mockRefresh(clientBuild)
+}));
+
+const mockRecover = jest.fn();
+jest.mock("@/lib/staleBundleRecovery", () => ({
+  recoverFromStaleBundle: () => mockRecover()
+}));
+
+const PAGE_LOAD = new Date("2026-11-01T23:30:00Z").getTime();
+
+let visibility: DocumentVisibilityState = "visible";
+let online = true;
+
+function setVisibility(state: DocumentVisibilityState) {
+  visibility = state;
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+}
+
+function setOnline(next: boolean) {
+  online = next;
+  act(() => {
+    window.dispatchEvent(new Event(next ? "online" : "offline"));
+  });
+}
+
+beforeAll(() => {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+  Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
+});
+
+afterAll(() => {
+  delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+  delete (navigator as { onLine?: boolean }).onLine;
+});
+
+beforeEach(() => {
+  visibility = "visible";
+  online = true;
+  mockRouter.refresh.mockClear();
+  mockRefresh.mockClear();
+  mockRecover.mockClear();
+  jest.useFakeTimers({ now: PAGE_LOAD });
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+describe("useNow", () => {
+  it("renders the server's time first, then the browser clock once mounted", () => {
+    const serverRenderedAt = PAGE_LOAD - 90_000;
+    const rendered: number[] = [];
+    const { result } = renderHook(() => {
+      const now = useNow(serverRenderedAt);
+      rendered.push(now);
+      return now;
+    });
+
+    expect(rendered[0]).toBe(serverRenderedAt);
+    expect(result.current).toBe(PAGE_LOAD);
+  });
+
+  it("re-reads the clock every 30 s while the tab is visible", () => {
+    const { result } = renderHook(() => useNow(PAGE_LOAD));
+
+    act(() => {
+      jest.advanceTimersByTime(NOW_TICK_MS - 1);
+    });
+    expect(result.current).toBe(PAGE_LOAD);
+
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(PAGE_LOAD + NOW_TICK_MS);
+  });
+
+  it("does not tick while hidden, and reads the clock as soon as the tab is shown", () => {
+    const { result } = renderHook(() => useNow(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(5 * 60_000);
+    });
+    expect(result.current).toBe(PAGE_LOAD);
+
+    setVisibility("visible");
+    expect(result.current).toBe(PAGE_LOAD + 5 * 60_000);
+
+    act(() => {
+      jest.advanceTimersByTime(NOW_TICK_MS);
+    });
+    expect(result.current).toBe(PAGE_LOAD + 5 * 60_000 + NOW_TICK_MS);
+  });
+
+  it("keeps the browser clock when a refresh brings a server time that is behind it", () => {
+    const { result, rerender } = renderHook(({ t }) => useNow(t), { initialProps: { t: PAGE_LOAD } });
+
+    act(() => {
+      jest.advanceTimersByTime(NOW_TICK_MS);
+    });
+    expect(result.current).toBe(PAGE_LOAD + NOW_TICK_MS);
+
+    // router.refresh() renders the component again with the new payload's server time.
+    rerender({ t: PAGE_LOAD - 60_000 });
+    expect(result.current).toBe(PAGE_LOAD + NOW_TICK_MS);
+  });
+
+  it("keeps reading the clock with no network", () => {
+    setOnline(false);
+    const { result } = renderHook(() => useNow(PAGE_LOAD));
+
+    act(() => {
+      jest.advanceTimersByTime(NOW_TICK_MS);
+    });
+
+    expect(result.current).toBe(PAGE_LOAD + NOW_TICK_MS);
+  });
+
+  it("leaves no timer running after unmount", () => {
+    const { unmount } = renderHook(() => useNow(PAGE_LOAD));
+    unmount();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+describe("useRefreshWhenShown", () => {
+  it("does not refresh a tab shown again within a minute of loading", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS - 1);
+    });
+    setVisibility("visible");
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshes when shown a minute or more after the last fetch, at most once a minute", async () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    // The refresh has answered, so only the minute can hold the next show off.
+    await act(async () => {});
+
+    // Flicking between tabs 30 s later does not refetch.
+    act(() => {
+      jest.advanceTimersByTime(30_000);
+    });
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // A minute after the refresh it may refetch again.
+    act(() => {
+      jest.advanceTimersByTime(30_000);
+    });
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes once when a dashboard rendered 10 minutes ago is shown again, even right after it mounts", () => {
+    // Back restores the dashboard from the router cache whatever its age, so the data on screen
+    // can be much older than the component.
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD - 10 * 60_000));
+
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // The refresh restarts the throttle.
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("throttles a dashboard rendered 30 s ago until a minute after it was rendered", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD - 30_000));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS - 30_000 - 1);
+    });
+    setVisibility("visible");
+    expect(mockRefresh).not.toHaveBeenCalled();
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts the minute when a new payload arrives", () => {
+    const { rerender } = renderHook(({ renderedAt }) => useRefreshWhenShown(renderedAt), {
+      initialProps: { renderedAt: PAGE_LOAD }
+    });
+
+    // Something else refreshed the page 50 s after load.
+    act(() => {
+      jest.advanceTimersByTime(50_000);
+    });
+    rerender({ renderedAt: PAGE_LOAD + 50_000 });
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(20_000);
+    });
+    setVisibility("visible");
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("costs at most one extra refresh when the browser clock is 10 minutes ahead of the server", () => {
+    const skew = 10 * 60_000;
+    const { rerender } = renderHook(({ renderedAt }) => useRefreshWhenShown(renderedAt), {
+      initialProps: { renderedAt: PAGE_LOAD - skew }
+    });
+
+    // At mount this looks like a page rendered 10 minutes ago, so the first show refreshes.
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // The refresh's payload arrives a second later with the server's time, still 10 minutes behind.
+    act(() => {
+      jest.advanceTimersByTime(1_000);
+    });
+    rerender({ renderedAt: Date.now() - skew });
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(30_000);
+    });
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a minute after mount when the server clock is 10 minutes ahead of the browser", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD + 10 * 60_000));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("never refreshes on hide, or on the interval alone", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    act(() => {
+      jest.advanceTimersByTime(10 * 60_000);
+    });
+    setVisibility("hidden");
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("skips the refresh while offline, and a skip doesn't use up the minute", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setOnline(false);
+    setVisibility("visible");
+    expect(mockRefresh).not.toHaveBeenCalled();
+
+    setOnline(true);
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing on `online`, whether the tab stayed visible or was just shown", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    act(() => {
+      jest.advanceTimersByTime(2 * REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setOnline(false);
+    setOnline(true);
+    expect(mockRefresh).not.toHaveBeenCalled();
+
+    setVisibility("hidden");
+    setOnline(false);
+    setVisibility("visible");
+    setOnline(true);
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("never uses router.refresh(), whose failure can't be caught", () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setVisibility("visible");
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockRouter.refresh).not.toHaveBeenCalled();
+  });
+
+  it("gives the minute back when a refresh fails, so the next show tries again", async () => {
+    renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    mockRefresh.mockImplementationOnce(() => Promise.reject(new Error("Failed to fetch")));
+    await act(async () => {
+      setVisibility("visible");
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    setVisibility("hidden");
+    setVisibility("visible");
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  describe("a refresh still in flight", () => {
+    // Past the minute, so only the refresh in flight can hold the second show off.
+    const showAgainAfterAMinute = () => {
+      setVisibility("hidden");
+      act(() => {
+        jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+      });
+      setVisibility("visible");
+    };
+
+    function startStalledRefresh() {
+      let resolve: (sameBuild: boolean) => void = () => {};
+      let reject: (error: Error) => void = () => {};
+      mockRefresh.mockImplementationOnce(
+        () =>
+          new Promise((res, rej) => {
+            resolve = res;
+            reject = rej;
+          })
+      );
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      showAgainAfterAMinute();
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      return { resolve: (sameBuild: boolean) => resolve(sameBuild), reject: (error: Error) => reject(error) };
+    }
+
+    it("holds off another show, however long it takes", () => {
+      startStalledRefresh();
+      showAgainAfterAMinute();
+      showAgainAfterAMinute();
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets the next show past the minute through once it's answered", async () => {
+      const { resolve } = startStalledRefresh();
+      showAgainAfterAMinute();
+      await act(async () => resolve(true));
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+      showAgainAfterAMinute();
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("lets the next show through once it has failed", async () => {
+      const { reject } = startStalledRefresh();
+      await act(async () => reject(new Error("Failed to fetch")));
+
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("a clock set back", () => {
+    function refreshOnceThenSetTheClockBack() {
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      setVisibility("hidden");
+      act(() => {
+        jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+      });
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      jest.setSystemTime(PAGE_LOAD - 60 * 60_000);
+    }
+
+    it("doesn't hold the next show until the clock catches up", async () => {
+      refreshOnceThenSetTheClockBack();
+      await act(async () => {});
+
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the one-minute limit from there", async () => {
+      refreshOnceThenSetTheClockBack();
+      await act(async () => {});
+      setVisibility("hidden");
+      setVisibility("visible");
+      await act(async () => {});
+
+      setVisibility("hidden");
+      act(() => {
+        jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS - 1);
+      });
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("when the answer isn't a refresh", () => {
+    const showPastTheMinute = async () => {
+      setVisibility("hidden");
+      act(() => {
+        jest.advanceTimersByTime(REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        setVisibility("visible");
+      });
+    };
+
+    it("sends this tab's build, so the server can say it's another one", async () => {
+      process.env.NEXT_PUBLIC_GIT_COMMIT_SHA = "this-build";
+      try {
+        renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+        await showPastTheMinute();
+        expect(mockRefresh).toHaveBeenCalledWith("this-build");
+      } finally {
+        delete process.env.NEXT_PUBLIC_GIT_COMMIT_SHA;
+      }
+    });
+
+    it.each([
+      ["another build answered", false],
+      ["the answer wasn't the action's reply, as from a stale action ID or a signed-out tab", undefined]
+    ])("reloads when %s", async (_name, answer) => {
+      mockRefresh.mockImplementationOnce(() => Promise.resolve(answer));
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      await showPastTheMinute();
+      expect(mockRecover).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the page alone after a refresh that worked, and after one that failed", async () => {
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      await showPastTheMinute();
+      mockRefresh.mockImplementationOnce(() => Promise.reject(new Error("Failed to fetch")));
+      await showPastTheMinute();
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+
+    it("doesn't reload a page the student has moved on to", async () => {
+      let answer: (value: boolean) => void = () => {};
+      mockRefresh.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const { unmount } = renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      await showPastTheMinute();
+      unmount();
+      await act(async () => {
+        answer(false);
+      });
+      expect(mockRecover).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops listening after unmount", () => {
+    const { unmount } = renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+    unmount();
+
+    setVisibility("hidden");
+    act(() => {
+      jest.advanceTimersByTime(2 * REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS);
+    });
+    setVisibility("visible");
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+});
