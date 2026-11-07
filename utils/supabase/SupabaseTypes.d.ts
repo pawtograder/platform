@@ -72,6 +72,20 @@ export type Database = {
         Args: { messages: Json[]; queue_name: string; sleep_seconds?: number };
         Returns: number[];
       };
+      set_vt: {
+        Args: {
+          message_id: number;
+          queue_name: string;
+          vt_offset_seconds: number;
+        };
+        Returns: unknown[];
+        SetofOptions: {
+          from: "*";
+          to: "message_record";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
+      };
     };
     Enums: {
       [_ in never]: never;
@@ -4610,6 +4624,48 @@ export type Database = {
             referencedColumns: ["student_private_profile_id"];
           }
         ];
+      };
+      handout_sync_shadow_results: {
+        Row: {
+          created_at: string;
+          error: string | null;
+          from_sha: string | null;
+          id: number;
+          msg_id: number;
+          predicted_commit_parent: string | null;
+          predicted_tree: string | null;
+          repository_id: number;
+          synced_repo_sha: string | null;
+          to_sha: string;
+          unresolved: Json | null;
+        };
+        Insert: {
+          created_at?: string;
+          error?: string | null;
+          from_sha?: string | null;
+          id?: never;
+          msg_id: number;
+          predicted_commit_parent?: string | null;
+          predicted_tree?: string | null;
+          repository_id: number;
+          synced_repo_sha?: string | null;
+          to_sha: string;
+          unresolved?: Json | null;
+        };
+        Update: {
+          created_at?: string;
+          error?: string | null;
+          from_sha?: string | null;
+          id?: never;
+          msg_id?: number;
+          predicted_commit_parent?: string | null;
+          predicted_tree?: string | null;
+          repository_id?: number;
+          synced_repo_sha?: string | null;
+          to_sha?: string;
+          unresolved?: Json | null;
+        };
+        Relationships: [];
       };
       help_queue_assignments: {
         Row: {
