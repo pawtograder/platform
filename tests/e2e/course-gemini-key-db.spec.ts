@@ -45,6 +45,9 @@ import {
 
 test.use({ trace: "off", video: "off", screenshot: "off" });
 
+// Database-only: no browser behavior is exercised, so one project is enough.
+test.skip(({ browserName }) => browserName !== "chromium", "database-only spec; runs in the chromium project only");
+
 const LOCK_TIMEOUT_MS = 2000;
 
 type Outcome = { ok: true; value: unknown } | { ok: false; code: string };

@@ -32,6 +32,9 @@ import {
 // Credential specs keep traces, video and screenshots off: they would capture request bodies.
 test.use({ trace: "off", video: "off", screenshot: "off" });
 
+// Database-only: no browser behavior is exercised, so one project is enough.
+test.skip(({ browserName }) => browserName !== "chromium", "database-only spec; runs in the chromium project only");
+
 type Rpc = "get_course_gemini_key_status" | "set_course_gemini_key" | "remove_course_gemini_key";
 type RpcResult = {
   data: unknown;
