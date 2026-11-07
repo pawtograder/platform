@@ -5,18 +5,6 @@
 {{- end }}
 {{- end }}
 {{- if $apps }}
-{{- if .Values.forgejo.enabled }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Release.Name }}-forgejo-database
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo") | nindent 4 }}
-data:
-  host: {{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "forgejo") }}:5432
----
-{{- end }}
 {{- if .Values.coder.enabled }}
 apiVersion: v1
 kind: ConfigMap
@@ -26,8 +14,11 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "coder") | nindent 4 }}
 data:
-  # No password in the URL: Coder's Postgres driver reads PGPASSWORD (Secret <release>-coder-db).
-  CODER_PG_CONNECTION_URL: postgres://coder@{{ include "pawtograder.appDatabase.host" (dict "ctx" . "app" "coder") }}:5432/coder?sslmode=disable
+  {{- range .Values.coder.coder.env }}
+  {{- if eq .name "CODER_PG_CONNECTION_URL" }}
+  CODER_PG_CONNECTION_URL: {{ .value | quote }}
+  {{- end }}
+  {{- end }}
   CODER_TELEMETRY_ENABLE: "false"
   CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
@@ -51,28 +42,46 @@ spec:
     spec:
       restartPolicy: OnFailure
       automountServiceAccountToken: false
+      {{- include "pawtograder.podSecurityContext" (dict "ctx" . "component" .Values.appDatabases) | nindent 6 }}
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- with (include "pawtograder.placement" (dict "ctx" . "component" .Values.appDatabases) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      {{- with (include "pawtograder.priorityClassName" (dict "ctx" . "component" .Values.appDatabases) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         {{- range $app := $apps }}
         - name: {{ $app }}
           image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.postgres.image) }}
-          securityContext:
-            allowPrivilegeEscalation: false
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ "component" $.Values.appDatabases) | nindent 10 }}
           env:
             - name: PGHOST
               value: {{ include "pawtograder.appDatabase.host" (dict "ctx" $ "app" $app) }}
+            - name: PGPORT
+              value: {{ include "pawtograder.appDatabase.port" (dict "ctx" $ "app" $app) | quote }}
+            {{- $su := dict }}
+            {{- if eq (index $.Values $app).database "own" }}{{ $su = dig "settings" "superuser" dict (index $.Values (printf "%s-db" $app)) | default dict }}{{ end }}
             - name: PGUSER
-              value: {{ include "pawtograder.appDatabase.superuser" (dict "ctx" $ "app" $app) }}
+              {{- if $su.secretKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.appDatabase.superuserSecret" (dict "ctx" $ "app" $app) }}
+                  key: {{ $su.secretKey }}
+              {{- else }}
+              value: {{ $su.value | default (include "pawtograder.appDatabase.superuser" (dict "ctx" $ "app" $app)) }}
+              {{- end }}
             - name: PGDATABASE
               value: postgres
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "pawtograder.appDatabase.superuserSecret" (dict "ctx" $ "app" $app) }}
-                  key: POSTGRES_PASSWORD
+                  key: {{ include "pawtograder.appDatabase.superuserSecretKey" (dict "ctx" $ "app" $app) }}
             - name: APP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $.Release.Name }}-{{ $app }}-db, key: PGPASSWORD }
+          {{- /* No REVOKE CONNECT: revoking it from PUBLIC locks out Supabase's roles; pg_hba.conf confines the role. */}}
           command:
             - sh
             - -ec
@@ -89,5 +98,39 @@ spec:
               echo "database {{ $app }} ready on $PGHOST"
           resources:
             {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
+        {{- end }}
+        {{- /* A role leaving shared mode keeps LOGIN and its password while pg_hba.conf drops its reject lines. */}}
+        {{- if .Values.postgres.enabled }}
+        {{- range $app := list "forgejo" "coder" }}
+        {{- if not (and (index $.Values $app).enabled (eq (index $.Values $app).database "pawtograder")) }}
+        - name: {{ $app }}-shared-nologin
+          image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.postgres.image) }}
+          {{- include "pawtograder.containerSecurityContext" (dict "ctx" $ "component" $.Values.appDatabases) | nindent 10 }}
+          env:
+            - name: PGHOST
+              value: {{ include "pawtograder.postgres.host" $ }}
+            - name: PGPORT
+              value: {{ $.Values.postgres.service.port | quote }}
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGDATABASE
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $.Values.secrets.names.postgres }}, key: POSTGRES_PASSWORD }
+          command:
+            - sh
+            - -ec
+            - |
+              until pg_isready -q; do echo "waiting for $PGHOST"; sleep 2; done
+              psql -v ON_ERROR_STOP=1 -qAt <<'SQL'
+              SELECT format('ALTER ROLE %I NOLOGIN', '{{ $app }}')
+                FROM pg_roles WHERE rolname = '{{ $app }}' AND rolcanlogin \gexec
+              SQL
+              echo "role {{ $app }} can't log in to $PGHOST"
+          resources:
+            {{- toYaml $.Values.appDatabases.resources | nindent 12 }}
+        {{- end }}
+        {{- end }}
         {{- end }}
 {{- end }}

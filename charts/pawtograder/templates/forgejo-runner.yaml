@@ -1,11 +1,12 @@
 {{- if and .Values.forgejo.enabled .Values.forgejoRunner.enabled }}
 {{- $r := .Values.forgejoRunner }}
 {{- $name := include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-runner") }}
-{{- $url := printf "http://%s:3000" (include "pawtograder.forgejo.http" .) }}
+{{- $jobNS := $r.jobNamespace }}
+{{- $url := printf "http://%s.%s.svc:%v" (include "pawtograder.forgejo.http" .) .Release.Namespace (include "pawtograder.forgejo.servicePort" .) }}
 {{- $labelNames := list }}
 {{- range $r.labels }}{{ $labelNames = append $labelNames (splitList ":" . | first) }}{{ end }}
 {{- $config := dict "log" (dict "level" "info") "runner" (dict "timeout" $r.jobTimeout) "cache" (dict "enabled" false) "host" (dict "workdir_parent" "/data/work") }}
-{{- $args := list "one-job" "--config" "/etc/forgejo-runner/config.yaml" "--url" $url "--uuid" "$(RUNNER_UUID)" "--handle" "$(JOB_HANDLE)" "--token-url" "file:/run/forgejo-runner/token" }}
+{{- $args := list "one-job" "--config" "/etc/forgejo-runner/config.yaml" "--url" $url "--uuid" "$(RUNNER_UUID)" "--handle" "$(JOB_HANDLE)" "--token-url" "file:///run/forgejo-runner/token" }}
 {{- range $r.labels }}{{ $args = concat $args (list "--label" .) }}{{ end }}
 {{- $jobPod := dict
   "apiVersion" "v1"
@@ -19,7 +20,7 @@
     "serviceAccountName" (printf "%s-job" $name)
     "automountServiceAccountToken" false
     "enableServiceLinks" false
-    "imagePullSecrets" (.Values.global.imagePullSecrets | default list)
+    "imagePullSecrets" ($r.imagePullSecrets | default list)
     "securityContext" (dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault"))
     "containers" (list (dict
       "name" "job"
@@ -39,6 +40,10 @@
       (dict "name" "data" "emptyDir" (dict "sizeLimit" $r.workdirSizeLimit))
       (dict "name" "config" "configMap" (dict "name" $name))
       (dict "name" "token" "secret" (dict "secretName" "" "defaultMode" 256)))) }}
+{{- $arch := dict "kubernetes.io/arch" ($r.arch | default "amd64") }}
+{{- $jobPlacement := dict "nodeSelector" (merge (deepCopy $arch) ($r.nodeSelector | default dict)) "tolerations" $r.tolerations "affinity" $r.affinity }}
+{{- $_ := merge $jobPod.spec (include "pawtograder.placement" (dict "ctx" . "component" $jobPlacement) | fromYaml) (include "pawtograder.priorityClassName" (dict "ctx" . "component" $r) | fromYaml) }}
+{{- $dispatcherPlacement := dict "nodeSelector" (merge (deepCopy $arch) ($r.dispatcher.nodeSelector | default dict)) "tolerations" $r.dispatcher.tolerations "affinity" $r.dispatcher.affinity }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -47,11 +52,21 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 data:
-  config.yaml: |
-    {{- toYaml $config | nindent 4 }}
   job-pod.json: {{ toJson $jobPod | quote }}
   dispatcher.sh: |
     {{- .Files.Get "files/forgejo-dispatcher.sh" | nindent 4 }}
+---
+# Job pods mount this and are owned by it (an ownerReference can't cross namespaces), so deleting it deletes them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $jobNS }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml $config | nindent 4 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -65,16 +80,17 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $name }}-job
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $jobNS }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 automountServiceAccountToken: false
 ---
+# Pod-create lets the dispatcher mount any Secret in the job namespace, so nothing else lives there.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $name }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $jobNS }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 rules:
@@ -84,12 +100,16 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [{{ $name }}]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $name }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $jobNS }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 roleRef:
@@ -125,11 +145,21 @@ spec:
     spec:
       serviceAccountName: {{ $name }}
       enableServiceLinks: false
-      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      {{- with $r.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.placement" (dict "ctx" . "component" $dispatcherPlacement) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      {{- with (include "pawtograder.priorityClassName" (dict "ctx" . "component" $r.dispatcher) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        fsGroup: 1000 # makes the forgejo-auth Secret file group-readable
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: dispatcher
@@ -138,14 +168,13 @@ spec:
           command: [bash, /etc/dispatcher/dispatcher.sh]
           env:
             - { name: FORGEJO_URL, value: {{ $url | quote }} }
+            - { name: JOB_NS, value: {{ $jobNS | quote }} }
+            - { name: ORGS, value: {{ join "," ($r.dispatcher.orgs | default list) | quote }} }
             - { name: PREFIX, value: {{ $name | quote }} }
             - { name: LABELS, value: {{ join "," $labelNames | quote }} }
             - { name: CAPACITY, value: {{ $r.capacity | quote }} }
             - { name: POLL_INTERVAL, value: {{ $r.pollInterval | quote }} }
-            - name: FORGEJO_USER
-              valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: username } }
-            - name: FORGEJO_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ .Values.forgejo.gitea.admin.existingSecret }}, key: password } }
+            - { name: PENDING_TIMEOUT, value: {{ $r.pendingTimeoutSeconds | default 900 | quote }} }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -154,7 +183,18 @@ spec:
             {{- toYaml $r.dispatcher.resources | nindent 12 }}
           volumeMounts:
             - { name: dispatcher, mountPath: /etc/dispatcher, readOnly: true }
+            # Bash spills here-strings past the pipe buffer (the pod list can) to a temp file.
+            - { name: tmp, mountPath: /tmp }
+            # A mounted Secret follows rotations; env from secretKeyRef would keep the old token.
+            - { name: forgejo-auth, mountPath: /run/forgejo-auth, readOnly: true }
       volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: forgejo-auth
+          secret:
+            defaultMode: 0400
+            secretName: {{ $r.dispatcher.tokenSecret }}
+            items: [{ key: token, path: token }]
         - name: dispatcher
           configMap:
             name: {{ $name }}
@@ -167,7 +207,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ $name }}-jobs
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ $jobNS }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-runner") | nindent 4 }}
 spec:
@@ -184,12 +224,14 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
     - to:
-        - podSelector:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }
+          podSelector:
             matchLabels:
               app.kubernetes.io/name: forgejo
               app.kubernetes.io/instance: {{ .Release.Name }}
       ports:
-        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: {{ include "pawtograder.forgejo.containerPort" . }} }
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

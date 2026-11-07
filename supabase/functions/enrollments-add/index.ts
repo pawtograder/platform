@@ -13,6 +13,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!courseId) {
     throw new UserVisibleError("Course ID is required", 400);
   }
+  // This writes user_roles through the service-role client, which guard_admin_role_grant trusts,
+  // so the role has to be checked here. An admin row in any class is platform-wide admin.
+  if (!["student", "grader", "instructor"].includes(role)) {
+    throw new UserVisibleError("Valid role is required (student, grader, or instructor)", 400);
+  }
   scope?.setTag("function", "enrollments-add");
   scope?.setTag("email", email);
   scope?.setTag("name", name);

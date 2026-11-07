@@ -1,5 +1,13 @@
 # Pre-create the Secrets listed in README "Forgejo and Coder".
 
+# The render refuses job pods and workspaces alongside meta, Studio or Kong's admin API unless networkPolicy.cilium.enabled.
+meta:
+  enabled: false
+studio:
+  enabled: false
+kong:
+  metricsListener: status
+
 forgejo:
   enabled: true
   database: pawtograder
@@ -14,12 +22,12 @@ forgejo:
         hosts: [git.example.com]
   gitea:
     additionalConfigFromEnvs:
-      - name: FORGEJO__DATABASE__HOST
-        valueFrom:
-          configMapKeyRef: { name: pawtograder-forgejo-database, key: host }
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
       - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID }
@@ -36,8 +44,14 @@ forgejo:
         MINIO_LOCATION: us-east-1
         MINIO_BASE_PATH: forgejo/
 
+# Enable the runner after Forgejo is up: it needs the token Secrets below.
 forgejoRunner:
   enabled: true
+  jobNamespace: pawtograder-actions # create it first
+  dispatcher:
+    tokenSecret: pawtograder-forgejo-runner-token
+  actions:
+    tokenSecret: pawtograder-forgejo-mirror-token
   image:
     repository: registry.example.com/pawtograder/forgejo-runner
     tag: 13.2.0-jdk21
@@ -47,6 +61,8 @@ coder:
   database: pawtograder
   coder:
     env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
       - name: CODER_ACCESS_URL
         value: https://coder.example.com
       - name: CODER_WILDCARD_ACCESS_URL

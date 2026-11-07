@@ -49,6 +49,7 @@ set -uo pipefail
 BASE_REF="${1:?usage: $0 <base-ref>}"
 # PGATE_CHART overrides the chart path (for testing a copy of this script).
 CHART="${PGATE_CHART:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+"$CHART/scripts/build-deps.sh" --if-missing "$CHART" || { echo "FAIL could not fetch $CHART's subcharts" >&2; exit 1; }
 REPO="$(git -C "$CHART" rev-parse --show-toplevel)"
 CHART_REL="${CHART#"$REPO"/}"
 TMP="$(mktemp -d)"

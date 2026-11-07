@@ -8,6 +8,7 @@ import {
   AssignmentGroupWithMembersAndMentor,
   UserRoleWithPrivateProfileGroupMembershipsAndUser
 } from "@/utils/supabase/DatabaseTypes";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
 import {
   useIsTableControllerReady,
@@ -246,6 +247,8 @@ function CopyGroupsFromAssignmentDialog({
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
   const courseController = useCourseController();
+  // Every change here needs publish_groups (#1010); without it the page is read-only.
+  const canEditGroups = useCapability("publish_groups");
   const { assignmentGroupsWithMembers, assignments, userRolesWithProfiles } = courseController;
 
   const groupsPredicate = useCallback(
@@ -329,6 +332,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         members_moved: number;
         groups_dissolved: number;
         syncs_enqueued: number;
+        repos_deferred: number;
         errors: { error: string; profile_id?: string; group_name?: string }[];
       };
 
@@ -365,6 +369,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         if (result.members_moved > 0) parts.push(`${result.members_moved} student(s) moved`);
         if (result.groups_dissolved > 0) parts.push(`${result.groups_dissolved} group(s) dissolved`);
         if (result.syncs_enqueued > 0) parts.push(`${result.syncs_enqueued} permission sync(s) queued`);
+        if (result.repos_deferred > 0) parts.push(`${result.repos_deferred} repo(s) will be created at release`);
 
         toaster.create({
           title: "Changes published",
@@ -422,11 +427,13 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (
           <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
         </Text>
-        <CopyGroupsFromAssignmentDialog
-          assignment={assignment}
-          course_id={course_id}
-          sourceAssignments={orderedSourceAssignments}
-        />
+        {canEditGroups && (
+          <CopyGroupsFromAssignmentDialog
+            assignment={assignment}
+            course_id={course_id}
+            sourceAssignments={orderedSourceAssignments}
+          />
+        )}
       </Flex>
       {loading && (
         <Box
@@ -450,7 +457,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       )}
 
       <Flex flexDir={"column"} gap="10px">
-        {groupsToCreate.length === 0 && movesToFulfill.length === 0 && (
+        {canEditGroups && groupsToCreate.length === 0 && movesToFulfill.length === 0 && (
           <Text fontSize="sm">There are no staged changes at this time</Text>
         )}
         {(groupsToCreate.length > 0 || movesToFulfill.length > 0) && (
@@ -621,29 +628,33 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         </Switch.Root>
       </Box>
 
-      <Text fontSize="sm" color="text.muted">
-        This table allows you to tweak group configurations.{" "}
-        <Text as="span" fontWeight="bold">
-          Changes will be staged and must be published to take effect
-        </Text>
-      </Text>
-      <Heading size="md" pt="10px">
-        Options
-      </Heading>
-      <Flex gap="10px" flexDir={"row"} wrap={"wrap"}>
-        <CreateNewGroup groups={groupsData} assignment={assignment} />
-        <BulkAssignGroup groups={groupsData} assignment={assignment} />
-        <BulkModifyGroup
-          groups={groupsData}
-          assignment={assignment}
-          profiles={profiles}
-          trigger={
-            <Button size="sm" variant="outline">
-              Tweak a Group
-            </Button>
-          }
-        />
-      </Flex>
+      {canEditGroups && (
+        <>
+          <Text fontSize="sm" color="text.muted">
+            This table allows you to tweak group configurations.{" "}
+            <Text as="span" fontWeight="bold">
+              Changes will be staged and must be published to take effect
+            </Text>
+          </Text>
+          <Heading size="md" pt="10px">
+            Options
+          </Heading>
+          <Flex gap="10px" flexDir={"row"} wrap={"wrap"}>
+            <CreateNewGroup groups={groupsData} assignment={assignment} />
+            <BulkAssignGroup groups={groupsData} assignment={assignment} />
+            <BulkModifyGroup
+              groups={groupsData}
+              assignment={assignment}
+              profiles={profiles}
+              trigger={
+                <Button size="sm" variant="outline">
+                  Tweak a Group
+                </Button>
+              }
+            />
+          </Flex>
+        </>
+      )}
       {groupViewOn ? (
         <TableByGroups assignment={assignment} profiles={profiles} groupsData={groupsData} />
       ) : (
@@ -668,6 +679,8 @@ function TableByGroups({
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
   const graders = useGradersAndInstructors();
+  // Without publish_groups the mentor is shown as text and Edit Group is hidden (#1010).
+  const canEditGroups = useCapability("publish_groups");
   const { assignmentGroupsWithMembers } = useCourseController();
   const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
 
@@ -777,7 +790,7 @@ function TableByGroups({
             <Table.ColumnHeader>Group</Table.ColumnHeader>
             <Table.ColumnHeader>Members</Table.ColumnHeader>
             <Table.ColumnHeader>Mentor</Table.ColumnHeader>
-            <Table.ColumnHeader>Actions</Table.ColumnHeader>
+            {canEditGroups && <Table.ColumnHeader>Actions</Table.ColumnHeader>}
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -834,35 +847,41 @@ function TableByGroups({
                   {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
-                  <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
-                    <NativeSelect.Field
-                      value={group.mentor_profile_id ?? ""}
-                      onChange={(e) => {
-                        updateMentor(group.id, e.target.value || null);
-                      }}
-                    >
-                      <option value="">No mentor</option>
-                      {graders.map((grader) => (
-                        <option key={grader.id} value={grader.id}>
-                          {grader.name}
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
-                  </NativeSelect.Root>
+                  {canEditGroups ? (
+                    <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
+                      <NativeSelect.Field
+                        value={group.mentor_profile_id ?? ""}
+                        onChange={(e) => {
+                          updateMentor(group.id, e.target.value || null);
+                        }}
+                      >
+                        <option value="">No mentor</option>
+                        {graders.map((grader) => (
+                          <option key={grader.id} value={grader.id}>
+                            {grader.name}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                    </NativeSelect.Root>
+                  ) : (
+                    <Text>{graders.find((grader) => grader.id === group.mentor_profile_id)?.name ?? "No mentor"}</Text>
+                  )}
                 </Table.Cell>
-                <Table.Cell>
-                  <BulkModifyGroup
-                    groups={groupsData}
-                    assignment={assignment}
-                    profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
-                    groupToModify={group}
-                    trigger={
-                      <Button variant={"surface"} size={"xs"}>
-                        <Icon as={FaEdit} /> Edit Group
-                      </Button>
-                    }
-                  />
-                </Table.Cell>
+                {canEditGroups && (
+                  <Table.Cell>
+                    <BulkModifyGroup
+                      groups={groupsData}
+                      assignment={assignment}
+                      profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
+                      groupToModify={group}
+                      trigger={
+                        <Button variant={"surface"} size={"xs"}>
+                          <Icon as={FaEdit} /> Edit Group
+                        </Button>
+                      }
+                    />
+                  </Table.Cell>
+                )}
                 <Table.Cell>
                   {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
                 </Table.Cell>
@@ -901,6 +920,8 @@ function TableByStudents({
 }) {
   const { modProfiles, groupsToCreate, movesToFulfill, addMovesToFulfill } = useGroupManagement();
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
+  // Without publish_groups the Edit Group and Move Student actions are hidden (#1010).
+  const canEditGroups = useCapability("publish_groups");
 
   /**
    * Export students data to CSV (Student as Name <email>, group, validation status).
@@ -977,7 +998,7 @@ function TableByStudents({
           <Table.Row>
             <Table.ColumnHeader>Student</Table.ColumnHeader>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
-            <Table.ColumnHeader>Actions</Table.ColumnHeader>
+            {canEditGroups && <Table.ColumnHeader>Actions</Table.ColumnHeader>}
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -1039,119 +1060,121 @@ function TableByStudents({
                     )}
                   </Flex>
                 </Table.Cell>
-                <Table.Cell>
-                  <HStack gap={1}>
-                    <BulkModifyGroup
-                      groups={groupsData}
-                      assignment={assignment}
-                      profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
-                      groupToModify={group}
-                      trigger={
-                        <Button variant={"surface"} size={"xs"}>
-                          <Icon as={FaEdit} /> Edit Group
-                        </Button>
-                      }
-                    />
-                    <Dialog.Root placement={"center"}>
-                      <Dialog.Trigger asChild>
-                        <Button
-                          variant={"surface"}
-                          size={"xs"}
-                          _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
-                        >
-                          <Icon as={FaArrowRight} /> Move Student
-                        </Button>
-                      </Dialog.Trigger>
-                      <Portal>
-                        <Dialog.Positioner>
-                          <Dialog.Backdrop />
-                          <Dialog.Content>
-                            <Dialog.Header>
-                              <Dialog.Title>Move student {profile.profiles.name}</Dialog.Title>
-                            </Dialog.Header>
-                            <Dialog.Body>
-                              <Text>
-                                <strong>Current group:</strong> {group ? group.name : "no group"}{" "}
-                              </Text>
-                              <Text>
-                                <strong>Move to:</strong>
-                              </Text>
+                {canEditGroups && (
+                  <Table.Cell>
+                    <HStack gap={1}>
+                      <BulkModifyGroup
+                        groups={groupsData}
+                        assignment={assignment}
+                        profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
+                        groupToModify={group}
+                        trigger={
+                          <Button variant={"surface"} size={"xs"}>
+                            <Icon as={FaEdit} /> Edit Group
+                          </Button>
+                        }
+                      />
+                      <Dialog.Root placement={"center"}>
+                        <Dialog.Trigger asChild>
+                          <Button
+                            variant={"surface"}
+                            size={"xs"}
+                            _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
+                          >
+                            <Icon as={FaArrowRight} /> Move Student
+                          </Button>
+                        </Dialog.Trigger>
+                        <Portal>
+                          <Dialog.Positioner>
+                            <Dialog.Backdrop />
+                            <Dialog.Content>
+                              <Dialog.Header>
+                                <Dialog.Title>Move student {profile.profiles.name}</Dialog.Title>
+                              </Dialog.Header>
+                              <Dialog.Body>
+                                <Text>
+                                  <strong>Current group:</strong> {group ? group.name : "no group"}{" "}
+                                </Text>
+                                <Text>
+                                  <strong>Move to:</strong>
+                                </Text>
 
-                              <NativeSelect.Root disabled={loading}>
-                                <NativeSelect.Field
-                                  value={groupId ?? group?.id ?? ""}
-                                  onChange={(e) => {
-                                    setGroupId(e.target.value);
-                                  }}
-                                >
-                                  <option value="">(No group)</option>
-                                  {groupsData?.map((group) => (
-                                    <option key={group.id} value={group.id}>
-                                      {group.name}
-                                    </option>
-                                  ))}
-                                </NativeSelect.Field>
-                              </NativeSelect.Root>
-
-                              <Dialog.Footer>
-                                <Dialog.CloseTrigger as="div">
-                                  <Button
-                                    colorPalette={"red"}
-                                    variant="surface"
-                                    onClick={() => {
-                                      setGroupId(undefined);
+                                <NativeSelect.Root disabled={loading}>
+                                  <NativeSelect.Field
+                                    value={groupId ?? group?.id ?? ""}
+                                    onChange={(e) => {
+                                      setGroupId(e.target.value);
                                     }}
                                   >
-                                    Cancel
-                                  </Button>
-                                </Dialog.CloseTrigger>
-                                <Dialog.CloseTrigger as="div">
-                                  <Button
-                                    colorPalette={"green"}
-                                    onClick={() => {
-                                      {
-                                        const raw = groupId ?? "";
-                                        const newGroupId =
-                                          raw === "" || raw === "undefined"
-                                            ? null
-                                            : (() => {
-                                                const n = Number(raw);
-                                                return Number.isFinite(n) ? n : null;
-                                              })();
-                                        if (newGroupId !== null && group?.id === newGroupId) {
-                                          toaster.error({
-                                            title: "Failed to stage changes",
-                                            description: "Cannot move student to a group they are already in"
-                                          });
-                                        } else {
-                                          addMovesToFulfill([
-                                            {
-                                              profile_id: profile.private_profile_id,
-                                              old_group_id:
-                                                findGroupForProfileOnAssignment(
-                                                  groupsData,
-                                                  assignment.id,
-                                                  profile.private_profile_id
-                                                )?.id ?? null,
-                                              new_group_id: newGroupId
-                                            }
-                                          ]);
+                                    <option value="">(No group)</option>
+                                    {groupsData?.map((group) => (
+                                      <option key={group.id} value={group.id}>
+                                        {group.name}
+                                      </option>
+                                    ))}
+                                  </NativeSelect.Field>
+                                </NativeSelect.Root>
+
+                                <Dialog.Footer>
+                                  <Dialog.CloseTrigger as="div">
+                                    <Button
+                                      colorPalette={"red"}
+                                      variant="surface"
+                                      onClick={() => {
+                                        setGroupId(undefined);
+                                      }}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </Dialog.CloseTrigger>
+                                  <Dialog.CloseTrigger as="div">
+                                    <Button
+                                      colorPalette={"green"}
+                                      onClick={() => {
+                                        {
+                                          const raw = groupId ?? "";
+                                          const newGroupId =
+                                            raw === "" || raw === "undefined"
+                                              ? null
+                                              : (() => {
+                                                  const n = Number(raw);
+                                                  return Number.isFinite(n) ? n : null;
+                                                })();
+                                          if (newGroupId !== null && group?.id === newGroupId) {
+                                            toaster.error({
+                                              title: "Failed to stage changes",
+                                              description: "Cannot move student to a group they are already in"
+                                            });
+                                          } else {
+                                            addMovesToFulfill([
+                                              {
+                                                profile_id: profile.private_profile_id,
+                                                old_group_id:
+                                                  findGroupForProfileOnAssignment(
+                                                    groupsData,
+                                                    assignment.id,
+                                                    profile.private_profile_id
+                                                  )?.id ?? null,
+                                                new_group_id: newGroupId
+                                              }
+                                            ]);
+                                          }
                                         }
-                                      }
-                                      setGroupId(undefined);
-                                    }}
-                                  >
-                                    Stage Changes
-                                  </Button>
-                                </Dialog.CloseTrigger>
-                              </Dialog.Footer>
-                            </Dialog.Body>
-                          </Dialog.Content>
-                        </Dialog.Positioner>
-                      </Portal>
-                    </Dialog.Root>
-                  </HStack>
-                </Table.Cell>
+                                        setGroupId(undefined);
+                                      }}
+                                    >
+                                      Stage Changes
+                                    </Button>
+                                  </Dialog.CloseTrigger>
+                                </Dialog.Footer>
+                              </Dialog.Body>
+                            </Dialog.Content>
+                          </Dialog.Positioner>
+                        </Portal>
+                      </Dialog.Root>
+                    </HStack>
+                  </Table.Cell>
+                )}
                 <Table.Cell>
                   {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
                 </Table.Cell>

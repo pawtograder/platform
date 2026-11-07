@@ -1087,6 +1087,7 @@ export type Database = {
           description: string | null;
           due_date: string;
           enable_repo_analytics: boolean;
+          git_provider: string;
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
@@ -1138,6 +1139,7 @@ export type Database = {
           description?: string | null;
           due_date: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1189,6 +1191,7 @@ export type Database = {
           description?: string | null;
           due_date?: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1764,6 +1767,21 @@ export type Database = {
           }
         ];
       };
+      capabilities: {
+        Row: {
+          description: string;
+          name: string;
+        };
+        Insert: {
+          description: string;
+          name: string;
+        };
+        Update: {
+          description?: string;
+          name?: string;
+        };
+        Relationships: [];
+      };
       class_metrics_totals: {
         Row: {
           active_graders_total: number | null;
@@ -1877,6 +1895,38 @@ export type Database = {
           }
         ];
       };
+      class_roles: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          default_for: Database["public"]["Enums"]["app_role"] | null;
+          id: number;
+          name: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          default_for?: Database["public"]["Enums"]["app_role"] | null;
+          id?: number;
+          name: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          default_for?: Database["public"]["Enums"]["app_role"] | null;
+          id?: number;
+          name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_roles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       class_sections: {
         Row: {
           campus: string | null;
@@ -1979,6 +2029,7 @@ export type Database = {
           end_date: string | null;
           events_ics_url: string | null;
           features: Json | null;
+          forgejo_org: string | null;
           github_org: string | null;
           gradebook_id: number | null;
           handout_template_repo: string | null;
@@ -2007,6 +2058,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -2035,6 +2087,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -4726,10 +4779,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_feedback_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_feedback_student_profile_id_fkey";
@@ -4819,10 +4872,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_file_references_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_file_references_submission_file_id_fkey";
@@ -4899,10 +4952,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_message_read_receipts_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_message_read_receipts_message_id_fkey";
@@ -4988,10 +5041,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_messages_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_messages_reply_to_message_id_fkey";
@@ -5135,10 +5188,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_students_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_students_profile_id_fkey";
@@ -5248,10 +5301,10 @@ export type Database = {
           },
           {
             foreignKeyName: "help_request_watchers_help_request_id_fkey";
-            columns: ["help_request_id"];
+            columns: ["help_request_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "help_requests";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "help_request_watchers_user_id_fkey";
@@ -6772,6 +6825,7 @@ export type Database = {
           creation_attempts: number;
           creation_error: string | null;
           desired_handout_sha: string | null;
+          git_provider: string;
           id: number;
           is_github_ready: boolean;
           last_creation_attempt_at: string | null;
@@ -6793,6 +6847,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -6814,6 +6869,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -7564,6 +7620,36 @@ export type Database = {
           token_id?: string;
         };
         Relationships: [];
+      };
+      role_capabilities: {
+        Row: {
+          capability: string;
+          role_id: number;
+        };
+        Insert: {
+          capability: string;
+          role_id: number;
+        };
+        Update: {
+          capability?: string;
+          role_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "role_capabilities_capability_fkey";
+            columns: ["capability"];
+            isOneToOne: false;
+            referencedRelation: "capabilities";
+            referencedColumns: ["name"];
+          },
+          {
+            foreignKeyName: "role_capabilities_role_id_fkey";
+            columns: ["role_id"];
+            isOneToOne: false;
+            referencedRelation: "class_roles";
+            referencedColumns: ["id"];
+          }
+        ];
       };
       rubric_check_references: {
         Row: {
@@ -10502,6 +10588,7 @@ export type Database = {
       user_privileges: {
         Row: {
           class_id: number;
+          class_role_id: number | null;
           private_profile_id: string | null;
           public_profile_id: string | null;
           role: Database["public"]["Enums"]["app_role"];
@@ -10509,6 +10596,7 @@ export type Database = {
         };
         Insert: {
           class_id: number;
+          class_role_id?: number | null;
           private_profile_id?: string | null;
           public_profile_id?: string | null;
           role: Database["public"]["Enums"]["app_role"];
@@ -10516,6 +10604,7 @@ export type Database = {
         };
         Update: {
           class_id?: number;
+          class_role_id?: number | null;
           private_profile_id?: string | null;
           public_profile_id?: string | null;
           role?: Database["public"]["Enums"]["app_role"];
@@ -10527,6 +10616,7 @@ export type Database = {
         Row: {
           canvas_id: number | null;
           class_id: number;
+          class_role_id: number;
           class_section_id: number | null;
           disabled: boolean;
           github_org_confirmed: boolean | null;
@@ -10544,6 +10634,7 @@ export type Database = {
         Insert: {
           canvas_id?: number | null;
           class_id: number;
+          class_role_id?: number;
           class_section_id?: number | null;
           disabled?: boolean;
           github_org_confirmed?: boolean | null;
@@ -10561,6 +10652,7 @@ export type Database = {
         Update: {
           canvas_id?: number | null;
           class_id?: number;
+          class_role_id?: number;
           class_section_id?: number | null;
           disabled?: boolean;
           github_org_confirmed?: boolean | null;
@@ -10589,6 +10681,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "user_roles_class_role_fkey";
+            columns: ["class_role_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "class_roles";
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "user_roles_class_section_id_fkey";
@@ -11654,6 +11753,9 @@ export type Database = {
           class_id: number | null;
           class_section_id: number | null;
           class_section_name: string | null;
+          code_walk_completed: boolean | null;
+          code_walk_released: boolean | null;
+          code_walk_review_count: number | null;
           completed_at: string | null;
           completed_by: string | null;
           created_at: string | null;
@@ -11830,9 +11932,21 @@ export type Database = {
       };
     };
     Functions: {
+      _calculate_effective_due_date: {
+        Args: { assignment_id_param: number; student_profile_id_param: string };
+        Returns: string;
+      };
       _cli_resolve_submission_file_id: {
         Args: { p_file_name: string; p_submission_id: number };
         Returns: number;
+      };
+      _due_date_lookup_allowed: {
+        Args: {
+          p_assignment_group_id: number;
+          p_assignment_id: number;
+          p_profile_id: string;
+        };
+        Returns: boolean;
       };
       _eval_rubric_report_filter: {
         Args: {
@@ -12307,6 +12421,14 @@ export type Database = {
         Args: { class__id: number };
         Returns: boolean;
       };
+      authorizeforhelprequestparticipant: {
+        Args: { p_help_request_id: number };
+        Returns: boolean;
+      };
+      authorizeforhelprequeststaff: {
+        Args: { p_class_id: number };
+        Returns: boolean;
+      };
       authorizeforinstructorofstudent: {
         Args: { _user_id: string };
         Returns: boolean;
@@ -12319,6 +12441,10 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
+      authorizeforprofile_in_class: {
+        Args: { p_class_id: number; p_profile_id: string };
+        Returns: boolean;
+      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
@@ -12404,6 +12530,14 @@ export type Database = {
         Args: { path: string };
         Returns: boolean;
       };
+      can_add_profile_to_help_request: {
+        Args: { p_help_request_id: number; p_profile_id: string };
+        Returns: boolean;
+      };
+      can_follow_up_help_request: {
+        Args: { p_class_id: number; p_followup_to: number };
+        Returns: boolean;
+      };
       can_respond_to_survey: {
         Args: { p_profile_id: string; p_survey_id: string };
         Returns: boolean;
@@ -12411,14 +12545,6 @@ export type Database = {
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
       check_assignment_deadlines_passed: { Args: never; Returns: undefined };
       check_assignment_release_dates: { Args: never; Returns: undefined };
-      check_can_add_to_help_request: {
-        Args: {
-          p_class_id: number;
-          p_help_request_id: number;
-          p_user_id: string;
-        };
-        Returns: boolean;
-      };
       check_can_remove_from_help_request: {
         Args: {
           p_class_id: number;
@@ -12780,7 +12906,12 @@ export type Database = {
       custom_access_token_hook: { Args: { event: Json }; Returns: Json };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
-        Args: { p_assignment_id: number; p_class_id: number };
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_enqueue_github_archives?: boolean;
+          p_expected_repository_ids?: number[];
+        };
         Returns: Json;
       };
       delete_queued_messages_for_class: {
@@ -12792,6 +12923,10 @@ export type Database = {
       };
       delete_queued_messages_for_class_simple: {
         Args: { p_class_id: number };
+        Returns: number;
+      };
+      delete_repository_rows: {
+        Args: { p_repository_ids: number[] };
         Returns: number;
       };
       delete_system_notifications_by_campaign: {
@@ -13971,6 +14106,10 @@ export type Database = {
         Args: { assignment_id: number };
         Returns: number;
       };
+      release_code_walk_reviews_for_assignment: {
+        Args: { p_assignment_id: number };
+        Returns: number;
+      };
       release_grading_reviews_for_submissions: {
         Args: { p_assignment_id: number; p_submission_ids: number[] };
         Returns: number;
@@ -13998,6 +14137,17 @@ export type Database = {
           queued: number;
           roles_repaired: number;
         }[];
+      };
+      reserve_github_staff_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_is_grader: boolean;
+          p_latest_template_sha?: string;
+          p_repository: string;
+          p_upstream_repo?: string;
+        };
+        Returns: undefined;
       };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
@@ -14052,6 +14202,10 @@ export type Database = {
       save_error_pin: {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;
+      };
+      seed_default_class_roles: {
+        Args: { p_class_id: number };
+        Returns: undefined;
       };
       send_signup_welcome_message: {
         Args: { p_user_id: string };
@@ -14129,6 +14283,19 @@ export type Database = {
         Args: { p_survey_id: string };
         Returns: boolean;
       };
+      survey_duplicate_question_names: {
+        Args: { p_json: Json };
+        Returns: string[];
+      };
+      survey_json_unwrapped: { Args: { p_json: Json }; Returns: Json };
+      survey_question_answer_key: { Args: { p_el: Json }; Returns: string };
+      survey_question_name_entries: {
+        Args: { p_elements: Json; p_path: string; p_scope: string };
+        Returns: {
+          name: string;
+          scope: string;
+        }[];
+      };
       sync_calendar_events: {
         Args: {
           p_calendar_type: string;
@@ -14191,6 +14358,10 @@ export type Database = {
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
+        Returns: number;
+      };
+      unrelease_code_walk_reviews_for_assignment: {
+        Args: { p_assignment_id: number };
         Returns: number;
       };
       unrelease_grading_reviews_for_submissions: {
@@ -14300,6 +14471,17 @@ export type Database = {
           p_target_url?: string;
         };
         Returns: number;
+      };
+      user_class_capabilities: {
+        Args: never;
+        Returns: {
+          capability: string;
+          class_id: number;
+        }[];
+      };
+      user_class_ids_with_capability: {
+        Args: { p_capability: string };
+        Returns: number[];
       };
       user_is_in_help_request: {
         Args: { p_help_request_id: number; p_user_id?: string };

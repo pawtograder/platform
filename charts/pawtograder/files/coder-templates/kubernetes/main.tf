@@ -3,10 +3,12 @@
 terraform {
   required_providers {
     coder = {
-      source = "coder/coder"
+      source  = "coder/coder"
+      version = "2.19.0"
     }
     kubernetes = {
-      source = "hashicorp/kubernetes"
+      source  = "hashicorp/kubernetes"
+      version = "3.4.0"
     }
   }
 }
@@ -16,6 +18,66 @@ provider "kubernetes" {}
 variable "namespace" {
   type        = string
   description = "Namespace workspaces are created in (coderd's own)."
+}
+
+variable "node_selector" {
+  type        = string
+  description = "JSON object of node labels for workspace pods."
+  default     = "{}"
+}
+
+variable "tolerations" {
+  type        = string
+  description = "JSON list of Kubernetes tolerations for workspace pods."
+  default     = "[]"
+}
+
+variable "node_affinity" {
+  type        = string
+  description = "JSON Kubernetes nodeAffinity for workspace pods."
+  default     = "{}"
+}
+
+variable "arch" {
+  type        = string
+  description = "CPU architecture of the workspace image and nodes (the agent binary must match)."
+  default     = "amd64"
+}
+
+variable "image_pull_policy" {
+  type        = string
+  description = "Pull policy for the workspace image."
+  default     = "IfNotPresent"
+}
+
+variable "image_pull_secrets" {
+  type        = string
+  description = "JSON list of Secret names for pulling the workspace image."
+  default     = "[]"
+}
+
+variable "home_storage_class" {
+  type        = string
+  description = "StorageClass for workspace home volumes; empty uses the cluster default."
+  default     = ""
+}
+
+variable "priority_class_name" {
+  type        = string
+  description = "PriorityClass for workspace pods; empty uses the cluster default."
+  default     = ""
+}
+
+variable "ephemeral_storage_limit" {
+  type        = string
+  description = "Cap on what a workspace writes outside its home volume (/tmp, the image layer)."
+  default     = "4Gi"
+}
+
+variable "code_server_version" {
+  type        = string
+  description = "code-server release to run, downloaded into the home volume unless the image's code-server is this version; empty uses the image's."
+  default     = "4.143.1"
 }
 
 variable "image" {
@@ -72,10 +134,11 @@ data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
 locals {
-  name = "coder-${lower(data.coder_workspace_owner.me.name)}-${lower(data.coder_workspace.me.name)}"
+  # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
+  name = "coder-${data.coder_workspace.me.id}"
   labels = {
     "app.kubernetes.io/name"     = "coder-workspace"
-    "app.kubernetes.io/instance" = local.name
+    "app.kubernetes.io/instance" = data.coder_workspace.me.id
     "app.kubernetes.io/part-of"  = "pawtograder-stack"
     "com.coder.workspace.id"     = data.coder_workspace.me.id
     "com.coder.user.id"          = data.coder_workspace_owner.me.id
@@ -84,13 +147,25 @@ locals {
 
 resource "coder_agent" "main" {
   os             = "linux"
-  arch           = "amd64"
+  arch           = var.arch
   startup_script = <<-EOT
     set -e
-    if [ ! -x "$HOME/.local/bin/code-server" ]; then
-      curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix="$HOME/.local"
+    V="${var.code_server_version}"
+    CS="$(command -v code-server || true)"
+    if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
+      CS="$HOME/.local/lib/code-server-$V/bin/code-server"
+      if [ ! -x "$CS" ]; then
+        mkdir -p "$HOME/.local/lib"
+        rm -rf "$HOME"/.local/lib/.code-server-*
+        tmp="$(mktemp -d "$HOME/.local/lib/.code-server-XXXXXX")"
+        curl -fsSL "https://github.com/coder/code-server/releases/download/v$V/code-server-$V-linux-${var.arch}.tar.gz" | tar -xz -C "$tmp"
+        rm -rf "$HOME/.local/lib/code-server-$V"
+        mv "$tmp/code-server-$V-linux-${var.arch}" "$HOME/.local/lib/code-server-$V"
+        rmdir "$tmp"
+      fi
     fi
-    "$HOME/.local/bin/code-server" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
+    [ -n "$CS" ] || { echo "the workspace image has no code-server and code_server_version is empty" >&2; exit 1; }
+    "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
   EOT
 
   metadata {
@@ -139,8 +214,13 @@ resource "kubernetes_persistent_volume_claim_v1" "home" {
     labels    = local.labels
   }
   wait_until_bound = false
+  # Each forces replacement, which deletes the home; changing these applies to new workspaces only.
+  lifecycle {
+    ignore_changes = [metadata[0].name, metadata[0].namespace, spec[0].storage_class_name]
+  }
   spec {
-    access_modes = ["ReadWriteOnce"]
+    access_modes       = ["ReadWriteOnce"]
+    storage_class_name = var.home_storage_class == "" ? null : var.home_storage_class
     resources {
       requests = {
         storage = "${data.coder_parameter.home_disk_size.value}Gi"
@@ -153,25 +233,108 @@ resource "kubernetes_pod_v1" "main" {
   count = data.coder_workspace.me.start_count
 
   metadata {
-    name      = local.name
-    namespace = var.namespace
+    name = local.name
+    # The home PVC keeps its original namespace, and a pod can only mount a claim in its own.
+    namespace = kubernetes_persistent_volume_claim_v1.home.metadata[0].namespace
     labels    = local.labels
   }
 
   spec {
     automount_service_account_token = false
     restart_policy                  = "Always"
+    priority_class_name             = var.priority_class_name == "" ? null : var.priority_class_name
+    node_selector                   = merge(jsondecode(var.node_selector), { "kubernetes.io/arch" = var.arch })
+
+    dynamic "image_pull_secrets" {
+      for_each = jsondecode(var.image_pull_secrets)
+      content {
+        name = image_pull_secrets.value
+      }
+    }
+
+    dynamic "affinity" {
+      for_each = var.node_affinity == "{}" ? [] : [jsondecode(var.node_affinity)]
+      content {
+        node_affinity {
+          dynamic "required_during_scheduling_ignored_during_execution" {
+            for_each = can(affinity.value.requiredDuringSchedulingIgnoredDuringExecution) ? [affinity.value.requiredDuringSchedulingIgnoredDuringExecution] : []
+            content {
+              dynamic "node_selector_term" {
+                for_each = required_during_scheduling_ignored_during_execution.value.nodeSelectorTerms
+                content {
+                  dynamic "match_expressions" {
+                    for_each = lookup(node_selector_term.value, "matchExpressions", [])
+                    content {
+                      key      = match_expressions.value.key
+                      operator = match_expressions.value.operator
+                      values   = lookup(match_expressions.value, "values", null)
+                    }
+                  }
+                  dynamic "match_fields" {
+                    for_each = lookup(node_selector_term.value, "matchFields", [])
+                    content {
+                      key      = match_fields.value.key
+                      operator = match_fields.value.operator
+                      values   = lookup(match_fields.value, "values", null)
+                    }
+                  }
+                }
+              }
+            }
+          }
+          dynamic "preferred_during_scheduling_ignored_during_execution" {
+            for_each = lookup(affinity.value, "preferredDuringSchedulingIgnoredDuringExecution", [])
+            content {
+              weight = preferred_during_scheduling_ignored_during_execution.value.weight
+              preference {
+                dynamic "match_expressions" {
+                  for_each = lookup(preferred_during_scheduling_ignored_during_execution.value.preference, "matchExpressions", [])
+                  content {
+                    key      = match_expressions.value.key
+                    operator = match_expressions.value.operator
+                    values   = lookup(match_expressions.value, "values", null)
+                  }
+                }
+                dynamic "match_fields" {
+                  for_each = lookup(preferred_during_scheduling_ignored_during_execution.value.preference, "matchFields", [])
+                  content {
+                    key      = match_fields.value.key
+                    operator = match_fields.value.operator
+                    values   = lookup(match_fields.value, "values", null)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    dynamic "toleration" {
+      for_each = jsondecode(var.tolerations)
+      content {
+        key                = lookup(toleration.value, "key", null)
+        operator           = lookup(toleration.value, "operator", null)
+        value              = lookup(toleration.value, "value", null)
+        effect             = lookup(toleration.value, "effect", null)
+        toleration_seconds = lookup(toleration.value, "tolerationSeconds", null)
+      }
+    }
 
     security_context {
-      run_as_user  = 1000
-      run_as_group = 1000
-      fs_group     = 1000
+      run_as_user     = 1000
+      run_as_group    = 1000
+      fs_group        = 1000
+      run_as_non_root = true
+      seccomp_profile {
+        type = "RuntimeDefault"
+      }
     }
 
     container {
       name              = "dev"
       image             = var.image
-      image_pull_policy = "IfNotPresent"
+      image_pull_policy = var.image_pull_policy
       command           = ["sh", "-c", coder_agent.main.init_script]
 
       env {
@@ -181,16 +344,21 @@ resource "kubernetes_pod_v1" "main" {
 
       security_context {
         allow_privilege_escalation = false
+        capabilities {
+          drop = ["ALL"]
+        }
       }
 
       resources {
         requests = {
-          cpu    = "250m"
-          memory = "512Mi"
+          cpu                 = "250m"
+          memory              = "512Mi"
+          "ephemeral-storage" = "256Mi"
         }
         limits = {
-          cpu    = data.coder_parameter.cpu.value
-          memory = "${data.coder_parameter.memory.value}Gi"
+          cpu                 = data.coder_parameter.cpu.value
+          memory              = "${data.coder_parameter.memory.value}Gi"
+          "ephemeral-storage" = var.ephemeral_storage_limit
         }
       }
 

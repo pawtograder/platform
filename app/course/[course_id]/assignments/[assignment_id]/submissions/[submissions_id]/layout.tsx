@@ -37,6 +37,7 @@ import PersonName from "@/components/ui/person-name";
 import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/SubmissionRegradeRequestsPanel";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import SubmissionReviewAssignments from "@/components/ui/submission-review-assignments";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -1820,9 +1821,16 @@ function ReviewActions() {
   const isInstructor = useIsInstructor();
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  const showCompletionActions = isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader);
+  // One completion control at a time. While the viewer is working an incomplete review assignment,
+  // its "Complete Review Assignment" button in the toolbar is the control (completing the last
+  // assignment completes the submission review in the database). This sidebar button is for staff
+  // grading without an assignment, or after "View + Grade Full Rubric".
+  const workingAssignedReview = Boolean(activeReviewAssignment && !activeReviewAssignment.completed_at);
+  const showCompletionActions =
+    !workingAssignedReview && (isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader));
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -2164,15 +2172,25 @@ function RubricView({
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
-        {reviewAssignment === undefined && activeReviewAssignmentId && <Skeleton height="100px" />}
-        {activeReviewAssignmentId && reviewAssignment && (
+        {/* Staff see every assignment on this submission (theirs, a colleague's, or none). Students
+            only ever have their own self-review, so they keep the single Review Task box. */}
+        {isGraderOrInstructor && <SubmissionReviewAssignments submissionId={submission.id} />}
+        {!isGraderOrInstructor && reviewAssignment === undefined && activeReviewAssignmentId && (
+          <Skeleton height="100px" />
+        )}
+        {!isGraderOrInstructor && activeReviewAssignmentId && reviewAssignment && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
             <Heading as="h2" size="md">
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
-            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
-              Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}
+            <Text fontSize="sm">
+              Assigned to:{" "}
+              {reviewAssignment.assignee_profile_id ? (
+                <PersonName uid={reviewAssignment.assignee_profile_id} showAvatar={false} />
+              ) : (
+                "N/A"
+              )}
             </Text>
             <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
               Due:{" "}
@@ -2299,18 +2317,37 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
   // No-submission assignments render the grading UI directly below (see isNoSubmissionAssignment
   // further down) regardless of the sub-route, so none of files/results/checks/etc.'s own page
   // components ever mount here to run their own redirect-to-default-tab effect. Canonicalize the
-  // URL to /grade ourselves so bookmarks, the back button, and stale links (e.g. "next incomplete
-  // review", which always points at /files) all settle on the one URL this assignment type supports.
+  // URL to /grade ourselves so bookmarks, the back button, and stale links (e.g. an old /files
+  // bookmark, or the submission root) all settle on a URL this assignment type supports.
   // Survey is exempt: a no-submission assignment can still have a linked survey, and that page
   // needs to actually render instead of getting bounced back to /grade.
   // The staff-prefixed route (isStaffGradeRoute) has no "/grade" sub-page at all -- its whole
   // /course/[course_id]/grade/... prefix already means "you're grading", the way this same
   // component's activeSubPage/defaultSubPage fallback already renders the right content without
   // needing a URL change. Redirecting there would 404. Skip the whole effect for that route.
+  // Staff grading a survey-linked no-submission assignment land on Survey instead: it shows the
+  // student's answers next to the editable rubric, which is everything they need to grade. Wait for
+  // the linked-survey query, or every load would bounce to /grade before the surveys arrive.
+  // An explicit /grade is left alone, so a grader who chose Grade keeps it from one submission to
+  // the next (navigation carries the current tab in the URL).
+  const { surveys: linkedSurveys, loading: linkedSurveysLoading } = useAssignmentLinkedSurveys(assignment?.id);
+  const hasLinkedSurveys = linkedSurveys.length > 0;
+  const noSubmissionLandingPage = isGraderOrInstructor && hasLinkedSurveys ? "survey" : "grade";
   useEffect(() => {
     if (isStaffGradeRoute || !isNoSubmissionAssignment || explicitSubPage === "grade" || isSurveySubPage) return;
-    router.replace(linkToSubPage(pathname, "grade", searchParams));
-  }, [isStaffGradeRoute, isNoSubmissionAssignment, explicitSubPage, isSurveySubPage, pathname, searchParams, router]);
+    if (linkedSurveysLoading) return;
+    router.replace(linkToSubPage(pathname, noSubmissionLandingPage, searchParams));
+  }, [
+    isStaffGradeRoute,
+    isNoSubmissionAssignment,
+    explicitSubPage,
+    isSurveySubPage,
+    linkedSurveysLoading,
+    noSubmissionLandingPage,
+    pathname,
+    searchParams,
+    router
+  ]);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
@@ -2331,8 +2368,6 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
   // Staff and students both get the Survey tab. RLS decides which surveys come back, and
   // the RPC behind the panel decides whose responses are in it, so there is no role gate
   // here — only "is there a survey linked to this assignment that you can see".
-  const { surveys: linkedSurveys } = useAssignmentLinkedSurveys(assignment?.id);
-  const hasLinkedSurveys = linkedSurveys.length > 0;
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
@@ -2625,7 +2660,7 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
         // No-submission assignments have no files/autograder content worth rendering, and their
         // only tab (Grade) points at a read-only ledger page, not the editable rubric. Show the
         // real grading UI (RubricView) directly, full width, regardless of which sub-route the URL
-        // happens to be on (stale "next incomplete review" links etc. still point at /files) --
+        // happens to be on (stale links and bookmarks can still point at /files) --
         // that sub-route's own page component is never mounted here for this assignment type.
         // Survey is exempt (see the redirect effect above) -- it falls through to the normal
         // content + rubric layout below so the linked survey actually renders.
