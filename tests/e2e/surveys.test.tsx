@@ -1293,13 +1293,43 @@ test.describe("Survey autosave order", () => {
     release();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
 
-    // A draft left in the debounce timer at Complete would go out now.
-    await passAutosaveDebounce(page);
     expect(await storedResponse(survey.id, student)).toEqual({ q1: "Final answer", is_submitted: true });
     // Only the held draft and the submission go out. The drafts queued behind the held one are dropped.
     expect(writesInServerOrder).toEqual([
       { is_submitted: false, q1: "Older answer" },
       { is_submitted: true, q1: "Final answer" }
     ]);
+  });
+
+  // The most common way to finish: type the last answer and press Complete within a second.
+  test("Complete pressed inside the debounce sends only the submission, with the newest answer", async ({ page }) => {
+    // Editing on, so a late write would go through instead of being refused.
+    const survey = await seedOneQuestionSurvey("Complete Inside Debounce Survey", true);
+    await loginAsUser(page, student, course);
+    const writes: { is_submitted: boolean; q1?: string }[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST" || !request.url().includes("/rest/v1/survey_responses")) return;
+      const body = request.postDataJSON() as { is_submitted: boolean; response: { q1?: string } };
+      writes.push({ is_submitted: body.is_submitted, q1: body.response.q1 });
+    });
+
+    await page.clock.install();
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toBeEditable();
+    // Stop the page's timers, so the debounce is still waiting when Complete is pressed.
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    await input.fill("Typed right before Complete");
+    await page.getByRole("button", { name: "Complete" }).click();
+    await page.clock.resume();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+
+    // A save left waiting in the debounce would go out now.
+    await passAutosaveDebounce(page);
+    expect(await storedResponse(survey.id, student)).toEqual({
+      q1: "Typed right before Complete",
+      is_submitted: true
+    });
+    expect(writes).toEqual([{ is_submitted: true, q1: "Typed right before Complete" }]);
   });
 });

@@ -1,25 +1,151 @@
 "use client";
 
-import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
+import { Box, Heading, Text, VStack, Button, HStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
+import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import dynamic from "next/dynamic";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { SurveyResponse, ResponseData } from "@/types/survey";
-import { Model, ValueChangedEvent } from "survey-core";
+import { CompleteEvent, Model, ValueChangedEvent } from "survey-core";
 import { useCourseController, useSurvey } from "@/hooks/useCourseController";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import {
+  isSameResponseData,
   isSurveyResponseReadOnly,
   resolveResponseWriteFlags,
   responseStateFromLoad,
   shouldAutosaveResponse,
   type LoadedResponseState
 } from "@/lib/surveyResponseState";
+import {
+  runWithTimeout,
+  SaveRefusedError,
+  SaveTimeoutError,
+  SurveyAutosaveQueue,
+  type AutosaveStatus,
+  type RetryPolicy,
+  type SaveAttempt
+} from "@/lib/surveyAutosaveQueue";
+import { upsertSurveyResponseWithKeepalive, type SurveyResponseUpsert } from "@/lib/surveyResponseKeepalive";
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
+// Upper bound on one save request, autosave or Complete. A survey upsert normally takes well under
+// a second; past this the request is canceled, so it cannot hold up the saves queued behind it.
+const SAVE_TIMEOUT_MS = 10_000;
+// A failed autosave is retried after 1, 2, 4 and 8 s, then waits for the next edit or for the
+// browser to come back online.
+const AUTOSAVE_RETRY: RetryPolicy = { baseDelayMs: 1000, maxDelayMs: 8000, maxRetries: 4 };
+
+const AUTOSAVE_STATUS_TEXT: Record<AutosaveStatus, string> = {
+  idle: "",
+  saving: "Saving…",
+  saved: "All changes saved",
+  retrying: "Not saved yet. Retrying…",
+  offline: "You're offline. Keep this page open and your answers will save when you reconnect.",
+  failed: "Your latest answers aren't saved.",
+  refused: "This survey no longer accepts changes, so your latest answers aren't saved."
+};
+const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
+  idle: "fg.muted",
+  saving: "fg.muted",
+  saved: "fg.muted",
+  // fg.warning is orange.600, about 3.6:1 on white: below AA for small text. orange.fg is
+  // orange.700 in light mode and orange.300 in dark.
+  retrying: "orange.fg",
+  offline: "orange.fg",
+  failed: "fg.error",
+  refused: "fg.error"
+};
+// Shown in the same status region, in the `failed` color, after an edit the page can't save because
+// the student's saved response didn't load.
+const UNSAVABLE_STATUS_TEXT =
+  "Your saved answers didn't load, so changes can't be saved. Reload the page to try again.";
+// The project the browser Supabase client talks to (utils/supabase/client.ts), for the keepalive
+// request sent while the page unloads.
+const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+/** The Postgres error code PostgREST returned, or undefined when the error didn't come from the database. */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error) || !error.code) return undefined;
+  return String(error.code);
+}
+
+// What the database answers when an upsert would change a submitted response the student may not
+// change: the trigger that keeps it submitted (check_violation) or the write policies
+// (insufficient_privilege). Those refuse a change to a submitted response on a survey without
+// editing, and any write on a survey that is closed, unpublished or not assigned to the student.
+const REFUSED_AS_SUBMITTED_CODES = new Set(["23514", "42501"]);
+
+/**
+ * Whether the response row has to be read to learn where a failed Complete left it. Only an error
+ * the database returned says the upsert was rolled back. A timeout, a dropped connection or a
+ * gateway's error page can arrive after it committed, and a refusal because the row is already
+ * submitted may mean an earlier attempt got through.
+ */
+function submitOutcomeNeedsReadBack(error: unknown): boolean {
+  const code = errorCode(error);
+  return !code || REFUSED_AS_SUBMITTED_CODES.has(code);
+}
+
+/** Whether a stored row shows that a submit carrying `sentData` landed: submitted, with those answers. */
+function holdsSubmission(row: SurveyResponse | null | undefined, sentData: ResponseData): row is SurveyResponse {
+  return Boolean(row?.is_submitted) && isSameResponseData(row?.response, sentData);
+}
+
+const NOT_SUBMITTED_TITLE = "Your survey wasn't submitted";
+const MAYBE_SUBMITTED_TITLE = "Your survey may not have been submitted";
+const PRESS_COMPLETE_AGAIN = "Your answers are still here. Press Complete to try again.";
+
+type SubmitAlert = {
+  title: string;
+  message: string;
+  /** Move focus to the alert. Set when Complete fails, not when a later check only updates the text. */
+  focus: boolean;
+};
+
+/**
+ * What the alert says after a failed Complete. `failed`: the submit did not land. `unknown`: it may
+ * have, and the row couldn't be read to find out. `unknown-until-online`: it may have, and the row
+ * is read once the browser is back online.
+ */
+type SubmitOutcome = "failed" | "unknown" | "unknown-until-online";
+
+const COULD_NOT_CHECK = `The page couldn't reach the server to check. ${PRESS_COMPLETE_AGAIN}`;
+
+/** The alert a failed Complete shows, with the focus moved to it. */
+function submitFailureAlert(error: unknown, outcome: SubmitOutcome): SubmitAlert {
+  if (outcome === "unknown-until-online") {
+    return {
+      title: MAYBE_SUBMITTED_TITLE,
+      message:
+        "The connection dropped before the server replied. Your answers are still here. Keep this page open, and it will check when you reconnect.",
+      focus: true
+    };
+  }
+  if (outcome === "unknown") return { title: MAYBE_SUBMITTED_TITLE, message: COULD_NOT_CHECK, focus: true };
+  return { title: NOT_SUBMITTED_TITLE, message: submitFailureMessage(error, navigator.onLine), focus: true };
+}
+
+/**
+ * Why a Complete that did not land failed. A network failure reaches us from supabase-js as
+ * `{ message: "TypeError: Failed to fetch", details: <stack trace> }`, which
+ * getStudentFacingErrorMessage would show as the stack trace, so those are named here.
+ */
+function submitFailureMessage(error: unknown, online: boolean): string {
+  if (!online) {
+    return "You're offline. Your answers are still here. Keep this page open and they will save as a draft when you reconnect. Then press Complete again.";
+  }
+  if (error instanceof SaveTimeoutError) return `The server took too long to respond. ${PRESS_COMPLETE_AGAIN}`;
+  const message = typeof error === "object" && error !== null && "message" in error ? String(error.message) : "";
+  if (!errorCode(error) && /^(TypeError|AbortError)\b/.test(message)) {
+    return `The server couldn't be reached. ${PRESS_COMPLETE_AGAIN}`;
+  }
+  return `${getStudentFacingErrorMessage(error)} ${PRESS_COMPLETE_AGAIN}`;
+}
 
 const SurveyComponent = dynamic(() => import("@/components/Survey"), {
   ssr: false,
@@ -45,6 +171,17 @@ export default function SurveyTakingPage() {
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
+  // Why the last Complete failed, shown above the form until the next attempt.
+  const [submitError, setSubmitError] = useState<SubmitAlert | null>(null);
+  const submitErrorRef = useRef<HTMLDivElement | null>(null);
+  const saveStatusRef = useRef<HTMLParagraphElement | null>(null);
+  // The response turned out to be submitted after the page loaded it as a draft: a Complete whose
+  // reply was lost, or a submit from another tab. On a survey that allows editing the form keeps the
+  // student's answers, so this, not existingResponse, says it is submitted.
+  const [submittedSinceLoad, setSubmittedSinceLoad] = useState(false);
+  // An edit arrived that can't be saved because the student's saved response didn't load.
+  const [saveBlocked, setSaveBlocked] = useState(false);
 
   // Autosave/submit coordination. SurveyJS fires a final onValueChanged on blur
   // that can race the Complete upsert: an autosave carrying is_submitted:false
@@ -60,26 +197,75 @@ export default function SurveyTakingPage() {
   // Which (survey, profile) pair responseStateRef describes, so a re-run of the loader effect
   // for the same response cannot silently discard what it learned.
   const responseStateKeyRef = useRef<string | null>(null);
-  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autosaveInFlightRef = useRef<Promise<unknown> | null>(null);
-  // Number of the newest autosave added to the chain. A queued autosave with a lower number skips
-  // its upsert: the newer one sends every answer as of a later edit.
-  const latestAutosaveRef = useRef(0);
-  // Fires the pending autosave immediately. Held in a ref so the unmount
-  // cleanup can flush rather than merely cancel: `textUpdateMode = "onTyping"`
-  // restarts the debounce on every keystroke, so a student who navigates away
-  // while typing has an unwritten answer sitting in the timer.
-  const flushAutosaveRef = useRef<(() => void) | null>(null);
+  // Holds the newest unsaved answers and sends them one request at a time, so a slow older request
+  // can never land after a newer one. Complete pauses it and waits for the request in flight.
+  const autosaveQueueRef = useRef<SurveyAutosaveQueue<ResponseData> | null>(null);
+  // The queue outlives renders, so it reads the current save function and guards through refs.
+  const saveDraftRef = useRef<(responseData: ResponseData, attempt: SaveAttempt) => Promise<void>>(async () => {});
+  const canAutosaveRef = useRef<() => boolean>(() => false);
+  // The student's access token, kept current so the request sent while the page unloads does not
+  // have to wait for the Supabase client to read it.
+  const accessTokenRef = useRef<string | null>(null);
+  // A Complete failed offline after it may have reached the database. The autosave queue stays
+  // paused until the row has been read, once the browser is back online: a draft sent first would
+  // only be refused.
+  const submitCheckPendingRef = useRef(false);
+  const checkSubmitOnReconnectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
-    return () => {
-      if (autosaveTimerRef.current) {
-        clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
-        flushAutosaveRef.current?.();
+    const queue = new SurveyAutosaveQueue<ResponseData>({
+      save: (responseData, attempt) => saveDraftRef.current(responseData, attempt),
+      canSave: () => canAutosaveRef.current(),
+      debounceMs: AUTOSAVE_DEBOUNCE_MS,
+      timeoutMs: SAVE_TIMEOUT_MS,
+      retry: AUTOSAVE_RETRY,
+      isOnline: () => navigator.onLine,
+      onStatusChange: setAutosaveStatus,
+      onError: (error) => {
+        console.error("Error auto-saving response:", error);
       }
+    });
+    autosaveQueueRef.current = queue;
+
+    const onReconnect = () => {
+      void checkSubmitOnReconnectRef.current();
+      queue.retryNow();
+    };
+    const noteOffline = () => queue.noteOffline();
+    window.addEventListener("online", onReconnect);
+    window.addEventListener("offline", noteOffline);
+
+    // `textUpdateMode = "onTyping"` restarts the debounce on every keystroke, so a student who
+    // leaves while typing has an unwritten answer waiting for it. A reload or a closed tab does not
+    // unmount React, so the page also flushes when it is hidden (tab switch, app switch on a phone,
+    // which may be the last chance) and on pagehide (reload, close, navigation).
+    const flushOnLeave = () => queue.flush({ keepalive: true });
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushOnLeave();
+    };
+    window.addEventListener("pagehide", flushOnLeave);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flushOnLeave);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      window.removeEventListener("online", onReconnect);
+      window.removeEventListener("offline", noteOffline);
+      // Flush rather than merely cancel when the student navigates away inside the app. That
+      // request still goes out, but nothing is retried once the page is gone.
+      queue.flush();
+      queue.dispose();
+      if (autosaveQueueRef.current === queue) autosaveQueueRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const {
+      data: { subscription }
+    } = controller.client.auth.onAuthStateChange((_event, session) => {
+      accessTokenRef.current = session?.access_token ?? null;
+    });
+    return () => subscription.unsubscribe();
+  }, [controller.client]);
 
   // Derived from the survey row rather than the row object itself: the row comes
   // from a TableController, so its identity changes on every realtime update or
@@ -113,6 +299,8 @@ export default function SurveyTakingPage() {
     if (responseStateKeyRef.current !== responseKey) {
       responseStateKeyRef.current = responseKey;
       responseStateRef.current = "unknown";
+      setSubmittedSinceLoad(false);
+      setSaveBlocked(false);
     }
 
     let cancelled = false;
@@ -174,24 +362,18 @@ export default function SurveyTakingPage() {
     }
   }, [isLoading, surveyMissing, course_id, router]);
 
-  // Save response helper using controller client
-  const saveResponseToDb = useCallback(
-    async (responseData: ResponseData, isSubmitted: boolean) => {
-      if (!surveyId || !private_profile_id) return;
+  // The row an upsert sends, or null when it must be skipped. An autosave never downgrades a
+  // submitted response: on an editable survey it persists the edit as still-submitted and omits
+  // submitted_at, so the upsert leaves the original submission time in place. An upsert against a
+  // row we could not read is dropped.
+  const buildResponseRow = useCallback(
+    (responseData: ResponseData, isSubmitted: boolean): SurveyResponseUpsert | null => {
+      if (!surveyId || !private_profile_id) return null;
 
-      // An autosave never downgrades a submitted response: on an editable survey it persists
-      // the edit as still-submitted and omits submitted_at, so the upsert leaves the original
-      // submission time in place. A write against a row we could not read is dropped.
       const flags = resolveResponseWriteFlags({ isSubmitted, loadedState: responseStateRef.current });
-      if (flags.skip) return;
+      if (flags.skip) return null;
 
-      const upsertData: {
-        survey_id: string;
-        profile_id: string;
-        response: ResponseData;
-        is_submitted: boolean;
-        submitted_at?: string;
-      } = {
+      const row: SurveyResponseUpsert = {
         survey_id: surveyId,
         profile_id: private_profile_id,
         response: responseData,
@@ -199,8 +381,19 @@ export default function SurveyTakingPage() {
       };
 
       if (flags.stampSubmittedAt) {
-        upsertData.submitted_at = new Date().toISOString();
+        row.submitted_at = new Date().toISOString();
       }
+
+      return row;
+    },
+    [surveyId, private_profile_id]
+  );
+
+  // Save response helper using controller client
+  const saveResponseToDb = useCallback(
+    async (responseData: ResponseData, isSubmitted: boolean, signal: AbortSignal) => {
+      const upsertData = buildResponseRow(responseData, isSubmitted);
+      if (!upsertData) return;
 
       const { data, error } = await controller.client
         .from("survey_responses")
@@ -208,6 +401,7 @@ export default function SurveyTakingPage() {
           onConflict: "survey_id,profile_id"
         })
         .select()
+        .abortSignal(signal)
         .single();
 
       if (error) {
@@ -216,11 +410,53 @@ export default function SurveyTakingPage() {
 
       return data;
     },
-    [surveyId, private_profile_id, controller.client]
+    [buildResponseRow, controller.client]
+  );
+
+  // The student's response row as stored now: null when there is none, undefined when it can't be
+  // read. Read when a save's reply (or the lack of one) doesn't say where the row stands.
+  const readStoredResponse = useCallback(async (): Promise<SurveyResponse | null | undefined> => {
+    if (!surveyId || !private_profile_id) return undefined;
+    try {
+      const { data, error } = await runWithTimeout(
+        async (signal) =>
+          controller.client
+            .from("survey_responses")
+            .select("*")
+            .eq("survey_id", surveyId)
+            .eq("profile_id", private_profile_id)
+            .abortSignal(signal)
+            .maybeSingle(),
+        SAVE_TIMEOUT_MS
+      );
+      return error ? undefined : data;
+    } catch {
+      return undefined;
+    }
+  }, [surveyId, private_profile_id, controller.client]);
+
+  // The server holds a submitted response that this page took for a draft: a Complete whose reply
+  // was lost, or a submit from another tab. Show it as submitted, as a reload would.
+  const showSubmittedResponse = useCallback(
+    (row: SurveyResponse) => {
+      responseStateRef.current = "submitted";
+      setSubmitError(null);
+      setSubmittedSinceLoad(true);
+      // Without editing the form locks and shows what was submitted. With editing it keeps the
+      // student's answers, which are newer than the row; handing it the row would overwrite them
+      // the next time it turns read-only.
+      if (!allowResponseEditing) setExistingResponse(row);
+      toaster.create({
+        title: "Survey Submitted",
+        description: "Your survey has been submitted.",
+        type: "success"
+      });
+    },
+    [allowResponseEditing]
   );
 
   const handleSurveyComplete = useCallback(
-    async (surveyModel: Model) => {
+    async (surveyModel: Model, options?: CompleteEvent) => {
       if (!private_profile_id || !surveyId) {
         console.error("Cannot submit survey: Missing profile_id or survey");
         return;
@@ -230,23 +466,51 @@ export default function SurveyTakingPage() {
       const surveyData = surveyModel.data;
 
       setIsSubmitting(true);
+      setSubmitError(null);
       isSubmittingRef.current = true;
-      // Cancel any pending autosave and wait out the in-flight chain so the
-      // submit upsert is guaranteed to be the last write. Saves still queued in
-      // the chain see isSubmittingRef and skip.
-      if (autosaveTimerRef.current) {
-        clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
-      }
-      flushAutosaveRef.current = null;
+      // SurveyJS has already switched to its completed page. Say the answers are on their way
+      // rather than leaving the thank-you text to claim they arrived.
+      options?.showSaveInProgress("Submitting your answers…");
+      // Stop the autosave queue and wait out the request in flight, so the submit upsert is the
+      // last one. The wait is bounded: every request gives up after SAVE_TIMEOUT_MS.
+      const autosaveQueue = autosaveQueueRef.current;
+      autosaveQueue?.pause();
+      let submitted = false;
+      // Assigned in the catch below. The cast keeps TypeScript from narrowing it to "failed" in finally.
+      let outcome = "failed" as SubmitOutcome;
       try {
-        if (autosaveInFlightRef.current) {
-          await autosaveInFlightRef.current.catch(() => {});
+        await autosaveQueue?.whenIdle();
+        // Offline, the browser doesn't send the request at all.
+        const sentOnline = navigator.onLine;
+        try {
+          await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
+        } catch (error) {
+          // A failed request is not a failed submit: the upsert may have committed and only the
+          // reply been lost. Reporting that as a failure would send the student back to a form
+          // whose row is already submitted, and the draft autosave after it would be refused.
+          if (!submitOutcomeNeedsReadBack(error)) throw error;
+          if (!navigator.onLine) {
+            // The row can't be read until the network is back. A submit sent online, or an
+            // earlier one not yet checked, may have got through.
+            if (sentOnline || submitCheckPendingRef.current) outcome = "unknown-until-online";
+            throw error;
+          }
+          // submitted_at can't tell: on a first submit the database stamps it with the server's
+          // clock, not this browser's. The answers can.
+          const row = await readStoredResponse();
+          if (!holdsSubmission(row, surveyData)) {
+            if (row === undefined) outcome = "unknown";
+            throw error;
+          }
         }
-        await saveResponseToDb(surveyData, true);
+        submitted = true;
+        submitCheckPendingRef.current = false;
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
         responseStateRef.current = "submitted";
+        // The submit carried the newest answers; a draft snapshot taken before it must not follow.
+        autosaveQueue?.discardPending();
+        options?.showSaveSuccess("Your survey has been submitted.");
 
         toaster.create({
           title: "Survey Submitted",
@@ -258,70 +522,134 @@ export default function SurveyTakingPage() {
         router.push(`/course/${course_id}/surveys`);
       } catch (error) {
         console.error("Error submitting survey:", error);
-
-        const errorMessage = getStudentFacingErrorMessage(error);
-        toaster.create({
-          title: "Submission Failed",
-          description: `${errorMessage} Please try again.`,
-          type: "error"
-        });
+        // Back to the form, on the same page and with the answers, so the student can see them
+        // and press Complete again. clear(false, false) keeps the data and the current page.
+        options?.clearSaveMessages();
+        // clearSaveMessages doesn't hide the notice "Submitting your answers…", which would stay
+        // beside the alert until SurveyJS's 2 s timer hid it.
+        surveyModel.notifier.active = false;
+        surveyModel.clear(false, false);
+        setSubmitError(submitFailureAlert(error, outcome));
       } finally {
         setIsSubmitting(false);
         isSubmittingRef.current = false;
+        // The answers were not submitted, so they go back to being saved as a draft. Offline, the
+        // queue holds them until the browser reconnects.
+        if (!submitted) autosaveQueue?.schedule(surveyModel.data);
+        if (outcome === "unknown-until-online") {
+          // The queue stays paused until checkSubmitOnReconnect has read the row.
+          submitCheckPendingRef.current = true;
+          if (navigator.onLine) void checkSubmitOnReconnectRef.current();
+        } else {
+          autosaveQueue?.resume();
+          if (!submitted) autosaveQueue?.flush();
+        }
       }
     },
-    [private_profile_id, surveyId, course_id, router, saveResponseToDb]
+    [private_profile_id, surveyId, course_id, router, saveResponseToDb, readStoredResponse]
   );
+
+  // Back online after a Complete that may have landed while offline: read the row before any draft
+  // goes out. If it is submitted, show that; otherwise the answers go back to autosaving.
+  checkSubmitOnReconnectRef.current = async () => {
+    if (!submitCheckPendingRef.current || isSubmittingRef.current) return;
+    submitCheckPendingRef.current = false;
+    const row = await readStoredResponse();
+    // A new Complete started meanwhile. It decides, and resumes the queue when it ends.
+    if (isSubmittingRef.current) return;
+    if (row?.is_submitted) {
+      showSubmittedResponse(row);
+    } else {
+      setSubmitError(
+        row === undefined
+          ? { title: MAYBE_SUBMITTED_TITLE, message: COULD_NOT_CHECK, focus: false }
+          : { title: NOT_SUBMITTED_TITLE, message: PRESS_COMPLETE_AGAIN, focus: false }
+      );
+    }
+    autosaveQueueRef.current?.resume();
+    autosaveQueueRef.current?.flush();
+  };
+
+  // The failed form is re-rendered from scratch, so focus would otherwise fall back to the page.
+  // Moving it to the alert puts keyboard and screen-reader users next to the form they return to.
+  useEffect(() => {
+    if (submitError?.focus) submitErrorRef.current?.focus();
+  }, [submitError]);
+
+  const canAutosave = useCallback(
+    () =>
+      // Rechecked when a save's turn comes: Complete may have started, or the response may have
+      // been submitted, while it waited behind a slow save.
+      !isSubmittingRef.current &&
+      shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing }) &&
+      // A row that could not be read gets no draft upsert at all (see resolveResponseWriteFlags).
+      !resolveResponseWriteFlags({ isSubmitted: false, loadedState: responseStateRef.current }).skip,
+    [allowResponseEditing]
+  );
+  canAutosaveRef.current = canAutosave;
+  const sendDraft = async (responseData: ResponseData, { signal, keepalive }: SaveAttempt) => {
+    const accessToken = accessTokenRef.current;
+    if (keepalive && accessToken && SUPABASE_URL && SUPABASE_ANON_KEY) {
+      const row = buildResponseRow(responseData, false);
+      if (!row) return;
+      await upsertSurveyResponseWithKeepalive({
+        supabaseUrl: SUPABASE_URL,
+        anonKey: SUPABASE_ANON_KEY,
+        accessToken,
+        row,
+        signal
+      });
+      return;
+    }
+    await saveResponseToDb(responseData, false, signal);
+  };
+  const saveDraft = async (responseData: ResponseData, attempt: SaveAttempt): Promise<void> => {
+    // Whether these answers go out as a draft, or as a change to a response the page knows is
+    // submitted.
+    const sentAsDraft = responseStateRef.current !== "submitted";
+    try {
+      await sendDraft(responseData, attempt);
+    } catch (error) {
+      const code = errorCode(error);
+      if (!code || !REFUSED_AS_SUBMITTED_CODES.has(code)) throw error;
+      // The page knew the response was submitted, so the survey itself refused the change: it was
+      // closed, unpublished or unassigned, or editing was turned off, since the page loaded.
+      // Sending it again would only be refused again.
+      if (!sentAsDraft) throw new SaveRefusedError(error);
+      // The database refuses a draft over a submitted response. If the row is submitted, it was
+      // submitted where this page couldn't see it, so show that instead of retrying a request that
+      // can only be refused again.
+      const row = await readStoredResponse();
+      if (!row?.is_submitted) throw error;
+      showSubmittedResponse(row);
+      // A survey that allows editing still takes the edit, now as a change to the submitted
+      // response. responseStateRef now says submitted, so a refusal of that ends above.
+      if (canAutosaveRef.current()) await saveDraft(responseData, attempt);
+    }
+  };
+  saveDraftRef.current = saveDraft;
 
   const handleValueChanged = useCallback(
     (surveyModel: Model, options?: ValueChangedEvent) => {
       void options;
       if (!private_profile_id || !surveyId) return;
-      if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
       // Only a submit in flight blocks autosave outright. An already-submitted response does
       // not: on an editable survey the student may still be changing answers, and
       // saveResponseToDb keeps that write in the submitted state rather than dropping it.
-      if (isSubmittingRef.current) return;
+      if (!canAutosave()) {
+        // The saved response couldn't be read, so no edit is saved (see resolveResponseWriteFlags).
+        // The form is still editable, so say so rather than leave the status blank.
+        if (!isSubmittingRef.current && responseStateRef.current === "unknown") setSaveBlocked(true);
+        return;
+      }
+      setSaveBlocked(false);
 
-      // Extract only the survey data from the model, not the entire model object
-      const surveyData = surveyModel.data;
-
-      // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke
-      // and again on blur; only the trailing edit needs persisting.
-      const runAutosave = () => {
-        autosaveTimerRef.current = null;
-        flushAutosaveRef.current = null;
-        if (isSubmittingRef.current) return;
-        const autosaveNumber = ++latestAutosaveRef.current;
-        // Chained on the previous save so writes reach the server in the order they were made:
-        // a slow older upsert landing after a newer one would put the older answers back.
-        // autosaveInFlightRef is the tail of the chain, which is what Complete waits on.
-        const inFlight = (autosaveInFlightRef.current ?? Promise.resolve())
-          .then(() => {
-            // Rechecked when the save's turn comes: Complete may have started, or the response
-            // may have been submitted, while this one waited behind a slow save.
-            if (isSubmittingRef.current) return;
-            // A newer save was queued while this one waited, and its upsert would replace this
-            // one's straight away.
-            if (autosaveNumber !== latestAutosaveRef.current) return;
-            if (!shouldAutosaveResponse({ loadedState: responseStateRef.current, allowResponseEditing })) return;
-            return saveResponseToDb(surveyData, false);
-          })
-          .catch((error) => {
-            console.error("Error auto-saving response:", error);
-            // Don't show error toast for auto-save failures to avoid spam
-          });
-        autosaveInFlightRef.current = inFlight;
-        void inFlight.finally(() => {
-          if (autosaveInFlightRef.current === inFlight) autosaveInFlightRef.current = null;
-        });
-      };
-
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-      flushAutosaveRef.current = runAutosave;
-      autosaveTimerRef.current = setTimeout(runAutosave, AUTOSAVE_DEBOUNCE_MS);
+      // Debounced auto-save: SurveyJS fires onValueChanged on every keystroke and again on blur;
+      // only the trailing edit needs persisting. Extract only the survey data from the model,
+      // not the entire model object.
+      autosaveQueueRef.current?.schedule(surveyModel.data);
     },
-    [private_profile_id, surveyId, allowResponseEditing, saveResponseToDb]
+    [private_profile_id, surveyId, canAutosave]
   );
 
   const handleBackToSurveys = useCallback(() => {
@@ -370,9 +698,10 @@ export default function SurveyTakingPage() {
 
   // Check if survey is read-only (submitted and editing not allowed). An instructor
   // viewing as a student is also read-only and must not submit/overwrite the student's response.
-  const surveyAlreadySubmitted = existingResponse?.is_submitted && !survey.allow_response_editing;
+  const responseIsSubmitted = Boolean(existingResponse?.is_submitted) || submittedSinceLoad;
+  const surveyAlreadySubmitted = responseIsSubmitted && !survey.allow_response_editing;
   const isReadOnly = isSurveyResponseReadOnly({
-    responseIsSubmitted: Boolean(existingResponse?.is_submitted),
+    responseIsSubmitted,
     allowResponseEditing: survey.allow_response_editing,
     isViewingAsStudent
   });
@@ -410,7 +739,7 @@ export default function SurveyTakingPage() {
             </Box>
           )}
 
-          {existingResponse?.is_submitted && survey.allow_response_editing && (
+          {responseIsSubmitted && survey.allow_response_editing && (
             <Box
               colorPalette="green"
               bg="green.subtle"
@@ -425,6 +754,44 @@ export default function SurveyTakingPage() {
             </Box>
           )}
         </VStack>
+
+        {/* Autosave status. A polite live region: its text changes when a save starts, lands or
+            fails, not on every keystroke. Kept in the DOM, even while empty, so a screen reader
+            is already watching it when the first message arrives. */}
+        {!isReadOnly && (
+          <HStack gap={3} minH={6} justify="flex-end">
+            <Text
+              ref={saveStatusRef}
+              tabIndex={-1}
+              role="status"
+              aria-live="polite"
+              fontSize="sm"
+              color={saveBlocked ? "fg.error" : AUTOSAVE_STATUS_COLOR[autosaveStatus]}
+            >
+              {saveBlocked ? UNSAVABLE_STATUS_TEXT : AUTOSAVE_STATUS_TEXT[autosaveStatus]}
+            </Text>
+            {autosaveStatus === "failed" && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  // Retrying changes the status, which removes this button. Without somewhere to
+                  // go, focus would fall to the body and a keyboard user back to the top of the page.
+                  saveStatusRef.current?.focus();
+                  autosaveQueueRef.current?.retryNow();
+                }}
+              >
+                Try again
+              </Button>
+            )}
+          </HStack>
+        )}
+
+        {submitError && (
+          <Alert ref={submitErrorRef} tabIndex={-1} role="alert" status="error" title={submitError.title}>
+            {submitError.message}
+          </Alert>
+        )}
 
         {/* Survey */}
         <Box w="100%" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
