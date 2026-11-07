@@ -480,3 +480,59 @@ monitoring:
   prometheusRules:
     labels:
       release: kps
+
+# ----- Forgejo and Coder (seed secrets first: scripts/setup-openbao-forgejo-coder.sh)
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: true
+    forgejoPath: apps/pawtograder/forgejo-staging
+    coderPath: apps/pawtograder/coder-staging
+
+# Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
+networkPolicy:
+  cilium:
+    enabled: true
+
+forgejo:
+  enabled: true
+  # global.nodeSelector/tolerations don't reach subcharts.
+  nodeSelector: { tier: prod-staging }
+  tolerations:
+    - { key: tier, operator: Equal, value: prod-staging, effect: NoSchedule }
+  ingress:
+    hosts:
+      - host: git.staging.pawtograder.net
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: staging-wildcard-tls
+        hosts: [git.staging.pawtograder.net]
+
+forgejoRunner:
+  enabled: false
+  image:
+    repository: ghcr.io/pawtograder/forgejo-runner
+    tag: staging-latest
+
+coder:
+  enabled: true
+  coder:
+    nodeSelector: { tier: prod-staging }
+    tolerations:
+      - { key: tier, operator: Equal, value: prod-staging, effect: NoSchedule }
+    env:
+      # Setting the list replaces values.yaml's, so keep its connection URL.
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
+      - name: CODER_ACCESS_URL
+        value: https://coder.staging.pawtograder.net
+      - name: CODER_WILDCARD_ACCESS_URL
+        value: "*-coder.staging.pawtograder.net" # suffix form stays one label deep for the wildcard cert
+    ingress:
+      host: coder.staging.pawtograder.net
+      wildcardHost: "*.staging.pawtograder.net"
+      tls:
+        enable: true
+        secretName: staging-wildcard-tls
+        wildcardSecretName: staging-wildcard-tls

@@ -669,6 +669,10 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 
 Keep database passwords alphanumeric; Coder's connection settings don't escape them. To rotate `pawtograder-forgejo-db` or `pawtograder-coder-db`: change the Secret, run `helm upgrade --wait --wait-for-jobs` (the `app-databases` Job sets the role's new password, and without both flags the upgrade returns before the Job finishes), then `kubectl rollout restart deployment/pawtograder-forgejo deployment/coder`. The apps read the password only at startup, and neither subchart restarts on a Secret change. Don't let Reloader restart them on the Secret alone: it would do so before the role's password changes.
 
+With External Secrets Operator, set `forgejoCoderSecrets.externalSecret.enabled` and point `forgejoPath` / `coderPath` at one OpenBao path per app; the chart then renders ExternalSecrets for the Secrets above (the `*-superuser` ones excepted, which only `database: own` uses). `scripts/setup-openbao-forgejo-coder.sh --env <env> --coder-email <email>` writes both paths with generated passwords. `examples/values-staging.yaml` runs this way.
+
+The runner image is built from `images/forgejo-runner` by `.github/workflows/release-images.yml` as `ghcr.io/pawtograder/forgejo-runner:<tag>`, with the same tags as the other images.
+
 ### Forgejo
 
 Forgejo's public URL comes from the first `forgejo.ingress.hosts` entry: the subchart builds `ROOT_URL` from it (https when the ingress has `tls`, otherwise `gitea.config.server.PROTOCOL`, unless `gitea.config.server.ROOT_URL` is set), and the edge functions get the same URL, derived the same way, as `FORGEJO_URL`. Forgejo Actions job tokens carry `<ROOT_URL>api/actions` as their issuer; a job asks for one with `enable-openid-connect: true`. The edge functions in this release don't read `FORGEJO_URL` yet, so they still only accept GitHub's tokens: grading from Forgejo Actions needs the follow-up that teaches `validateOIDCToken` this issuer. With the runner on, bare `uses:` names (`actions/checkout@v4`) resolve against mirrors in Forgejo itself; see "Action mirrors" below. Self-registration is off; accounts are provisioned.

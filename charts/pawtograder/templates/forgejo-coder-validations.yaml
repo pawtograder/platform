@@ -179,8 +179,12 @@
 {{- if not (and $wildcardHost $wildcardEnv) }}
 {{- fail "the pushed workspace template serves VS Code on a subdomain: set coder.coder.ingress.wildcardHost and CODER_WILDCARD_ACCESS_URL in coder.coder.env" }}
 {{- end }}
-{{- if ne $wildcardEnv $wildcardHost }}
-{{- fail (printf "CODER_WILDCARD_ACCESS_URL (%s) must name the same host as coder.coder.ingress.wildcardHost (%s), or app URLs have no route" $wildcardEnv $wildcardHost) }}
+{{- /* Coder's suffix form (*-coder.example.com) is routed by a whole-label Ingress wildcard (*.example.com) one level up. */}}
+{{- $domain := trimPrefix "*" $wildcardHost }}
+{{- $suffix := trimSuffix $domain (trimPrefix "*" $wildcardEnv) }}
+{{- $suffixForm := and (hasPrefix "*." $wildcardHost) (hasPrefix "*" $wildcardEnv) (hasSuffix $domain $wildcardEnv) (regexMatch "^[-a-z0-9]*$" $suffix) }}
+{{- if not (or (eq $wildcardEnv $wildcardHost) $suffixForm) }}
+{{- fail (printf "CODER_WILDCARD_ACCESS_URL (%s) must be coder.coder.ingress.wildcardHost (%s) or a one-label suffix form under it such as *-coder%s, or app URLs have no route" $wildcardEnv $wildcardHost $domain) }}
 {{- end }}
 {{- range $key := list "defaultTTL" "activityBump" "dormancyThreshold" "dormancyAutoDeletion" }}
 {{- $d := index ($.Values.coderBootstrap.schedule | default dict) $key | toString }}
@@ -264,7 +268,7 @@
 {{- fail "forgejoRunner.enabled needs forgejo.enabled" }}
 {{- end }}
 {{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
-{{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- fail "forgejoRunner.image.repository and .tag are required (ghcr.io/pawtograder/forgejo-runner, built by release-images.yml)" }}
 {{- end }}
 {{- if not .Values.forgejoRunner.dispatcher.tokenSecret }}
 {{- fail "forgejoRunner.dispatcher.tokenSecret must name a Secret with a Forgejo access token (key token): install with forgejoRunner.enabled=false, create the token in Forgejo, then enable the runner. See README \"Actions runner\"" }}
