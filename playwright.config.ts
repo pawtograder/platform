@@ -18,7 +18,7 @@ export default defineConfig({
      out of the default/per-PR E2E run. The *.vision.spec.ts suites call the real
      Google Vision + Gemini APIs and run in exam-vision-e2e.yml via
      playwright.vision.config.ts. */
-  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/*.vision.spec.ts"],
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/sso/**", "**/*.forgejo-coder.spec.ts", "**/*.vision.spec.ts"],
   /* One-time gate before any worker spawns: probe PostgREST until its
      schema cache is loaded. Deployed previews don't admit traffic until
      this finishes, so test setup never races a partial cache. See

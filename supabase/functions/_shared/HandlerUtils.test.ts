@@ -9,10 +9,12 @@
  * Run from supabase/functions:  deno test --no-check --allow-env _shared/HandlerUtils.test.ts
  */
 import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   assertAuthLookupSucceeded,
   assertRoleLookupSucceeded,
   IllegalArgumentError,
+  JobTokenRejectedError,
   NotFoundError,
   readJsonObjectBody,
   SecurityError,
@@ -135,6 +137,36 @@ Deno.test("wrapRequestHandler: typed errors keep their own statuses", async () =
       throw err;
     });
     assertEquals(res.status, status, err.constructor.name);
+  }
+});
+
+Deno.test("wrapRequestHandler: job-token rejections reach Sentry where other denials are muted", async () => {
+  const events: Sentry.ErrorEvent[] = [];
+  Sentry.init({
+    dsn: "https://public@sentry.example.test/1",
+    defaultIntegrations: false,
+    beforeSend: (event) => {
+      events.push(event);
+      return null;
+    }
+  });
+  try {
+    const muted = { recordUserVisibleErrors: false, recordSecurityErrors: false };
+    for (const err of [new SecurityError("not enrolled"), new JobTokenRejectedError("audience", "aud")]) {
+      const res = await wrapRequestHandler(
+        post(),
+        () => {
+          throw err;
+        },
+        muted
+      );
+      assertEquals(res.status, 401);
+      assertEquals((await res.json()).error.details, err.details);
+    }
+    assertEquals(events.length, 1);
+    assertEquals(events[0].tags?.job_token_rejected, "audience");
+  } finally {
+    await Sentry.close();
   }
 });
 
