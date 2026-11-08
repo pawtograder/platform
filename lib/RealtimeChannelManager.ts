@@ -2,6 +2,7 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import * as Sentry from "@sentry/nextjs";
+import { bugReportIngest } from "@/lib/bugReport/ingestGate";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -526,6 +527,10 @@ export class RealtimeChannelManager {
   private _routeMessage(topic: string, message: BroadcastMessage) {
     const managedChannel = this._channels.get(topic);
     if (!managedChannel) return;
+
+    // Bug reporter taint ingest (full-row broadcasts); null unless a recorder is running.
+    const ingest = bugReportIngest.sink;
+    if (ingest) ingest.broadcast(message);
 
     for (const subscription of managedChannel.subscriptions) {
       try {

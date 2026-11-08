@@ -12,7 +12,8 @@ export const COURSE_FEATURES = {
   GRADEBOOK_WHAT_IF: "gradebook-what-if",
   SUGGESTED_DUE_DATE: "suggested-due-date",
   DISCORD_STUDENT_JOIN: "discord-student-join",
-  GEMINI_API_KEY_SETUP: "gemini-api-key-setup"
+  GEMINI_API_KEY_SETUP: "gemini-api-key-setup",
+  BUG_REPORT_RECORDING: "bug-report-recording"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -133,6 +134,16 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Allow instructors to save or replace the course Gemini API key",
     ariaLabel: "Enable Gemini API key setup for this course"
+  },
+  {
+    name: COURSE_FEATURES.BUG_REPORT_RECORDING,
+    title: "Bug report recordings",
+    description:
+      "When on, students and staff can attach a redacted recording of their last few minutes on supported pages when they report a bug. Nothing is uploaded unless they submit a report.",
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Allow redacted recordings in bug reports",
+    ariaLabel: "Enable bug report recordings for this course"
   }
 ];
 

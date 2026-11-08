@@ -279,8 +279,9 @@ jobs:
           GIT_SHA: ${{ github.sha }}
           SEED_IMAGE: ${{ steps.nextcache.outputs.seed }}
           OAUTH_CLIENT_ID: ${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}
-          BUGSINK_DSN: ${{ secrets.STAGING_BUGSINK_DSN }}
-          BUGSINK_HOST: ${{ secrets.STAGING_BUGSINK_HOST }}
+          # STAGING_SENTRY_DSN replaces STAGING_BUGSINK_DSN (HU1). Until the secret is
+          # renamed the old one is used; drop the fallback with the app's own one.
+          SENTRY_DSN: ${{ secrets.STAGING_SENTRY_DSN || secrets.STAGING_BUGSINK_DSN }}
           POSTHOG_KEY: ${{ secrets.STAGING_POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.STAGING_POSTHOG_HOST }}
           POSTHOG_UI_HOST: ${{ secrets.STAGING_POSTHOG_UI_HOST }}
@@ -293,8 +294,7 @@ jobs:
             printf '%s\n' "NEXT_PUBLIC_SUPABASE_URL=$API_HOST"
             printf '%s\n' "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY"
             printf '%s\n' "NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=$OAUTH_CLIENT_ID"
-            printf '%s\n' "NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN"
-            printf '%s\n' "NEXT_PUBLIC_BUGSINK_HOST=$BUGSINK_HOST"
+            printf '%s\n' "NEXT_PUBLIC_SENTRY_DSN=$SENTRY_DSN"
             printf '%s\n' "NEXT_PUBLIC_POSTHOG_KEY=$POSTHOG_KEY"
             printf '%s\n' "NEXT_PUBLIC_POSTHOG_HOST=$POSTHOG_HOST"
             printf '%s\n' "NEXT_PUBLIC_POSTHOG_UI_HOST=$POSTHOG_UI_HOST"

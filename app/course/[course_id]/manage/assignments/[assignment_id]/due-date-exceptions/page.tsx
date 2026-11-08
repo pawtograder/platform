@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -370,7 +371,8 @@ function AdjustDueDateDialogContent({
     <Dialog.Content p={4}>
       <Dialog.Header>
         <Dialog.Title>
-          Adjust Due Date for {group ? group.name : <PersonName uid={student_id} showAvatar={false} />} on{" "}
+          Adjust Due Date for{" "}
+          {group ? <ReportBlock>{group.name}</ReportBlock> : <PersonName uid={student_id} showAvatar={false} />} on{" "}
           {assignment.title}
         </Dialog.Title>
         <DialogCloseTrigger />
@@ -568,7 +570,7 @@ function AdjustDueDateDialogContent({
                       <TimeZoneAwareDate date={extension.created_at} format="MMM d, h:mm a" />
                     </Table.Cell>
                     <Table.Cell>
-                      {extension.hours}
+                      <ReportBlock>{extension.hours}</ReportBlock>
                       {
                         <PopConfirm
                           triggerLabel="Delete"
@@ -586,12 +588,18 @@ function AdjustDueDateDialogContent({
                         />
                       }
                     </Table.Cell>
-                    <Table.Cell>{extension.minutes || 0}</Table.Cell>
-                    <Table.Cell>{extension.tokens_consumed}</Table.Cell>
+                    <ReportBlock>
+                      <Table.Cell>{extension.minutes || 0}</Table.Cell>
+                    </ReportBlock>
+                    <ReportBlock>
+                      <Table.Cell>{extension.tokens_consumed}</Table.Cell>
+                    </ReportBlock>
                     <Table.Cell>
                       <PersonName uid={extension.creator_id} />
                     </Table.Cell>
-                    <Table.Cell>{extension.note}</Table.Cell>
+                    <ReportBlock>
+                      <Table.Cell>{extension.note}</Table.Cell>
+                    </ReportBlock>
                   </Table.Row>
                 ))}
               </Table.Body>
