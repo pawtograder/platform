@@ -286,6 +286,13 @@ edgeFunctions:
       value: "2"
     - name: MALLOC_MMAP_THRESHOLD_
       value: "131072"
+    # Links in notification email (APP_URL is a bare host: links are built as https://${APP_URL}/...)
+    # and in autograder check-run details (PAWTOGRADER_WEBAPP_URL is a full URL). Unset, enrollment
+    # and other emails linked to https://undefined/course/...
+    - name: APP_URL
+      value: staging.pawtograder.net
+    - name: PAWTOGRADER_WEBAPP_URL
+      value: https://staging.pawtograder.net
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
