@@ -50,6 +50,7 @@ import {
 } from "@/tests/fixtures/teamCollaborationSurvey";
 import type { QuestionAnalyticsConfig, SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import { SURVEYJS_TEMPLATES } from "./surveyTemplates";
+import { seedExams, type ExamConfig } from "./ExamSeeding";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -129,6 +130,8 @@ export interface SeedingConfiguration {
   helpRequestConfig?: HelpRequestConfig;
   discussionConfig?: DiscussionConfig;
   surveyConfig?: SurveyConfig;
+  /** Exam and quiz assignments (see examTemplates.ts). Omit to seed none. */
+  examConfig?: ExamConfig;
   gradingScheme?: "current" | "specification";
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
@@ -1302,6 +1305,11 @@ export class DatabaseSeeder {
     return this;
   }
 
+  withExams(config: ExamConfig): this {
+    this.config.examConfig = config;
+    return this;
+  }
+
   // -------- Demo-mode builders --------
   withDemoFixtures(bundle: FixtureBundle): this {
     this.config.demoFixtures = bundle;
@@ -1423,6 +1431,7 @@ export class DatabaseSeeder {
       helpRequestConfig: this.config.helpRequestConfig,
       discussionConfig: this.config.discussionConfig,
       surveyConfig: this.config.surveyConfig,
+      examConfig: this.config.examConfig,
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
       recycleUsers: this.config.recycleUsers !== false, // Default to true unless explicitly disabled
@@ -1708,6 +1717,14 @@ export class DatabaseSeeder {
       // Create surveys if configured
       if (config.surveyConfig) {
         await this.createSurveys(config.surveyConfig, class_id, students, instructors, assignments);
+      }
+
+      // Exams and quizzes are their own assignments, with their own submissions and grading.
+      if (config.examConfig) {
+        const exams = await seedExams({ classId: class_id, students, graders, instructors }, config.examConfig);
+        for (const exam of exams.assignments) {
+          console.log(`   ${exam.title} [${exam.type}]: assignment ${exam.id}, ${exam.submissions} submissions`);
+        }
       }
 
       // Display final summary

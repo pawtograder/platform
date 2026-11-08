@@ -48,8 +48,11 @@ WORKDIR /app
 # in run-seed.sh. The Node script itself talks to Kong (REST/Auth API),
 # not psql, but the readiness checks are cheaper via psql than spinning
 # up a tsx process.
+#
+# fonts-dejavu-core: the exam seeder renders exam page images from SVG with
+# sharp, and the slim base image has no fonts, so page text would be blank.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client ca-certificates \
+ && apt-get install -y --no-install-recommends postgresql-client ca-certificates fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy node_modules from deps stage (avoids re-downloading + reuses the
