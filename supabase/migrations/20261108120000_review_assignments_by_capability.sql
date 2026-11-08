@@ -28,7 +28,14 @@
 -- bulk_assign_reviews, bulk_update_review_assignment_due_dates and
 -- get_grading_progress_for_assignment, which keep their own checks.
 
-DROP POLICY "Instructors can manage review assignments" ON public.review_assignments;
+-- Safe to run again: the file was renamed after it had run on preview databases, and a renamed
+-- migration runs as a new one there (drift detection compares hashes by version, not content).
+DROP POLICY IF EXISTS "Instructors can manage review assignments" ON public.review_assignments;
+DROP POLICY IF EXISTS "Review assignment managers can view review assignments" ON public.review_assignments;
+DROP POLICY IF EXISTS "Review assignment managers can delete review assignments" ON public.review_assignments;
+DROP POLICY IF EXISTS "Instructors can create review assignments" ON public.review_assignments;
+DROP POLICY IF EXISTS "Instructors can update review assignments" ON public.review_assignments;
+DROP POLICY IF EXISTS "Review assignment managers can view rubric parts" ON public.review_assignment_rubric_parts;
 
 CREATE POLICY "Review assignment managers can view review assignments"
 ON public.review_assignments
