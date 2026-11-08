@@ -14,7 +14,7 @@ import {
   RenameDestinationExistsError
 } from "../_shared/GitHubWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
-import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserHasCapabilityOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
@@ -160,7 +160,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("class_id", class_id.toString());
   scope?.setTag("reconcile_only", String(reconcile_only === true));
 
-  await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
+  await assertUserHasCapabilityOrServiceRole(class_id, "manage_assignments", req.headers.get("Authorization"));
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -170,13 +170,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("id, slug, title, has_autograder, submission_mode, template_repo, repo_mode, classes(slug,github_org)")
+    .select("*, classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
 
   if (!assignment) {
     throw new UserVisibleError("Assignment not found", 400);
+  }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub workflow synchronization is unavailable.", 400);
   }
 
   // PR-mode assignments never have an autograder: their submissions are ingested by
@@ -260,6 +263,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .from("assignments")
       .select("id, title, class_id, has_autograder, submission_mode")
       .eq("template_repo", templateRepo)
+      .eq("git_provider", "github")
       .neq("id", assignment_id)
       .order("id", { ascending: true })
       .range(offset, offset + SHARER_PAGE_SIZE - 1);

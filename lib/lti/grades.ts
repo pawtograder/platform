@@ -19,6 +19,7 @@ import { ensureLineItem, publishScore, retractScore } from "./ags";
 import { ltiAdminClient, type LtiDb } from "./db";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { classifySupabase, timeRpc } from "@/lib/metrics";
+import * as Sentry from "@sentry/nextjs";
 
 type GradeSyncStateInsert = Database["public"]["Tables"]["lti_grade_sync_state"]["Insert"];
 
@@ -374,26 +375,65 @@ export type DrainItemResult = {
   error?: string;
 };
 
+export type DrainResult = {
+  results: DrainItemResult[];
+  deferred: number;
+};
+
 /**
  * Process the on-release work queue: reconcile each enqueued assignment, then
  * remove its queue row ONLY on success. An assignment-level failure (token mint,
- * ensureLineItem, a transient platform error, a momentarily-missing grade-sync
- * context) throws BEFORE the per-student loop writes any durable
- * `lti_grade_sync_state`, so dropping the row on failure would silently lose the
- * whole assignment's grade push until an unrelated future grade edit re-enqueues
- * it. Instead we leave a failed row queued so the safety-net cron retries; the
- * reconcile is idempotent, so the retry is safe. (Per-student failures inside a
- * successful reconcile are recorded in `lti_grade_sync_state`, not re-queued.)
+ * ensureLineItem, a transient platform error) throws BEFORE the per-student loop
+ * writes any durable `lti_grade_sync_state`, so dropping the row on failure would
+ * silently lose the whole assignment's grade push until an unrelated future
+ * grade edit re-enqueues it. Instead we leave a failed row queued so the
+ * safety-net cron retries; the reconcile is idempotent, so the retry is safe.
+ * (Per-student failures inside a successful reconcile are recorded in
+ * `lti_grade_sync_state`, not re-queued.)
  */
-export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainItemResult[]> {
-  const { data: queue } = await db
+export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 100): Promise<DrainResult> {
+  // Must match getGradeContext's predicate, or disabled-sync rows fail every drain.
+  const { data: contexts, error: contextError } = await db
+    .from("lti_context_links")
+    .select("class_id")
+    .eq("grade_sync_enabled", true)
+    .not("ags_lineitems_url", "is", null);
+  if (contextError) {
+    throw new Error(`Failed to read lti_context_links: ${contextError.message}`);
+  }
+  const enabledClassIds = [
+    ...new Set((contexts ?? []).map((c) => c.class_id).filter((id): id is number => id !== null))
+  ];
+
+  const deferredQuery = db.from("lti_grade_sync_queue").select("assignment_id", { count: "exact", head: true });
+  const { count: deferred, error: deferredError } = await (enabledClassIds.length > 0
+    ? deferredQuery.not("class_id", "in", `(${enabledClassIds.join(",")})`)
+    : deferredQuery);
+  if (deferredError) {
+    throw new Error(`Failed to count deferred lti_grade_sync_queue rows: ${deferredError.message}`);
+  }
+
+  if (enabledClassIds.length === 0) {
+    return { results: [], deferred: deferred ?? 0 };
+  }
+
+  const { data: queue, error: queueError } = await db
     .from("lti_grade_sync_queue")
     .select("class_id, assignment_id, enqueued_at")
+    .in("class_id", enabledClassIds)
     .order("enqueued_at", { ascending: true })
     .limit(limit);
+  if (queueError) {
+    throw new Error(`Failed to read lti_grade_sync_queue: ${queueError.message}`);
+  }
 
   const out: DrainItemResult[] = [];
   for (const item of queue ?? []) {
+    const tags = {
+      lti_stage: "grade_drain",
+      lti_class_id: String(item.class_id),
+      lti_assignment_id: String(item.assignment_id)
+    };
     try {
       const result = await syncAssignmentGrades(item.class_id, item.assignment_id, db);
       out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: true, result });
@@ -404,18 +444,37 @@ export async function drainGradeSyncQueue(db: LtiDb = ltiAdminClient(), limit = 
       // newer enqueued_at; matching on it means that delete affects 0 rows, the
       // row survives, and the next drain reprocesses it. Without this guard the
       // re-enqueued work would be silently dropped.
-      await db
+      const { error: deleteError } = await db
         .from("lti_grade_sync_queue")
         .delete()
         .eq("class_id", item.class_id)
         .eq("assignment_id", item.assignment_id)
         .eq("enqueued_at", item.enqueued_at);
+      if (deleteError) {
+        Sentry.captureException(deleteError, { tags, level: "warning" });
+      }
     } catch (e) {
       // Leave the row queued (do NOT delete) so the safety-net cron retries.
-      out.push({ classId: item.class_id, assignmentId: item.assignment_id, ok: false, error: (e as Error).message });
+      Sentry.captureException(e, { tags });
+      out.push({
+        classId: item.class_id,
+        assignmentId: item.assignment_id,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e)
+      });
+      // Bump to the back so repeat failures don't fill every oldest-first batch.
+      const { error: requeueError } = await db
+        .from("lti_grade_sync_queue")
+        .update({ enqueued_at: new Date().toISOString() })
+        .eq("class_id", item.class_id)
+        .eq("assignment_id", item.assignment_id)
+        .eq("enqueued_at", item.enqueued_at);
+      if (requeueError) {
+        Sentry.captureException(requeueError, { tags, level: "warning" });
+      }
     }
   }
-  return out;
+  return { results: out, deferred: deferred ?? 0 };
 }
 
 async function resolveSubsByProfile(

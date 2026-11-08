@@ -13,7 +13,7 @@ import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
-  cloneRepository,
+  assertJobTokenMatchesRepository,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
@@ -21,6 +21,7 @@ import {
   PrimaryRateLimitError,
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
@@ -560,6 +561,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
+  await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
 
   const org = repository.split("/")[0];
   scope?.setTag("org", org);
@@ -1535,7 +1537,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // Clone the repository
         const repoToClone = getRepoToCloneConsideringE2E(repository);
         const repo = await handleGitHubApiCall(
-          () => cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
+          () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
           org,
           "cloneRepository",
           adminSupabase,
