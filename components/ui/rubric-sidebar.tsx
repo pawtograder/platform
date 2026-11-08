@@ -1173,12 +1173,13 @@ function SubmissionCommentForm({
       : undefined;
 
   // Picking an option fills the points box with its points; the grader can still type over it.
+  // Keyed on the index too, so picking another option worth the same points still refills it (#1203).
   const selectedOptionPoints = selectedOption?.points;
   useEffect(() => {
     if (selectedOptionPoints !== undefined) {
       setPointsInput(String(selectedOptionPoints));
     }
-  }, [selectedOptionPoints]);
+  }, [selectedOptionIndex, selectedOptionPoints]);
 
   useEffect(() => {
     if (messageInputRef.current) {

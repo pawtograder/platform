@@ -73,6 +73,21 @@ describe("realtime ingest", () => {
     }
   });
 
+  it("reads a classes_update broadcast as a classes row", () => {
+    const ingest = startIngest({ getSessionUser: async () => null });
+    try {
+      manager()._routeMessage("class:1:staff", {
+        type: "classes_update",
+        class_id: 1,
+        data: { id: 1, name: "CS 9999", slug: "cs9999" },
+        timestamp: "2026-11-08T00:00:00Z"
+      });
+      expect(ingest.stats().broadcasts).toBe(1);
+    } finally {
+      ingest.stop();
+    }
+  });
+
   it("classifies postgres_changes rows through the sink", () => {
     const ingest = startIngest({ getSessionUser: async () => null });
     try {

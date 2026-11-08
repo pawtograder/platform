@@ -10,9 +10,9 @@
  *    before the recorder chunk loaded come from the pre-start buffer in `ingestGate.ts`.
  * 2. TableController: `initialData`, `_addRow`, `_updateRow` through `bugReportIngest.sink`, plus
  *    the rows every live controller already holds when the ingest starts.
- * 3. Realtime: broadcasts routed by RealtimeChannelManager and the two `postgres_changes`
- *    listeners (classes, meeting windows). ID-only broadcasts make the controller refetch, which
- *    comes back through the fetch hook.
+ * 3. Realtime: broadcasts routed by RealtimeChannelManager (including `classes_update`, which
+ *    carries the classes row) and the meeting-windows `postgres_changes` listener. ID-only
+ *    broadcasts make the controller refetch, which comes back through the fetch hook.
  * 4. The taint block, read by the recorder at start and on each navigation (`readTaintBlocks`).
  * 5. The auth session: the user's own email, `user_metadata`, and identity data.
  *
@@ -230,7 +230,9 @@ class Ingest implements IngestSink {
 
   broadcast(message: unknown): void {
     if (this.stopped || !message || typeof message !== "object") return;
-    const { table, data } = message as { table?: unknown; data?: unknown };
+    const { table: named, type, data } = message as { table?: unknown; type?: unknown; data?: unknown };
+    // `classes_update` (broadcast_classes_update) carries the full classes row without naming the table.
+    const table = named ?? (type === "classes_update" ? "classes" : undefined);
     // ID-only broadcasts carry no row; the controller's refetch comes back through fetch.
     if (typeof table !== "string" || !data || typeof data !== "object") return;
     this.counters.broadcasts++;
