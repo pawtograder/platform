@@ -167,7 +167,8 @@ function GeminiKeyPanel({ courseId }: { courseId: number }) {
           <Heading size="lg">Gemini API key</Heading>
           <Text fontSize="sm" color="fg.muted" mt={1}>
             Store one Gemini API key for this course. It is shared by all of the course&apos;s instructors and is
-            encrypted when stored. Nobody can view it again after it is saved: not you, other instructors, or students.
+            encrypted when stored. Once saved, the key cannot be viewed again through Course Settings, including by
+            other instructors or students.
           </Text>
           <Text fontSize="sm" color="fg.muted" mt={2}>
             Saving a key does not check it with Google and does not turn on AI grading. &ldquo;Configured&rdquo; only
