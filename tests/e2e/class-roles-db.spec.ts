@@ -1346,4 +1346,76 @@ test.describe("review assignments follow manage_review_assignments (#1010, step 
     expect(error).toBeNull();
     expect(after!.due_date, "the due date is unchanged").toBe(existing.due_date);
   });
+  /** A rubric part of `rubric_id`, marked as covered by `review_assignment_id`, made with the service client. */
+  async function rubricPartFor(
+    review_assignment_id: number,
+    class_id: number,
+    a: { id: number; grading_rubric_id: number | null }
+  ) {
+    const { data: part, error: partError } = await supabase
+      .from("rubric_parts")
+      .insert({ class_id, rubric_id: a.grading_rubric_id!, assignment_id: a.id, name: "Part A", ordinal: 1 })
+      .select("id")
+      .single();
+    expect(partError).toBeNull();
+    const { error } = await supabase
+      .from("review_assignment_rubric_parts")
+      .insert({ review_assignment_id, rubric_part_id: part!.id, class_id });
+    expect(error).toBeNull();
+    return part!.id;
+  }
+
+  async function visibleRubricParts(user: TestingUser, review_assignment_id: number) {
+    const client = await createAuthenticatedClient(user);
+    const { data, error } = await client
+      .from("review_assignment_rubric_parts")
+      .select("rubric_part_id")
+      .eq("review_assignment_id", review_assignment_id);
+    expect(error).toBeNull();
+    return (data ?? []).map((rp) => rp.rubric_part_id);
+  }
+
+  test("a grader with manage_review_assignments reads the rubric parts of other graders' reviews", async () => {
+    // Manage Review Assignments reads these to show each review's Rubric Part and coverage.
+    const review = await reviewAssignmentFor(instructorG);
+    const partId = await rubricPartFor(review.id, classG.id, assignment);
+    expect(await visibleRubricParts(headTa, review.id)).toEqual([partId]);
+    expect(await visibleRubricParts(plainGrader, review.id), "a default grader still can't").toEqual([]);
+  });
+
+  test("manage_review_assignments in one class doesn't reach another class", async () => {
+    const otherClass = await createClass({ name: "E2E Review Assignments Other" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const otherStudent = await createUserInClass({ role: "student", class_id: otherClass.id });
+    const otherAssignment = await insertAssignment({
+      class_id: otherClass.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      assignment_slug: `e2e-review-other-${Date.now().toString(36)}`
+    });
+    const submission = await insertPreBakedSubmission({
+      student_profile_id: otherStudent.private_profile_id,
+      assignment_id: otherAssignment.id,
+      class_id: otherClass.id
+    });
+    const { data: review, error } = await supabase
+      .from("review_assignments")
+      .insert({
+        assignee_profile_id: otherInstructor.private_profile_id,
+        class_id: otherClass.id,
+        assignment_id: otherAssignment.id,
+        submission_id: submission.submission_id,
+        submission_review_id: submission.grading_review_id,
+        rubric_id: otherAssignment.grading_rubric_id!,
+        due_date: addDays(new Date(), 1).toISOString()
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    await rubricPartFor(review!.id, otherClass.id, otherAssignment);
+
+    const client = await createAuthenticatedClient(headTa);
+    const { data: reviews } = await client.from("review_assignments").select("id").eq("id", review!.id);
+    expect(reviews ?? [], "the other class's review assignment").toHaveLength(0);
+    expect(await visibleRubricParts(headTa, review!.id), "the other class's rubric parts").toEqual([]);
+  });
 });

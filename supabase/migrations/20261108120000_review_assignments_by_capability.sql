@@ -17,10 +17,16 @@
 -- anything. Only a grader on a custom role that has the capability can now see and delete the
 -- class's review assignments.
 --
+-- Also on the capability: a SELECT policy on review_assignment_rubric_parts, because Manage Review
+-- Assignments reads them for the same rows. Without it a Head TA sees the review rows but not their
+-- rubric parts, so the page treats every review as covering the whole rubric (blank Rubric Part
+-- column, "All" in the CSV, wrong coverage counts).
+--
 -- Not changed: "Assignees can view their own review assignments", "Assignees can mark their review
--- assignments as completed", the review_assignment_rubric_parts cascade and its policy, and the
--- SECURITY DEFINER functions clear_unfinished_review_assignments, bulk_assign_reviews and
--- bulk_update_review_assignment_due_dates, which keep their own checks.
+-- assignments as completed", the instructor and assignee policies on review_assignment_rubric_parts
+-- and its cascade, and the SECURITY DEFINER functions clear_unfinished_review_assignments,
+-- bulk_assign_reviews, bulk_update_review_assignment_due_dates and
+-- get_grading_progress_for_assignment, which keep their own checks.
 
 DROP POLICY "Instructors can manage review assignments" ON public.review_assignments;
 
@@ -68,3 +74,8 @@ WITH CHECK (
       AND up.role = 'instructor'
   )
 );
+
+CREATE POLICY "Review assignment managers can view rubric parts"
+ON public.review_assignment_rubric_parts
+FOR SELECT TO authenticated
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_review_assignments')));
