@@ -1,5 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { COLUMNS } from "../lib/bugReport/privacy";
+import { brandPiiColumns } from "./bugReport/brandPiiColumns";
+import { runBugReportPostprocess } from "./bugReport/privacyArtifacts";
 
 const AUDIT_PARTITION_KEY_PATTERN = /^\s{6}audit_\d{8}:\s\{$/;
 
@@ -79,7 +82,7 @@ function makeTriggerFilledColumnsOptional(content: string) {
   return updated.join("\n");
 }
 
-function run() {
+async function run() {
   const targets = process.argv.slice(2);
   if (targets.length === 0) {
     throw new Error("Usage: npx tsx scripts/PostprocessSupabaseTypes.ts <file-path> [more-file-paths...]");
@@ -97,16 +100,35 @@ function run() {
       console.log(`No rotating audit partition types found in ${target}`);
     }
 
-    const updated = makeTriggerFilledColumnsOptional(stripped);
+    let updated = makeTriggerFilledColumnsOptional(stripped);
     if (updated !== stripped) {
       // eslint-disable-next-line no-console
       console.log(`Marked trigger-filled Insert columns optional in ${target}`);
     }
 
-    if (updated !== original) {
-      fs.writeFileSync(resolvedPath, updated, "utf8");
+    // Brand classified Row columns as Pii<kind, T> for the pii-render lint rule (bug reporter, package 4b).
+    if (path.basename(resolvedPath) === "SupabaseTypes.d.ts") {
+      const branded = brandPiiColumns(updated, (key) => COLUMNS[key]);
+      updated = branded.source;
+      // eslint-disable-next-line no-console
+      console.log(`Branded ${branded.branded} classified Row columns as Pii<kind, T> in ${target}`);
+    }
+    if (updated !== original) fs.writeFileSync(resolvedPath, updated, "utf8");
+
+    // The bug reporter's privacy classification must cover the public schema (lib/bugReport/privacy.ts).
+    if (path.basename(resolvedPath) === "SupabaseTypes.d.ts") {
+      const error = await runBugReportPostprocess(updated);
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error(error);
+        process.exitCode = 1;
+      }
     }
   }
 }
 
-run();
+run().catch((e) => {
+  // eslint-disable-next-line no-console
+  console.error(e);
+  process.exit(1);
+});
