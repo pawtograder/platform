@@ -13987,6 +13987,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      get_course_gemini_key_status: {
+        Args: { p_class_id: number };
+        Returns: Json;
+      };
       get_discord_circuit: {
         Args: { p_key: string; p_scope: string };
         Returns: {
@@ -14878,6 +14882,7 @@ export type Database = {
         Args: { p_column_id: number };
         Returns: undefined;
       };
+      remove_course_gemini_key: { Args: { p_class_id: number }; Returns: Json };
       reorder_surveys_in_series: {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
@@ -14974,6 +14979,10 @@ export type Database = {
       set_class_template_overrides: {
         Args: { p_class_id: number; p_handout?: string; p_solution?: string };
         Returns: undefined;
+      };
+      set_course_gemini_key: {
+        Args: { p_api_key: string; p_class_id: number };
+        Returns: Json;
       };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };
