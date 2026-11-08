@@ -77,6 +77,7 @@
   "/course/[course_id]/manage/course/flashcard-decks/[deck_id]/analytics",
   "/course/[course_id]/manage/course/flashcard-decks/[deck_id]/student-analytics",
   "/course/[course_id]/manage/course/flashcard-decks/analytics",
+  "/course/[course_id]/manage/course/gemini-api-key",
   "/course/[course_id]/manage/course/github",
   "/course/[course_id]/manage/course/grading-conflicts",
   "/course/[course_id]/manage/course/lab-roster",
