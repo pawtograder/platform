@@ -49,10 +49,12 @@ WORKDIR /app
 # not psql, but the readiness checks are cheaper via psql than spinning
 # up a tsx process.
 #
-# fonts-dejavu-core: the exam seeder renders exam page images from SVG with
+# fonts-liberation: the exam seeder renders exam page images from SVG with
 # sharp, and the slim base image has no fonts, so page text would be blank.
+# Liberation Sans has Helvetica's metrics, which the exam PDF layout uses; a
+# wider font such as DejaVu Sans runs lines past the page margin.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client ca-certificates fonts-dejavu-core \
+ && apt-get install -y --no-install-recommends postgresql-client ca-certificates fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy node_modules from deps stage (avoids re-downloading + reuses the

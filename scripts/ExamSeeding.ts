@@ -11,9 +11,11 @@
  * the seeder writes their results directly in the shapes the worker produces.
  *
  * Page images are rendered from SVG with sharp, using the draw operations that
- * generateExamPdf reports, so a page image lines up with its regions exactly. Text needs
- * a font installed (the seeder image installs DejaVu); without one, pages render with
- * boxes but no text.
+ * generateExamPdf reports, so a page image lines up with its regions exactly. That needs
+ * a font with Helvetica's metrics, since generateExamPdf lays text out with them: Liberation
+ * Sans or Nimbus Sans. The seeder image installs Liberation. Other fonts render wider than
+ * the layout allows (DejaVu Sans by about 14%), so lines run past the margin and no longer
+ * match the OCR word boxes. With no font at all, pages render with boxes but no text.
  */
 import { faker } from "@faker-js/faker";
 import { addDays, addMinutes } from "date-fns";
@@ -47,8 +49,10 @@ const SCALE = 2;
 const PAGE_W_PX = PAGE_W_PT * SCALE;
 const PAGE_H_PX = PAGE_H_PT * SCALE;
 
-const PRINT_FONT = "Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif";
-const HAND_FONT = "'Comic Neue', 'Patrick Hand', 'Comic Sans MS', 'Segoe Print', cursive, 'DejaVu Sans', sans-serif";
+// Metric-compatible with the Helvetica that generateExamPdf measures text with.
+const PRINT_FONT = "'Liberation Sans', 'Nimbus Sans', Helvetica, Arial, sans-serif";
+const HAND_FONT =
+  "'Comic Neue', 'Patrick Hand', 'Comic Sans MS', 'Segoe Print', cursive, 'Liberation Sans', sans-serif";
 const INK = "#1f3c88";
 
 const OBJECTIVE = new Set(["multiple_choice", "true_false", "numeric"]);
@@ -1074,6 +1078,28 @@ async function seedQuizAttempts(
 
 // ---------- Grading ----------
 
+/** Graders each student may not be graded by, from grading_conflicts. */
+async function loadGradingConflicts(classId: number): Promise<Map<string, Set<string>>> {
+  const conflicts = new Map<string, Set<string>>();
+  for (let from = 0; ; from += 1000) {
+    const rows = check(
+      await supabase
+        .from("grading_conflicts")
+        .select("grader_profile_id, student_profile_id")
+        .eq("class_id", classId)
+        .order("id")
+        .range(from, from + 999),
+      "read grading conflicts"
+    );
+    for (const r of rows) {
+      const set = conflicts.get(r.student_profile_id) ?? new Set<string>();
+      set.add(r.grader_profile_id);
+      conflicts.set(r.student_profile_id, set);
+    }
+    if (rows.length < 1000) return conflicts;
+  }
+}
+
 async function gradeExamSubmissions(
   scenario: SeedExamScenario,
   exam: SeededExam,
@@ -1093,17 +1119,26 @@ async function gradeExamSubmissions(
   );
   const checkByQuestion = new Map(checks.map((c) => [c.exam_question_id!, c]));
   const keyByQuestionId = new Map([...exam.questionIds].map(([k, id]) => [id, k]));
-  const reviews = check(
-    await supabase
-      .from("submissions")
-      .select("id, grading_review_id")
-      .in(
-        "id",
-        submissions.map((s) => s.submissionId)
-      ),
-    "read grading reviews"
-  );
-  const reviewBySubmission = new Map(reviews.map((r) => [r.id, r.grading_review_id]));
+  // In chunks: PostgREST caps a response at 1,000 rows, and a long id list overflows the URL.
+  const reviewBySubmission = new Map<number, number | null>();
+  for (let start = 0; start < submissions.length; start += 200) {
+    const ids = submissions.slice(start, start + 200).map((s) => s.submissionId);
+    const rows = check(
+      await supabase.from("submissions").select("id, grading_review_id").in("id", ids),
+      "read grading reviews"
+    );
+    for (const r of rows) reviewBySubmission.set(r.id, r.grading_review_id);
+  }
+  const conflicts = await loadGradingConflicts(classId);
+  /** The i-th grader in rotation, skipping any with a grading conflict for this student. */
+  const pickGrader = (student: TestingUser, i: number): string => {
+    const blocked = conflicts.get(student.private_profile_id);
+    for (let k = 0; k < staff.length; k++) {
+      const candidate = staff[(i + k) % staff.length].private_profile_id;
+      if (!blocked?.has(candidate)) return candidate;
+    }
+    return people.instructors[0]?.private_profile_id ?? staff[i % staff.length].private_profile_id;
+  };
   const now = new Date().toISOString();
   const due = addDays(new Date(), scenario.dueOffsetDays + 7).toISOString();
 
@@ -1111,7 +1146,7 @@ async function gradeExamSubmissions(
   await mapLimit(submissions, 6, async (sub, i) => {
     const reviewId = reviewBySubmission.get(sub.submissionId);
     if (!reviewId) return;
-    const grader = staff[i % staff.length].private_profile_id;
+    const grader = pickGrader(sub.student, i);
     const completed = Math.random() < scenario.grading!.completedFraction;
     if (completed) {
       const comments = [];
@@ -1182,13 +1217,27 @@ async function gradeExamSubmissions(
 
 // ---------- Entry point ----------
 
+/**
+ * Throw on an exam config that seedExams would reject. Called when the config is set, so
+ * a bad value fails before the seed writes anything.
+ */
+export function validateExamConfig(config: ExamConfig): void {
+  const unknown = (config.scenarios ?? []).filter((k) => !EXAM_SCENARIOS.some((s) => s.key === k));
+  if (unknown.length) {
+    throw new Error(
+      `Unknown exam scenarios: ${unknown.join(", ")}. Known: ${EXAM_SCENARIOS.map((s) => s.key).join(", ")}`
+    );
+  }
+  const max = config.maxScannedStudents;
+  if (max !== undefined && (!Number.isInteger(max) || max < 0)) {
+    throw new Error(`maxScannedStudents must be a non-negative integer, got ${max}`);
+  }
+}
+
 export async function seedExams(people: ClassPeople, config: ExamConfig = {}): Promise<ExamSeedSummary> {
+  validateExamConfig(config);
   const wanted = config.scenarios ? new Set(config.scenarios) : null;
   const scenarios = EXAM_SCENARIOS.filter((s) => !wanted || wanted.has(s.key));
-  if (wanted) {
-    const unknown = [...wanted].filter((k) => !EXAM_SCENARIOS.some((s) => s.key === k));
-    if (unknown.length) throw new Error(`Unknown exam scenarios: ${unknown.join(", ")}`);
-  }
   const maxScanned = config.maxScannedStudents ?? 40;
   console.log(`\n📝 Creating ${scenarios.length} exams and quizzes...`);
 

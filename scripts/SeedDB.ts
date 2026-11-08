@@ -582,10 +582,13 @@ function parseArgs(): CLIArgs {
         }
         break;
       case "--exam-scans":
-        if (nextArg && !nextArg.startsWith("--")) {
-          result.examScans = parseInt(nextArg, 10);
-          i++;
+        // Not `startsWith("--")`: that would take "-1" as a value, and parseInt accepts "5x".
+        if (!nextArg || !/^\d+$/.test(nextArg)) {
+          console.error(`--exam-scans needs a non-negative integer, got ${nextArg ?? "nothing"}`);
+          process.exit(1);
         }
+        result.examScans = Number(nextArg);
+        i++;
         break;
       case "--discussion-posts":
         if (nextArg && !nextArg.startsWith("--")) {

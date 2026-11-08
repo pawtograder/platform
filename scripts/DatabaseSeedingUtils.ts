@@ -50,7 +50,7 @@ import {
 } from "@/tests/fixtures/teamCollaborationSurvey";
 import type { QuestionAnalyticsConfig, SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import { SURVEYJS_TEMPLATES } from "./surveyTemplates";
-import { seedExams, type ExamConfig } from "./ExamSeeding";
+import { seedExams, validateExamConfig, type ExamConfig } from "./ExamSeeding";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -1306,6 +1306,8 @@ export class DatabaseSeeder {
   }
 
   withExams(config: ExamConfig): this {
+    // Validate here, not in seedExams, so a bad config fails before the class is created.
+    validateExamConfig(config);
     this.config.examConfig = config;
     return this;
   }
