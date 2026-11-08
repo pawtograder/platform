@@ -36,7 +36,11 @@ const tester = new RuleTester({
     parserOptions: {
       project: "./tsconfig.json",
       tsconfigRootDir: FIXTURES,
-      ecmaFeatures: { jsx: true }
+      ecmaFeatures: { jsx: true },
+      // With CI=true, typescript-eslint infers a one-shot CLI run and builds the program once from
+      // the files on disk, so these in-memory snippets lose their types (`rows.map((r) => ...)`
+      // gives `r: any`) and the rule reports nothing. Keep the per-file program the editor uses.
+      disallowAutomaticSingleRunInference: true
     }
   }
 });

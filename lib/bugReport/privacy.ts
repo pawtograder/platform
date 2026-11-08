@@ -2541,6 +2541,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.common_errors[*].sample_outputs": "free_text",
     "$.common_errors[*].error_signature": "free_text"
   },
+  get_course_gemini_key_status: "none",
   get_discord_circuit: { "$[*].open_until": "none", "$[*].state": "none" },
   get_discord_circuit_breaker_statuses: {
     "$[*].is_open": "none",
@@ -2839,6 +2840,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   release_code_walk_reviews_for_assignment: "none",
   release_grading_reviews_for_submissions: "none",
   release_instructor_only_gradebook_column: "none",
+  remove_course_gemini_key: "none",
   reorder_surveys_in_series: "none",
   repo_ids_with_dead_lettered_create: { "$[*].dead_lettered_at": "none", "$[*].repo_id": "none" },
   repo_ids_with_queued_create: "none",
@@ -2862,6 +2864,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   seed_default_class_roles: "none",
   send_signup_welcome_message: "none",
   set_class_template_overrides: "none",
+  set_course_gemini_key: "none",
   set_discussion_thread_topic: "none",
   set_discussion_thread_visibility: "none",
   set_pr_state: "none",
