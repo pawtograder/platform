@@ -1081,12 +1081,14 @@ export type Database = {
           allow_not_graded_submissions: boolean;
           allow_student_formed_groups: boolean | null;
           archived_at: string | null;
+          assignment_type: Database["public"]["Enums"]["assignment_type"];
           autograder_points: number | null;
           class_id: number;
           created_at: string;
           description: string | null;
           due_date: string;
           enable_repo_analytics: boolean;
+          git_provider: string;
           gradebook_column_id: number | null;
           grader_pseudonymous_mode: boolean;
           grading_rubric_id: number | null;
@@ -1132,12 +1134,14 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          assignment_type?: Database["public"]["Enums"]["assignment_type"];
           autograder_points?: number | null;
           class_id: number;
           created_at?: string;
           description?: string | null;
           due_date: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1183,12 +1187,14 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          assignment_type?: Database["public"]["Enums"]["assignment_type"];
           autograder_points?: number | null;
           class_id?: number;
           created_at?: string;
           description?: string | null;
           due_date?: string;
           enable_repo_analytics?: boolean;
+          git_provider?: string;
           gradebook_column_id?: number | null;
           grader_pseudonymous_mode?: boolean;
           grading_rubric_id?: number | null;
@@ -1764,6 +1770,21 @@ export type Database = {
           }
         ];
       };
+      capabilities: {
+        Row: {
+          description: string;
+          name: string;
+        };
+        Insert: {
+          description: string;
+          name: string;
+        };
+        Update: {
+          description?: string;
+          name?: string;
+        };
+        Relationships: [];
+      };
       class_metrics_totals: {
         Row: {
           active_graders_total: number | null;
@@ -1877,6 +1898,38 @@ export type Database = {
           }
         ];
       };
+      class_roles: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          default_for: Database["public"]["Enums"]["app_role"] | null;
+          id: number;
+          name: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          default_for?: Database["public"]["Enums"]["app_role"] | null;
+          id?: number;
+          name: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          default_for?: Database["public"]["Enums"]["app_role"] | null;
+          id?: number;
+          name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "class_roles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       class_sections: {
         Row: {
           campus: string | null;
@@ -1979,6 +2032,7 @@ export type Database = {
           end_date: string | null;
           events_ics_url: string | null;
           features: Json | null;
+          forgejo_org: string | null;
           github_org: string | null;
           gradebook_id: number | null;
           handout_template_repo: string | null;
@@ -2007,6 +2061,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -2035,6 +2090,7 @@ export type Database = {
           end_date?: string | null;
           events_ics_url?: string | null;
           features?: Json | null;
+          forgejo_org?: string | null;
           github_org?: string | null;
           gradebook_id?: number | null;
           handout_template_repo?: string | null;
@@ -3290,6 +3346,624 @@ export type Database = {
             columns: ["discussion_thread_id"];
             isOneToOne: false;
             referencedRelation: "discussion_threads";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Json | null;
+          error_message: string | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Json | null;
+          method: string | null;
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json | null;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          method?: string | null;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json | null;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          method?: string | null;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [];
+      };
+      exam_question_regions: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          exam_id: number;
+          exam_question_id: number | null;
+          height: number;
+          id: number;
+          kind: string;
+          page_number: number;
+          width: number;
+          x: number;
+          y: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          exam_id: number;
+          exam_question_id?: number | null;
+          height: number;
+          id?: number;
+          kind?: string;
+          page_number: number;
+          width: number;
+          x: number;
+          y: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          exam_id?: number;
+          exam_question_id?: number | null;
+          height?: number;
+          id?: number;
+          kind?: string;
+          page_number?: number;
+          width?: number;
+          x?: number;
+          y?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_question_regions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_question_exam_fkey";
+            columns: ["exam_question_id", "exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id", "exam_id"];
+          }
+        ];
+      };
+      exam_questions: {
+        Row: {
+          answer_type: string | null;
+          choices: Json | null;
+          class_id: number;
+          correct_answer: Json | null;
+          created_at: string;
+          exam_id: number;
+          grading_tolerance: number | null;
+          id: number;
+          label: string | null;
+          level: number;
+          ordinal: number;
+          parent_id: number | null;
+          points: number | null;
+          prompt: string | null;
+        };
+        Insert: {
+          answer_type?: string | null;
+          choices?: Json | null;
+          class_id: number;
+          correct_answer?: Json | null;
+          created_at?: string;
+          exam_id: number;
+          grading_tolerance?: number | null;
+          id?: number;
+          label?: string | null;
+          level: number;
+          ordinal?: number;
+          parent_id?: number | null;
+          points?: number | null;
+          prompt?: string | null;
+        };
+        Update: {
+          answer_type?: string | null;
+          choices?: Json | null;
+          class_id?: number;
+          correct_answer?: Json | null;
+          created_at?: string;
+          exam_id?: number;
+          grading_tolerance?: number | null;
+          id?: number;
+          label?: string | null;
+          level?: number;
+          ordinal?: number;
+          parent_id?: number | null;
+          points?: number | null;
+          prompt?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_questions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_questions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_questions_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_questions_parent_id_fkey";
+            columns: ["parent_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_scan_batches: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          error: string | null;
+          exam_id: number;
+          id: number;
+          original_pdf_path: string | null;
+          pages_per_exam: number;
+          status: string;
+          total_pages: number;
+          uploaded_by: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          error?: string | null;
+          exam_id: number;
+          id?: number;
+          original_pdf_path?: string | null;
+          pages_per_exam?: number;
+          status?: string;
+          total_pages?: number;
+          uploaded_by?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          error?: string | null;
+          exam_id?: number;
+          id?: number;
+          original_pdf_path?: string | null;
+          pages_per_exam?: number;
+          status?: string;
+          total_pages?: number;
+          uploaded_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_scan_batches_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_batches_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_scan_batches_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_scan_pages: {
+        Row: {
+          batch_id: number;
+          class_id: number;
+          created_at: string;
+          exam_id: number;
+          height: number;
+          id: number;
+          image_path: string;
+          ocr_data: Json | null;
+          ocr_text: string | null;
+          page_index: number;
+          scanned_submission_id: number | null;
+          width: number;
+        };
+        Insert: {
+          batch_id: number;
+          class_id: number;
+          created_at?: string;
+          exam_id: number;
+          height: number;
+          id?: number;
+          image_path: string;
+          ocr_data?: Json | null;
+          ocr_text?: string | null;
+          page_index: number;
+          scanned_submission_id?: number | null;
+          width: number;
+        };
+        Update: {
+          batch_id?: number;
+          class_id?: number;
+          created_at?: string;
+          exam_id?: number;
+          height?: number;
+          id?: number;
+          image_path?: string;
+          ocr_data?: Json | null;
+          ocr_text?: string | null;
+          page_index?: number;
+          scanned_submission_id?: number | null;
+          width?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_scan_pages_batch_class_fkey";
+            columns: ["batch_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_batch_id_fkey";
+            columns: ["batch_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_scanned_submission_id_fkey";
+            columns: ["scanned_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scanned_submissions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_scanned_submissions: {
+        Row: {
+          batch_id: number;
+          class_id: number;
+          created_at: string;
+          detected_name: string | null;
+          detected_sis_id: string | null;
+          exam_id: number;
+          exam_index: number;
+          extracted: Json | null;
+          finalized_at: string | null;
+          id: number;
+          match_confidence: number | null;
+          match_status: string;
+          matched_profile_id: string | null;
+          submission_id: number | null;
+        };
+        Insert: {
+          batch_id: number;
+          class_id: number;
+          created_at?: string;
+          detected_name?: string | null;
+          detected_sis_id?: string | null;
+          exam_id: number;
+          exam_index: number;
+          extracted?: Json | null;
+          finalized_at?: string | null;
+          id?: number;
+          match_confidence?: number | null;
+          match_status?: string;
+          matched_profile_id?: string | null;
+          submission_id?: number | null;
+        };
+        Update: {
+          batch_id?: number;
+          class_id?: number;
+          created_at?: string;
+          detected_name?: string | null;
+          detected_sis_id?: string | null;
+          exam_id?: number;
+          exam_index?: number;
+          extracted?: Json | null;
+          finalized_at?: string | null;
+          id?: number;
+          match_confidence?: number | null;
+          match_status?: string;
+          matched_profile_id?: string | null;
+          submission_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_scanned_submissions_batch_id_fkey";
+            columns: ["batch_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_matched_profile_id_fkey";
+            columns: ["matched_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_matched_profile_id_fkey";
+            columns: ["matched_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
+      exam_template_pages: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          exam_id: number;
+          height: number;
+          id: number;
+          image_path: string;
+          page_number: number;
+          width: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          exam_id: number;
+          height: number;
+          id?: number;
+          image_path: string;
+          page_number: number;
+          width: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          exam_id?: number;
+          height?: number;
+          id?: number;
+          image_path?: string;
+          page_number?: number;
+          width?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_template_pages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_template_pages_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_template_pages_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exams: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          created_at: string;
+          created_by: string | null;
+          delivery_mode: string;
+          id: number;
+          num_pages: number;
+          status: string;
+          template_markdown: string | null;
+          template_pdf_path: string | null;
+          template_source_type: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          created_at?: string;
+          created_by?: string | null;
+          delivery_mode?: string;
+          id?: number;
+          num_pages?: number;
+          status?: string;
+          template_markdown?: string | null;
+          template_pdf_path?: string | null;
+          template_source_type?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string | null;
+          delivery_mode?: string;
+          id?: number;
+          num_pages?: number;
+          status?: string;
+          template_markdown?: string | null;
+          template_pdf_path?: string | null;
+          template_source_type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "exams_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           }
         ];
@@ -6772,6 +7446,7 @@ export type Database = {
           creation_attempts: number;
           creation_error: string | null;
           desired_handout_sha: string | null;
+          git_provider: string;
           id: number;
           is_github_ready: boolean;
           last_creation_attempt_at: string | null;
@@ -6793,6 +7468,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -6814,6 +7490,7 @@ export type Database = {
           creation_attempts?: number;
           creation_error?: string | null;
           desired_handout_sha?: string | null;
+          git_provider?: string;
           id?: number;
           is_github_ready?: boolean;
           last_creation_attempt_at?: string | null;
@@ -7565,6 +8242,36 @@ export type Database = {
         };
         Relationships: [];
       };
+      role_capabilities: {
+        Row: {
+          capability: string;
+          role_id: number;
+        };
+        Insert: {
+          capability: string;
+          role_id: number;
+        };
+        Update: {
+          capability?: string;
+          role_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "role_capabilities_capability_fkey";
+            columns: ["capability"];
+            isOneToOne: false;
+            referencedRelation: "capabilities";
+            referencedColumns: ["name"];
+          },
+          {
+            foreignKeyName: "role_capabilities_role_id_fkey";
+            columns: ["role_id"];
+            isOneToOne: false;
+            referencedRelation: "class_roles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       rubric_check_references: {
         Row: {
           assignment_id: number;
@@ -7661,6 +8368,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           file: string | null;
           group: string | null;
           id: number;
@@ -7684,6 +8392,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           file?: string | null;
           group?: string | null;
           id?: number;
@@ -7707,6 +8416,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           file?: string | null;
           group?: string | null;
           id?: number;
@@ -7759,6 +8469,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "rubric_checks_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "rubric_checks_rubric_criteria_id_fkey";
             columns: ["rubric_criteria_id"];
             isOneToOne: false;
@@ -7781,6 +8498,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           id: number;
           is_additive: boolean;
           is_deduction_only: boolean;
@@ -7798,6 +8516,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_additive: boolean;
           is_deduction_only?: boolean;
@@ -7815,6 +8534,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_additive?: boolean;
           is_deduction_only?: boolean;
@@ -7863,6 +8583,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "rubric_criteria_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "rubric_criteria_rubric_id_fkey";
             columns: ["rubric_id"];
             isOneToOne: false;
@@ -7885,6 +8612,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           id: number;
           is_assign_to_student: boolean;
           is_individual_grading: boolean;
@@ -7898,6 +8626,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
@@ -7911,6 +8640,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
@@ -7952,6 +8682,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
             referencedColumns: ["id"];
           },
           {
@@ -10502,6 +11239,7 @@ export type Database = {
       user_privileges: {
         Row: {
           class_id: number;
+          class_role_id: number | null;
           private_profile_id: string | null;
           public_profile_id: string | null;
           role: Database["public"]["Enums"]["app_role"];
@@ -10509,6 +11247,7 @@ export type Database = {
         };
         Insert: {
           class_id: number;
+          class_role_id?: number | null;
           private_profile_id?: string | null;
           public_profile_id?: string | null;
           role: Database["public"]["Enums"]["app_role"];
@@ -10516,6 +11255,7 @@ export type Database = {
         };
         Update: {
           class_id?: number;
+          class_role_id?: number | null;
           private_profile_id?: string | null;
           public_profile_id?: string | null;
           role?: Database["public"]["Enums"]["app_role"];
@@ -10527,6 +11267,7 @@ export type Database = {
         Row: {
           canvas_id: number | null;
           class_id: number;
+          class_role_id: number;
           class_section_id: number | null;
           disabled: boolean;
           github_org_confirmed: boolean | null;
@@ -10544,6 +11285,7 @@ export type Database = {
         Insert: {
           canvas_id?: number | null;
           class_id: number;
+          class_role_id?: number;
           class_section_id?: number | null;
           disabled?: boolean;
           github_org_confirmed?: boolean | null;
@@ -10561,6 +11303,7 @@ export type Database = {
         Update: {
           canvas_id?: number | null;
           class_id?: number;
+          class_role_id?: number;
           class_section_id?: number | null;
           disabled?: boolean;
           github_org_confirmed?: boolean | null;
@@ -10589,6 +11332,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "user_roles_class_role_fkey";
+            columns: ["class_role_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "class_roles";
+            referencedColumns: ["id", "class_id"];
           },
           {
             foreignKeyName: "user_roles_class_section_id_fkey";
@@ -12909,6 +13659,11 @@ export type Database = {
         Args: { p_class_id: number; p_guild_id?: string };
         Returns: undefined;
       };
+      enqueue_exam_finalize: { Args: { p_batch_id: number }; Returns: number };
+      enqueue_exam_process_batch: {
+        Args: { p_batch_id: number };
+        Returns: number;
+      };
       enqueue_github_archive_repo: {
         Args: {
           p_class_id: number;
@@ -13021,6 +13776,29 @@ export type Database = {
           p_test_name_filter: string;
         };
         Returns: boolean;
+      };
+      exam_create: {
+        Args: {
+          p_assignment_id: number;
+          p_delivery_mode?: string;
+          p_num_pages?: number;
+          p_source_type?: string;
+          p_template_markdown?: string;
+          p_template_pdf_path?: string;
+        };
+        Returns: number;
+      };
+      exam_create_submission: {
+        Args: { p_scanned_submission_id: number };
+        Returns: number;
+      };
+      exam_sync_rubric_from_questions: {
+        Args: { p_exam_id: number; p_rubric_id: number };
+        Returns: undefined;
+      };
+      exam_upsert_questions_and_regions: {
+        Args: { p_exam_id: number; p_questions: Json; p_regions: Json };
+        Returns: undefined;
       };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
@@ -13708,6 +14486,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_exam_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_github_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -13944,6 +14726,12 @@ export type Database = {
         Args: { p_force?: boolean; p_repository_ids: number[] };
         Returns: Json;
       };
+      quiz_autograde: { Args: { p_submission_id: number }; Returns: undefined };
+      quiz_get_for_student: { Args: { p_assignment_id: number }; Returns: Json };
+      quiz_submit: {
+        Args: { p_answers: Json; p_assignment_id: number };
+        Returns: number;
+      };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };
         Returns: number;
@@ -14044,6 +14832,17 @@ export type Database = {
           roles_repaired: number;
         }[];
       };
+      reserve_github_staff_repo: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_is_grader: boolean;
+          p_latest_template_sha?: string;
+          p_repository: string;
+          p_upstream_repo?: string;
+        };
+        Returns: undefined;
+      };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
         Returns: undefined;
@@ -14097,6 +14896,10 @@ export type Database = {
       save_error_pin: {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;
+      };
+      seed_default_class_roles: {
+        Args: { p_class_id: number };
+        Returns: undefined;
       };
       send_signup_welcome_message: {
         Args: { p_user_id: string };
@@ -14177,6 +14980,28 @@ export type Database = {
       survey_allows_response_editing: {
         Args: { p_survey_id: string };
         Returns: boolean;
+      };
+      survey_apply_completion: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_profile_id: string;
+          p_revoke: boolean;
+        };
+        Returns: undefined;
+      };
+      survey_duplicate_question_names: {
+        Args: { p_json: Json };
+        Returns: string[];
+      };
+      survey_json_unwrapped: { Args: { p_json: Json }; Returns: Json };
+      survey_question_answer_key: { Args: { p_el: Json }; Returns: string };
+      survey_question_name_entries: {
+        Args: { p_elements: Json; p_path: string; p_scope: string };
+        Returns: {
+          name: string;
+          scope: string;
+        }[];
       };
       sync_calendar_events: {
         Args: {
@@ -14354,6 +15179,17 @@ export type Database = {
         };
         Returns: number;
       };
+      user_class_capabilities: {
+        Args: never;
+        Returns: {
+          capability: string;
+          class_id: number;
+        }[];
+      };
+      user_class_ids_with_capability: {
+        Args: { p_capability: string };
+        Returns: number[];
+      };
       user_is_in_help_request: {
         Args: { p_help_request_id: number; p_user_id?: string };
         Returns: boolean;
@@ -14379,6 +15215,7 @@ export type Database = {
         | "template_with_student_forks"
         | "fork_from_prior_assignment"
         | "no_submission";
+      assignment_type: "code" | "quiz" | "exam" | "survey";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
@@ -14586,6 +15423,7 @@ export const Constants = {
         "fork_from_prior_assignment",
         "no_submission"
       ],
+      assignment_type: ["code", "quiz", "exam", "survey"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: [
         "general",

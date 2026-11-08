@@ -45,7 +45,7 @@ $vault_guard$;
 
 CREATE SCHEMA course_secrets;
 COMMENT ON SCHEMA course_secrets IS
-  'Private (non-API) storage for course-owned credentials. No client role has USAGE. See 20261028160000_course_gemini_api_key.sql.';
+  'Private (non-API) storage for course-owned credentials. No client role has USAGE. See 20261108110000_course_gemini_api_key.sql.';
 REVOKE ALL ON SCHEMA course_secrets FROM PUBLIC;
 REVOKE ALL ON SCHEMA course_secrets FROM anon, authenticated, service_role;
 
