@@ -92,6 +92,20 @@ spec:
             # GOTRUE_JWT_ISSUER below, so this doesn't affect token validation.)
             - name: API_EXTERNAL_URL
               value: {{ include "pawtograder.api.url" . }}/auth/v1
+            {{- /*
+            Email links are API_EXTERNAL_URL resolved against a mailer URL path, and the default
+            path is the absolute "/verify", which replaces /auth/v1 instead of appending to it:
+            reset links pointed at https://api.<host>/verify and Kong answered "no Route matched".
+            Supabase's self-hosted config sets these to /auth/v1/verify for the same reason.
+            */}}
+            - name: GOTRUE_MAILER_URLPATHS_INVITE
+              value: /auth/v1/verify
+            - name: GOTRUE_MAILER_URLPATHS_CONFIRMATION
+              value: /auth/v1/verify
+            - name: GOTRUE_MAILER_URLPATHS_RECOVERY
+              value: /auth/v1/verify
+            - name: GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE
+              value: /auth/v1/verify
             - name: GOTRUE_SITE_URL
               value: {{ include "pawtograder.web.url" . }}
             {{- /* GoTrue allows any path on SITE_URL's host; other hosts need `/**` since `/*` matches one segment. */}}
