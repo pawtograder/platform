@@ -306,7 +306,9 @@ class GeminiVision {
           "the region where the student writes their name and the region for their student ID. Return strict " +
           'JSON: { "questions": [{ "client_id","parent_client_id","level","ordinal","label","prompt",' +
           '"answer_type","points" }], "regions": [{ "question_client_id"|null,"kind"(answer|name|student_id),' +
-          '"page_number","x","y","width","height" }] }.'
+          '"page_number","x","y","width","height" }] }. "answer_type" must be exactly one of "free_text", ' +
+          '"short_answer", "multiple_choice", "numeric" or "true_false"; use "free_text" for a section or ' +
+          "question that only groups sub-questions."
       },
       ...pages.map((p) => this.imagePart(p))
     ];

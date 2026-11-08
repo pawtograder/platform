@@ -1,6 +1,7 @@
 "use client";
 
 import { examExtractTemplate } from "@/lib/edgeFunctions";
+import { EXAM_ANSWER_TYPES, normalizeAnswerType } from "@/lib/exam/answerTypes";
 import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
@@ -37,7 +38,7 @@ type EditorRegion = {
   page_number: number;
 } & NormRect;
 
-const ANSWER_TYPES = ["free_text", "multiple_choice", "numeric", "true_false", "short_answer"];
+const ANSWER_TYPES = EXAM_ANSWER_TYPES;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -296,7 +297,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
           ordinal: q.ordinal,
           label: q.label,
           prompt: q.prompt,
-          answer_type: q.answer_type,
+          answer_type: normalizeAnswerType(q.answer_type),
           choices: q.choices,
           points: q.points,
           correct_answer: q.correct_answer,
@@ -372,7 +373,8 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
             level: q.level,
             ordinal: q.ordinal,
             label: q.label ?? "",
-            answer_type: q.answer_type ?? "free_text",
+            // Extraction can return types the database rejects, and parents hide the type selector.
+            answer_type: normalizeAnswerType(q.answer_type),
             points: q.points ?? 0,
             prompt: q.prompt ?? "",
             choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
