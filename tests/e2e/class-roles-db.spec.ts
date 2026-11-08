@@ -20,7 +20,7 @@
  * Step 4b (20261106140000_assignments_save_by_capability.sql): saving New and Edit Assignment follows
  * manage_assignments, in the database and in the edge functions those saves call.
  *
- * Step 5 (20261106150000_review_assignments_by_capability.sql): seeing and deleting review
+ * Step 5 (20261108120000_review_assignments_by_capability.sql): seeing and deleting review
  * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
