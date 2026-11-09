@@ -57,9 +57,18 @@ tests/e2e/forgejo-coder/run-remote.sh --namespace cs4535-workspaces \
 2. Forgejo, cold start. With no Pawtograder session, consent sends the user to sign in and back.
 3. Forgejo, deny. No account is created.
 4. Forgejo, repeat sign-in. GoTrue remembers the consent and the user gets the same account.
-5. Coder, already signed in. Coder creates an `oidc` account.
-6. Coder, cold start and deny.
+5. Coder, already signed in. The test first creates the user's Coder account the way
+   `workspace-open` does (#1222): an `oidc` user whose email is `<user id>@coder.pawtograder.invalid`.
+   The sign-in lands on that account and binds it to the user's id.
+6. Coder: cold start, deny (the account stays unbound), and a new Pawtograder account that took
+   another user's old email. That user's Coder account still has the real email, and the new account
+   doesn't get it: Coder refuses the sign-in.
 7. GoTrue refuses an authorize request whose `redirect_uri` isn't registered.
+
+The lane's Coder uses the chart's OIDC settings (`charts/pawtograder/templates/app-databases.yaml`):
+sign-ups off, and the email read from the access token's `coder_email` claim
+(`CODER_OIDC_EMAIL_FIELD`, `CODER_OIDC_ACCESS_TOKEN_CLAIMS`, `CODER_OIDC_IGNORE_USERINFO`,
+`CODER_OIDC_EMAIL_DOMAIN`, `CODER_OIDC_USERNAME_FIELD=sub`). Change them in both places.
 
 ## Things this lane found
 
