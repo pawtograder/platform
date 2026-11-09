@@ -128,7 +128,8 @@ postgres:
     forcePathStyle: true
     baseBackup:
       intervalHours: 24
-      keepBackups: 8   # ~8 days of PITR window
+    retention:
+      keepBackups: 8    # ~8 days of PITR window
 
   # Streaming standby replica: warm failover target + read scaling. local-path
   # is fine (own volume on another node); spreadAcrossNodes keeps it off the
