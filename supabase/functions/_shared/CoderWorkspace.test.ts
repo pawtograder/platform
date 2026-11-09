@@ -9,7 +9,8 @@
  * bound to another subject, the failing startup step with its log lines, a failed build, the
  * restart after a failed or lost agent (within open's time budget, finished by a status read when
  * the stop is slow), one start per restart however the callers interleave, answering within the
- * budget in real time when a Coder or database call hangs, readiness only with a connected agent, the editor
+ * budget in real time when a Coder or database call hangs, no claim taken without time to use it,
+ * a stale claim taken over, readiness only with a connected agent, the editor
  * URL, a group change, which repository a caller may open, the repo_url shape the template accepts,
  * and a Coder user that predates the Coder email (an account conflict until staff delete it).
  *
@@ -26,6 +27,7 @@ import {
   OPEN_BUDGET_MS,
   openWorkspace,
   type RepositoryRow,
+  RESTART_CLAIM_MS,
   startBudget,
   type WorkspaceDb,
   workspaceName,
@@ -407,7 +409,7 @@ class FakeDb implements WorkspaceDb {
   }
   async takeRestartStart(id: number, token: string) {
     const r = this.rows.find((r) => r.id === id)!;
-    if (r.restart_token !== token || r.restart_phase !== "stopping") return null;
+    if (r.restart_token !== token) return null;
     holdClaim(r, this.clock.iso(), "starting");
     return r.restart_token;
   }
@@ -1158,15 +1160,19 @@ Deno.test(
 );
 
 Deno.test("an abandoned claim expires: the workspace reads as it is, and the next restart retakes it", async () => {
+  assertEquals(RESTART_CLAIM_MS, 60_000, "a holder's 20 s budget plus a margin");
   const { clock, coder, db, deps } = await failedWorkspace();
-  holdClaim(db.rows[0], new Date(clock.t - 5 * 60_000 - 1).toISOString(), "stopping");
-  // A stale claim alone doesn't say restarting, and a status read doesn't act on it.
+  holdClaim(db.rows[0], new Date(clock.t - RESTART_CLAIM_MS - 1).toISOString(), "stopping");
+  // A stale `stopping` claim on a workspace that isn't stopped: its stop never reached Coder. It
+  // doesn't say restarting, and a status read doesn't act on it; only an open restarts.
   assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "failed");
-  coder.workspaces[0].latest_build.status = "running";
+  assertEquals(buildPosts(coder), []);
+  // Its stop did finish: a status read finishes the restart as usual.
   const ws = coder.workspaces[0];
   ws.latest_build = { ...ws.latest_build, transition: "stop", status: "stopped", resources: [] };
-  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "not_started");
-  assertEquals(buildPosts(coder), []);
+  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals(buildPosts(coder), ["start"]);
+  assertEquals(db.rows[0].restart_token, null);
 
   // A fresh claim held by another call: open waits for it instead of restarting.
   const { clock: clock2, coder: coder2, db: db2, deps: deps2 } = await failedWorkspace();
@@ -1174,15 +1180,15 @@ Deno.test("an abandoned claim expires: the workspace reads as it is, and the nex
   assertEquals((await openWorkspace(deps2, ALEX, { assignment_id: 41 })).status, "restarting");
   assertEquals(buildPosts(coder2), []);
   // Once it's stale, the next open takes it and restarts.
-  clock2.t += 5 * 60_000 + 1;
+  clock2.t += RESTART_CLAIM_MS + 1;
   coder2.autoBuild = true;
   assertEquals((await openWorkspace(deps2, ALEX, { assignment_id: 41 })).status, "ready");
   assertEquals(buildPosts(coder2), ["stop", "start"]);
   assertEquals(db2.rows[0].restart_started_at, null);
 
   // Stopped, with the claim in either phase and its holder gone. A fresh `starting` claim has its
-  // poster, so nothing else posts; once stale, the workspace reads not_started and the next open
-  // starts it and clears the claim.
+  // poster, so nothing else posts. Once stale, a status read retakes it, posts the start and clears
+  // the claim, and an open after it posts nothing.
   for (const phase of ["stopping", "starting"] as const) {
     const { clock: clock3, coder: coder3, db: db3, deps: deps3 } = await stoppedRestart();
     holdClaim(db3.rows[0], clock3.iso(), phase);
@@ -1191,12 +1197,26 @@ Deno.test("an abandoned claim expires: the workspace reads as it is, and the nex
       assertEquals((await openWorkspace(deps3, ALEX, { assignment_id: 41 })).status, "restarting");
       assertEquals(buildPosts(coder3), ["stop"]);
     }
-    clock3.t += 5 * 60_000 + 1;
-    assertEquals((await workspaceStatus(deps3, ALEX, { assignment_id: 41 })).status, "not_started", phase);
+    clock3.t += RESTART_CLAIM_MS + 1;
+    assertEquals((await workspaceStatus(deps3, ALEX, { assignment_id: 41 })).status, "starting", phase);
+    assertEquals(db3.rows[0].restart_phase, null, phase);
     assertEquals((await openWorkspace(deps3, ALEX, { assignment_id: 41 })).status, "starting", phase);
     assertEquals(buildPosts(coder3), ["stop", "start"], phase);
-    assertEquals(db3.rows[0].restart_phase, null, phase);
   }
+
+  // A stop that outlasts its claim (a pod held by a finalizer) still reads restarting, and nothing
+  // posts until it finishes.
+  const { clock: clock4, coder: coder4, db: db4, deps: deps4 } = await failedWorkspace();
+  coder4.latencyMs = 1_000;
+  assertEquals((await openWorkspace(deps4, ALEX, { assignment_id: 41 })).status, "restarting");
+  coder4.latencyMs = 0;
+  clock4.t += RESTART_CLAIM_MS + 1;
+  assertEquals((await workspaceStatus(deps4, ALEX, { assignment_id: 41 })).status, "restarting");
+  assertEquals((await openWorkspace(deps4, ALEX, { assignment_id: 41 })).status, "restarting");
+  assertEquals(buildPosts(coder4), ["stop"]);
+  coder4.workspaces[0].latest_build.status = "stopped";
+  assertEquals((await workspaceStatus(deps4, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals([buildPosts(coder4), db4.rows[0].restart_token], [["stop", "start"], null]);
 });
 
 /**
@@ -1324,8 +1344,12 @@ Deno.test("a status read takes over the open's restart: the open doesn't post a 
   assertEquals(buildPosts(coder), ["stop", "start"]);
 });
 
-/** Deps on real time, with a real budget that cuts off the fake Coder's calls. */
-function onRealTime(t: { clock: Clock; coder: FakeCoder; deps: Deps }, budgetMs: number): Deps {
+/** Deps on real time, with a real budget that cuts off the fake Coder's calls (through `base`). */
+function onRealTime(
+  t: { clock: Clock; coder: FakeCoder; deps: Deps },
+  budgetMs: number,
+  base: typeof fetch = t.coder.fetch
+): Deps {
   t.clock.now = Date.now;
   const budget = startBudget(budgetMs);
   return {
@@ -1333,9 +1357,29 @@ function onRealTime(t: { clock: Clock; coder: FakeCoder; deps: Deps }, budgetMs:
     now: undefined,
     sleep: undefined,
     budget,
-    coder: { ...t.deps.coder, fetch: budgetFetch(budget, t.coder.fetch) }
+    coder: { ...t.deps.coder, fetch: budgetFetch(budget, base) }
   };
 }
+
+/** A fetch whose first request `match` picks never reaches Coder: it fails when its signal fires. */
+function loseFirst(base: typeof fetch, match: (method: string, path: string, body: string) => boolean): typeof fetch {
+  let lost = false;
+  return async (input, init) => {
+    const path = new URL(String(input)).pathname.replace(/^\/api\/v2/, "");
+    if (!lost && match(init?.method ?? "GET", path, String(init?.body ?? ""))) {
+      lost = true;
+      const signal = init!.signal!;
+      await new Promise((_resolve, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }
+    return await base(input, init);
+  };
+}
+
+const isWorkspaceLookup = (method: string, path: string) => method === "GET" && /\/workspace\//.test(path);
+const isBuildPost = (method: string, path: string) => method === "POST" && path.endsWith("/builds");
 
 Deno.test(
   "a Coder call that hangs: open answers restarting within 20 s of real time, and a status read finishes",
@@ -1381,13 +1425,14 @@ Deno.test(
     assertEquals(err.status, 504);
     assertEquals(buildPosts(t.coder), []);
 
-    // A status read posts the start, but Coder's reply doesn't come back in time.
+    // A status read posts the start, but Coder's reply doesn't come back in time. The budget leaves
+    // the 5 s a claim needs.
     const r = await stoppedRestart();
     r.coder.slow = (method, path) => (method === "POST" && path.endsWith("/builds") ? 10_000 : 0);
-    const read = onRealTime(r, 3_000);
+    const read = onRealTime(r, 6_000);
     const t1 = Date.now();
     const res = await withinBudget(read.budget!, () => workspaceStatus(read, ALEX, { assignment_id: 41 }));
-    assert(Date.now() - t1 < 3_000, `answered after ${Date.now() - t1} ms`);
+    assert(Date.now() - t1 < 6_000, `answered after ${Date.now() - t1} ms`);
     assertEquals(res.status, "restarting");
     assertEquals(r.db.rows[0].restart_phase, "starting", "the start may have reached Coder");
     // It did: the next read sees its build, gives the claim up, and nothing else posts a start.
@@ -1400,6 +1445,82 @@ Deno.test(
     assertEquals(buildPosts(r.coder), ["stop", "start"]);
   }
 );
+
+Deno.test("a status read takes the claim only with time to post the start, and a lost start is retaken", async () => {
+  // The review's repro A: the workspace read comes back with too little of a 6 s budget left (its
+  // signal fires at 4 s), and the start POST would never reach Coder.
+  const r = await stoppedRestart();
+  let reads = 0;
+  r.coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 0 ? 1_500 : 0);
+  const late = onRealTime(r, 6_000, loseFirst(r.coder.fetch, isStartPost));
+  const res = await withinBudget(late.budget!, () => workspaceStatus(late, ALEX, { assignment_id: 41 }));
+  assertEquals(res.status, "restarting");
+  assertEquals([buildPosts(r.coder), r.db.rows[0].restart_phase], [["stop"], "stopping"], "left for the next read");
+  r.coder.slow = undefined;
+  assertEquals((await workspaceStatus(r.deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals([buildPosts(r.coder), r.db.rows[0].restart_token], [["stop", "start"], null]);
+
+  // A read with time to spare whose start still never reaches Coder: the claim is `starting` with no
+  // build behind it. Its holder may still be posting, so nothing else does until the claim is stale.
+  const s = await stoppedRestart();
+  const lossy = onRealTime(s, 6_000, loseFirst(s.coder.fetch, isStartPost));
+  const lost = await withinBudget(lossy.budget!, () => workspaceStatus(lossy, ALEX, { assignment_id: 41 }));
+  assertEquals(lost.status, "restarting");
+  assertEquals([buildPosts(s.coder), s.db.rows[0].restart_phase], [["stop"], "starting"]);
+  const takenAt = Date.parse(s.db.rows[0].restart_started_at!);
+  s.clock.t = takenAt + RESTART_CLAIM_MS - 1_000;
+  assertEquals((await workspaceStatus(s.deps, ALEX, { assignment_id: 41 })).status, "restarting");
+  assertEquals((await openWorkspace(s.deps, ALEX, { assignment_id: 41 })).status, "restarting");
+  assertEquals(buildPosts(s.coder), ["stop"]);
+  // Stale: the holder answered long ago. A status read retakes the claim and posts the start.
+  s.clock.t = takenAt + RESTART_CLAIM_MS + 1;
+  assertEquals((await workspaceStatus(s.deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals([buildPosts(s.coder), s.db.rows[0].restart_token], [["stop", "start"], null]);
+  assertEquals((await openWorkspace(s.deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals(buildPosts(s.coder), ["stop", "start"]);
+});
+
+Deno.test("an open takes the restart claim only with time to post the stop", async () => {
+  // The review's repro B: the workspace lookup comes back with too little of a 6 s budget left, and
+  // the stop POST would never reach Coder.
+  const t = await failedWorkspace();
+  let lookups = 0;
+  t.coder.slow = (method, path) => (isWorkspaceLookup(method, path) && lookups++ === 0 ? 1_500 : 0);
+  const deps = onRealTime(t, 6_000, loseFirst(t.coder.fetch, isBuildPost));
+  const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
+  assertEquals(res.status, "restarting");
+  assertEquals([buildPosts(t.coder), t.db.rows[0].restart_phase], [[], null], "no claim for anyone to wait on");
+  // The workspace reads as it is, and the next open restarts it.
+  t.coder.slow = undefined;
+  assertEquals((await workspaceStatus(t.deps, ALEX, { assignment_id: 41 })).status, "failed");
+  t.coder.autoBuild = true;
+  assertEquals((await openWorkspace(t.deps, ALEX, { assignment_id: 41 })).status, "ready");
+  assertEquals([buildPosts(t.coder), t.db.rows[0].restart_token], [["stop", "start"], null]);
+});
+
+Deno.test("an open that read the claim before it went stale doesn't post a start a status read took", async () => {
+  // The review's double-start window, at the claim's expiry. The open reads the row and its lookup
+  // is held; a status read takes the claim over and its start is held; the open goes on with the
+  // claim it read, now stale, on a workspace that still reads stopped.
+  const { clock, coder, db, deps } = await stoppedRestart();
+  const claimedAt = Date.parse(db.rows[0].restart_started_at!);
+  clock.t = claimedAt + RESTART_CLAIM_MS - 1;
+  const lookup = holdFirst(coder.fetch, isWorkspaceLookup);
+  const open = openWorkspace(holding(deps, lookup.fetch), ALEX, { assignment_id: 41 });
+  await lookup.reached;
+  const readStart = holdFirst(coder.fetch, isStartPost);
+  const read = workspaceStatus(holding(deps, readStart.fetch), ALEX, { assignment_id: 41 });
+  await readStart.reached;
+  assertEquals(db.rows[0].restart_phase, "starting");
+
+  clock.t = claimedAt + RESTART_CLAIM_MS + 1;
+  lookup.release();
+  assertEquals((await open).status, "restarting");
+  assertEquals(buildPosts(coder), ["stop"]);
+  readStart.release();
+  assertEquals((await read).status, "starting");
+  assertEquals([buildPosts(coder), db.rows[0].restart_token], [["stop", "start"], null]);
+});
 
 Deno.test("ready needs a connected agent: a lost agent is failed, and open restarts it", async () => {
   for (const status of ["disconnected", "timeout"]) {
