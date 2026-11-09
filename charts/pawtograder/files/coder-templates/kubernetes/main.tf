@@ -201,7 +201,8 @@ resource "coder_agent" "main" {
   arch = var.arch
   # Passed as variables so a quote in a name can't break the script.
   env = {
-    OWNER_GIT_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+    # The provider reports an empty name as "default", and Pawtograder's ID tokens carry the email as the name.
+    OWNER_GIT_NAME  = contains(["", "default", data.coder_workspace_owner.me.email], data.coder_workspace_owner.me.full_name) ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
     OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
   }
   startup_script = <<-EOT
