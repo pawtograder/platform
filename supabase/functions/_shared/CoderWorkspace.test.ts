@@ -7,8 +7,10 @@
  * workspace create, reuse and start, the concurrent-create 409 and 500, the unlinked external auth
  * and unsigned-in paths (always asking Coder about the student, never the service token), a user
  * bound to another subject, the failing startup step with its log lines, a failed build, the
- * restart after a failed or lost agent, readiness only with a connected agent, the editor URL, a
- * group change, which repository a caller may open, and the repo_url shape the template accepts.
+ * restart after a failed or lost agent (within open's time budget, finished by a status read when
+ * the stop is slow), readiness only with a connected agent, the editor URL, a group change, which
+ * repository a caller may open, the repo_url shape the template accepts, and a Coder user that
+ * predates the Coder email (an account conflict until staff delete it).
  *
  * Run from supabase/functions:
  *   deno test --no-check --allow-read --allow-env _shared/CoderWorkspace.test.ts
@@ -27,7 +29,7 @@ import {
   workspaceStatus
 } from "./CoderWorkspace.ts";
 import type { CoderAgent, CoderWorkspace } from "./CoderWrapper.ts";
-import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
+import { IllegalArgumentError, NotFoundError, SecurityError } from "./HandlerUtils.ts";
 
 const CODER_URL = "https://coder.example.com";
 const FORGEJO_URL = "https://git.example.com";
@@ -53,7 +55,21 @@ type FakeUser = {
   login_type: string;
   status: string;
   subject: string | null;
+  /** Coder soft-deletes users. */
+  deleted?: boolean;
 };
+
+/** Fake time: sleeps and Coder calls move it, so a test can measure what open spends. */
+class Clock {
+  t = Date.parse("2026-11-09T12:00:00Z");
+  now = () => this.t;
+  sleep = async (ms: number) => {
+    this.t += ms;
+  };
+  iso() {
+    return new Date(this.t).toISOString();
+  }
+}
 type Call = { method: string; path: string; body?: Record<string, unknown> };
 
 class FakeCoder {
@@ -89,7 +105,11 @@ class FakeCoder {
    * runs it with `nextAgent`. Otherwise builds stay pending.
    */
   autoBuild = false;
+  /** Fake milliseconds each Coder call takes. */
+  latencyMs = 0;
   private seq = 0;
+
+  constructor(private clock: Clock) {}
 
   newId(prefix: string) {
     this.seq++;
@@ -102,8 +122,9 @@ class FakeCoder {
     return user;
   }
 
+  /** Like Coder, a deleted user is still found by id (GetUserByID), but not by username. */
   findUser(key: string) {
-    return this.users.find((u) => u.id === key || u.username === key) ?? null;
+    return this.users.find((u) => u.id === key || (u.username === key && !u.deleted)) ?? null;
   }
 
   build(owner: FakeUser, name: string, repoUrl: string): CoderWorkspace {
@@ -136,6 +157,7 @@ class FakeCoder {
   fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     // Yield, so concurrent calls interleave the way two requests would.
     await new Promise((r) => setTimeout(r, 0));
+    this.clock.t += this.latencyMs;
     const url = new URL(String(input));
     assertEquals(url.origin, CODER_URL);
     assertEquals((init?.headers as Record<string, string>)["Coder-Session-Token"], "owner-token");
@@ -151,7 +173,8 @@ class FakeCoder {
     if (method === "GET" && path === "/organizations/default/templates/kubernetes") return json(200, TEMPLATE);
     if (method === "GET" && path === "/applications/host") return json(200, { host: "*.coder.example.com" });
     if (method === "POST" && path === "/users") {
-      if (this.users.some((u) => u.username === body.username || u.email.toLowerCase() === body.email.toLowerCase())) {
+      const live = this.users.filter((u) => !u.deleted);
+      if (live.some((u) => u.username === body.username || u.email.toLowerCase() === body.email.toLowerCase())) {
         if (this.userConflictAs === 500) {
           return json(500, {
             message: "Internal error creating user.",
@@ -167,7 +190,9 @@ class FakeCoder {
     }
     if (method === "GET" && path === "/users") {
       const email = url.searchParams.get("q")!.replace(/^email:/, "");
-      return json(200, { users: this.users.filter((u) => u.email.toLowerCase() === email.toLowerCase()) });
+      return json(200, {
+        users: this.users.filter((u) => !u.deleted && u.email.toLowerCase() === email.toLowerCase())
+      });
     }
     if ((m = path.match(/^\/debug\/([^/]+)\/debug-link$/))) {
       const u = this.findUser(decodeURIComponent(m[1]));
@@ -260,6 +285,7 @@ class FakeCoder {
 const ASSIGNMENT = { id: 41, class_id: 7, git_provider: "forgejo" };
 
 class FakeDb implements WorkspaceDb {
+  constructor(private clock: Clock) {}
   assignments = [ASSIGNMENT, { id: 42, class_id: 7, git_provider: "github" }];
   enrollments: { user_id: string; class_id: number; private_profile_id: string; disabled: boolean }[] = [
     { user_id: ALEX.userId, class_id: 7, private_profile_id: "prof-alex", disabled: false },
@@ -330,10 +356,21 @@ class FakeDb implements WorkspaceDb {
   restartClaims = 0;
   async claimRestart(id: number, staleBefore: string) {
     const r = this.rows.find((r) => r.id === id)!;
-    if (r.restart_started_at && r.restart_started_at >= staleBefore) return false;
-    r.restart_started_at = new Date().toISOString();
+    if (r.restart_started_at && r.restart_started_at >= staleBefore) return null;
+    r.restart_started_at = this.clock.iso();
     this.restartClaims++;
-    return true;
+    return r.restart_started_at;
+  }
+  async renewRestart(id: number, claim: string) {
+    const r = this.rows.find((r) => r.id === id)!;
+    if (r.restart_started_at !== claim) return null;
+    // Distinct from the old claim even when the clock hasn't moved.
+    r.restart_started_at = new Date(Math.max(this.clock.t, Date.parse(claim) + 1)).toISOString();
+    return r.restart_started_at;
+  }
+  async releaseRestart(id: number, claim: string) {
+    const r = this.rows.find((r) => r.id === id)!;
+    if (r.restart_started_at === claim) r.restart_started_at = null;
   }
   async deletionDate() {
     return "2026-12-31T00:00:00+00:00";
@@ -353,15 +390,17 @@ function repo(id: number, profileId: string | null, groupId: number | null, name
 }
 
 function setup() {
-  const coder = new FakeCoder();
-  const db = new FakeDb();
+  const clock = new Clock();
+  const coder = new FakeCoder(clock);
+  const db = new FakeDb(clock);
   const deps: Deps = {
     db,
     coder: { url: CODER_URL, token: "owner-token", fetch: coder.fetch },
     forgejoUrl: FORGEJO_URL,
-    sleep: async () => {}
+    now: clock.now,
+    sleep: clock.sleep
   };
-  return { coder, db, deps };
+  return { clock, coder, db, deps };
 }
 
 /** What the student's first Coder sign-in and Forgejo link do. */
@@ -434,18 +473,69 @@ Deno.test("never by real email: a Coder user with the caller's real email is nei
     assertEquals(coder.findUser(db.accounts[0].coder_user_id)!.email, coderEmail(ALEX.userId));
   }
   // Our deterministic username, but with a real email (made before the Coder email existed) or bound
-  // to someone else: refused, never adopted.
+  // to someone else: never adopted, an account conflict for staff.
   for (const u of [
     { email: ALEX.email, subject: null },
     { email: coderEmail(ALEX.userId), subject: "someone-else" }
   ]) {
     const { coder, db, deps } = setup();
-    coder.addUser({ username: coderUsername(ALEX.email, ALEX.userId), ...u });
-    const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
-    assertEquals(err.status, 409);
+    const taken = coder.addUser({ username: coderUsername(ALEX.email, ALEX.userId), ...u });
+    const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    assertEquals(res.status, "account_conflict");
+    assertEquals(res.coder_user_id, taken.id);
+    assert(res.message!.includes(`"${taken.username}"`), res.message);
     assertEquals(db.accounts.length, 0);
   }
 });
+
+Deno.test(
+  "a stored Coder user with a real email: account_conflict, not needs_linking forever; once staff delete it, a new one",
+  async () => {
+    const { coder, db, deps } = setup();
+    // Made before Coder sign-ins used the Coder email: the row proves Pawtograder made it, but Coder
+    // looks Alex's sign-in up by the Coder email, so Alex can never sign in to it.
+    const legacy = coder.addUser({ username: coderUsername(ALEX.email, ALEX.userId), email: ALEX.email });
+    db.accounts.push({
+      user_id: ALEX.userId,
+      instance_url: CODER_URL,
+      coder_user_id: legacy.id,
+      coder_username: legacy.username
+    });
+    for (let i = 0; i < 2; i++) {
+      const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+      assertEquals(res.status, "account_conflict");
+      assertEquals(res.coder_user_id, legacy.id);
+    }
+    // The same user without the row gets the same answer.
+    db.accounts = [];
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "account_conflict");
+    db.accounts.push({
+      user_id: ALEX.userId,
+      instance_url: CODER_URL,
+      coder_user_id: legacy.id,
+      coder_username: legacy.username
+    });
+    assertEquals(coder.posts(/\/workspaces$/).length, 0);
+    assertEquals(db.rows.length, 0);
+
+    // A user bound to Alex keeps working: Coder rewrites the email on Alex's next sign-in.
+    legacy.subject = ALEX.userId;
+    coder.forgejoLinked.add(legacy.id);
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+    coder.workspaces = [];
+    db.rows = [];
+    legacy.subject = null;
+
+    // Staff delete it. Coder still answers the deleted user by id, so it's looked up by username.
+    legacy.deleted = true;
+    const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    assertEquals(res.status, "needs_linking");
+    assert(res.coder_user_id !== legacy.id);
+    const fresh = coder.findUser(res.coder_user_id!)!;
+    assertEquals([fresh.username, fresh.email], [legacy.username, coderEmail(ALEX.userId)]);
+    assertEquals(db.accounts[0].coder_user_id, fresh.id);
+  }
+);
 
 Deno.test("unlinked Forgejo: needs_linking with the student's own link state, and no workspace", async () => {
   const { coder, db, deps } = setup();
@@ -884,33 +974,137 @@ Deno.test("two opens of a failed workspace restart it once", async () => {
     coder.posts(/\/builds$/).map((c) => c.body),
     [{ transition: "stop" }, { transition: "start" }]
   );
-  assertEquals(new Set([a.status, b.status]), new Set(["ready", "starting"]), "the other call says starting");
+  assertEquals(new Set([a.status, b.status]), new Set(["ready", "restarting"]), "the other call says restarting");
 });
 
-Deno.test("a slow stop: open answers starting, status reads say starting, and the next open starts it", async () => {
-  const { coder, db, deps } = setup();
-  await openWorkspace(deps, ALEX, { assignment_id: 41 });
-  signInAndLink(coder, ALEX);
-  coder.nextAgent = failedClone();
-  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+/** A workspace whose clone failed, so the next open restarts it; the fake's builds then stay pending. */
+async function failedWorkspace() {
+  const t = setup();
+  await openWorkspace(t.deps, ALEX, { assignment_id: 41 });
+  signInAndLink(t.coder, ALEX);
+  t.coder.nextAgent = failedClone();
+  await openWorkspace(t.deps, ALEX, { assignment_id: 41 });
+  t.coder.nextAgent = readyAgent();
+  return t;
+}
 
-  // The stop never finishes while open waits.
+const buildPosts = (coder: FakeCoder) => coder.posts(/\/builds$/).map((c) => c.body!.transition);
+
+Deno.test(
+  "a slow stop: open answers restarting within 20 s of real time, a status read posts the start, then ready",
+  async () => {
+    const { clock, coder, db, deps } = await failedWorkspace();
+    // Every Coder call takes a second, and the stop doesn't finish while open waits.
+    coder.latencyMs = 1_000;
+    const t0 = clock.t;
+    const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    const spent = clock.t - t0;
+    assert(spent <= 20_000, `open took ${spent} ms; Kong gives up at 60 s`);
+    assert(spent >= 15_000, `open gave the stop most of its budget (${spent} ms)`);
+    assertEquals([res.status, res.step, res.build!.transition], ["restarting", "build", "stop"]);
+    assertEquals(buildPosts(coder), ["stop"]);
+    const claim = db.rows[0].restart_started_at;
+    assert(claim !== null, "the claim stays while the stop runs");
+
+    // Still stopping: status reads say restarting and post nothing.
+    assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "restarting");
+    assertEquals(buildPosts(coder), ["stop"]);
+
+    // The stop finishes. The next status read posts the start and gives up the claim.
+    coder.workspaces[0].latest_build.status = "stopped";
+    const started = await workspaceStatus(deps, ALEX, { assignment_id: 41 });
+    assertEquals(buildPosts(coder), ["stop", "start"]);
+    assertEquals([started.status, started.build!.transition, started.build!.status], ["starting", "start", "pending"]);
+    assertEquals(db.rows[0].restart_started_at, null);
+
+    // Later reads see the start build, and nothing posts another.
+    assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
+    coder.autoBuild = true;
+    assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "ready");
+    assertEquals(buildPosts(coder), ["stop", "start"]);
+  }
+);
+
+Deno.test("a restart's start is posted once, by whichever call swaps the claim first", async () => {
+  // Two status reads, or a status read and an open, after the stop finished.
+  for (const second of [workspaceStatus, openWorkspace]) {
+    const { coder, db, deps } = await failedWorkspace();
+    coder.latencyMs = 1_000;
+    await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    coder.latencyMs = 0;
+    coder.workspaces[0].latest_build.status = "stopped";
+    const [a, b] = await Promise.all([
+      workspaceStatus(deps, ALEX, { assignment_id: 41 }),
+      second(deps, ALEX, { assignment_id: 41 })
+    ]);
+    assertEquals(buildPosts(coder), ["stop", "start"]);
+    if (second === workspaceStatus) {
+      // The two reads run in step: the loser saw the stopped workspace while the winner held the
+      // claim to post the start.
+      assertEquals(new Set([a.status, b.status]), new Set(["starting", "restarting"]));
+    } else {
+      // The open reaches the workspace after the read posted the start, and sees it starting.
+      assertEquals([a.status, b.status], ["starting", "starting"]);
+    }
+    assertEquals(db.rows[0].restart_started_at, null);
+  }
+});
+
+Deno.test("an open whose stop finishes within its budget starts the workspace itself", async () => {
+  const { coder, db, deps } = await failedWorkspace();
+  coder.autoBuild = true;
   const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
-  assertEquals(res.status, "starting");
-  assertEquals(res.build!.transition, "stop");
-  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
-  assert(db.rows[0].restart_started_at !== null);
-
-  // The stop finishes later; the next open starts the workspace.
-  coder.workspaces[0].latest_build.status = "stopped";
-  coder.nextAgent = readyAgent();
-  const next = await openWorkspace(deps, ALEX, { assignment_id: 41 });
-  assertEquals(next.status, "starting");
-  assertEquals(
-    coder.posts(/\/builds$/).map((c) => c.body),
-    [{ transition: "stop" }, { transition: "start" }]
-  );
+  assertEquals(buildPosts(coder), ["stop", "start"]);
+  assertEquals(res.status, "ready");
   assertEquals(db.rows[0].restart_started_at, null);
+});
+
+Deno.test(
+  "a failed start gives the claim up: the workspace reads not_started and the next open starts it",
+  async () => {
+    const { coder, db, deps } = await failedWorkspace();
+    coder.latencyMs = 1_000;
+    await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    coder.latencyMs = 0;
+    coder.workspaces[0].latest_build.status = "stopped";
+    const realFetch = coder.fetch;
+    deps.coder.fetch = async (input, init) =>
+      init?.method === "POST" && String(init.body).includes('"start"')
+        ? new Response(JSON.stringify({ message: "Internal error creating workspace build." }), { status: 500 })
+        : await realFetch(input, init);
+    await assertRejects(() => workspaceStatus(deps, ALEX, { assignment_id: 41 }), Error, "workspace start failed: 500");
+    assertEquals(db.rows[0].restart_started_at, null);
+    // Nothing is starting, so nothing says it is.
+    assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "not_started");
+
+    deps.coder.fetch = realFetch;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+    assertEquals(buildPosts(coder), ["stop", "start"]);
+  }
+);
+
+Deno.test("an abandoned claim expires: the workspace reads as it is, and the next restart retakes it", async () => {
+  const { clock, coder, db, deps } = await failedWorkspace();
+  db.rows[0].restart_started_at = new Date(clock.t - 5 * 60_000 - 1).toISOString();
+  // A stale claim alone doesn't say restarting, and a status read doesn't act on it.
+  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "failed");
+  coder.workspaces[0].latest_build.status = "running";
+  const ws = coder.workspaces[0];
+  ws.latest_build = { ...ws.latest_build, transition: "stop", status: "stopped", resources: [] };
+  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "not_started");
+  assertEquals(buildPosts(coder), []);
+
+  // A fresh claim held by another call: open waits for it instead of restarting.
+  const { clock: clock2, coder: coder2, db: db2, deps: deps2 } = await failedWorkspace();
+  db2.rows[0].restart_started_at = clock2.iso();
+  assertEquals((await openWorkspace(deps2, ALEX, { assignment_id: 41 })).status, "restarting");
+  assertEquals(buildPosts(coder2), []);
+  // Once it's stale, the next open takes it and restarts.
+  clock2.t += 5 * 60_000 + 1;
+  coder2.autoBuild = true;
+  assertEquals((await openWorkspace(deps2, ALEX, { assignment_id: 41 })).status, "ready");
+  assertEquals(buildPosts(coder2), ["stop", "start"]);
+  assertEquals(db2.rows[0].restart_started_at, null);
 });
 
 Deno.test("ready needs a connected agent: a lost agent is failed, and open restarts it", async () => {
