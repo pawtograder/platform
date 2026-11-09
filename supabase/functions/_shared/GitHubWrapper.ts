@@ -500,6 +500,93 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   }
   return undefined;
 }
+/** Permissions a scoped installation token may ask for, as `POST .../access_tokens` names them. */
+export type InstallationTokenPermissions = {
+  contents?: "read" | "write";
+  pull_requests?: "read" | "write";
+  /** GitHub offers only "write" for this one. */
+  workflows?: "write";
+};
+
+/** A scoped installation token and when GitHub expires it (at most an hour after minting). */
+export interface ScopedInstallationToken {
+  token: string;
+  expiresAt: string;
+}
+
+/**
+ * The request behind `getScopedInstallationToken`, with the App client passed in so a test can
+ * read exactly what is asked for.
+ *
+ * `repositories` takes repository NAMES, not `owner/name`: the installation already fixes the
+ * owner, and GitHub refuses the whole request with a 422 if any name is not granted to it.
+ */
+export async function requestScopedInstallationToken(
+  appOctokit: Pick<Octokit, "request">,
+  installationId: number,
+  repositories: readonly string[],
+  permissions: InstallationTokenPermissions
+): Promise<ScopedInstallationToken> {
+  const { data } = await appOctokit.request("POST /app/installations/{installation_id}/access_tokens", {
+    installation_id: installationId,
+    repositories: [...repositories],
+    permissions
+  });
+  return { token: data.token, expiresAt: data.expires_at };
+}
+
+/**
+ * Mints an installation token limited to `repositories` (names within `org`) and `permissions`
+ * (docs/handout-sync-git-worker.md §8.2). The handout sync gives each job one of these, so a
+ * leaked token reaches two repositories for at most an hour instead of the whole org.
+ *
+ * Never cached: a token is per job by design.
+ */
+export async function getScopedInstallationToken(
+  org: string,
+  repositories: readonly string[],
+  permissions: InstallationTokenPermissions,
+  scope?: Sentry.Scope
+): Promise<ScopedInstallationToken> {
+  scope?.setTag("github_operation", "create_scoped_installation_token");
+  for (const name of repositories) {
+    if (!name || name.includes("/")) {
+      throw new Error(
+        `getScopedInstallationToken takes repository names without an owner, got ${JSON.stringify(name)}`
+      );
+    }
+  }
+  const { installationId } = await getOctoKitAndInstallationID(org, scope);
+  if (installationId === undefined) {
+    throw new MissingInstallationError(`No GitHub installation found for organization ${org}`, org);
+  }
+  return await requestScopedInstallationToken(app.octokit, installationId, repositories, permissions);
+}
+
+/**
+ * An Octokit authenticated with a token minted by `getScopedInstallationToken`, throttled the
+ * same way as the per-installation clients `getOctoKit` builds: a rate limit fails the request
+ * instead of sleeping in it, so the worker backs off.
+ */
+export function octokitForInstallationToken(token: string, scope?: Sentry.Scope): Octokit {
+  return new MyOctokit({
+    auth: token,
+    throttle: {
+      connection: getBottleneckConnection() ?? undefined,
+      id: "pawtograder-production",
+      Bottleneck,
+      onRateLimit: () => {
+        Sentry.captureMessage("PrimaryRateLimit detected for request, not retrying (worker will backoff)", scope);
+        return false;
+      },
+      onSecondaryRateLimit: () => {
+        Sentry.captureMessage("SecondaryRateLimit detected for request, not retrying", scope);
+        return false;
+      }
+    }
+  });
+}
+
 /**
  * List the GitHub orgs the App is currently installed on, plus the URL an admin
  * can use to install it on a new org. Authenticated as the App itself (not an
