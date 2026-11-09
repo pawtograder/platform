@@ -331,6 +331,14 @@ edgeFunctions:
     # roll the edge-function Deployments once the Secret first exists. Not forgejo-staging, which
     # holds Forgejo's own passwords.
     - pawtograder-forgejo-webhook
+    # CODER_API_TOKEN, a Coder owner's token, for workspace-open and workspace-status, which answer
+    # 503 without it (CODER_URL comes from coder.coder.env). Needs a pawtograder-coder-api
+    # ExternalSecret syncing kv/apps/pawtograder/coder-api-staging (written by
+    # scripts/setup-openbao-edge-functions.sh --bundle coder-api); until then this entry is skipped,
+    # like any absent envFromSecrets name. envFrom is read at container start, so roll the
+    # edge-function Deployments once the Secret first exists. Not coder-staging, which holds Coder's
+    # own passwords.
+    - pawtograder-coder-api
   email:
     # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
     enabled: "true"
