@@ -452,7 +452,9 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   // Forgejo clone URL; the repository name carries the student's username
   "coder_workspaces.repo_url": "handle",
   "coder_workspaces.repository_id": "none",
+  "coder_workspaces.restart_phase": "none",
   "coder_workspaces.restart_started_at": "none",
+  "coder_workspaces.restart_token": "none",
   "coder_workspaces.student_inactive_seen_at": "none",
   "coder_workspaces.superseded_at": "none",
   "coder_workspaces.updated_at": "none",

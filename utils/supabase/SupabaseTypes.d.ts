@@ -2224,7 +2224,9 @@ export type Database = {
           profile_id: string | null;
           repo_url: Pii<"handle", string>;
           repository_id: number;
+          restart_phase: string | null;
           restart_started_at: string | null;
+          restart_token: string | null;
           student_inactive_seen_at: string | null;
           superseded_at: string | null;
           updated_at: string;
@@ -2248,7 +2250,9 @@ export type Database = {
           profile_id?: string | null;
           repo_url: string;
           repository_id: number;
+          restart_phase?: string | null;
           restart_started_at?: string | null;
+          restart_token?: string | null;
           student_inactive_seen_at?: string | null;
           superseded_at?: string | null;
           updated_at?: string;
@@ -2272,7 +2276,9 @@ export type Database = {
           profile_id?: string | null;
           repo_url?: string;
           repository_id?: number;
+          restart_phase?: string | null;
           restart_started_at?: string | null;
+          restart_token?: string | null;
           student_inactive_seen_at?: string | null;
           superseded_at?: string | null;
           updated_at?: string;

@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
-import { openWorkspace } from "../_shared/CoderWorkspace.ts";
+import { OPEN_BUDGET_MS, openWorkspace, startBudget, withinBudget } from "../_shared/CoderWorkspace.ts";
 import { workspaceRequestContext } from "../_shared/CoderWorkspaceDb.ts";
 import type { WorkspaceOpenResponse } from "../_shared/FunctionTypes.d.ts";
 import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
@@ -8,9 +8,13 @@ import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 // The Open in Coder button (#1095): creates the caller's Coder user and workspace if missing, starts
 // the workspace if it's stopped, and says where to send them.
 async function handleRequest(req: Request, scope: Sentry.Scope): Promise<WorkspaceOpenResponse> {
-  const { deps, caller, request } = await workspaceRequestContext(req);
-  scope.setTag("assignment_id", String(request.assignment_id));
-  return await openWorkspace(deps, caller, request);
+  // From the start of the request, so the sign-in check counts too.
+  const budget = startBudget(OPEN_BUDGET_MS);
+  return await withinBudget(budget, async () => {
+    const { deps, caller, request } = await workspaceRequestContext(req, budget);
+    scope.setTag("assignment_id", String(request.assignment_id));
+    return await openWorkspace(deps, caller, request);
+  });
 }
 
 Deno.serve(async (req) => {

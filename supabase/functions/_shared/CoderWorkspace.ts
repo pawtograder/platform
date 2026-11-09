@@ -32,7 +32,7 @@ import {
   getWorkspaceByName,
   postBuild
 } from "./CoderWrapper.ts";
-import { IllegalArgumentError, NotFoundError, SecurityError } from "./HandlerUtils.ts";
+import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 export const CODER_ORGANIZATION = "default";
 export const CODER_TEMPLATE = "kubernetes";
@@ -40,11 +40,15 @@ export const CODER_TEMPLATE = "kubernetes";
 export const CODER_EMAIL_DOMAIN = "coder.pawtograder.invalid";
 const LOG_LINES = 20;
 /**
- * How long workspace-open may take, from the start of the call. Kong cuts the request at 60 s (the
- * functions route sets no read_timeout, charts/pawtograder/templates/kong-config.yaml). A restart
- * whose stop outlasts this answers "restarting", and a status read posts the start.
+ * How long workspace-open may take, from the start of the request. Kong cuts the request at 60 s
+ * (the functions route sets no read_timeout, charts/pawtograder/templates/kong-config.yaml). A
+ * restart whose stop outlasts this answers "restarting", and a status read posts the start.
  */
-const OPEN_BUDGET_MS = 20_000;
+export const OPEN_BUDGET_MS = 20_000;
+/** The same for workspace-status, which posts at most a restart's start. */
+export const STATUS_BUDGET_MS = 20_000;
+/** Every Coder and database call is cut off this long before the deadline, to leave time to answer. */
+const RESPONSE_RESERVE_MS = 2_000;
 const RESTART_POLL_MS = 2_000;
 /** A restart claim older than this is abandoned, and the next open may restart again. */
 const RESTART_CLAIM_MS = 5 * 60_000;
@@ -69,6 +73,8 @@ export type WorkspaceRow = {
   coder_workspace_id: string | null;
   superseded_at: string | null;
   restart_started_at: string | null;
+  restart_phase: "stopping" | "starting" | null;
+  restart_token: string | null;
 };
 
 export interface WorkspaceDb {
@@ -114,14 +120,17 @@ export interface WorkspaceDb {
   getWorkspaceRow(userId: string, repositoryId: number, instanceUrl: string): Promise<WorkspaceRow | null>;
   updateWorkspaceRow(id: number, patch: { coder_workspace_id?: string | null; coder_user_id?: string }): Promise<void>;
   /**
-   * Sets restart_started_at unless a claim newer than staleBefore holds it. Returns the claim (the
-   * timestamp set) if this call won, null if not.
+   * Takes the restart claim in phase `stopping` with a new token, unless a claim newer than
+   * staleBefore holds it (in either phase). Returns the token if this call won, null if not.
    */
   claimRestart(id: number, staleBefore: string): Promise<string | null>;
-  /** Replaces the claim `claim` with a new one, so one caller posts a restart's start. Null if it changed. */
-  renewRestart(id: number, claim: string): Promise<string | null>;
-  /** Clears the claim if it is still `claim`. */
-  releaseRestart(id: number, claim: string): Promise<void>;
+  /**
+   * Moves the claim from `stopping` to `starting` with a new token, if `token` still holds it in
+   * `stopping`. One conditional update, so one caller wins and posts the start. Null if not.
+   */
+  takeRestartStart(id: number, token: string): Promise<string | null>;
+  /** Clears the claim if `token` still holds it. */
+  releaseRestart(id: number, token: string): Promise<void>;
   deletionDate(workspaceRowId: number): Promise<string | null>;
 }
 
@@ -129,10 +138,41 @@ export type Deps = {
   db: WorkspaceDb;
   coder: CoderConfig;
   forgejoUrl: string;
+  /** The request's budget; `db` and `coder` make their calls through budgetFetch with it. */
+  budget?: Budget;
   /** Tests pass a fake clock. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
+
+/** When the request has to have answered, and the signal that cuts its calls off before that. */
+export type Budget = { deadline: number; signal: AbortSignal };
+
+/** A budget of `ms` from now. Its signal fires RESPONSE_RESERVE_MS before the deadline. */
+export function startBudget(ms: number): Budget {
+  return { deadline: Date.now() + ms, signal: AbortSignal.timeout(ms - RESPONSE_RESERVE_MS) };
+}
+
+/** `fetch`, with every request aborted when the budget's signal fires. */
+export function budgetFetch(budget: Budget, base: typeof fetch = fetch): typeof fetch {
+  return (input, init) =>
+    base(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal });
+}
+
+/** Runs a request's work. A call the budget cut off, anywhere but a restart, is a 504 to retry. */
+export async function withinBudget<T>(budget: Budget, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (e) {
+    if (budget.signal.aborted)
+      throw new UserVisibleError("Coder or Pawtograder didn't answer in time. Try again.", 504);
+    throw e;
+  }
+}
+
+function outOfTime(deps: Deps): boolean {
+  return deps.budget?.signal.aborted ?? false;
+}
 
 /** The Coder email for a Pawtograder user. Only a token for that user carries it. */
 export function coderEmail(userId: string): string {
@@ -448,11 +488,17 @@ export async function describeWorkspace(
 }
 
 async function withDeletionDate(
-  db: WorkspaceDb,
+  deps: Deps,
   rowId: number,
   response: WorkspaceOpenResponse
 ): Promise<WorkspaceOpenResponse> {
-  return { ...response, deletion_date: await db.deletionDate(rowId) };
+  try {
+    return { ...response, deletion_date: await deps.db.deletionDate(rowId) };
+  } catch (e) {
+    // The date is a detail; the next status read has it.
+    if (outOfTime(deps)) return response;
+    throw e;
+  }
 }
 
 function clock(deps: Deps): () => number {
@@ -468,37 +514,64 @@ function isStopped(ws: CoderWorkspace): boolean {
 }
 
 /**
- * Posts the start of a restart, then gives up the claim. A failed start leaves the workspace
- * stopped, which reads not_started, and the next open starts it.
+ * A `starting` claim whose start build exists. While a claim is `starting` only its holder posts a
+ * start, so the build is the holder's, which didn't get to give the claim up (it ran out of time or
+ * died after posting). Gives it up, so the workspace reads as it is.
  */
-async function startRestart(deps: Deps, rowId: number, claim: string, ws: CoderWorkspace): Promise<CoderWorkspace> {
-  const error = await postBuild(deps.coder, ws.id, "start");
-  await deps.db.releaseRestart(rowId, claim);
-  if (error && error.status !== 409) throw error;
-  return (await getWorkspace(deps.coder, ws.id)) ?? ws;
+async function settleRestart(deps: Deps, row: WorkspaceRow, ws: CoderWorkspace): Promise<WorkspaceRow> {
+  if (row.restart_phase !== "starting" || ws.latest_build.transition !== "start") return row;
+  await deps.db.releaseRestart(row.id, row.restart_token!);
+  return { ...row, restart_started_at: null, restart_phase: null, restart_token: null };
 }
 
 /**
- * The start of a restart whose stop has finished after the open that stopped it answered. The
- * claim is swapped first, so one caller posts it, and is held until the start is posted. Returns
- * restarting: true when another call holds it.
+ * Posts the start of a restart whose stop has finished, if this call wins the claim's move from
+ * `stopping` (held by `token`) to `starting`. Whoever loses posts nothing: while the claim is
+ * `starting`, its holder is the only caller that may. The claim is given up once the start is
+ * posted. A failed start leaves the workspace stopped, which reads not_started, and the next open
+ * starts it. Returns restarting: true when another call posts the start, or this one ran out of time.
+ */
+async function startRestart(
+  deps: Deps,
+  rowId: number,
+  token: string,
+  ws: CoderWorkspace
+): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
+  const { db, coder } = deps;
+  try {
+    const starting = await db.takeRestartStart(rowId, token);
+    if (!starting) return { ws, restarting: true };
+    const error = await postBuild(coder, ws.id, "start");
+    await db.releaseRestart(rowId, starting);
+    if (error && error.status !== 409) throw error;
+    return { ws: (await getWorkspace(coder, ws.id)) ?? ws, restarting: false };
+  } catch (e) {
+    // The claim stays. If the start reached Coder, the next read sees its build and settles it.
+    if (outOfTime(deps)) return { ws, restarting: true };
+    throw e;
+  }
+}
+
+/**
+ * The start of a restart whose stop finished after the open that stopped it answered. Only a
+ * `stopping` claim can be taken: a `starting` one has its poster. Returns restarting: true when
+ * another call posts the start.
  */
 async function finishRestart(
   deps: Deps,
   row: WorkspaceRow,
   ws: CoderWorkspace
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
-  const claim = await deps.db.renewRestart(row.id, row.restart_started_at!);
-  if (!claim) return { ws, restarting: true };
-  return { ws: await startRestart(deps, row.id, claim, ws), restarting: false };
+  if (row.restart_phase !== "stopping") return { ws, restarting: true };
+  return await startRestart(deps, row.id, row.restart_token!, ws);
 }
 
 /**
- * Stops the workspace and, if the stop finishes before `deadline`, starts it again. The home volume
- * outlives the stop (#1221's PVC has no count), so the clone and any work on it are kept. Only one
- * call restarts a workspace at a time: the row's restart claim decides which. Returns the workspace
- * and whether the restart is still under way without a start build (another call holds the claim,
- * or the stop outlasted the deadline; the claim is then kept, and a status read posts the start).
+ * Stops the workspace and, if the stop finishes in time, starts it again. The home volume outlives
+ * the stop (#1221's PVC has no count), so the clone and any work on it are kept. Only one call
+ * restarts a workspace at a time: the row's restart claim decides which. Returns the workspace and
+ * whether the restart is still under way without a start build (another call holds the claim, or
+ * time ran short; the claim then stays `stopping`, and a status read posts the start).
  */
 async function restartWorkspace(
   deps: Deps,
@@ -508,27 +581,35 @@ async function restartWorkspace(
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
   const { db, coder } = deps;
   const now = clock(deps);
-  const claim = await db.claimRestart(row.id, new Date(now() - RESTART_CLAIM_MS).toISOString());
-  if (!claim) return { ws, restarting: true };
-  const stopError = await postBuild(coder, ws.id, "stop");
-  if (stopError && stopError.status !== 409) {
-    await db.releaseRestart(row.id, claim);
-    throw stopError;
-  }
+  const token = await db.claimRestart(row.id, new Date(now() - RESTART_CLAIM_MS).toISOString());
+  if (!token) return { ws, restarting: true };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  for (;;) {
-    ws = (await getWorkspace(coder, ws.id)) ?? ws;
-    if (isStopped(ws)) break;
-    // A 409 means another build was already active, so this may not be a stop. A stop that failed
-    // or a build that isn't a stop is reported as it is.
-    if (ws.latest_build.transition !== "stop" || !BUILD_IN_PROGRESS.has(ws.latest_build.status)) {
-      await db.releaseRestart(row.id, claim);
-      return { ws, restarting: false };
+  try {
+    const stopError = await postBuild(coder, ws.id, "stop");
+    if (stopError && stopError.status !== 409) {
+      await db.releaseRestart(row.id, token);
+      throw stopError;
     }
-    if (now() + RESTART_POLL_MS > deadline) return { ws, restarting: true };
-    await sleep(RESTART_POLL_MS);
+    for (;;) {
+      ws = (await getWorkspace(coder, ws.id)) ?? ws;
+      // A 409 means another build was already active, so this may not be a stop. A stop that failed
+      // or a build that isn't a stop is reported as it is.
+      const stopping = ws.latest_build.transition === "stop" && BUILD_IN_PROGRESS.has(ws.latest_build.status);
+      if (!isStopped(ws) && !stopping) {
+        await db.releaseRestart(row.id, token);
+        return { ws, restarting: false };
+      }
+      // Checked before the start too, which needs time of its own.
+      if (now() + RESTART_POLL_MS > deadline - RESPONSE_RESERVE_MS) return { ws, restarting: true };
+      if (isStopped(ws)) break;
+      await sleep(RESTART_POLL_MS);
+    }
+  } catch (e) {
+    // The claim stays `stopping`, and a status read starts the workspace once the stop finishes.
+    if (outOfTime(deps)) return { ws, restarting: true };
+    throw e;
   }
-  return { ws: await startRestart(deps, row.id, claim, ws), restarting: false };
+  return await startRestart(deps, row.id, token, ws);
 }
 
 /**
@@ -541,7 +622,7 @@ export async function openWorkspace(
   request: WorkspaceOpenRequest
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
-  const deadline = clock(deps)() + OPEN_BUDGET_MS;
+  const deadline = deps.budget?.deadline ?? clock(deps)() + OPEN_BUDGET_MS;
   const { repo, profileId, classId } = await resolveRepository(db, caller, request);
   const repoUrl = cloneUrl(deps.forgejoUrl, repo.repository);
   let user: CoderUser;
@@ -604,6 +685,7 @@ export async function openWorkspace(
 
   let restarting = false;
   let ws = await getWorkspaceByName(coder, user.id, name);
+  if (ws) row = await settleRestart(deps, row, ws);
   if (!ws) {
     const created = await createWorkspace(coder, user.id, {
       template_id: template.id,
@@ -638,17 +720,19 @@ export async function openWorkspace(
   } else if (isStopped(ws) || ws.latest_build.status === "failed" || ws.latest_build.status === "canceled") {
     // Stopped after an hour unused, or a build that failed (Retry). An abandoned claim goes too.
     const error = await postBuild(coder, ws.id, "start");
-    if (row.restart_started_at) await db.releaseRestart(row.id, row.restart_started_at);
+    if (row.restart_token) await db.releaseRestart(row.id, row.restart_token);
     if (error && error.status !== 409) throw error;
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
   } else {
     restarting = restartClaimed(deps, row);
   }
 
+  // Out of time in a restart: answer with what's known, and leave the rest to status reads.
+  if (outOfTime(deps)) return await describeWorkspace(coder, ws, restarting);
   if (row.coder_workspace_id !== ws.id) {
     await db.updateWorkspaceRow(row.id, { coder_workspace_id: ws.id });
   }
-  return await withDeletionDate(db, row.id, await describeWorkspace(coder, ws, restarting));
+  return await withDeletionDate(deps, row.id, await describeWorkspace(coder, ws, restarting));
 }
 
 /**
@@ -662,15 +746,16 @@ export async function workspaceStatus(
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
   const { repo } = await resolveRepository(db, caller, request);
-  const row = await db.getWorkspaceRow(caller.userId, repo.id, coder.url);
+  let row = await db.getWorkspaceRow(caller.userId, repo.id, coder.url);
   if (!row?.coder_workspace_id) return { status: "not_started" };
   let ws = await getWorkspace(coder, row.coder_workspace_id);
-  if (!ws) return await withDeletionDate(db, row.id, { status: "not_started" });
+  if (!ws) return await withDeletionDate(deps, row.id, { status: "not_started" });
+  row = await settleRestart(deps, row, ws);
   let restarting = restartClaimed(deps, row);
   if (restarting && isStopped(ws)) {
     // workspace-open stopped the workspace to restart it and answered before the stop finished.
     // Nothing else would start it, so this is the one build a status read posts.
     ({ ws, restarting } = await finishRestart(deps, row, ws));
   }
-  return await withDeletionDate(db, row.id, await describeWorkspace(coder, ws, restarting));
+  return await withDeletionDate(deps, row.id, await describeWorkspace(coder, ws, restarting));
 }
