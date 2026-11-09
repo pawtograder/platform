@@ -138,7 +138,8 @@ on conflict (key) do nothing;
 -- ---------------------------------------------------------------------------------------------
 -- 4. queue_repository_syncs
 -- ---------------------------------------------------------------------------------------------
--- Copied from 20260915120000_dedupe_queued_repository_syncs.sql, whose header explains the claim
+-- Copied from 20260915120000_dedupe_queued_repository_syncs.sql, with the access check of
+-- 20261106140000_assignments_save_by_capability.sql. The 20260915 header explains the claim
 -- this keeps: the unarchived queue message IS the claim that a sync for this repository at this
 -- revision is queued or running, read after `for update of r`, with an unreadable queue answering
 -- "nothing pending". Every guarantee in that header still holds. What changes:
@@ -216,15 +217,17 @@ begin
         raise exception 'All repositories must belong to the same class';
     end if;
 
-    if not exists (
-        select 1 from public.user_privileges up
-        where up.user_id = auth.uid()
-          and (up.role = 'admin' or (up.class_id = v_class_id and up.role = 'instructor'))
+    -- Admins of any course, or holders of manage_assignments in this class (#1010): Edit Assignment
+    -- queues these syncs through assignment-sync-autograder-workflow with the editor's own JWT.
+    -- Carried over unchanged from 20261106140000_assignments_save_by_capability.sql.
+    if not (
+        exists (select 1 from public.user_privileges up where up.user_id = auth.uid() and up.role = 'admin')
+        or v_class_id in (select public.user_class_ids_with_capability('manage_assignments'))
     ) then
-        raise exception 'Only instructors can queue repository syncs';
+        raise exception 'manage_assignments is required to queue repository syncs for class %', v_class_id;
     end if;
 
-    -- The routing switch (section 3 of 20261101120000). Strict comparisons on purpose: a missing
+    -- The routing switch (section 3 of 20261109120000). Strict comparisons on purpose: a missing
     -- row, a non-object value or a mistyped field all leave both flags false, which is the REST
     -- path this function took before the switch existed. `->` on a jsonb scalar or array yields
     -- NULL rather than raising, so no shape of the value can make this statement fail.
@@ -573,7 +576,7 @@ BEGIN
 
     -- Handout syncs already queued for those repositories, on every queue a sync can be on:
     -- async_calls and async_calls_low_priority (the edge worker) and handout_sync (the git
-    -- worker, 20261101120000, whose running test is different and is described at git_q).
+    -- worker, 20261109120000, whose running test is different and is described at git_q).
     -- An unclaimed one would write a sync branch into a repository that is about to be
     -- archived, so it is cancelled. A RUNNING one (defined below) cannot be
     -- stopped from here: deleting its queue row does not stop the worker holding the envelope,
@@ -654,7 +657,7 @@ BEGIN
                AND q.message->'args'->>'repository_id' = ANY (v_repository_ids::text[])
                FOR UPDATE OF q
         ), git_q AS (
-            -- The git worker's queue (20261101120000). Its heartbeat keeps vt in the future for
+            -- The git worker's queue (20261109120000). Its heartbeat keeps vt in the future for
             -- as long as a job runs, so a claimed message is a running one and there is no org
             -- slot to consult; the marker arm still covers a heartbeat that failed mid-job. A
             -- shadow copy pushes nothing and writes nothing to the repository, so it is never
