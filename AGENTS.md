@@ -37,6 +37,8 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
 
 Run `npm run seed` to create a test class with students, assignments, and login credentials. The output includes instructor/grader/student emails (all with password `change-it`). The instructor dashboard is at `/course/<class_id>`.
 
+Every template also seeds the exam and quiz scenarios in `scripts/examTemplates.ts`: paper exams with generated or uploaded templates, scan batches in each state, finalized and graded submissions, and in-app quizzes with autograded attempts. `--exams none` skips them, `--exams midterm-1,quiz-1` picks some, and `--exam-scans <n>` caps how many students get scanned papers per exam. Page images are rendered with sharp and need a system font to show text.
+
 ### Before committing
 
 **Always** run `npm run format` before committing. This runs Prettier on the entire codebase. CI will reject unformatted code.
@@ -63,6 +65,22 @@ Run `npm run seed` to create a test class with students, assignments, and login 
   4. You can verify Edge Functions are working: `curl http://127.0.0.1:54321/functions/v1/autograder-create-submission` should return `{"error":{"recoverable":false,"message":"No token provided","details":"No token provided"}}` (not `WORKER_ERROR`).
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
+
+### Bug reporter test tiers
+
+The bug reporter (`lib/bugReport/`) has three CI tiers. Test IDs such as F7 and K1 are the ones the spec and the specs' titles use.
+
+| Tier    | Where                                                                                                                                                                                                  | What runs                                                                                                                                                                                                                                                                                          | Sentry                                                                  |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| PR      | `lint.yml` (Jest, `tests/unit/bugReport*`), `lint.yml` deno job (`npm run test:functions`, which includes the purge unit tests), `deploy.yml` e2e-local (`tests/e2e/bugReport/` with every other spec) | Every PR. The e2e build has `E2E_ENABLE=true` (test hooks, harness pages) and the `ci-fast` profile                                                                                                                                                                                                | None. `captureTunnel` answers `/api/tunnel` locally; G1 uses a stub DSN |
+| Nightly | `bug-reporter-nightly.yml`                                                                                                                                                                             | Daily, on dispatch, and on PRs labeled `bug-reporter-full`. Lane `sentry`: F8 smoke, then F7 and H1-H3. Lane `local`: K1-K3, then the taint trace over the whole suite (I1-I4)                                                                                                                     | Real dev Sentry in the `sentry` lane only                               |
+| Release | `bug-reporter-release.yml`                                                                                                                                                                             | PRs that change a `@sentry/*` or `@sentry-internal/*` version (Renovate groups them and adds the `bug-reporter-release` label), promotion PRs from `staging` into `main`, staging pushes that change those versions or the Sentry wiring, and dispatch. Runs F8, F7, and the ADR 8 contract checks | Real dev Sentry                                                         |
+
+Both Sentry tiers build with `SENTRY_BUILD_PROFILE=full` and are gated by `_trust-gate.yml`, like e2e-local. If F8 fails, the run reports a Sentry infrastructure fault and skips the rest of its lane. The taint trace posts the diff of `lib/bugReport/generated/` in the job summary and as an artifact for review, and never commits. Reports, measurements, and Playwright HTML reports are uploaded as artifacts.
+
+Repository secrets the Sentry tiers need: `SENTRY_URL`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN`, and `NEXT_PUBLIC_SENTRY_DSN` for the dev Sentry (human task HU2), and `SENTRY_PURGE_TOKEN` for H1-H3 (HU3; those tests are skipped without it). The optional repository variable `SENTRY_PROJECT` defaults to `pawtograder-web`.
+
+To run a nightly group locally, build with `SENTRY_BUILD_PROFILE=full E2E_ENABLE=true` (plus the Sentry variables for F7 and F8) and use `scripts/bugReport/ci-playwright.sh <group> <playwright args>`, which the workflows use too. The K tests need `BUG_REPORT_NIGHTLY=1`; the trace needs `BUG_REPORT_TRACE=1` (see `lib/bugReport/PRIVACY_REVIEW.md`).
 
 ### Operator CLI
 

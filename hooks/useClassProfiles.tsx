@@ -8,7 +8,8 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { registerRowSource, unregisterRowSource, type IngestRowSource } from "@/lib/bugReport/ingestGate";
 import useAuthState from "./useAuthState";
 import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
 type ClassProfileContextType = {
@@ -108,6 +109,40 @@ export function useIsReadOnly() {
   return isReadOnly;
 }
 
+/** The viewer's capabilities in the current class, fetched once per class page by `ClassCapabilitiesProvider`. */
+export type ClassCapabilitiesState = { capabilities: ReadonlySet<string>; isLoading: boolean };
+
+export const ClassCapabilitiesContext = createContext<ClassCapabilitiesState | undefined>(undefined);
+
+/**
+ * Whether the viewer holds capability `name` in the current class, as decided by
+ * `user_class_capabilities()` — the same rule RLS uses (docs/capabilities.md). Returns `false`
+ * while loading, so a control never flashes on for someone who can't use it, and `false` while
+ * an instructor is viewing as a student, like {@link useIsInstructor}.
+ */
+export function useCapability(name: string) {
+  const state = useContext(ClassCapabilitiesContext);
+  if (!state || state.isLoading) {
+    return false;
+  }
+  return state.capabilities.has(name);
+}
+
+/**
+ * Like {@link useCapability}, but `undefined` until the answer is in, for a page that should
+ * wait before sending someone away.
+ */
+export function useCapabilityOnceLoaded(name: string): boolean | undefined {
+  const state = useContext(ClassCapabilitiesContext);
+  if (!state) {
+    return false;
+  }
+  if (state.isLoading) {
+    return undefined;
+  }
+  return state.capabilities.has(name);
+}
+
 /**
  * Returns whether the current user holds a global admin role (a `user_roles` row with
  * role "admin" in any class). Admins can act as instructors in any course.
@@ -131,6 +166,9 @@ type UserRoleWithClassAndUser = GetResult<
  *
  * @param children - React child components that will have access to the class profile context
  */
+const USER_ROLES_SELECT =
+  "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)";
+
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const pathname = usePathname();
@@ -192,9 +230,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         try {
           const { data, error } = await supabase
             .from("user_roles")
-            .select(
-              "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes!inner(*), users(*)"
-            )
+            .select(USER_ROLES_SELECT)
             .eq("user_id", userId)
             .eq("disabled", false)
             .eq("classes.archived", false);
@@ -228,6 +264,24 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       cleanedUp = true;
     };
   }, [userId, retryNonce]);
+
+  // The bug reporter's taint ingest reads these rows (the user's own profiles and user row) if
+  // a recorder starts after they loaded: they are fetched before the course layout renders, so
+  // no pre-start buffer can see them. Registering is one Set entry; nothing is read unless a
+  // recorder starts. The ref keeps the source alive for the registry's WeakRef.
+  const bugReportRowSource = useRef<IngestRowSource | null>(null);
+  useEffect(() => {
+    if (roles.length === 0) return;
+    const source: IngestRowSource = {
+      bugReportRows: () => ({ relation: "user_roles", rows: roles, select: USER_ROLES_SELECT })
+    };
+    bugReportRowSource.current = source;
+    const ref = registerRowSource(source);
+    return () => {
+      unregisterRowSource(ref);
+      if (bugReportRowSource.current === source) bugReportRowSource.current = null;
+    };
+  }, [roles]);
 
   // Determine global admin status independently of the per-course roles query above, which
   // joins classes!inner and filters archived=false — that would drop an admin row whose class

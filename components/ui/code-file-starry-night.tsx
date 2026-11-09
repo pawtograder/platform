@@ -91,6 +91,7 @@ import {
   type RubricCheckSelectOption,
   type RubricCheckSubOptions
 } from "./code-file-shared";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export type { RubricCheckSubOption, RubricCheckDataWithOptions };
 // Re-export the single shared annotation component so existing importers (e.g. markdown-file-preview)
@@ -271,9 +272,11 @@ export default function CodeFileStarryNight({
           alignItems="center"
           justifyContent="space-between"
         >
-          <Text fontSize="xs" color="text.subtle">
-            {file.name}
-          </Text>
+          <ReportBlock>
+            <Text fontSize="xs" color="text.subtle">
+              {file.name}
+            </Text>
+          </ReportBlock>
           <HStack>
             {showCommentsFeature && comments.length > 0 && (
               <>
@@ -564,7 +567,9 @@ export function CodeLineComment({ comment_id }: { comment_id: number }) {
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
