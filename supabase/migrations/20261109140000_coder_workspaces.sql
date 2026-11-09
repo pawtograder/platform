@@ -1,7 +1,7 @@
 -- CW-17c (#1222): Coder accounts and workspaces that workspace-open creates.
 --
 -- Coder's sign-ups are off (#1165), so workspace-open creates each student's Coder user and records
--- it in coder_accounts. It then creates one workspace per student per assignment and records it in
+-- it in coder_accounts. It then creates one workspace per student per repository and records it in
 -- coder_workspaces. The row is written before Coder is called and coder_workspace_id is filled in
 -- after, so a crash between the two leaves a row the cleanup job (#1223) can match by name.
 --
@@ -28,6 +28,10 @@ CREATE TABLE public.coder_workspaces (
   -- SET NULL, not CASCADE: the cleanup job still needs the row to delete the Coder workspace.
   class_id bigint REFERENCES public.classes (id) ON DELETE SET NULL,
   assignment_id bigint REFERENCES public.assignments (id) ON DELETE SET NULL,
+  -- The repository the workspace clones. Not a foreign key: keys into repositories must be NO ACTION
+  -- and cleared by every delete path (AGENTS.md), and this row has to outlive the repository until
+  -- the cleanup job deletes the workspace.
+  repository_id bigint NOT NULL,
   user_id uuid NOT NULL REFERENCES public.users (user_id) ON DELETE CASCADE,
   profile_id uuid REFERENCES public.profiles (id) ON DELETE SET NULL,
   instance_url text NOT NULL,
@@ -44,24 +48,31 @@ CREATE TABLE public.coder_workspaces (
     CHECK (cleanup_status IN ('active', 'deleting', 'deleted', 'parked')),
   cleanup_attempts integer NOT NULL DEFAULT 0,
   cleanup_last_error text,
+  -- Set by workspace-open when the student opens a different repository for the same assignment
+  -- (they changed groups), cleared if they open this one again. The old workspace may hold unpushed
+  -- work, so it gets the same 14 days as the conditions below.
+  superseded_at timestamptz,
+  -- While one workspace-open stops and starts the workspace after a failed startup. Others wait.
+  restart_started_at timestamptz,
   -- When the cleanup job first saw each condition. Cleared when it goes away, so a recurrence
   -- starts a fresh grace period.
   class_archived_seen_at timestamptz,
   assignment_archived_seen_at timestamptz,
   assignment_deleted_seen_at timestamptz,
   student_inactive_seen_at timestamptz,
-  -- One workspace per student per assignment. A deleted assignment's NULL doesn't collide, so its
-  -- row waits for cleanup without blocking anything.
-  UNIQUE (user_id, assignment_id, instance_url),
+  -- One workspace per student per repository. A group change gives the student a new repository,
+  -- and so a new workspace; the old row is superseded rather than reused.
+  UNIQUE (user_id, repository_id, instance_url),
   UNIQUE (instance_url, coder_user_id, coder_workspace_name),
   UNIQUE (instance_url, coder_workspace_id)
 );
 
 CREATE INDEX coder_workspaces_class_id_idx ON public.coder_workspaces (class_id);
 CREATE INDEX coder_workspaces_assignment_id_idx ON public.coder_workspaces (assignment_id);
+CREATE INDEX coder_workspaces_user_assignment_idx ON public.coder_workspaces (user_id, assignment_id);
 
 COMMENT ON TABLE public.coder_workspaces IS
-  'Coder workspaces workspace-open created, one per student per assignment. Written only by the service role.';
+  'Coder workspaces workspace-open created, one per student per repository. Written only by the service role.';
 
 ALTER TABLE public.coder_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.coder_workspaces ENABLE ROW LEVEL SECURITY;
@@ -86,7 +97,8 @@ CREATE POLICY coder_workspaces_select_class_staff ON public.coder_workspaces
 -- When the workspace is due to be deleted (#1223): 14 days after the latest final due date over the
 -- owner's current group members, plus the assignment's full late-token allowance. This can be late
 -- but never early. Archiving the class or assignment, deleting the assignment, or the student
--- leaving starts its own 14 days once the cleanup job has seen it, and the earliest date wins.
+-- leaving starts its own 14 days once the cleanup job has seen it, and so does a group change that
+-- superseded the workspace. The earliest date wins.
 CREATE OR REPLACE FUNCTION public.coder_workspace_deletion_date(p_workspace_id bigint)
 RETURNS timestamptz
 LANGUAGE sql
@@ -125,7 +137,8 @@ AS $$
     w.class_archived_seen_at + interval '14 days',
     w.assignment_archived_seen_at + interval '14 days',
     w.assignment_deleted_seen_at + interval '14 days',
-    w.student_inactive_seen_at + interval '14 days'
+    w.student_inactive_seen_at + interval '14 days',
+    w.superseded_at + interval '14 days'
   )
   FROM w;
 $$;
