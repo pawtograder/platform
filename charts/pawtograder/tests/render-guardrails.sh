@@ -3028,6 +3028,12 @@ apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id:
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
   --set coderBootstrap.workspaces.externalAuthId=git-school --show-only templates/coder-bootstrap.yaml
+apps_has "template: repo_url is pinned to Forgejo's public URL" yes 'forgejo_url: "https://git.example.com"' \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: the pin follows Forgejo's ROOT_URL" yes 'forgejo_url: "https://code.school.edu/git"' \
+  --set forgejo.gitea.config.server.ROOT_URL=https://code.school.edu/git/ --show-only templates/coder-bootstrap.yaml
+apps_has "template: the clone script ships with the template" yes "path: kubernetes/clone.sh" \
+  --show-only templates/coder-bootstrap.yaml
 
 apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
   --set coderBootstrap.schedule.defaultTTL=1.5h --show-only templates/coder-bootstrap.yaml
