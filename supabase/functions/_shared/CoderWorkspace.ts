@@ -383,13 +383,7 @@ export async function openWorkspace(
       ttl_ms: template.default_ttl_ms,
       rich_parameter_values: [{ name: "repo_url", value: `${deps.forgejoUrl}/${repo.repository}.git` }]
     });
-    if (created.error?.status === 409) {
-      // A concurrent call created it first.
-      ws = await getWorkspaceByName(coder, user.id, name);
-    } else if (
-      created.error?.status === 403 &&
-      created.error.body?.validations?.some((v) => v.field === "external_auth")
-    ) {
+    if (created.error?.status === 403 && created.error.body?.validations?.some((v) => v.field === "external_auth")) {
       // The link went away between the check and the create.
       const ext = (await getExternalAuth(coder, template.active_version_id, user.id)).find(
         (e) => !e.optional && !e.authenticated
@@ -397,7 +391,11 @@ export async function openWorkspace(
       const authenticate_url = ext?.authenticate_url ?? `${coder.url}/external-auth/forgejo`;
       return { status: "needs_linking", authenticate_url, redirect_url: authenticate_url, coder_user_id: user.id };
     } else if (created.error) {
-      throw created.error;
+      // A concurrent call created it first. Coder answers 409 when its name check sees that
+      // workspace, and 500 when both requests pass the check and its unique index refuses the
+      // second insert (coderd/workspaces.go:621-623 has a TODO about it).
+      ws = await getWorkspaceByName(coder, user.id, name);
+      if (!ws) throw created.error;
     } else {
       ws = created.workspace;
     }
