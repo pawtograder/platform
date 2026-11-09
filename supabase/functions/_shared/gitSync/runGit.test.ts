@@ -374,7 +374,7 @@ function hostileRequests(gitDir: string, bad: string): Array<[string, GitRequest
 }
 
 const ID = { name: "pawtograder[bot]", email: "1+pawtograder[bot]@users.noreply.github.com" };
-const DATE = "1700000000 +0000";
+const DATE = "@1700000000 +0000";
 
 Deno.test("runGit rejects hostile input in every request field without spawning", async () => {
   const spawned: string[][] = [];
@@ -427,6 +427,8 @@ Deno.test("runGit rejects hostile input in every request field without spawning"
       date: DATE
     },
     { op: "commit-tree", gitDir: "/j", tree: SHA_A, parents: [], message: "m", identity: ID, date: "yesterday" },
+    // The raw form without `@`, which git parses heuristically and refuses outside ~1973-2100.
+    { op: "commit-tree", gitDir: "/j", tree: SHA_A, parents: [], message: "m", identity: ID, date: "86400 +0000" },
     { op: "commit-tree", gitDir: "/j", tree: SHA_A, parents: [], message: "a\0b", identity: ID, date: DATE },
     { op: "fetch", gitDir: "/j", repo: GOOD_REPO, target: { kind: "sha", sha: SHA_A }, depth: 0 },
     { op: "fetch", gitDir: "/j", repo: GOOD_REPO, target: { kind: "sha", sha: SHA_A }, timeoutMs: -1 }
@@ -1291,7 +1293,7 @@ Deno.test(
           parents: [S],
           message: `Sync handout updates to ${H.slice(0, 7)}\n\nbody\n`,
           identity: ID,
-          date: hDate
+          date: `@${hDate}`
         };
         const commit = text((await runGitChecked(commitReq, ctx)).stdout).trim();
         // Deterministic: the same inputs give the same commit.
@@ -1751,6 +1753,59 @@ Deno.test({
       const { ctx } = fileContext(dir, dir);
       const version = await assertGitRuntime(ctx);
       assert(version[0] >= 2);
+    });
+  }
+});
+
+Deno.test({
+  name: "real git: commit-tree takes @-epoch dates the raw parser refuses, and normalizes -0000",
+  ignore: SKIP_REAL_GIT,
+  fn: async () => {
+    await withTempDir(async (dir) => {
+      const job = `${dir}/job.git`;
+      const { ctx } = fileContext(dir, dir);
+      await runGitChecked({ op: "init", gitDir: job }, ctx);
+      // Control: the raw form really is refused by git for an early date.
+      const raw = await new Deno.Command("git", {
+        args: ["--git-dir", job, "commit-tree", "-m", "m", EMPTY_TREE_SHA],
+        clearEnv: true,
+        env: {
+          PATH: "/usr/bin:/bin",
+          HOME: dir,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_AUTHOR_NAME: "a",
+          GIT_AUTHOR_EMAIL: "a@b",
+          GIT_COMMITTER_NAME: "a",
+          GIT_COMMITTER_EMAIL: "a@b",
+          GIT_AUTHOR_DATE: "86400 +0000",
+          GIT_COMMITTER_DATE: "86400 +0000"
+        },
+        stdout: "null",
+        stderr: "piped"
+      }).output();
+      assert(!raw.success && new TextDecoder().decode(raw.stderr).includes("invalid date format"));
+      for (const [date, header] of [
+        ["@86400 +0000", "86400 +0000"],
+        ["@99999999 +0000", "99999999 +0000"],
+        ["@4102444800 +0000", "4102444800 +0000"],
+        ["@1700000000 -0000", "1700000000 +0000"]
+      ]) {
+        const req = {
+          op: "commit-tree",
+          gitDir: job,
+          tree: EMPTY_TREE_SHA,
+          parents: [],
+          message: "m\n",
+          identity: ID,
+          date
+        } as const;
+        const sha = text((await runGitChecked(req, ctx)).stdout).trim();
+        assertEquals(text((await runGitChecked(req, ctx)).stdout).trim(), sha, `${date} is deterministic`);
+        const commit = text(
+          (await runGitChecked({ op: "cat-file", gitDir: job, object: sha, mode: "commit" }, ctx)).stdout
+        );
+        assertStringIncludes(commit, `committer ${ID.name} <${ID.email}> ${header}\n`);
+      }
     });
   }
 });

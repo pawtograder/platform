@@ -248,7 +248,7 @@ export interface CommitTreeRequest extends RequestBase {
   /** Written byte for byte. `commit-tree` does not clean up a message read with `-F`. */
   message: string;
   identity: GitIdentity;
-  /** Author and committer date in git's raw form, `<unix seconds> <+|-HHMM>`. */
+  /** Author and committer date as `@<unix seconds> <+|-HHMM>` (see `validateGitDate`). */
   date: string;
 }
 

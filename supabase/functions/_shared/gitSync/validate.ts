@@ -142,13 +142,18 @@ export function validateIdentityPart(value: unknown, field: string): string {
 }
 
 /**
- * A commit date in git's raw form, `<unix seconds> <+|-HHMM>`, which is how `cat-file commit`
- * prints the handout commit's committer date (§5.7). Accepting only this form keeps git's
- * free-form date parser, and its "now" fallbacks, out of a value that must be deterministic.
+ * A commit date in git's explicit epoch form, `@<unix seconds> <+|-HHMM>`: the handout commit's
+ * committer date as `cat-file commit` prints it (§5.7), with `@` in front. Accepting only this
+ * form keeps git's free-form date parser, and its "now" fallbacks, out of a value that must be
+ * deterministic.
+ *
+ * The `@` is required. Without it git parses the number heuristically and refuses anything
+ * outside roughly 1973-03-03 to 2100 ("fatal: invalid date format: 86400 +0000"), so a handout
+ * commit with such a date failed every attempt.
  */
 export function validateGitDate(value: unknown, field = "date"): string {
-  if (typeof value !== "string" || !/^\d{1,12} [+-]\d{4}$/.test(value)) {
-    throw new InvalidSyncInputError(field, value, "must be '<unix seconds> <+|-HHMM>'");
+  if (typeof value !== "string" || !/^@\d{1,12} [+-]\d{4}$/.test(value)) {
+    throw new InvalidSyncInputError(field, value, "must be '@<unix seconds> <+|-HHMM>'");
   }
   return value;
 }
