@@ -126,6 +126,12 @@ export type SyncRepoToHandoutArgs = {
    * student's own prior-assignment repo. Provide it here when known.
    */
   upstream_repo_full_name?: string;
+  /**
+   * Only on a shadow copy (`GitHubAsyncEnvelope.shadow`): the row's `synced_repo_sha` as read when
+   * the sync was queued, so the shadow plan uses the inputs the real job saw then. A real job
+   * rereads the row instead and ignores this.
+   */
+  synced_repo_sha?: string | null;
 };
 
 export type FetchRepoAnalyticsArgs = {
@@ -154,6 +160,13 @@ export type GitHubAsyncEnvelope = {
   log_id?: number;
   repo_id?: number; // Repository ID for create_repo operations
   retry_count?: number;
+  /**
+   * Set by queue_repository_syncs on the plan-only copy of a `sync_repo_to_handout` it sends to
+   * `handout_sync` when handout_sync_engine has `shadow: true` (migration 20261109120000). Such a
+   * copy must never run as a sync: the handout-sync worker plans it and records the prediction,
+   * and `processEnvelope` refuses it.
+   */
+  shadow?: boolean;
   /**
    * Readiness deferrals for `sync_repo_permissions`, counted SEPARATELY from `retry_count`.
    *

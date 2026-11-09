@@ -20,7 +20,7 @@ import { assert, assertEquals } from "jsr:@std/assert@^1";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { processEnvelope } = await import("../../github-async-worker/index.ts");
+const { deadLetterQueueFor, processEnvelope } = await import("../../github-async-worker/index.ts");
 
 type Query = { table: string; ops: Array<[string, unknown[]]> };
 
@@ -165,3 +165,10 @@ for (const queue of ["async_calls", undefined]) {
     }
   });
 }
+
+Deno.test("a poison message dead-letters to its own queue's DLQ", () => {
+  assertEquals(deadLetterQueueFor("handout_sync"), "handout_sync_dlq");
+  assertEquals(deadLetterQueueFor("async_calls"), "async_calls_dlq");
+  assertEquals(deadLetterQueueFor("async_calls_low_priority"), "async_calls_dlq");
+  assertEquals(deadLetterQueueFor(undefined), "async_calls_dlq");
+});
