@@ -201,14 +201,21 @@ resource "coder_agent" "main" {
   arch = var.arch
   # Passed as variables so a quote in a name can't break the script.
   env = {
-    # The provider reports an empty name as "default", and Pawtograder's ID tokens carry the email as the name.
-    OWNER_GIT_NAME  = contains(["", "default", data.coder_workspace_owner.me.email], data.coder_workspace_owner.me.full_name) ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
+    # The provider reports an empty name as "default", and Pawtograder's ID tokens carry the email as the name. The
+    # owner's email is a placeholder (#1222), so any address in the name means there is no name.
+    OWNER_GIT_NAME  = contains(["", "default"], data.coder_workspace_owner.me.full_name) || strcontains(data.coder_workspace_owner.me.full_name, "@") ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
     OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
+    # The template import plans with an empty repo_url.
+    FORGEJO_API = "${var.forgejo_url != "" ? trimsuffix(var.forgejo_url, "/") : try(regex("^https?://[^/]+", data.coder_parameter.repo_url.value), "")}/api/v1"
+    GIT_AUTH_ID = var.external_auth_id
   }
   startup_script = <<-EOT
     set -e
     git config --global user.name "$OWNER_GIT_NAME"
-    git config --global user.email "$OWNER_GIT_EMAIL"
+    # Pawtograder gives each Coder user a placeholder email made from their login id (#1222), so
+    # commit as the Forgejo account's address, and fall back to the placeholder if Forgejo won't say.
+    EMAIL="$(curl -fsS -m 10 -H "Authorization: token $(coder external-auth access-token "$GIT_AUTH_ID")" "$FORGEJO_API/user" | jq -r '.email // empty')" || EMAIL=""
+    git config --global user.email "$${EMAIL:-$OWNER_GIT_EMAIL}"
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
     if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
