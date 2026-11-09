@@ -13,6 +13,9 @@ import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useTags from "@/hooks/useTags";
 import { createClient } from "@/utils/supabase/client";
+import { type ForgejoLogins, useForgejoLogins } from "@/hooks/useForgejoLogins";
+import { COURSE_FEATURES, courseFeatureEffectiveEnabled } from "@/lib/courseFeatures";
+import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -149,6 +152,13 @@ function discordStatusLabel(
  * Provides filtering, pagination, bulk tag add/remove, and per-user actions
  * including editing profile, editing role, and removing users from the course.
  */
+function forgejoUsernameLabel(row: EnrollmentTableRow, logins: ForgejoLogins): string {
+  if (row.type === "invitation") return "N/A";
+  if (logins.error) return "Unavailable";
+  if (logins.loading) return "Loading…";
+  return logins.byUserId.get(row.user_id) ?? "Not created yet";
+}
+
 export default function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
@@ -157,6 +167,12 @@ export default function EnrollmentsTable() {
   const classSections = useClassSections();
   const course = useCourse();
   const discordServerConfigured = !!course?.discord_server_id;
+  const cloudWorkspacesEnabled = courseFeatureEffectiveEnabled(
+    (course as CourseWithFeatures | undefined)?.features,
+    COURSE_FEATURES.CLOUD_WORKSPACES,
+    false
+  );
+  const forgejoLogins = useForgejoLogins(cloudWorkspacesEnabled);
   const {
     byUserId: discordStateByUser,
     loading: discordStatusLoadingRaw,
@@ -644,6 +660,16 @@ export default function EnrollmentsTable() {
           return values.includes(username);
         }
       },
+      // Only for cloud-workspaces classes, where Pawtograder creates each person's Forgejo account.
+      ...(cloudWorkspacesEnabled
+        ? [
+            {
+              id: "forgejo_username",
+              header: "Forgejo Username",
+              accessorFn: (row: EnrollmentTableRow) => forgejoUsernameLabel(row, forgejoLogins)
+            }
+          ]
+        : []),
       {
         id: "github_org_confirmed",
         header: "GitHub Org Status",
@@ -1008,7 +1034,9 @@ export default function EnrollmentsTable() {
       setSisSyncOptOut,
       discordServerConfigured,
       discordStateByUser,
-      discordStatusUnknown
+      discordStatusUnknown,
+      cloudWorkspacesEnabled,
+      forgejoLogins
     ]
   );
 
@@ -1110,6 +1138,7 @@ export default function EnrollmentsTable() {
       "Class Section",
       "Lab Section",
       "GitHub Username",
+      ...(cloudWorkspacesEnabled ? ["Forgejo Username"] : []),
       "GitHub Org Status",
       ...(discordServerConfigured ? ["Discord Status"] : []),
       "SIS User ID",
@@ -1219,6 +1248,7 @@ export default function EnrollmentsTable() {
         classSection,
         labSection,
         githubUsername,
+        ...(cloudWorkspacesEnabled ? [forgejoUsernameLabel(original, forgejoLogins)] : []),
         githubOrgStatus,
         ...(discordServerConfigured ? [discordStatus] : []),
         sisUserId,
@@ -1252,7 +1282,9 @@ export default function EnrollmentsTable() {
     course_id,
     discordServerConfigured,
     discordStateByUser,
-    discordStatusUnknown
+    discordStatusUnknown,
+    cloudWorkspacesEnabled,
+    forgejoLogins
   ]);
 
   return (
