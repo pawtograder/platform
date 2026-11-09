@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DialogCloseTrigger } from "@/components/ui/dialog";
@@ -174,7 +175,7 @@ function useFinalizedTargets(targets: BulkExceptionTarget[], assignmentId: numbe
 
 function TargetName({ target }: { target: BulkExceptionTarget }) {
   const group = useAssignmentGroupWithMembers({ assignment_group_id: target.assignment_group_id });
-  if (target.assignment_group_id) return <>{group?.name ?? "Unknown group"}</>;
+  if (target.assignment_group_id) return <ReportBlock>{group?.name ?? "Unknown group"}</ReportBlock>;
   return target.student_id ? <PersonName uid={target.student_id} showAvatar={false} /> : null;
 }
 
