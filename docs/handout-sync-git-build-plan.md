@@ -72,7 +72,7 @@ Acceptance:
 - An integration test against a local bare repo that contains a `.gitattributes` with
   `* merge=evil diff=evil filter=evil` runs every builder. A canary file that a driver would
   create never appears.
-- G-* gates.
+- G-\* gates.
 
 Size: small. No dependencies.
 
@@ -101,7 +101,7 @@ Acceptance:
   stays under 150 MB, measured with `/usr/bin/time -v`.
 - **Policy parity.** `syncConflictGuard.test.ts` passes untouched. The guard module itself has
   no diff, other than removals the spec lists for Phase 3.
-- G-* gates.
+- G-\* gates.
 
 Also covered, from the WP1 review:
 
@@ -145,7 +145,7 @@ Acceptance:
   permissions.
 - The handler diff is limited to the engine switch. A reviewer confirms that
   `applyRepositoryUpdate` and `retireStaleSync` are untouched.
-- G-* gates.
+- G-\* gates.
 
 Size: medium. Depends on WP2.
 
@@ -184,7 +184,7 @@ Acceptance:
 - Types are regenerated from the isolated stack only.
 - The PR description includes the deploy step `NOTIFY pgrst, 'reload schema'`, because a new
   RPC is invisible to PostgREST until the schema reloads ([[postgrest-schema-cache-deploy-race]]).
-- G-* gates.
+- G-\* gates.
 
 Size: medium. No dependency on WP1–WP3.
 
@@ -244,7 +244,7 @@ Acceptance:
   - A shadow message leaves the `repositories` row byte-identical, pushes nothing to its
     `file://` remote, and writes one `handout_sync_shadow_results` row.
 - `/metrics` is scraped by a gzip-sending client, not curl ([[prometheus-scrape-sends-gzip]]).
-- G-* gates.
+- G-\* gates.
 
 Size: medium. Depends on WP3 and WP4.
 
@@ -273,7 +273,7 @@ Acceptance:
   mounted.
 - The image runs `git --version` at or above the pin, as a non-root user, on a read-only root
   filesystem.
-- G-* gates.
+- G-\* gates.
 
 Size: medium. No dependency on WP1–WP5.
 
@@ -364,7 +364,7 @@ list in spec §10.1, the shadow mode, and the engine switch.
 
 Acceptance:
 
-- G-* gates.
+- G-\* gates.
 - A grep shows no remaining references to the deleted symbols.
 - The edge-functions image builds and its eszip bundle for `github-async-worker` shrinks. Record
   the size.
