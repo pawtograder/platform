@@ -566,3 +566,10 @@ coder:
 
 coderBootstrap:
   workspaceNamespace: pawtograder-staging-workspaces
+  workspaces:
+    # The chart's default resolves to coder-workspace:<appVersion>, and a source install's appVersion
+    # (0.0.1) isn't published. release-images.yml builds images/coder-workspace on every staging push;
+    # deploy-staging pins the exact staging-<sha>, and this default is what redeploy-staging.sh uses.
+    image: ghcr.io/pawtograder/coder-workspace:staging-latest
+    # staging-latest floats, so a node's cached copy would go stale under IfNotPresent (as with backup above).
+    imagePullPolicy: Always
