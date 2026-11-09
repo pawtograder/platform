@@ -9,7 +9,8 @@ import { REQUEST_SCOPED_AUTH_OPTIONS } from "./requestScopedAuthOptions.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
 
 const REPOSITORY_COLUMNS = "id, assignment_id, class_id, profile_id, assignment_group_id, repository, git_provider";
-const WORKSPACE_COLUMNS = "id, coder_user_id, coder_workspace_name, coder_workspace_id";
+const WORKSPACE_COLUMNS =
+  "id, coder_user_id, coder_workspace_name, coder_workspace_id, superseded_at, restart_started_at";
 
 function check<T>(result: { data: T; error: { message: string } | null }, what: string): T {
   if (result.error) throw new Error(`${what}: ${result.error.message}`);
@@ -79,20 +80,42 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
       check(
         await admin
           .from("coder_workspaces")
-          .upsert(row, { onConflict: "user_id,assignment_id,instance_url", ignoreDuplicates: true }),
+          .upsert(row, { onConflict: "user_id,repository_id,instance_url", ignoreDuplicates: true }),
         "Workspace row insert"
       );
-      const stored = await this.getWorkspaceRow(row.user_id, row.assignment_id, row.instance_url);
+      const stored = await this.getWorkspaceRow(row.user_id, row.repository_id, row.instance_url);
       if (!stored) throw new Error("Workspace row missing after insert");
       return stored;
     },
-    async getWorkspaceRow(userId, assignmentId, instanceUrl) {
+    async markCurrentWorkspace(row) {
+      const now = new Date().toISOString();
+      check(
+        await admin
+          .from("coder_workspaces")
+          .update({ superseded_at: now, updated_at: now })
+          .eq("user_id", row.user_id)
+          .eq("assignment_id", row.assignment_id)
+          .eq("instance_url", row.instance_url)
+          .neq("id", row.id)
+          .is("superseded_at", null),
+        "Workspace rows supersede"
+      );
+      check(
+        await admin
+          .from("coder_workspaces")
+          .update({ superseded_at: null, updated_at: now })
+          .eq("id", row.id)
+          .not("superseded_at", "is", null),
+        "Workspace row unsupersede"
+      );
+    },
+    async getWorkspaceRow(userId, repositoryId, instanceUrl) {
       return check(
         await admin
           .from("coder_workspaces")
           .select(WORKSPACE_COLUMNS)
           .eq("user_id", userId)
-          .eq("assignment_id", assignmentId)
+          .eq("repository_id", repositoryId)
           .eq("instance_url", instanceUrl)
           .maybeSingle(),
         "Workspace row lookup"
@@ -106,6 +129,19 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
           .eq("id", id),
         "Workspace row update"
       );
+    },
+    async claimRestart(id, staleBefore) {
+      const now = new Date().toISOString();
+      const claimed = check(
+        await admin
+          .from("coder_workspaces")
+          .update({ restart_started_at: now, updated_at: now })
+          .eq("id", id)
+          .or(`restart_started_at.is.null,restart_started_at.lt."${staleBefore}"`)
+          .select("id"),
+        "Workspace restart claim"
+      );
+      return (claimed ?? []).length > 0;
     },
     async deletionDate(workspaceRowId) {
       return check(

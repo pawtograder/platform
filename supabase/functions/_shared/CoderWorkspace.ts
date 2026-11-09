@@ -4,11 +4,13 @@
 //
 // Binding the Coder user to the Pawtograder login. Coder v2.37.3 binds an OIDC user by
 // `user_links.linked_id` (issuer + subject), and only its login handler writes that column. The API
-// that creates users can't set it. So the first OIDC login that lands on the user we create finds it
-// by email and binds that subject; every later login is matched by subject, and a different subject
-// with the same email is refused ("Account already linked"). Before a workspace is created or
-// started, we read the bound subject back and require it to be the caller's Pawtograder user id. A
-// user who hasn't signed in to Coder yet gets the link page, which signs them in first.
+// that creates users can't set it, so a user's first OIDC login finds them by email and binds that
+// subject. We never let a real, transferable email decide that: each Coder user gets
+// `<Pawtograder user id>@coder.pawtograder.invalid`, and Coder reads the email from the `coder_email`
+// claim, which the access token hook sets to the same address for the token's subject (migration
+// 20261109150000, chart CODER_OIDC_EMAIL_FIELD). Every later login is matched by subject. Before a
+// workspace is created or started we still read the bound subject back and require it to be the
+// caller's, and a user who hasn't signed in to Coder yet gets the link page, which signs them in.
 
 import type { WorkspaceOpenRequest, WorkspaceOpenResponse, WorkspaceStep } from "./FunctionTypes.d.ts";
 import {
@@ -28,13 +30,21 @@ import {
   getUser,
   getWorkspace,
   getWorkspaceByName,
-  startWorkspace
+  postBuild
 } from "./CoderWrapper.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 export const CODER_ORGANIZATION = "default";
 export const CODER_TEMPLATE = "kubernetes";
+/** Must match the access token hook's `coder_email` and the chart's CODER_OIDC_EMAIL_DOMAIN. */
+export const CODER_EMAIL_DOMAIN = "coder.pawtograder.invalid";
 const LOG_LINES = 20;
+/** How long workspace-open waits for the stop build of a restart before it answers "starting". */
+const RESTART_WAIT_MS = 60_000;
+const RESTART_POLL_MS = 2_000;
+/** A restart claim older than this is abandoned, and the next open may restart again. */
+const RESTART_CLAIM_MS = 5 * 60_000;
+const BUILD_IN_PROGRESS = new Set(["pending", "starting", "stopping", "canceling", "deleting"]);
 
 export type Caller = { userId: string; email: string; name: string | null };
 
@@ -53,6 +63,8 @@ export type WorkspaceRow = {
   coder_user_id: string;
   coder_workspace_name: string;
   coder_workspace_id: string | null;
+  superseded_at: string | null;
+  restart_started_at: string | null;
 };
 
 export interface WorkspaceDb {
@@ -70,10 +82,11 @@ export interface WorkspaceDb {
     coder_user_id: string;
     coder_username: string;
   }): Promise<void>;
-  /** Inserts the row unless one exists for (user, assignment, instance), and returns the stored row. */
+  /** Inserts the row unless one exists for (user, repository, instance), and returns the stored row. */
   reserveWorkspace(row: {
     class_id: number;
     assignment_id: number;
+    repository_id: number;
     user_id: string;
     profile_id: string;
     instance_url: string;
@@ -81,12 +94,38 @@ export interface WorkspaceDb {
     coder_workspace_name: string;
     repo_url: string;
   }): Promise<WorkspaceRow>;
-  getWorkspaceRow(userId: string, assignmentId: number, instanceUrl: string): Promise<WorkspaceRow | null>;
-  updateWorkspaceRow(id: number, patch: { coder_workspace_id?: string | null; coder_user_id?: string }): Promise<void>;
+  /**
+   * Sets superseded_at on the user's other rows for the assignment (a group change left them on
+   * another repository) and clears it on this one, so the cleanup job deletes only the old ones.
+   */
+  markCurrentWorkspace(row: {
+    id: number;
+    user_id: string;
+    assignment_id: number;
+    instance_url: string;
+  }): Promise<void>;
+  getWorkspaceRow(userId: string, repositoryId: number, instanceUrl: string): Promise<WorkspaceRow | null>;
+  updateWorkspaceRow(
+    id: number,
+    patch: { coder_workspace_id?: string | null; coder_user_id?: string; restart_started_at?: string | null }
+  ): Promise<void>;
+  /** Sets restart_started_at unless a claim newer than staleBefore holds it. True if this call won. */
+  claimRestart(id: number, staleBefore: string): Promise<boolean>;
   deletionDate(workspaceRowId: number): Promise<string | null>;
 }
 
-export type Deps = { db: WorkspaceDb; coder: CoderConfig; forgejoUrl: string };
+export type Deps = {
+  db: WorkspaceDb;
+  coder: CoderConfig;
+  forgejoUrl: string;
+  /** Tests pass a fake clock. */
+  sleep?: (ms: number) => Promise<void>;
+};
+
+/** The Coder email for a Pawtograder user. Only a token for that user carries it. */
+export function coderEmail(userId: string): string {
+  return `${userId.toLowerCase()}@${CODER_EMAIL_DOMAIN}`;
+}
 
 /**
  * Coder usernames are letters, digits and single hyphens, at most 32 characters. The suffix is the
@@ -105,9 +144,12 @@ export function coderUsername(email: string, userId: string): string {
   return `${local || "user"}-${suffix}`;
 }
 
-/** One workspace per student per assignment. At most 30 characters. */
-export function workspaceName(assignmentId: number): string {
-  return `assignment-${assignmentId}`;
+/**
+ * One workspace per student per repository, so a student who moves to another group gets a new
+ * workspace for the new repository. At most 24 characters.
+ */
+export function workspaceName(repositoryId: number): string {
+  return `repo-${repositoryId}`;
 }
 
 /** The repository the caller may open a workspace on, or a SecurityError. */
@@ -152,15 +194,16 @@ export async function resolveRepository(
 
 function conflict(): UserVisibleError {
   return new UserVisibleError(
-    "A Coder account with your email already exists and isn't linked to your Pawtograder login. Ask course staff to remove it.",
+    "A Coder account with your username already exists and isn't linked to your Pawtograder login. Ask course staff to remove it.",
     409
   );
 }
 
 /**
- * The caller's Coder user, created if missing. A second call finds the stored row. If the row was
- * lost after the user was created, the create answers 409 and the user is adopted only if it is
- * bound to the caller's subject, or is our deterministic username, unbound, with the caller's email.
+ * The caller's Coder user, created if missing. A second call finds the stored row. When the create
+ * fails (409 for a taken username or email, or a 500 when two creates race past Coder's existence
+ * check, coderd/users.go:532-540 and :636-641), an existing user is adopted only if it is bound to
+ * the caller's subject, or is unbound with the caller's Coder email.
  */
 export async function ensureCoderUser(deps: Deps, caller: Caller): Promise<CoderUser> {
   const { db, coder } = deps;
@@ -174,14 +217,14 @@ export async function ensureCoderUser(deps: Deps, caller: Caller): Promise<Coder
   const organizationId = await getOrganizationId(coder, CODER_ORGANIZATION);
   const created = await createOidcUser(coder, {
     username,
-    email: caller.email,
+    email: coderEmail(caller.userId),
     name: caller.name ?? "",
     organizationId
   });
   let user = created.user;
   if (created.error) {
-    if (created.error.status !== 409) throw created.error;
     user = await adoptExistingUser(deps, caller, username);
+    if (!user) throw created.error.status === 409 ? conflict() : created.error;
   }
   await db.saveCoderAccount({
     user_id: caller.userId,
@@ -192,20 +235,21 @@ export async function ensureCoderUser(deps: Deps, caller: Caller): Promise<Coder
   return user!;
 }
 
-async function adoptExistingUser(deps: Deps, caller: Caller, username: string): Promise<CoderUser> {
+/** The user a failed create left, if the caller may have it; null if there is none. */
+async function adoptExistingUser(deps: Deps, caller: Caller, username: string): Promise<CoderUser | null> {
+  const email = coderEmail(caller.userId);
   const byName = await getUser(deps.coder, username);
-  if (byName && byName.login_type === "oidc") {
-    const subject = await getBoundOidcSubject(deps.coder, byName.id);
-    if (subject === caller.userId) return byName;
-    // A concurrent call made it a moment ago, or an earlier call's row write failed.
-    if (subject === null && byName.email.toLowerCase() === caller.email.toLowerCase()) return byName;
+  const byEmail = byName?.email.toLowerCase() === email ? byName : await findUserByEmail(deps.coder, email);
+  for (const user of [byName, byEmail]) {
+    if (!user || user.login_type !== "oidc") continue;
+    const subject = await getBoundOidcSubject(deps.coder, user.id);
+    if (subject === caller.userId) return user;
+    // A concurrent call made it a moment ago, or an earlier call's row write failed. Only the
+    // caller's own token carries this email, so their first sign-in is the one that binds it.
+    if (subject === null && user.email.toLowerCase() === email) return user;
     throw conflict();
   }
-  const byEmail = await findUserByEmail(deps.coder, caller.email);
-  if (byEmail && byEmail.login_type === "oidc") {
-    if ((await getBoundOidcSubject(deps.coder, byEmail.id)) === caller.userId) return byEmail;
-  }
-  throw conflict();
+  return null;
 }
 
 function firstAgent(ws: CoderWorkspace): CoderAgent | null {
@@ -234,8 +278,31 @@ async function editorUrl(coder: CoderConfig, ws: CoderWorkspace, agent: CoderAge
   return `${workspacePage(coder, ws)}.${encodeURIComponent(agent.name)}/apps/${app.slug}/${query}`;
 }
 
-/** Maps Coder's build and agent state onto #1170's steps, with the failing script's last log lines. */
-export async function describeWorkspace(coder: CoderConfig, ws: CoderWorkspace): Promise<WorkspaceOpenResponse> {
+/**
+ * A running workspace whose agent failed to start or lost its connection. A start build alone
+ * doesn't help: the build is already running. workspace-open stops and starts it.
+ */
+export function needsRestart(ws: CoderWorkspace): boolean {
+  const build = ws.latest_build;
+  const agent = firstAgent(ws);
+  if (build.transition !== "start" || build.status !== "running" || !agent) return false;
+  return (
+    agent.lifecycle_state === "start_error" ||
+    agent.lifecycle_state === "start_timeout" ||
+    agent.status === "disconnected" ||
+    agent.status === "timeout"
+  );
+}
+
+/**
+ * Maps Coder's build and agent state onto #1170's steps, with the failing script's last log lines.
+ * `restarting` says another workspace-open is stopping and starting the workspace.
+ */
+export async function describeWorkspace(
+  coder: CoderConfig,
+  ws: CoderWorkspace,
+  restarting = false
+): Promise<WorkspaceOpenResponse> {
   const build = ws.latest_build;
   const agent = firstAgent(ws);
   const base: WorkspaceOpenResponse = {
@@ -248,6 +315,12 @@ export async function describeWorkspace(coder: CoderConfig, ws: CoderWorkspace):
     agent: agent ? { lifecycle_state: agent.lifecycle_state, status: agent.status } : null
   };
 
+  if (
+    restarting &&
+    (build.transition === "stop" ? !["failed", "canceled", "canceling"].includes(build.status) : needsRestart(ws))
+  ) {
+    return { ...base, step: "build" };
+  }
   if (build.transition !== "start" || ["stopping", "stopped", "deleting", "deleted"].includes(build.status)) {
     return { ...base, status: "not_started" };
   }
@@ -264,36 +337,52 @@ export async function describeWorkspace(coder: CoderConfig, ws: CoderWorkspace):
   if (build.status !== "running" || !agent) return { ...base, step: "build" };
 
   const scripts = agent.scripts ?? [];
+  if (agent.lifecycle_state === "start_error" || agent.lifecycle_state === "start_timeout") {
+    const failing =
+      scripts.find((s) => s.status && s.status !== "ok") ??
+      (agent.lifecycle_state === "start_timeout" ? scripts.find((s) => !s.status) : undefined);
+    const step = failing ? stepForScript(failing.display_name) : "build";
+    const logs = failing ? await getAgentLogs(coder, agent.id) : [];
+    const log_lines = logs
+      .filter((l) => l.source_id === failing?.log_source_id)
+      .map((l) => l.output)
+      .slice(-LOG_LINES);
+    const what = failing ? `"${failing.display_name}"` : "A startup step";
+    const message =
+      agent.lifecycle_state === "start_timeout"
+        ? `${what} did not finish in time.`
+        : `${what} failed${failing?.exit_code !== undefined ? ` with exit code ${failing.exit_code}` : ""}.`;
+    return {
+      ...base,
+      status: "failed",
+      step,
+      message,
+      failure: { step, script: failing?.display_name ?? null, exit_code: failing?.exit_code ?? null, log_lines }
+    };
+  }
+  // Lifecycle records how startup went, not whether the agent is still there: a crashed pod keeps
+  // `ready`. A lost or never-connected agent is failed, and the next open restarts it.
+  if (agent.status === "disconnected" || agent.status === "timeout") {
+    const message =
+      agent.status === "timeout"
+        ? "The workspace did not connect in time. Open it again to restart it."
+        : "The workspace lost its connection. Open it again to restart it.";
+    return {
+      ...base,
+      status: "failed",
+      step: "build",
+      message,
+      failure: { step: "build", script: null, exit_code: null, log_lines: [] }
+    };
+  }
+  if (agent.status !== "connected") return { ...base, step: "build" };
+
   switch (agent.lifecycle_state) {
     case "created":
       return { ...base, step: "build" };
     case "starting": {
       const clone = scripts.find((s) => s.display_name === "Git Clone");
       return { ...base, step: clone && !clone.status ? "clone" : "editor" };
-    }
-    case "start_error":
-    case "start_timeout": {
-      const failing =
-        scripts.find((s) => s.status && s.status !== "ok") ??
-        (agent.lifecycle_state === "start_timeout" ? scripts.find((s) => !s.status) : undefined);
-      const step = failing ? stepForScript(failing.display_name) : "build";
-      const logs = failing ? await getAgentLogs(coder, agent.id) : [];
-      const log_lines = logs
-        .filter((l) => l.source_id === failing?.log_source_id)
-        .map((l) => l.output)
-        .slice(-LOG_LINES);
-      const what = failing ? `"${failing.display_name}"` : "A startup step";
-      const message =
-        agent.lifecycle_state === "start_timeout"
-          ? `${what} did not finish in time.`
-          : `${what} failed${failing?.exit_code !== undefined ? ` with exit code ${failing.exit_code}` : ""}.`;
-      return {
-        ...base,
-        status: "failed",
-        step,
-        message,
-        failure: { step, script: failing?.display_name ?? null, exit_code: failing?.exit_code ?? null, log_lines }
-      };
     }
     case "ready": {
       const app = agent.apps?.find((a) => a.slug === "code-server");
@@ -324,9 +413,51 @@ async function withDeletionDate(
   return { ...response, deletion_date: await db.deletionDate(rowId) };
 }
 
+function restartClaimed(row: WorkspaceRow): boolean {
+  return row.restart_started_at !== null && Date.parse(row.restart_started_at) > Date.now() - RESTART_CLAIM_MS;
+}
+
+/**
+ * Stops the workspace, waits for the stop, and starts it again. The home volume outlives the stop
+ * (#1221's PVC has no count), so the clone and any work on it are kept. Only one call restarts a
+ * workspace at a time: the row's restart claim decides which. Returns the workspace and whether a
+ * restart is still under way without a start build (the claim was taken, or the stop is slow).
+ */
+async function restartWorkspace(
+  deps: Deps,
+  row: WorkspaceRow,
+  ws: CoderWorkspace
+): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
+  const { db, coder } = deps;
+  if (!(await db.claimRestart(row.id, new Date(Date.now() - RESTART_CLAIM_MS).toISOString()))) {
+    return { ws, restarting: true };
+  }
+  // 409: a build is already running (someone stopped it in Coder); wait for that one.
+  const stopError = await postBuild(coder, ws.id, "stop");
+  if (stopError && stopError.status !== 409) throw stopError;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let waited = 0; ; waited += RESTART_POLL_MS) {
+    ws = (await getWorkspace(coder, ws.id)) ?? ws;
+    const build = ws.latest_build;
+    if (build.transition === "stop" && build.status === "stopped") break;
+    if (!BUILD_IN_PROGRESS.has(build.status)) {
+      // The stop failed, or the build we waited for wasn't a stop. Report it as it is.
+      await db.updateWorkspaceRow(row.id, { restart_started_at: null });
+      return { ws, restarting: false };
+    }
+    // Still stopping. The claim stays, so the next open or status read says "starting".
+    if (waited >= RESTART_WAIT_MS) return { ws, restarting: true };
+    await sleep(RESTART_POLL_MS);
+  }
+  const startError = await postBuild(coder, ws.id, "start");
+  if (startError && startError.status !== 409) throw startError;
+  await db.updateWorkspaceRow(row.id, { restart_started_at: null });
+  return { ws: (await getWorkspace(coder, ws.id)) ?? ws, restarting: false };
+}
+
 /**
  * Creates the caller's Coder user and workspace if they're missing, starts the workspace if it's
- * stopped, and says where to send the student.
+ * stopped, restarts it if its agent failed, and says where to send the student.
  */
 export async function openWorkspace(
   deps: Deps,
@@ -357,16 +488,24 @@ export async function openWorkspace(
     };
   }
 
-  const name = workspaceName(repo.assignment_id);
+  const name = workspaceName(repo.id);
+  const repoUrl = `${deps.forgejoUrl}/${repo.repository}.git`;
   let row = await db.reserveWorkspace({
     class_id: classId,
     assignment_id: repo.assignment_id,
+    repository_id: repo.id,
     user_id: caller.userId,
     profile_id: profileId,
     instance_url: coder.url,
     coder_user_id: user.id,
     coder_workspace_name: name,
-    repo_url: `${deps.forgejoUrl}/${repo.repository}.git`
+    repo_url: repoUrl
+  });
+  await db.markCurrentWorkspace({
+    id: row.id,
+    user_id: caller.userId,
+    assignment_id: repo.assignment_id,
+    instance_url: coder.url
   });
   if (row.coder_user_id !== user.id) {
     // The Coder user was deleted and made again. Coder won't delete a user who has workspaces.
@@ -374,6 +513,7 @@ export async function openWorkspace(
     row = { ...row, coder_user_id: user.id, coder_workspace_id: null };
   }
 
+  let restarting = false;
   let ws = await getWorkspaceByName(coder, user.id, name);
   if (!ws) {
     const created = await createWorkspace(coder, user.id, {
@@ -381,7 +521,7 @@ export async function openWorkspace(
       name,
       // Coder copies the TTL into a workspace only at create.
       ttl_ms: template.default_ttl_ms,
-      rich_parameter_values: [{ name: "repo_url", value: `${deps.forgejoUrl}/${repo.repository}.git` }]
+      rich_parameter_values: [{ name: "repo_url", value: repoUrl }]
     });
     if (created.error?.status === 403 && created.error.body?.validations?.some((v) => v.field === "external_auth")) {
       // The link went away between the check and the create.
@@ -400,24 +540,34 @@ export async function openWorkspace(
       ws = created.workspace;
     }
     if (!ws) throw new Error(`Coder workspace ${name} was neither created nor found`);
+  } else if (needsRestart(ws)) {
+    // Retry after a startup failure, such as a clone that timed out, or a lost agent.
+    ({ ws, restarting } = await restartWorkspace(deps, row, ws));
   } else if (
     (ws.latest_build.transition === "stop" && ws.latest_build.status === "stopped") ||
     ws.latest_build.status === "failed" ||
     ws.latest_build.status === "canceled"
   ) {
-    // Stopped after an hour unused, or a build that failed (Retry).
-    const error = await startWorkspace(coder, ws.id);
+    // Stopped after an hour unused, a build that failed (Retry), or a restart whose start this
+    // call takes over.
+    const error = await postBuild(coder, ws.id, "start");
     if (error && error.status !== 409) throw error;
+    if (row.restart_started_at) await db.updateWorkspaceRow(row.id, { restart_started_at: null });
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
+  } else {
+    restarting = restartClaimed(row);
   }
 
   if (row.coder_workspace_id !== ws.id) {
     await db.updateWorkspaceRow(row.id, { coder_workspace_id: ws.id });
   }
-  return await withDeletionDate(db, row.id, await describeWorkspace(coder, ws));
+  return await withDeletionDate(db, row.id, await describeWorkspace(coder, ws, restarting));
 }
 
-/** The caller's workspace for the assignment, read only. Never creates or starts anything. */
+/**
+ * The caller's workspace for the repository they would open, read only. Never creates, starts or
+ * restarts anything.
+ */
 export async function workspaceStatus(
   deps: Deps,
   caller: Caller,
@@ -425,9 +575,9 @@ export async function workspaceStatus(
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
   const { repo } = await resolveRepository(db, caller, request);
-  const row = await db.getWorkspaceRow(caller.userId, repo.assignment_id, coder.url);
+  const row = await db.getWorkspaceRow(caller.userId, repo.id, coder.url);
   if (!row?.coder_workspace_id) return { status: "not_started" };
   const ws = await getWorkspace(coder, row.coder_workspace_id);
   if (!ws) return await withDeletionDate(db, row.id, { status: "not_started" });
-  return await withDeletionDate(db, row.id, await describeWorkspace(coder, ws));
+  return await withDeletionDate(db, row.id, await describeWorkspace(coder, ws, restartClaimed(row)));
 }
