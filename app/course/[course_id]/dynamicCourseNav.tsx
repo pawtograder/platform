@@ -34,6 +34,7 @@ import {
   FiCompass,
   FiFileText,
   FiHash,
+  FiKey,
   FiMenu,
   FiMessageSquare,
   FiSettings,
@@ -152,6 +153,13 @@ const LinkItems = (courseID: number) => [
         icon: FiSliders,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/feature-flags`
+      },
+      {
+        // Not gated on the gemini-api-key-setup flag: status and removal stay available when setup is off.
+        name: "Gemini API Key",
+        icon: FiKey,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/gemini-api-key`
       },
       {
         name: "GitHub Templates",

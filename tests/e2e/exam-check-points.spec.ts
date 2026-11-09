@@ -132,6 +132,7 @@ test.describe("Exam check points", () => {
       await openExamSubmission(page, [
         { label: "Full", points: 10 },
         { label: "Most", points: 7 },
+        { label: "Nearly all", points: 7 },
         { label: "Partial credit", points: 3 }
       ]);
     });
@@ -153,6 +154,13 @@ test.describe("Exam check points", () => {
     test("switching options updates the points box", async ({ page }) => {
       await pickOption(page, /Partial credit/);
       await pickOption(page, /Most/);
+      await expect(page.getByLabel("Points for Item 1")).toHaveValue("7");
+    });
+
+    test("switching to an option with the same points replaces a typed amount", async ({ page }) => {
+      await pickOption(page, /Most/);
+      await page.getByLabel("Points for Item 1").fill("4");
+      await pickOption(page, /Nearly all/);
       await expect(page.getByLabel("Points for Item 1")).toHaveValue("7");
     });
   });

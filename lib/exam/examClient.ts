@@ -4,6 +4,7 @@
 
 import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeAnswerType } from "./answerTypes";
 import { generateExamPdf, type GeneratedQuestion } from "./pdfGenerate";
 import { rasterizePdf, type RasterPage } from "./pdfRasterize";
 
@@ -179,7 +180,7 @@ export async function generateAndUploadExamTemplate(
       ordinal: q.ordinal,
       label: q.label ?? null,
       prompt: q.prompt ?? null,
-      answer_type: q.answer_type ?? null,
+      answer_type: q.answer_type == null ? null : normalizeAnswerType(q.answer_type),
       choices: q.choices ?? null,
       points: q.points ?? null,
       correct_answer: (q.correct_answer ?? null) as Json,
