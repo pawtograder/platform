@@ -379,7 +379,12 @@ export type WorkspaceOpenRequest = {
  */
 export type WorkspaceStep = "build" | "clone" | "editor";
 export type WorkspaceOpenResponse = {
-  status: "not_started" | "starting" | "ready" | "failed" | "needs_linking";
+  /**
+   * `restarting`: workspace-open is stopping the workspace to start it again; a status read starts it
+   * once the stop finishes, and it reads `starting` from then on. `account_conflict`: the student's
+   * Coder account can't be signed in to and staff have to remove it; `message` says so.
+   */
+  status: "not_started" | "starting" | "restarting" | "ready" | "failed" | "needs_linking" | "account_conflict";
   step?: WorkspaceStep;
   message?: string;
   /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */
