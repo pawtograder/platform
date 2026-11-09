@@ -692,6 +692,19 @@ export async function repositoryListCommits(
   );
 }
 
+/**
+ * Open in Coder (#1095): creates the student's Coder user and workspace if they're missing, starts a
+ * stopped workspace, and returns its state. Send the browser to `redirect_url`.
+ */
+export async function workspaceOpen(params: FunctionTypes.WorkspaceOpenRequest, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.WorkspaceOpenResponse>(supabase, "workspace-open", { body: params });
+}
+
+/** The student's workspace state for the progress card, including the failing step. Changes nothing. */
+export async function workspaceStatus(params: FunctionTypes.WorkspaceOpenRequest, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.WorkspaceOpenResponse>(supabase, "workspace-status", { body: params });
+}
+
 export async function rerunGrader(
   params: FunctionTypes.AutograderRerunGraderRequest,
   supabase: SupabaseClient<Database>
