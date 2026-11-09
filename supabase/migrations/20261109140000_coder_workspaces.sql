@@ -55,7 +55,8 @@ CREATE TABLE public.coder_workspaces (
   -- The restart claim, while a workspace is stopped and started again after a failed startup:
   -- `stopping` from workspace-open's stop, then `starting` from the moment one call wins the right
   -- to post the start (a conditional update on the token) until it has posted it. restart_token
-  -- says which call holds it. A claim older than 5 minutes is abandoned.
+  -- says which call holds it. A claim older than 60 s is abandoned, since every holder answers
+  -- within 20 s.
   restart_started_at timestamptz,
   restart_phase text CHECK (restart_phase IN ('stopping', 'starting')),
   restart_token uuid,
