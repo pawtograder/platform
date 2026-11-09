@@ -419,6 +419,11 @@ spec:
             - name: FORGEJO_URL
               value: {{ include "pawtograder.forgejo.url" $ctx | quote }}
             {{- end }}
+            {{- if $ctx.Values.coder.enabled }}
+            # workspace-open (#1222) calls Coder here and builds the student's links from it.
+            - name: CODER_URL
+              value: {{ include "pawtograder.coder.url" $ctx | quote }}
+            {{- end }}
             {{- with $ctx.Values.edgeFunctions.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
