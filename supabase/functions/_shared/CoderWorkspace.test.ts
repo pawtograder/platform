@@ -8,7 +8,7 @@
  * and unsigned-in paths (always asking Coder about the student, never the service token), a user
  * bound to another subject, the failing startup step with its log lines, a failed build, the
  * restart after a failed or lost agent, readiness only with a connected agent, the editor URL, a
- * group change, and which repository a caller may open.
+ * group change, which repository a caller may open, and the repo_url shape the template accepts.
  *
  * Run from supabase/functions:
  *   deno test --no-check --allow-read --allow-env _shared/CoderWorkspace.test.ts
@@ -34,6 +34,8 @@ const FORGEJO_URL = "https://git.example.com";
 const OWNER_ID = "00000000-0000-0000-0000-00000000aaaa";
 const ORG_ID = "00000000-0000-0000-0000-00000000000f";
 const TEMPLATE = { id: "tmpl-1", active_version_id: "ver-1", default_ttl_ms: 3_600_000 };
+/** The template's repo_url validation with forgejo_url = FORGEJO_URL (main.tf `repo_url_regex`). */
+const REPO_URL_REGEX = /^(https:\/\/git\.example\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$/;
 
 const ALEX: Caller = {
   userId: "1a2b3c4d-5e6f-4a1b-8c2d-0e1f2a3b4c5d",
@@ -202,6 +204,13 @@ class FakeCoder {
           validations: [{ field: "external_auth", detail: "forgejo" }]
         });
       }
+      const repoUrl = body.rich_parameter_values.find((p: { name: string }) => p.name === "repo_url")?.value;
+      if (typeof repoUrl !== "string" || !REPO_URL_REGEX.test(repoUrl)) {
+        return json(400, {
+          message: "Unable to validate parameters",
+          validations: [{ field: "repo_url", detail: "Parameter value does not match the validation regex" }]
+        });
+      }
       if (this.workspaces.some((w) => w.owner_id === owner.id && w.name === body.name)) {
         this.conflicts++;
         if (this.conflictAs === 500) {
@@ -213,7 +222,7 @@ class FakeCoder {
         }
         return json(409, { message: `Workspace "${body.name}" already exists.` });
       }
-      const ws = this.build(owner, body.name, body.rich_parameter_values[0].value);
+      const ws = this.build(owner, body.name, repoUrl);
       this.workspaces.push(ws);
       return json(201, ws);
     }
@@ -556,7 +565,7 @@ Deno.test("a failed user create with no user behind it is not swallowed", async 
   await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), Error, "Coder user create failed: 500");
 });
 
-Deno.test("a failed clone returns the failing step, its exit code and its last log lines", async () => {
+Deno.test("a failed clone returns the failing step, the clone script's reason and its last log lines", async () => {
   const { coder, deps } = setup();
   await openWorkspace(deps, ALEX, { assignment_id: 41 });
   signInAndLink(coder, ALEX);
@@ -565,7 +574,7 @@ Deno.test("a failed clone returns the failing step, its exit code and its last l
     status: "connected",
     scripts: [
       { display_name: "Startup Script", status: "ok", exit_code: 0, log_source_id: "src-startup" },
-      { display_name: "Git Clone", status: "exit_failure", exit_code: 128, log_source_id: "src-clone" }
+      { display_name: "Git Clone", status: "exit_failure", exit_code: 1, log_source_id: "src-clone" }
     ]
   };
   const clone = Array.from({ length: 25 }, (_, i) => ({
@@ -581,15 +590,25 @@ Deno.test("a failed clone returns the failing step, its exit code and its last l
     source_id: "src-clone",
     level: "info"
   });
+  coder.logs.push({
+    id: 201,
+    output: "Git Clone failed: git clone exited with 128",
+    source_id: "src-clone",
+    level: "info"
+  });
 
   const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
   assertEquals(res.status, "failed");
   assertEquals(res.step, "clone");
-  assertEquals(res.message, '"Git Clone" failed with exit code 128.');
+  // The script exits 1 on every failure, so the reason is its "Git Clone failed:" line.
+  assertEquals(res.message, "Git Clone failed: git clone exited with 128");
   assertEquals(res.failure!.script, "Git Clone");
-  assertEquals(res.failure!.exit_code, 128);
+  assertEquals(res.failure!.exit_code, 1);
   assertEquals(res.failure!.log_lines.length, 20);
-  assertEquals(res.failure!.log_lines.at(-1), "fatal: repository 'https://git.example.com/cs3500/nope.git/' not found");
+  assertEquals(res.failure!.log_lines.slice(-2), [
+    "fatal: repository 'https://git.example.com/cs3500/nope.git/' not found",
+    "Git Clone failed: git clone exited with 128"
+  ]);
   assert(!res.failure!.log_lines.includes("startup ok"));
   assertEquals(res.build, { status: "running", transition: "start", error: null });
   assertEquals(res.agent, { lifecycle_state: "start_error", status: "connected" });
@@ -616,6 +635,78 @@ Deno.test("a failed build reports the build step and Coder's job error", async (
     exit_code: null,
     log_lines: ['pods "coder-alex" is forbidden: exceeded quota']
   });
+});
+
+Deno.test("the reason is the clone script's own line, and other scripts report their exit code", async () => {
+  const { coder, deps } = setup();
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  signInAndLink(coder, ALEX);
+  coder.nextAgent = failedClone();
+  const link =
+    "Git Clone failed: the workspace owner hasn't linked their forgejo account: https://coder.example.com/external-auth/forgejo";
+  coder.logs = [
+    { id: 1, output: "Git Clone failed: an earlier start's reason", source_id: "src-clone", level: "info" },
+    { id: 2, output: link, source_id: "src-clone", level: "info" },
+    { id: 3, output: "Git Clone failed: another script's line", source_id: "src-other", level: "info" }
+  ];
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.step, "clone");
+  assertEquals(res.message, link);
+
+  // No reason line (Coder's own backstop killed the script): the exit code, not a guess.
+  coder.logs = [
+    { id: 4, output: "Cloning https://git.example.com/cs3500/hw1-alex.git...", source_id: "src-clone", level: "info" }
+  ];
+  assertEquals(
+    (await workspaceStatus(deps, ALEX, { assignment_id: 41 })).message,
+    '"Git Clone" failed with exit code 1.'
+  );
+
+  const { coder: coder2, deps: deps2 } = setup();
+  await openWorkspace(deps2, ALEX, { assignment_id: 41 });
+  signInAndLink(coder2, ALEX);
+  coder2.nextAgent = {
+    lifecycle_state: "start_error",
+    status: "connected",
+    scripts: [{ display_name: "Startup Script", status: "exit_failure", exit_code: 7, log_source_id: "src-startup" }]
+  };
+  coder2.logs = [{ id: 1, output: "Git Clone failed: not this script", source_id: "src-startup", level: "info" }];
+  const startup = await openWorkspace(deps2, ALEX, { assignment_id: 41 });
+  assertEquals(startup.step, "editor");
+  assertEquals(startup.message, '"Startup Script" failed with exit code 7.');
+});
+
+Deno.test("repo_url is <FORGEJO_URL>/<owner>/<repo>.git, and a name the template refuses creates nothing", async () => {
+  const { coder, db, deps } = setup();
+  db.repos[0] = repo(501, "prof-alex", null, "cs3500/hw1_alex.v2");
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  signInAndLink(coder, ALEX);
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "starting");
+  assertEquals(coder.posts(/\/workspaces$/)[0].body!.rich_parameter_values, [
+    { name: "repo_url", value: "https://git.example.com/cs3500/hw1_alex.v2.git" }
+  ]);
+
+  for (const name of [
+    "",
+    "cs3500",
+    "cs3500/",
+    "/hw1",
+    "cs3500/.coder-modules",
+    "cs3500/hw1/extra",
+    "cs 3500/hw1",
+    "cs3500/hw1?x=1"
+  ]) {
+    const t = setup();
+    t.db.repos[0] = repo(501, "prof-alex", null, name);
+    await assertRejects(() => openWorkspace(t.deps, ALEX, { assignment_id: 41 }), IllegalArgumentError);
+    assertEquals(
+      t.coder.calls.filter((c) => c.method === "POST"),
+      [],
+      `nothing is created for "${name}"`
+    );
+    assertEquals(t.db.rows.length, 0);
+  }
 });
 
 Deno.test("ready: redirect_url is VS Code on the app subdomain, opened on the cloned folder", async () => {
@@ -736,7 +827,7 @@ function failedClone(): Partial<CoderAgent> {
   return {
     lifecycle_state: "start_error",
     status: "connected",
-    scripts: [{ display_name: "Git Clone", status: "exit_failure", exit_code: 128, log_source_id: "src-clone" }]
+    scripts: [{ display_name: "Git Clone", status: "exit_failure", exit_code: 1, log_source_id: "src-clone" }]
   };
 }
 
