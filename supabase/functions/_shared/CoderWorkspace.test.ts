@@ -1498,6 +1498,27 @@ Deno.test("an open takes the restart claim only with time to post the stop", asy
   assertEquals([buildPosts(t.coder), t.db.rows[0].restart_token], [["stop", "start"], null]);
 });
 
+Deno.test("a cut-off restart on a row without the workspace id: the id is recorded first", async () => {
+  // The review's repro D. An earlier open's create was cut off after Coder made the workspace, so
+  // the row has no id, and this open's restart is cut off on the read after its stop.
+  const t = await failedWorkspace();
+  t.db.rows[0].coder_workspace_id = null;
+  let reads = 0;
+  t.coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 0 ? 10_000 : 0);
+  const deps = onRealTime(t, 6_000);
+  const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
+  assertEquals(res.status, "restarting");
+  assertEquals(
+    [t.db.rows[0].coder_workspace_id, t.db.rows[0].restart_phase, buildPosts(t.coder)],
+    [t.coder.workspaces[0].id, "stopping", ["stop"]]
+  );
+  // The stop finishes, and a status read finds the workspace and posts the start.
+  t.coder.slow = undefined;
+  t.coder.workspaces[0].latest_build.status = "stopped";
+  assertEquals((await workspaceStatus(t.deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals([buildPosts(t.coder), t.db.rows[0].restart_token], [["stop", "start"], null]);
+});
+
 Deno.test("an open that read the claim before it went stale doesn't post a start a status read took", async () => {
   // The review's double-start window, at the claim's expiry. The open reads the row and its lookup
   // is held; a status read takes the claim over and its start is held; the open goes on with the
