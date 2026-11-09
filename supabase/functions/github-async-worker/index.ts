@@ -24,6 +24,7 @@ import {
   RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import {
@@ -1544,7 +1545,7 @@ export async function processEnvelope(
         // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
         const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
-          github.createRepo(
+          getGitProvider().createRepo(
             org,
             repoName,
             effectiveSource,
@@ -1557,7 +1558,7 @@ export async function processEnvelope(
           )
         );
         Sentry.addBreadcrumb({ message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}` });
-        await github.syncRepoPermissions(
+        await getGitProvider().syncRepoPermissions(
           org,
           repoName,
           courseSlug,
@@ -1836,7 +1837,7 @@ export async function processEnvelope(
           await retireReplacedMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
-        await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
+        await getGitProvider().syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
           {
@@ -1924,7 +1925,7 @@ export async function processEnvelope(
         }
 
         // Trigger the workflow
-        await github.triggerWorkflow(repository, sha, "grade.yml", scope);
+        await getGitProvider().startGrading(repository, sha, scope);
 
         // Clear the rerun_queued_at flag on the repository after successful trigger
         const { error: clearError } = await adminSupabase
