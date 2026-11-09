@@ -1,4 +1,4 @@
--- Proof harness for 20261028120000_gradebook_column_groups.sql.
+-- Proof harness for 20261109120000_gradebook_column_groups.sql.
 --
 -- Needs a local stack with the migration applied and the cs4535 template seeded
 -- (`npm run seed -- --template cs4535`). Everything runs in one transaction that ends in
@@ -18,14 +18,14 @@ BEGIN;
 -- Topics build on groups, so their down path runs first when they are applied.
 SELECT to_regclass('public.gradebook_topics') IS NOT NULL AS has_topics \gset
 \if :has_topics
-\i supabase/migrations/20261028130000_gradebook_topics.down.sql.txt
+\i supabase/migrations/20261109130000_gradebook_topics.down.sql.txt
 \endif
-\i supabase/migrations/20261028120000_gradebook_column_groups.down.sql.txt
+\i supabase/migrations/20261109120000_gradebook_column_groups.down.sql.txt
 DO $$ BEGIN
   IF to_regclass('public.gradebook_column_groups') IS NOT NULL THEN RAISE EXCEPTION 'down left the table'; END IF;
   IF to_regprocedure('public.gradebook_columns_reorder(bigint[])') IS NULL THEN RAISE EXCEPTION 'down lost reorder'; END IF;
 END $$;
-\i supabase/migrations/20261028120000_gradebook_column_groups.sql
+\i supabase/migrations/20261109120000_gradebook_column_groups.sql
 
 CREATE TEMP TABLE t AS
 SELECT c.id AS class_id, c.gradebook_id,
