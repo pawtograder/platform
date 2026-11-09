@@ -3022,6 +3022,11 @@ echo
 
 echo "== Coder template schedule =="
 
+apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
+  --set coderBootstrap.workspaces.externalAuthId=git-school --show-only templates/coder-bootstrap.yaml
+
 apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
   --set coderBootstrap.schedule.defaultTTL=1.5h --show-only templates/coder-bootstrap.yaml
 apps_has "schedule: Go's largest whole-hour duration renders" yes "--default-ttl '2562047h'" \
