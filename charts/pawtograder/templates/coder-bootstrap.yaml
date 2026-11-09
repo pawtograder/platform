@@ -101,6 +101,7 @@ spec:
               node_affinity: {{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | toJson }}
               code_server_version: {{ .Values.coderBootstrap.workspaces.codeServerVersion | default "" | toString | toJson }}
               external_auth_id: {{ .Values.coderBootstrap.workspaces.externalAuthId | default "forgejo" | toString | toJson }}
+              forgejo_url: {{ if .Values.forgejo.enabled }}{{ include "pawtograder.forgejo.url" . | toString | toJson }}{{ else }}""{{ end }}
               VARS
               for dir in /templates/*/; do
                 name="$(basename "$dir")"
