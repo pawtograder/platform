@@ -3,6 +3,7 @@
 import { useCourse } from "@/hooks/useCourseController";
 import { Box, Button, Heading, HStack, Icon, Link, List, PopoverTrigger, Text, VStack } from "@chakra-ui/react";
 import { createBrowserClient } from "@supabase/ssr";
+import { installFetchHook } from "@/lib/bugReport/fetchHook";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/popover";
 import { useIdentity } from "@/hooks/useIdentities";
@@ -58,6 +59,8 @@ function HelpDialog() {
   );
 }
 export default function LinkAccount() {
+  // Before the client captures `fetch`: the bug reporter's taint ingest listens through this hook.
+  installFetchHook();
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL || "",
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""

@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
@@ -1008,7 +1009,9 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                       return (
                         <Table.Row key={result.id}>
                           <Table.Cell>{dateValue}</Table.Cell>
-                          <Table.Cell>{result.score == null ? "Unknown" : result.score}</Table.Cell>
+                          <ReportBlock>
+                            <Table.Cell>{result.score == null ? "Unknown" : result.score}</Table.Cell>
+                          </ReportBlock>
                           <Table.Cell>{result.grader_sha ? result.grader_sha.slice(0, 7) : "Unknown"}</Table.Cell>
                           <Table.Cell>
                             {result.grader_action_sha ? result.grader_action_sha.slice(0, 7) : "Unknown"}

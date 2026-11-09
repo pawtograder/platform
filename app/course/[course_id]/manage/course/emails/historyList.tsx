@@ -1,3 +1,4 @@
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Course, EmailBatches, Emails } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Card, Collapsible, Flex, Heading, Separator } from "@chakra-ui/react";
@@ -73,7 +74,9 @@ export const EmailHistoryCard = memo(function EmailHistoryCard({
             {group.emails.map((recipient, key) => {
               return (
                 <Box padding="1" fontSize="sm" key={key}>
-                  <Box>Subject: {recipient.subject ?? recipient.subject}</Box>
+                  <Box>
+                    Subject: <ReportBlock>{recipient.subject ?? recipient.subject}</ReportBlock>
+                  </Box>
                   <Box>
                     To:{" "}
                     {
@@ -84,7 +87,9 @@ export const EmailHistoryCard = memo(function EmailHistoryCard({
                   </Box>
                   <Box>Cc: {(recipient.cc_emails as { emails?: string[] })?.emails?.join(", ")}</Box>
                   <Box>Reply to: {recipient.reply_to}</Box>
-                  <Box paddingBottom="2">Body: {recipient.body ?? recipient.body}</Box>
+                  <Box paddingBottom="2">
+                    Body: <ReportBlock>{recipient.body ?? recipient.body}</ReportBlock>
+                  </Box>
                   <Separator />
                 </Box>
               );
