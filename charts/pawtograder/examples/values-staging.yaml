@@ -320,6 +320,13 @@ edgeFunctions:
     # (_shared/examVision.ts), which fail closed without them. Synced by the
     # pawtograder-exam-vision ExternalSecret from kv/apps/pawtograder/exam-vision-staging.
     - pawtograder-exam-vision
+    # FORGEJO_WEBHOOK_SECRET for forgejo-repo-webhook, which answers 500 without it. Needs a
+    # pawtograder-forgejo-webhook ExternalSecret syncing kv/apps/pawtograder/forgejo-webhook-staging
+    # (written by scripts/setup-openbao-edge-functions.sh --bundle forgejo-webhook); until then this
+    # entry is skipped, like any absent envFromSecrets name. envFrom is read at container start, so
+    # roll the edge-function Deployments once the Secret first exists. Not forgejo-staging, which
+    # holds Forgejo's own passwords.
+    - pawtograder-forgejo-webhook
   email:
     # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
     enabled: "true"
