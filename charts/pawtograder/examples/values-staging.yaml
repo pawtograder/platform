@@ -526,12 +526,29 @@ coder:
         value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
       - name: CODER_ACCESS_URL
         value: https://coder.staging.pawtograder.net
+      # Workspace apps run students' code, so they get a zone of their own.
+      # Staging's session cookies are scoped to .staging.pawtograder.net
+      # (utils/channels.ts) and aren't HttpOnly, so an app under that zone
+      # would receive a visiting staff member's session and its JavaScript
+      # could read it. This holds only while no environment scopes its
+      # cookies to the bare .pawtograder.net: production must keep host-only
+      # cookies or scope them to its own subdomain.
       - name: CODER_WILDCARD_ACCESS_URL
-        value: "*-coder.staging.pawtograder.net" # suffix form stays one label deep for the wildcard cert
+        value: "*.workspaces-staging.pawtograder.net"
     ingress:
       host: coder.staging.pawtograder.net
-      wildcardHost: "*.staging.pawtograder.net"
+      wildcardHost: "*.workspaces-staging.pawtograder.net"
       tls:
         enable: true
         secretName: staging-wildcard-tls
-        wildcardSecretName: staging-wildcard-tls
+        wildcardSecretName: workspaces-staging-wildcard-tls
+    serviceAccount:
+      # coderd gets no Role in pawtograder-staging: being able to create a pod
+      # here is enough to read every staging secret (README "Workspace pods").
+      workspacePerms: false
+      workspaceNamespaces:
+        - name: pawtograder-staging-workspaces
+          workspacePerms: true
+
+coderBootstrap:
+  workspaceNamespace: pawtograder-staging-workspaces

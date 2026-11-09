@@ -32,7 +32,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
-[ -n "$ENV_NAME" ] || { usage >&2; exit 2; }
+case "$ENV_NAME" in
+  preview|staging|prod) ;;
+  *) echo "ERROR: --env must be preview, staging or prod (got '${ENV_NAME}')" >&2; usage >&2; exit 2 ;;
+esac
 [ -n "$CODER_EMAIL" ] || { usage >&2; exit 2; }
 
 CLI=""
@@ -84,11 +87,12 @@ CODER_DB_PW="$(pw)"
 CAS=()
 [ "$ROTATE" -eq 1 ] || CAS=(-cas=0)
 
-jq -n --arg a "$FORGEJO_ADMIN_PW" --arg d "$FORGEJO_DB_PW" \
-  '{admin_username: "forgejo-admin", admin_password: $a, db_password: $d}' \
+# Passwords reach jq through its environment, not argv, so `ps` can't show them.
+PW_ADMIN="$FORGEJO_ADMIN_PW" PW_DB="$FORGEJO_DB_PW" jq -n \
+  '{admin_username: "forgejo-admin", admin_password: $ENV.PW_ADMIN, db_password: $ENV.PW_DB}' \
   | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$PREFIX/forgejo-$ENV_NAME" - >/dev/null
-if ! jq -n --arg e "$CODER_EMAIL" --arg a "$CODER_ADMIN_PW" --arg d "$CODER_DB_PW" \
-  '{admin_email: $e, admin_username: "coder-admin", admin_password: $a, db_password: $d}' \
+if ! PW_ADMIN="$CODER_ADMIN_PW" PW_DB="$CODER_DB_PW" jq -n --arg e "$CODER_EMAIL" \
+  '{admin_email: $e, admin_username: "coder-admin", admin_password: $ENV.PW_ADMIN, db_password: $ENV.PW_DB}' \
   | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$PREFIX/coder-$ENV_NAME" - >/dev/null; then
   {
     echo "ERROR: wrote ${BAO_MOUNT}/${PREFIX}/forgejo-${ENV_NAME} but not ${BAO_MOUNT}/${PREFIX}/coder-${ENV_NAME}."
