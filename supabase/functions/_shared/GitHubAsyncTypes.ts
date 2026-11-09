@@ -162,7 +162,7 @@ export type GitHubAsyncEnvelope = {
   retry_count?: number;
   /**
    * Set by queue_repository_syncs on the plan-only copy of a `sync_repo_to_handout` it sends to
-   * `handout_sync` when handout_sync_engine has `shadow: true` (migration 20261101120000). Such a
+   * `handout_sync` when handout_sync_engine has `shadow: true` (migration 20261109120000). Such a
    * copy must never run as a sync: the handout-sync worker plans it and records the prediction,
    * and `processEnvelope` refuses it.
    */

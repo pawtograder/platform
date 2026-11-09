@@ -1,7 +1,7 @@
 -- handout_sync and handout_sync_dlq in the queue gauges (docs/handout-sync-git-worker.md §10,
 -- build plan WP5 "Carried over").
 --
--- 20261101120000 created both queues, but get_async_queue_sizes() has fixed columns and does not
+-- 20261109120000 created both queues, but get_async_queue_sizes() has fixed columns and does not
 -- read them, so the metrics edge function cannot emit pawtograder_queue_depth or
 -- pawtograder_queue_oldest_message_seconds for them. The chart's PawtograderHandoutSyncQueueAging
 -- (warning and critical) and PawtograderHandoutSyncDLQGrowing select on queue="handout_sync" and

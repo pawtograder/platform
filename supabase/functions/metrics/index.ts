@@ -155,7 +155,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
     const discordQueueCount = queueSizes?.[0]?.discord_queue_size || 0;
     const discordDlqQueueCount = queueSizes?.[0]?.discord_dlq_queue_size || 0;
     const notificationEmailsQueueCount = queueSizes?.[0]?.notification_emails_queue_size || 0;
-    // The git handout-sync worker's queue and its DLQ (20261102120000). Labelled series only: the
+    // The git handout-sync worker's queue and its DLQ (20261109120100). Labelled series only: the
     // chart's handout_sync alerts select on these, and nothing reads an unlabelled name for them.
     const handoutSyncQueueCount = queueSizes?.[0]?.handout_sync_queue_size || 0;
     const handoutSyncDlqQueueCount = queueSizes?.[0]?.handout_sync_dlq_queue_size || 0;

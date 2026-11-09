@@ -495,7 +495,7 @@ async function requeueWithDelay(
 /**
  * The dead-letter queue for a message read from `queueName`. `handout_sync` has its own, so the
  * git worker's poison messages stay with the worker that can replay them (migration
- * 20261101120000). Every other queue, `async_calls_low_priority` included, keeps `async_calls_dlq`.
+ * 20261109120000). Every other queue, `async_calls_low_priority` included, keeps `async_calls_dlq`.
  */
 export function deadLetterQueueFor(queueName: string | undefined): "async_calls_dlq" | "handout_sync_dlq" {
   return queueName === HANDOUT_SYNC_QUEUE ? "handout_sync_dlq" : "async_calls_dlq";
