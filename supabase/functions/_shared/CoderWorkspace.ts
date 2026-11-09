@@ -152,6 +152,19 @@ export function workspaceName(repositoryId: number): string {
   return `repo-${repositoryId}`;
 }
 
+/** The owner and repository names the template's repo_url validation accepts (#1221). */
+const CLONE_PATH = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)$/;
+
+/**
+ * The template's repo_url, `<FORGEJO_URL>/<owner>/<repo>.git`. Coder refuses any other shape with a
+ * 400, so a repository whose name doesn't fit is refused before anything is created.
+ */
+export function cloneUrl(forgejoUrl: string, repository: string): string {
+  const m = repository.match(CLONE_PATH);
+  if (!m) throw new IllegalArgumentError("This repository can't be opened in a workspace");
+  return `${forgejoUrl}/${m[1]}/${m[2]}.git`;
+}
+
 /** The repository the caller may open a workspace on, or a SecurityError. */
 export async function resolveRepository(
   db: WorkspaceDb,
@@ -343,15 +356,17 @@ export async function describeWorkspace(
       (agent.lifecycle_state === "start_timeout" ? scripts.find((s) => !s.status) : undefined);
     const step = failing ? stepForScript(failing.display_name) : "build";
     const logs = failing ? await getAgentLogs(coder, agent.id) : [];
-    const log_lines = logs
-      .filter((l) => l.source_id === failing?.log_source_id)
-      .map((l) => l.output)
-      .slice(-LOG_LINES);
+    const output = logs.filter((l) => l.source_id === failing?.log_source_id).map((l) => l.output);
+    const log_lines = output.slice(-LOG_LINES);
+    // The template's clone script exits 1 on every failure; its last line says why (#1221).
+    const reason =
+      failing?.display_name === "Git Clone" ? output.findLast((l) => l.startsWith("Git Clone failed:")) : undefined;
     const what = failing ? `"${failing.display_name}"` : "A startup step";
     const message =
-      agent.lifecycle_state === "start_timeout"
+      reason ??
+      (agent.lifecycle_state === "start_timeout"
         ? `${what} did not finish in time.`
-        : `${what} failed${failing?.exit_code !== undefined ? ` with exit code ${failing.exit_code}` : ""}.`;
+        : `${what} failed${failing?.exit_code !== undefined ? ` with exit code ${failing.exit_code}` : ""}.`);
     return {
       ...base,
       status: "failed",
@@ -466,6 +481,7 @@ export async function openWorkspace(
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
   const { repo, profileId, classId } = await resolveRepository(db, caller, request);
+  const repoUrl = cloneUrl(deps.forgejoUrl, repo.repository);
   const user = await ensureCoderUser(deps, caller);
 
   // Coder binds the subject on the student's first sign-in, which the link page asks for.
@@ -489,7 +505,6 @@ export async function openWorkspace(
   }
 
   const name = workspaceName(repo.id);
-  const repoUrl = `${deps.forgejoUrl}/${repo.repository}.git`;
   let row = await db.reserveWorkspace({
     class_id: classId,
     assignment_id: repo.assignment_id,
