@@ -199,7 +199,9 @@ test.describe("Report a bug dialog, replay review", () => {
             const style = doc.createElement("style");
             style.id = "vt-hide-replayed-menus";
             style.textContent =
-              '[role="menu"], [data-part="positioner"], [data-scope="menu"], [data-scope="popover"] { display: none !important; }';
+              // Only the floating panels: the menu triggers share data-scope="menu", and hiding those
+              // removed the header's buttons from the capture.
+              '[role="menu"], [data-scope="menu"][data-part="positioner"], [data-scope="popover"][data-part="positioner"] { display: none !important; }';
             doc.head.appendChild(style);
           });
       }
