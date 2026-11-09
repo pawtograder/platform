@@ -92,6 +92,12 @@ variable "external_auth_id" {
   default     = "forgejo"
 }
 
+variable "forgejo_url" {
+  type        = string
+  description = "Forgejo's public URL; repo_url must name a repository on it. Empty accepts any HTTPS host."
+  default     = ""
+}
+
 data "coder_parameter" "cpu" {
   name         = "cpu"
   display_name = "CPU"
@@ -142,6 +148,10 @@ data "coder_parameter" "repo_url" {
   description  = "HTTPS clone URL of the repository to work on."
   type         = "string"
   mutable      = false
+  validation {
+    regex = local.repo_url_regex
+    error = "Must be a clone URL like ${var.forgejo_url == "" ? "https://<host>" : trimsuffix(var.forgejo_url, "/")}/<owner>/<repository>.git, whose repository name doesn't start with a dot."
+  }
 }
 
 # Coder refuses to create a workspace until the owner links this provider; the agent's GIT_ASKPASS then hands git its token.
@@ -152,16 +162,29 @@ data "coder_external_auth" "git" {
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
-# Clones on a start whose target directory is missing or empty, so a restart keeps the work on the home volume.
-module "git_clone" {
-  source   = "registry.coder.com/coder/git-clone/coder"
-  version  = "2.0.4"
-  agent_id = coder_agent.main.id
-  url      = data.coder_parameter.repo_url.value
-  base_dir = "/home/coder"
+# Blocks login until it ends, so a failure shows as the agent's start_error rather than a ready workspace.
+resource "coder_script" "git_clone" {
+  agent_id     = coder_agent.main.id
+  display_name = "Git Clone"
+  icon         = "/icon/git.svg"
+  script = templatefile("${path.module}/clone.sh", {
+    url   = data.coder_parameter.repo_url.value
+    dir   = local.repo_dir
+    limit = local.clone_timeout
+    auth  = var.external_auth_id
+  })
+  run_on_start       = true
+  start_blocks_login = true
+  # A backstop: clone.sh gives up on its own after clone_timeout.
+  timeout = local.clone_timeout + 120
 }
 
 locals {
+  # Owner and repository names are Forgejo's characters; a name can't start with a dot, so the clone can't land on a dotfile.
+  # "" passes because template import checks the parameter without a value; clone.sh fails a workspace created with it.
+  repo_url_regex = "^(${var.forgejo_url == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : replace(trimsuffix(var.forgejo_url, "/"), "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")}/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+  repo_dir       = "/home/coder/${trimsuffix(basename(data.coder_parameter.repo_url.value), ".git")}"
+  clone_timeout  = 300
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
   name = "coder-${data.coder_workspace.me.id}"
   labels = {
@@ -230,7 +253,7 @@ resource "coder_app" "code_server" {
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "VS Code"
-  url          = "http://localhost:13337/?folder=${module.git_clone.repo_dir}"
+  url          = "http://localhost:13337/?folder=${local.repo_dir}"
   icon         = "/icon/code.svg"
   subdomain    = true
   share        = "owner"
