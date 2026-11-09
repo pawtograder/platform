@@ -2964,6 +2964,46 @@ apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %
 
 echo
 
+echo "== Coder template variables =="
+
+# The CLI parses each --variable as CSV, so a JSON value (quotes, commas) fails
+# to parse ("bare \" in non-quoted-field") or splits. Variables must go through
+# --variables-file, with every value a JSON string literal that decodes to the
+# string Terraform expects; the JSON-typed ones must decode again to JSON.
+apps_has "variables: push uses no --variable flag" no "--variable " \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "variables: push reads the variables file" yes '--variables-file "$vars"' \
+  --show-only templates/coder-bootstrap.yaml
+label="variables: every value is a string, JSON ones decode"
+if ! apps "${WS_NS[@]}" --set-json 'coderBootstrap.workspaces.imagePullSecrets=[{"name":"a"},{"name":"b"}]' \
+  --show-only templates/coder-bootstrap.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif msg="$(python3 - "$OUTFILE" <<'PYCHECK'
+import json, re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r"<<'VARS'\n(.*?)\n\s*VARS\n", text, re.S)
+if not m:
+    sys.exit("no variables heredoc")
+vals = {}
+for line in m.group(1).splitlines():
+    k, _, v = line.strip().partition(": ")
+    vals[k] = json.loads(v)
+    if not isinstance(vals[k], str):
+        sys.exit(f"{k} is not a string")
+for k in ("node_selector", "tolerations", "image_pull_secrets", "node_affinity"):
+    json.loads(vals[k])
+if vals["namespace"] != "pawtograder-ws":
+    sys.exit("namespace is " + vals["namespace"])
+if json.loads(vals["image_pull_secrets"]) != [{"name": "a"}, {"name": "b"}]:
+    sys.exit("image_pull_secrets was split or mangled")
+PYCHECK
+)"; then
+  echo "ok   [$label]"
+else
+  echo "FAIL [$label]: $msg"; FAILED=1
+fi
+echo
+
 echo "== Coder template schedule =="
 
 apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
