@@ -282,7 +282,7 @@
 {{- fail "forgejoRunner.enabled needs forgejo.enabled" }}
 {{- end }}
 {{- if not (and .Values.forgejoRunner.image.repository .Values.forgejoRunner.image.tag) }}
-{{- fail "forgejoRunner.image.repository and .tag are required (build images/forgejo-runner)" }}
+{{- fail "forgejoRunner.image.repository and .tag are required (ghcr.io/pawtograder/forgejo-runner, built by release-images.yml)" }}
 {{- end }}
 {{- if not .Values.forgejoRunner.dispatcher.tokenSecret }}
 {{- fail "forgejoRunner.dispatcher.tokenSecret must name a Secret with a Forgejo access token (key token): install with forgejoRunner.enabled=false, create the token in Forgejo, then enable the runner. See README \"Actions runner\"" }}

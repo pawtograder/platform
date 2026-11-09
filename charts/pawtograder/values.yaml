@@ -2959,6 +2959,15 @@ coder-db:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 250m, memory: 256Mi }
 
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: false
+    forgejoPath: ""
+    coderPath: ""
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+
 coderBootstrap:
   enabled: true
   workspaceNamespace: ""
