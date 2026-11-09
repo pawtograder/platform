@@ -14,14 +14,20 @@ import {
 
 // Regression coverage for #1125 / #983 (PR 1 of the error-surfacing stack).
 //
-// RLS on `assignments` only lets instructors UPDATE. When a grader saved Edit Assignment, PostgREST
-// matched 0 rows and answered `200 []`, `@refinedev/supabase` turned that into `{ data: undefined }`
-// with no error, and the page showed the green "Assignment Updated" toast for a save that never
-// happened. `lib/refineDataProvider.ts` now throws a 403 when an update returns no row, so the
-// page's existing catch shows "Update Error" instead.
+// When RLS refuses an UPDATE, PostgREST matches 0 rows and answers `200 []`. `@refinedev/supabase`
+// turned that into `{ data: undefined }` with no error, so Edit Assignment showed the green
+// "Assignment Updated" toast for a save that never happened. `lib/refineDataProvider.ts` now throws
+// a 403 when an update returns no row, so the page's existing catch shows "Update Error" instead.
+//
+// Since #1199, edit/layout.tsx sends anyone without manage_assignments back to the assignment list,
+// so a default grader can no longer reach Save. The page can still be out of date, though: here a
+// grader on a custom role that holds manage_assignments opens Edit Assignment, and the capability is
+// then taken off that role (an instructor editing the role, in real life) before Save is clicked.
+// The page still renders the form, but RLS on `assignments` now refuses the UPDATE. Before the
+// provider fix that showed "Assignment Updated".
 //
 // The unit tests in tests/unit/refine-data-provider.test.ts cover the provider logic with stubbed
-// responses; this test is the end-to-end proof against real RLS as a seeded grader.
+// responses; this test is the end-to-end proof against real RLS.
 //
 // Save is clicked WITHOUT editing any field. The edit page renders the form twice (responsive
 // variants in ManageAssignmentNav.tsx) and react-hook-form binds to the last-mounted one, so typed
@@ -40,11 +46,12 @@ const SAFE_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,
 let course: Course;
 let grader: TestingUser | undefined;
 let assignment: Assignment;
+let editorRoleId: number;
 
 const futureDue = addDays(new TZDate(new Date(), "America/New_York"), 14);
 futureDue.setHours(9, 0, 0, 0);
 
-test.describe("Grader writes refused by RLS surface an error", () => {
+test.describe("Writes refused by RLS surface an error", () => {
   test.describe.configure({ mode: "serial" });
 
   test.beforeAll(async () => {
@@ -63,13 +70,36 @@ test.describe("Grader writes refused by RLS surface an error", () => {
       due_date: futureDue.toUTCString(),
       repo_mode: "none"
     });
+
+    // A custom role holding manage_assignments, with the grader on it, so edit/layout.tsx lets them in.
+    const { data: role, error: roleError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: `Assignment Editor ${SAFE_ID}` })
+      .select("id")
+      .single();
+    expect(roleError).toBeNull();
+    editorRoleId = role!.id;
+
+    const { error: capabilityError } = await supabase
+      .from("role_capabilities")
+      .insert({ role_id: editorRoleId, capability: "manage_assignments" });
+    expect(capabilityError).toBeNull();
+
+    const { error: assignError } = await supabase
+      .from("user_roles")
+      .update({ class_role_id: editorRoleId })
+      .eq("user_id", grader!.user_id)
+      .eq("class_id", course.id);
+    expect(assignError).toBeNull();
   });
 
   test.afterEach(async ({ logMagicLinksOnFailure }) => {
     await logMagicLinksOnFailure([grader]);
   });
 
-  test("a grader saving Edit Assignment sees an error, not 'Assignment Updated'", async ({ page }) => {
+  test("saving Edit Assignment after losing manage_assignments shows an error, not 'Assignment Updated'", async ({
+    page
+  }) => {
     const { data: before, error: beforeError } = await supabase
       .from("assignments")
       .select("title, updated_at")
@@ -83,6 +113,14 @@ test.describe("Grader writes refused by RLS surface an error", () => {
     // Wait for the loaded row to reach the form, so Save sends a real UPDATE for this id.
     await expect(page.getByLabel("Title", { exact: false }).first()).toHaveValue(assignment.title);
 
+    // The page is open; now take manage_assignments away, as an instructor editing the role would.
+    const { error: revokeError } = await supabase
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", editorRoleId)
+      .eq("capability", "manage_assignments");
+    expect(revokeError).toBeNull();
+
     // The visual-test fixture hides the toaster (display:none); turn it off so the toast is visible.
     await page.evaluate(() => document.documentElement.removeAttribute("data-visual-tests"));
     await page
@@ -95,10 +133,6 @@ test.describe("Grader writes refused by RLS surface an error", () => {
     await expect(page.getByText(/don't have permission to update this assignments record/).first()).toBeVisible();
     // ...and the false success the bug produced is gone.
     await expect(page.getByText("Assignment Updated")).toHaveCount(0);
-
-    // After a reload the page still shows the original assignment — nothing was persisted.
-    await page.reload();
-    await expect(page.getByLabel("Title", { exact: false }).first()).toHaveValue(assignment.title);
 
     // The database agrees nothing changed.
     const { data: after } = await supabase

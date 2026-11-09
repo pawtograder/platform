@@ -79,37 +79,69 @@ function refusedWriteError(action: "update" | "delete", resource: string, id: un
     new Error(
       `You don't have permission to ${action} this ${resource} record (id ${String(id)}), or it no longer exists. Nothing was changed.`
     ),
-    { statusCode: 403 }
+    { statusCode: 403, refusedWrite: true as const }
   );
 }
+
+/**
+ * True when `error` is the error this provider throws for a refine `update` or
+ * `deleteOne` that RLS refused (0 rows changed, no PostgREST error).
+ *
+ * Use it to tell a refusal apart from other failures, e.g. to show a
+ * permission message instead of a generic one. A PostgREST error, such as an
+ * RLS violation on insert (42501), is not one of these refusals and returns
+ * false.
+ */
+export function isRefusedWriteError(error: unknown): error is Error & { statusCode: 403; refusedWrite: true } {
+  return error instanceof Error && (error as { refusedWrite?: unknown }).refusedWrite === true;
+}
+
+type PostgrestResult = PromiseLike<{
+  data: unknown[] | null;
+  error: { message: string; code: string } | null;
+}>;
+
+/** A filtered PostgREST query: `.eq()` or `.match()` on a delete or select builder. */
+type FilterBuilder<T> = {
+  match: (filter: Record<string, unknown>) => T;
+  eq: (column: string, value: unknown) => T;
+};
 
 /** Minimal slice of the Supabase client that `withBlockedDeleteErrors` uses. */
 type DeleteClient = {
   schema?: (schema: string) => DeleteClient;
   from: (resource: string) => {
-    delete: () => {
-      match: (filter: Record<string, unknown>) => unknown;
-      eq: (column: string, value: unknown) => unknown;
-    };
+    delete: () => FilterBuilder<{ select: (columns: string) => PostgrestResult }>;
+    select: (columns: string) => FilterBuilder<{ limit: (count: number) => PostgrestResult }>;
   };
 };
 
-type DeleteQuery = {
-  select: (columns: string) => PromiseLike<{
-    data: unknown[] | null;
-    error: { message: string; code: string } | null;
-  }>;
-};
+/** Same shape upstream's handleError produces for PostgREST errors. */
+function postgrestError(error: { message: string; code: string }) {
+  return Object.assign(new Error(error.message), { ...error, statusCode: Number.parseInt(error.code) });
+}
 
 /**
- * Replaces `deleteOne` so an RLS-refused delete is reported as an error.
+ * Replaces `deleteOne` so that RLS refusing a delete is reported as an error,
+ * while deleting a row that is already gone still succeeds.
  *
  * Upstream `deleteOne` runs `.delete()` **without** `.select()`, so PostgREST
  * returns no rows whether the delete worked or was refused — `data` is always
  * empty and the "row missing" check used for `update` can't tell them apart.
- * Here the delete asks for the deleted ids back (`.select(idColumn)`): a
- * refused delete returns `[]` and is thrown as a 403; a real delete returns
- * the row and resolves exactly like upstream did.
+ * Here the delete asks for the deleted ids back (`.select(idColumn)`). A real
+ * delete returns the row and resolves exactly like upstream did.
+ *
+ * When nothing comes back, the row was either refused by RLS or already gone
+ * (a second tab, a double click, a realtime race). Both look the same from the
+ * delete, so a follow-up select checks whether the row is still visible:
+ *
+ * - **Still visible:** the session can read the row but was not allowed to
+ *   delete it. Thrown as a 403 (`isRefusedWriteError`).
+ * - **Not visible:** the row is gone, or the session can't see it at all.
+ *   Resolves as a success, which is what upstream always did. A delete that
+ *   RLS refused ends up here only on tables whose SELECT policy is no wider
+ *   than their DELETE policy (e.g. `notifications`), where the user could not
+ *   have seen the row to begin with.
  */
 export function withBlockedDeleteErrors(base: DataProvider, client: DeleteClient): DataProvider {
   return {
@@ -120,18 +152,26 @@ export function withBlockedDeleteErrors(base: DataProvider, client: DeleteClient
       const { resource, id, meta } = params;
       const scoped = meta?.schema && client.schema ? client.schema(meta.schema) : client;
       const idColumn: string = meta?.idColumnName ?? "id";
-      const builder = scoped.from(resource).delete();
-      const query = (meta?.idColumnName ? builder.eq(idColumn, id) : builder.match({ id })) as DeleteQuery;
+      const filter = <T>(builder: FilterBuilder<T>): T =>
+        meta?.idColumnName ? builder.eq(idColumn, id) : builder.match({ id });
 
-      const { data, error } = await query.select(idColumn);
+      const { data, error } = await filter(scoped.from(resource).delete()).select(idColumn);
       if (error) {
-        // Same shape upstream's handleError produces for PostgREST errors.
-        throw Object.assign(new Error(error.message), { ...error, statusCode: Number.parseInt(error.code) });
+        throw postgrestError(error);
       }
-      if (!data || data.length === 0) {
+      if (data && data.length > 0) {
+        return { data: data[0] as TData };
+      }
+
+      // Nothing deleted: refused, or already gone? Only a row we can still see was refused.
+      const { data: remaining, error: selectError } = await filter(scoped.from(resource).select(idColumn)).limit(1);
+      if (selectError) {
+        throw postgrestError(selectError);
+      }
+      if (remaining && remaining.length > 0) {
         throw refusedWriteError("delete", resource, id);
       }
-      return { data: data[0] as TData };
+      return { data: { [idColumn]: id } as unknown as TData };
     }
   };
 }

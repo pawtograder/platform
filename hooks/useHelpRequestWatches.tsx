@@ -1,4 +1,5 @@
 "use client";
+import { toaster } from "@/components/ui/toaster";
 import { HelpRequestWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -45,6 +46,7 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
   /**
    * Sets the watch status for the current help request.
    * Creates a new watcher record if none exists, or updates the existing one.
+   * Never rejects: a failed write is shown as a toast here.
    *
    * @param status - Whether to enable or disable watching
    */
@@ -53,21 +55,28 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
       // View-as student is read-only; writing here would subscribe the masquerading
       // instructor to help-request notifications under their own user_id.
       if (isReadOnly) return;
-      if (curWatch) {
-        await updateWatch({
-          id: curWatch.id,
-          values: {
-            enabled: status
-          }
-        });
-      } else {
-        await createHelpRequestWatcher({
-          values: {
-            user_id: user?.id,
-            class_id: course_id,
-            help_request_id: helpRequestId,
-            enabled: status
-          }
+      try {
+        if (curWatch) {
+          await updateWatch({
+            id: curWatch.id,
+            values: {
+              enabled: status
+            }
+          });
+        } else {
+          await createHelpRequestWatcher({
+            values: {
+              user_id: user?.id,
+              class_id: course_id,
+              help_request_id: helpRequestId,
+              enabled: status
+            }
+          });
+        }
+      } catch (error) {
+        toaster.error({
+          title: status ? "Failed to watch help request" : "Failed to unwatch help request",
+          description: error instanceof Error ? error.message : String(error)
         });
       }
     },

@@ -1,5 +1,10 @@
 import type { DataProvider } from "@refinedev/core";
-import { retryUnlessMissingRow, withBlockedDeleteErrors, withMissingRowErrors } from "@/lib/refineDataProvider";
+import {
+  isRefusedWriteError,
+  retryUnlessMissingRow,
+  withBlockedDeleteErrors,
+  withMissingRowErrors
+} from "@/lib/refineDataProvider";
 
 /**
  * Minimal stand-in for the `@refinedev/supabase` provider: only the response
@@ -99,78 +104,180 @@ describe("withMissingRowErrors", () => {
   });
 });
 
-/** Fake Supabase client recording the delete query and answering with `result`. */
-function fakeDeleteClient(result: { data: unknown[] | null; error: { message: string; code: string } | null }) {
-  const calls: { resource?: string; schema?: string; filter?: unknown; select?: string } = {};
-  const query = {
-    select: jest.fn((columns: string) => {
-      calls.select = columns;
-      return Promise.resolve(result);
-    })
-  };
-  const builder = {
+/** Awaits a promise that must reject and returns what it rejected with. */
+async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the promise to reject, but it resolved");
+}
+
+type QueryResult = { data: unknown[] | null; error: { message: string; code: string } | null };
+
+/** One query the fake client saw: delete or follow-up select, with its filter and columns. */
+type RecordedQuery = {
+  kind: "delete" | "select";
+  resource: string;
+  schema?: string;
+  filter?: Record<string, unknown>;
+  columns?: string;
+  limit?: number;
+};
+
+/**
+ * Fake Supabase client. The delete answers with `deleteResult`; the follow-up
+ * select (only made when the delete returns no rows) answers with
+ * `selectResult`. Every query is recorded in `queries`, in order.
+ */
+function fakeDeleteClient(deleteResult: QueryResult, selectResult: QueryResult = { data: [], error: null }) {
+  const queries: RecordedQuery[] = [];
+  let currentSchema: string | undefined;
+
+  const filterable = <T>(query: RecordedQuery, next: () => T) => ({
     match: jest.fn((filter: Record<string, unknown>) => {
-      calls.filter = filter;
-      return query;
+      query.filter = filter;
+      return next();
     }),
     eq: jest.fn((column: string, value: unknown) => {
-      calls.filter = { [column]: value };
-      return query;
+      query.filter = { [column]: value };
+      return next();
     })
-  };
-  const client = {
+  });
+
+  const client: Parameters<typeof withBlockedDeleteErrors>[1] = {
     from: jest.fn((resource: string) => {
-      calls.resource = resource;
-      return { delete: () => builder };
+      const schema = currentSchema;
+      return {
+        delete: () => {
+          const query: RecordedQuery = { kind: "delete", resource, schema };
+          queries.push(query);
+          return filterable(query, () => ({
+            select: jest.fn((columns: string) => {
+              query.columns = columns;
+              return Promise.resolve(deleteResult);
+            })
+          }));
+        },
+        select: (columns: string) => {
+          const query: RecordedQuery = { kind: "select", resource, schema, columns };
+          queries.push(query);
+          return filterable(query, () => ({
+            limit: jest.fn((count: number) => {
+              query.limit = count;
+              return Promise.resolve(selectResult);
+            })
+          }));
+        }
+      };
     }),
     schema: jest.fn((schema: string) => {
-      calls.schema = schema;
+      currentSchema = schema;
       return client;
     })
   };
-  return { client, calls };
+  return { client, queries };
 }
 
 describe("withBlockedDeleteErrors", () => {
   const base = baseProviderReturning({ data: undefined });
 
-  it("rejects with a 403 when RLS refuses the delete (0 rows returned)", async () => {
-    const { client } = fakeDeleteClient({ data: [], error: null });
-    const provider = withBlockedDeleteErrors(base, client);
-
-    await expect(provider.deleteOne({ resource: "review_assignments", id: 7 })).rejects.toMatchObject({
-      statusCode: 403
-    });
-    await expect(provider.deleteOne({ resource: "review_assignments", id: 7 })).rejects.toThrow(
-      /permission to delete this review_assignments record \(id 7\)/
-    );
-  });
-
-  it("resolves with the deleted row when the delete really happened", async () => {
-    const { client, calls } = fakeDeleteClient({ data: [{ id: 7 }], error: null });
+  it("resolves with the deleted row when the delete really happened, without a follow-up select", async () => {
+    const { client, queries } = fakeDeleteClient({ data: [{ id: 7 }], error: null });
     const provider = withBlockedDeleteErrors(base, client);
 
     await expect(provider.deleteOne({ resource: "review_assignments", id: 7 })).resolves.toEqual({ data: { id: 7 } });
-    // Asks for the deleted id back — that is what makes refusal detectable.
-    expect(calls).toMatchObject({ resource: "review_assignments", filter: { id: 7 }, select: "id" });
+    // Asks for the deleted id back. That is what makes refusal detectable.
+    expect(queries).toEqual([{ kind: "delete", resource: "review_assignments", filter: { id: 7 }, columns: "id" }]);
+  });
+
+  describe("when the delete returns no rows", () => {
+    it("rejects with a 403 when the row is still visible (RLS refused the delete)", async () => {
+      // #1127: a grader can see a review assignment they're assigned to, but only managers may delete it.
+      const { client } = fakeDeleteClient({ data: [], error: null }, { data: [{ id: 7 }], error: null });
+      const provider = withBlockedDeleteErrors(base, client);
+
+      const error = await rejectionOf(provider.deleteOne({ resource: "review_assignments", id: 7 }));
+      expect(error).toMatchObject({ statusCode: 403 });
+      expect((error as Error).message).toMatch(/permission to delete this review_assignments record \(id 7\)/);
+      expect(isRefusedWriteError(error)).toBe(true);
+    });
+
+    it("checks visibility with a filtered select on the same row", async () => {
+      const { client, queries } = fakeDeleteClient({ data: [], error: null }, { data: [{ id: 7 }], error: null });
+      const provider = withBlockedDeleteErrors(base, client);
+
+      await expect(provider.deleteOne({ resource: "review_assignments", id: 7 })).rejects.toThrow();
+      expect(queries).toEqual([
+        { kind: "delete", resource: "review_assignments", filter: { id: 7 }, columns: "id" },
+        { kind: "select", resource: "review_assignments", filter: { id: 7 }, columns: "id", limit: 1 }
+      ]);
+    });
+
+    it("resolves when the row is no longer visible (already deleted: second tab, double click, realtime race)", async () => {
+      const { client } = fakeDeleteClient({ data: [], error: null }, { data: [], error: null });
+      const provider = withBlockedDeleteErrors(base, client);
+
+      await expect(provider.deleteOne({ resource: "notifications", id: 7 })).resolves.toEqual({ data: { id: 7 } });
+    });
+
+    it("treats a null follow-up result as gone", async () => {
+      const { client } = fakeDeleteClient({ data: null, error: null }, { data: null, error: null });
+      const provider = withBlockedDeleteErrors(base, client);
+
+      await expect(provider.deleteOne({ resource: "tags", id: "t1" })).resolves.toEqual({ data: { id: "t1" } });
+    });
+
+    it("honours idColumnName and schema in the follow-up select and the resolved data", async () => {
+      const { client, queries } = fakeDeleteClient({ data: [], error: null }, { data: [], error: null });
+      const provider = withBlockedDeleteErrors(base, client);
+
+      await expect(
+        provider.deleteOne({ resource: "tags", id: "u1", meta: { idColumnName: "uuid", schema: "public" } })
+      ).resolves.toEqual({ data: { uuid: "u1" } });
+      expect(queries[1]).toEqual({
+        kind: "select",
+        resource: "tags",
+        schema: "public",
+        filter: { uuid: "u1" },
+        columns: "uuid",
+        limit: 1
+      });
+    });
+
+    it("rethrows a PostgREST error from the follow-up select", async () => {
+      const { client } = fakeDeleteClient(
+        { data: [], error: null },
+        { data: null, error: { message: "permission denied for table tags", code: "42501" } }
+      );
+      const provider = withBlockedDeleteErrors(base, client);
+
+      const error = await rejectionOf(provider.deleteOne({ resource: "tags", id: "t1" }));
+      expect(error).toMatchObject({ message: "permission denied for table tags", statusCode: 42501 });
+      expect(isRefusedWriteError(error)).toBe(false);
+    });
   });
 
   it("honours idColumnName and schema from meta", async () => {
-    const { client, calls } = fakeDeleteClient({ data: [{ uuid: "u1" }], error: null });
+    const { client, queries } = fakeDeleteClient({ data: [{ uuid: "u1" }], error: null });
     const provider = withBlockedDeleteErrors(base, client);
 
     await provider.deleteOne({ resource: "tags", id: "u1", meta: { idColumnName: "uuid", schema: "public" } });
-    expect(calls).toMatchObject({ schema: "public", filter: { uuid: "u1" }, select: "uuid" });
+    expect(queries).toEqual([
+      { kind: "delete", resource: "tags", schema: "public", filter: { uuid: "u1" }, columns: "uuid" }
+    ]);
   });
 
-  it("rethrows PostgREST errors with a numeric statusCode, like upstream", async () => {
-    const { client } = fakeDeleteClient({ data: null, error: { message: "fk violation", code: "23503" } });
+  it("rethrows PostgREST errors with a numeric statusCode, like upstream, without a follow-up select", async () => {
+    const { client, queries } = fakeDeleteClient({ data: null, error: { message: "fk violation", code: "23503" } });
     const provider = withBlockedDeleteErrors(base, client);
 
     await expect(provider.deleteOne({ resource: "assignments", id: 1 })).rejects.toMatchObject({
       message: "fk violation",
       statusCode: 23503
     });
+    expect(queries).toHaveLength(1);
   });
 
   it("does not touch the other provider methods", () => {
@@ -179,6 +286,25 @@ describe("withBlockedDeleteErrors", () => {
 
     expect(provider.update).toBe(base.update);
     expect(provider.getOne).toBe(base.getOne);
+  });
+});
+
+describe("isRefusedWriteError", () => {
+  it("is true for a refused update", async () => {
+    const provider = withMissingRowErrors(baseProviderReturning({ data: { id: 1 } }, { data: undefined }));
+
+    const error = await rejectionOf(provider.update({ resource: "assignments", id: 42, variables: {} }));
+    expect(isRefusedWriteError(error)).toBe(true);
+  });
+
+  it("is false for the 404 from getOne, PostgREST errors, plain errors and non-errors", () => {
+    expect(isRefusedWriteError(Object.assign(new Error("no such row"), { statusCode: 404 }))).toBe(false);
+    expect(isRefusedWriteError(Object.assign(new Error("rls"), { code: "42501", statusCode: 42501 }))).toBe(false);
+    // A plain 403 from elsewhere is not one of ours.
+    expect(isRefusedWriteError(Object.assign(new Error("forbidden"), { statusCode: 403 }))).toBe(false);
+    expect(isRefusedWriteError(new Error("boom"))).toBe(false);
+    expect(isRefusedWriteError({ refusedWrite: true })).toBe(false);
+    expect(isRefusedWriteError(undefined)).toBe(false);
   });
 });
 

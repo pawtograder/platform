@@ -8,6 +8,7 @@ import { BsPlus, BsPencil, BsTrash, BsEye, BsEyeSlash, BsFileText } from "react-
 import { formatDistanceToNow } from "date-fns";
 import useModalManager from "@/hooks/useModalManager";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
 import CreateHelpRequestTemplateModal from "./modals/createHelpRequestTemplateModal";
 import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal";
 import { useHelpRequestTemplates } from "@/hooks/useOfficeHoursRealtime";
@@ -35,37 +36,38 @@ export default function HelpRequestTemplateManagement() {
   const { mutate: updateTemplate } = useUpdate();
   const { mutateAsync: deleteTemplate } = useDelete();
 
+  // refine's success/errorNotification options do nothing here (no notificationProvider), so report
+  // the outcome with the toaster directly.
   const handleToggleActive = (templateId: number, currentState: boolean) => {
-    updateTemplate({
-      resource: "help_request_templates",
-      id: templateId,
-      values: {
-        is_active: !currentState
+    updateTemplate(
+      {
+        resource: "help_request_templates",
+        id: templateId,
+        values: {
+          is_active: !currentState
+        }
       },
-      successNotification: {
-        message: `Template ${!currentState ? "activated" : "deactivated"} successfully`,
-        type: "success"
-      },
-      errorNotification: {
-        message: "Failed to update template status",
-        type: "error"
+      {
+        onSuccess: () => {
+          toaster.success({ title: `Template ${!currentState ? "activated" : "deactivated"} successfully` });
+        },
+        onError: (error) => {
+          toaster.error({ title: "Failed to update template status", description: error.message });
+        }
       }
-    });
+    );
   };
 
   const handleDeleteTemplate = async (templateId: number) => {
-    await deleteTemplate({
-      resource: "help_request_templates",
-      id: templateId,
-      successNotification: {
-        message: "Template deleted successfully",
-        type: "success"
-      },
-      errorNotification: {
-        message: "Failed to delete template",
-        type: "error"
-      }
-    });
+    try {
+      await deleteTemplate({ resource: "help_request_templates", id: templateId });
+      toaster.success({ title: "Template deleted successfully" });
+    } catch (error) {
+      toaster.error({
+        title: "Failed to delete template",
+        description: error instanceof Error ? error.message : String(error)
+      });
+    }
   };
 
   const handleCreateSuccess = () => {

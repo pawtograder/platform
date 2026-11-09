@@ -639,12 +639,8 @@ export default function NotificationTeaser({
 
     setIsProcessing(true);
     try {
+      // dismiss() reports its own failures (useNotifications), so there is nothing to catch here.
       await dismiss();
-    } catch (error) {
-      toaster.error({
-        title: "Failed to dismiss notification",
-        description: "Error: " + (error as Error).message
-      });
     } finally {
       setIsProcessing(false);
     }
