@@ -174,6 +174,13 @@ auth:
     # https://api.staging.pawtograder.net/auth/v1/callback.
     discord:
       enabled: true
+  # Pawtograder's email templates. Their links go straight to the app's token_hash pages
+  # (/auth/reset-password, /auth/confirm, /auth/accept-invitation, /auth/magic-link), which is
+  # the flow those pages implement. GoTrue's built-in templates go through /verify and land on
+  # paths the app doesn't serve, so password reset on staging ended at a 404.
+  mailer:
+    templates:
+      enabled: true
   # Confirm signups via email (real round-trip) rather than auto-confirming.
   # Requires working SMTP below.
   enableEmailAutoconfirm: false
@@ -286,6 +293,13 @@ edgeFunctions:
       value: "2"
     - name: MALLOC_MMAP_THRESHOLD_
       value: "131072"
+    # Links in notification email (APP_URL is a bare host: links are built as https://${APP_URL}/...)
+    # and in autograder check-run details (PAWTOGRADER_WEBAPP_URL is a full URL). Unset, enrollment
+    # and other emails linked to https://undefined/course/...
+    - name: APP_URL
+      value: staging.pawtograder.net
+    - name: PAWTOGRADER_WEBAPP_URL
+      value: https://staging.pawtograder.net
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
@@ -294,7 +308,7 @@ edgeFunctions:
     - pawtograder-e2e
     # Edge functions read SENTRY_DSN for server-side error reporting
     # (_shared/HandlerUtils.ts). The secret also carries the frontend
-    # NEXT_PUBLIC_BUGSINK_* keys, which are inert in the Deno runtime.
+    # NEXT_PUBLIC_SENTRY_DSN key, which is inert in the Deno runtime.
     - pawtograder-sentry
     # The same Secret GoTrue uses. Without it SMTP_HOST is simply unset in the functions
     # environment, which is why notification email never sent: the processor read "no SMTP host"
@@ -302,6 +316,10 @@ edgeFunctions:
     # Note this Secret provides SMTP_PASS and SMTP_ADMIN_EMAIL; emailTransportConfig.ts accepts
     # those names as well as the older SMTP_PASSWORD / SMTP_FROM.
     - pawtograder-smtp
+    # EXAM_VISION_PROVIDER and GOOGLE_API_KEY for exam OCR and template extraction
+    # (_shared/examVision.ts), which fail closed without them. Synced by the
+    # pawtograder-exam-vision ExternalSecret from kv/apps/pawtograder/exam-vision-staging.
+    - pawtograder-exam-vision
   email:
     # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
     enabled: "true"

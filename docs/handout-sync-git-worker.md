@@ -50,22 +50,23 @@ queue_repository_syncs()  ──pgmq.send──▶  handout_sync  ──▶  han
   a small poll loop around the existing `processEnvelope` from `github-async-worker/index.ts`,
   called with `meta.queue_name = "handout_sync"`. `scripts/RunAsyncMessagesLocally.ts` already
   proves that `processEnvelope` runs under plain Deno.
-- **The engine swap happens inside `syncRepositoryToHandout`.** It keeps its signature and its
-  `SyncResult` contract. Its body becomes `syncRepositoryToHandoutGit` (§5). The edge function
-  never calls it once routing moves, but it can still bundle it.
+- **The queue picks the engine.** The handler calls `syncRepositoryToHandoutGit` (§5), which
+  has the same signature and `SyncResult` contract as `syncRepositoryToHandout`, when the
+  message came from `handout_sync`, and the REST function otherwise. The edge function bundles
+  the git path but never runs it.
 
 ### 3.1 Worker process
 
-| Setting | Value | Why |
-|---|---|---|
-| Image | `denoland/deno` + git ≥ 2.45, pinned | `merge-file --object-id` needs 2.43 or later |
-| Concurrency | 2 jobs per pod, 2 replicas | REST footprint is tiny; git is I/O-bound |
-| Memory | request 512 Mi / limit 1 Gi | The JS heap holds metadata only; git children are bounded by pack settings |
-| Disk | `emptyDir` with `sizeLimit: 20Gi` at `/work` | Template cache plus per-job scratch |
-| VT | 120 s, extended with `pgmq.set_vt` every 45 s while a job runs | A dead pod's message is back within 2 min, not 480 s plus one VT |
-| Job deadline | 15 min hard, enforced with an `AbortController` that kills git children | A hung push cannot hold a slot |
-| Read cap | `read_ct > 5` → DLQ with the error recorded on the row | Bounds a poison message to about 10 minutes |
-| Security context | non-root, read-only root filesystem, no capabilities, no service account token, restricted egress | §8.5 |
+| Setting          | Value                                                                                             | Why                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Image            | `denoland/deno` + git ≥ 2.45, pinned                                                              | `merge-file --object-id` needs 2.43 or later                               |
+| Concurrency      | 2 jobs per pod, 2 replicas                                                                        | REST footprint is tiny; git is I/O-bound                                   |
+| Memory           | request 512 Mi / limit 1 Gi                                                                       | The JS heap holds metadata only; git children are bounded by pack settings |
+| Disk             | `emptyDir` with `sizeLimit: 20Gi` at `/work`                                                      | Template cache plus per-job scratch                                        |
+| VT               | 120 s, extended with `pgmq.set_vt` every 45 s while a job runs                                    | A dead pod's message is back within 2 min, not 480 s plus one VT           |
+| Job deadline     | 15 min hard, enforced with an `AbortController` that kills git children                           | A hung push cannot hold a slot                                             |
+| Read cap         | `read_ct > 5` → DLQ with the error recorded on the row                                            | Bounds a poison message to about 10 minutes                                |
+| Security context | non-root, read-only root filesystem, no capabilities, no service account token, restricted egress | §8.5                                                                       |
 
 The poll loop reads up to `free_slots` messages from `handout_sync`, runs each under the
 heartbeat, and archives on `true`. Anything else is left to `processEnvelope`'s existing
@@ -88,13 +89,13 @@ Git config, set per invocation through `-c` by `runGit()` (§8.6), alongside the
 
 The same inputs the current function takes:
 
-| Name | Source | Meaning |
-|---|---|---|
-| `T` | `template_repo` | Handout repo |
-| `F` | `currentSyncedHandoutSha` (may be null) | Handout revision the repo was last synced to |
-| `H` | `to_sha` | Target handout revision |
-| `S` | `syncedRepoSha` (may be null) | Student repo commit at the last sync. If null, resolved to the current head, once (`resolveSyncBaselineSha`) |
-| `R` | `repository_full_name` | Student repo |
+| Name | Source                                  | Meaning                                                                                                      |
+| ---- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `T`  | `template_repo`                         | Handout repo                                                                                                 |
+| `F`  | `currentSyncedHandoutSha` (may be null) | Handout revision the repo was last synced to                                                                 |
+| `H`  | `to_sha`                                | Target handout revision                                                                                      |
+| `S`  | `syncedRepoSha` (may be null)           | Student repo commit at the last sync. If null, resolved to the current head, once (`resolveSyncBaselineSha`) |
+| `R`  | `repository_full_name`                  | Student repo                                                                                                 |
 
 `classifyHandoutDirection` still runs first in the handler (one metadata-only REST compare). The
 engine no longer needs `diffStrategy`, because it always diffs two trees (§5.3). That is
@@ -119,9 +120,12 @@ git -C $TCACHE cat-file -e $H^{commit} || git -C $TCACHE fetch --depth=1 --no-ta
   Otherwise one SIGKILL leaves that template unfetchable until the pod restarts.
 - A cache dir is evicted by LRU when `/work` passes 70 % of `sizeLimit`. A pod restart wipes
   it, which is also fine.
-- If `F` can't be fetched (history rewritten and GC'd), the old-handout side becomes the empty
-  tree `4b825dc6…`. Tag `sync_from_sha_unfetchable`. This fails in the safe direction: every
-  path the student holds classifies as theirs. It is exactly today's `fromSha = null` semantics.
+- If `F` can't be fetched (history rewritten and GC'd), the job is retryable, and terminal
+  `handout_base_missing` once `retry_count` reaches 5. It does not fall back to the empty tree.
+  Today a missing `F` also fails the sync (`getRepoTree` throws), and falling back would open a
+  PR that lists nearly every file as the student's own work. The empty tree stands in for `F`
+  only when the row records no `synced_handout_sha` at all: legacy, adopted or hand-made rows,
+  which is today's `fromSha = null` semantics.
 - If `H` can't be fetched, the job is retryable. Once `retry_count` reaches 5 it becomes terminal
   `handout_revision_missing`.
 
@@ -153,19 +157,39 @@ git diff-tree -r -z --no-renames --raw     $F_TREE $H_TREE      # status, old/ne
 git diff-tree -r -z --no-renames --numstat $F_TREE $H_TREE      # "-\t-" marks binary
 ```
 
-Each record maps to the existing `ChangedFileShape`:
+Each record maps to the existing `ChangedFileShape`. `isBinary` is true when numstat reports
+`-\t-` OR the path has an extension in today's `isBinaryPath` list
+(`GitHubSyncHelpers.ts:248`, moved into a pure module so the engine can import it without the
+REST stack). The extension list keeps today's behavior for files such as PDFs and class files
+whose content happens to look like text. Today's other binary signal, "GitHub's compare omitted
+the patch", is an artifact of the API and is dropped (§6.5).
 
-| git status | `status` | `isBinary` | `hasPatch` | `patchDeletesFile` |
-|---|---|---|---|---|
-| `A` | `added` | from numstat | `!isBinary` | false |
-| `M` | `modified` | from numstat | `!isBinary` | false |
-| `D` | `removed` | from numstat | false | false |
-| `T` (type change) | `modified` | **true** | false | false |
+| git status        | `status`   | `isBinary`   | `hasPatch`  | `patchDeletesFile` |
+| ----------------- | ---------- | ------------ | ----------- | ------------------ |
+| `A`               | `added`    | from numstat | `!isBinary` | false              |
+| `M`               | `modified` | from numstat | `!isBinary` | false              |
+| `D`               | `removed`  | from numstat | false       | false              |
+| `T` (type change) | `modified` | **true**     | false       | false              |
 
-- Entries with mode `160000` (gitlinks) are dropped and logged. The current path only ever emits
-  blob modes, so this matches today.
-- `patchDeletesFile` is always false. It exists only because GitHub's compare sometimes reports a
-  deletion as a `+0,0` modify, and `git diff-tree` reports deletions as `D`.
+- Entries with mode `160000` (gitlinks) are dropped and logged. Today a gitlink bump would reach
+  `createBranchAndCommit` as a "Subproject commit" patch and most likely fail the sync, so a
+  gitlink-only update becoming `no_changes` is a deliberate change, not parity. A `T` between a
+  blob and a gitlink keeps the blob side (a file becoming a submodule is `D`, the reverse is
+  `A`).
+- Unlike the compare API, which returns at most 300 files per response and was called without
+  pagination, the tree diff sees every path.
+- `patchDeletesFile` is true for an `M` whose new blob is the empty blob
+  (`e69de29bb2d1d6434b8b29ae775ad8c2e48c5391`) and whose old blob is not. Today's
+  `patchDeletesEntireFile` fires on GitHub's `+0,0` patch, which covers both a disguised
+  deletion and a genuine truncation to zero bytes. `git diff-tree` reports real deletions as
+  `D`, so only the truncation case remains, and it keeps today's decisions: a no-op when the
+  student deleted the file, a skip when they edited it, and the empty blob written otherwise.
+- A mode-only change (`M` with the same old and new blob) has `hasPatch = false`. Otherwise a
+  student's edited copy would "merge" to their own blob and their own mode, silently dropping
+  the handout's mode change. Today GitHub reports such an entry with no patch, so it is skipped
+  and listed.
+- Paths are decoded with `ignoreBOM: true`. A path beginning with U+FEFF is a different path
+  from the one without it.
 - `--no-renames` turns a rename into `D` + `A`, so each side is classified independently. Today
   compare reports `renamed`, and the code handles it inconsistently. This is an improvement.
 - An empty diff returns `{ success: true, no_changes: true }`, as today.
@@ -192,14 +216,14 @@ unless the path is in `removedPaths`. Then `decideFileAction(shape, reason)` for
 
 ### 5.5 Resolve each file to an index update
 
-| action | condition | index update | mode |
-|---|---|---|---|
-| `noop` | | none | |
-| `skip` | | none (base supplies the student's file); add to `unresolved` | |
-| `write` | `removed` | delete `p` | |
-| `write` | handout-owned path | `H`'s entry for `p` | `H`'s mode |
-| `write` | anything else | `H`'s entry for `p` | `modeFor` (§5.5.1) |
-| `attempt_patch` | | `git merge-file --object-id -L yours -L handout-before -L handout <S:p> <F:p> <H:p>`: exit 0 → the printed oid; exit > 0 (conflicts) → skip with `content_differs`; child killed by signal or exit < 0 → skip with `content_differs` and tag `merge_file_failed` | student's mode |
+| action          | condition          | index update                                                                                                                                                                                                                                                     | mode               |
+| --------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `noop`          |                    | none                                                                                                                                                                                                                                                             |                    |
+| `skip`          |                    | none (base supplies the student's file); add to `unresolved`                                                                                                                                                                                                     |                    |
+| `write`         | `removed`          | delete `p`                                                                                                                                                                                                                                                       |                    |
+| `write`         | handout-owned path | `H`'s entry for `p`                                                                                                                                                                                                                                              | `H`'s mode         |
+| `write`         | anything else      | `H`'s entry for `p`                                                                                                                                                                                                                                              | `modeFor` (§5.5.1) |
+| `attempt_patch` |                    | `git merge-file --object-id -L yours -L handout-before -L handout <S:p> <F:p> <H:p>`: exit 0 → the printed oid; exit > 0 (conflicts) → skip with `content_differs`; child killed by signal or exit < 0 → skip with `content_differs` and tag `merge_file_failed` | student's mode     |
 
 - `write` for a non-student file is simply the new handout blob. That is exactly what today's
   `applyPatch(base, patch)` produces when base equals the old handout, which is what
@@ -263,12 +287,12 @@ COMMIT=$(git commit-tree $TREE -p $S -F msg.txt)
 
 The branch is `B = sync-to-${H:0:7}`, and `X` is its head from `ls-remote` (§5.2).
 
-| `X` | Action |
-|---|---|
-| absent | `git push --force-with-lease=refs/heads/$B: $R_URL $COMMIT:refs/heads/$B` (an empty lease means "must not exist") |
-| `== COMMIT` | Skip the push. This is a retry of a job that already pushed. |
-| `== S` | `git push --force-with-lease=refs/heads/$B:$S …` |
-| other | `assertSyncBranchSafeToReset(R, B, S)` (REST compare, unchanged), then `git push --force-with-lease=refs/heads/$B:$X …` |
+| `X`         | Action                                                                                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| absent      | `git push --force-with-lease=refs/heads/$B: $R_URL $COMMIT:refs/heads/$B` (an empty lease means "must not exist")                                                                                                              |
+| `== COMMIT` | Skip the push. This is a retry of a job that already pushed.                                                                                                                                                                   |
+| `== S`      | `git push --force-with-lease=refs/heads/$B:$S …`                                                                                                                                                                               |
+| other       | `confirmResetSafe({ head: X, base: S })`, which compares `S...X` over REST for exactly that `X` and returns the sha it approved. The engine pushes `--force-with-lease=refs/heads/$B:$X …` only if the approved sha equals `X` |
 
 - `--force-with-lease` is a real server-side compare-and-swap. It replaces
   `updateRefWithExpectedHead`, `assertBranchStillAt` and the PATCH and delete+create fallbacks.
@@ -282,8 +306,18 @@ The branch is `B = sync-to-${H:0:7}`, and `X` is its head from `ls-remote` (§5.
 
 ### 5.9 PR and merge (REST; the only remaining REST writes)
 
-Everything here is unchanged (`createPullRequest`, `findExistingSyncPR`, `attemptAutoMerge`,
-`resolveAutoMerge`, the PR body), with one fix for idempotency:
+The PR title and body come from the same pure functions the REST path now calls, so the two
+cannot drift. The REST helpers (`createPullRequest`, `findExistingSyncPR`, `attemptAutoMerge`)
+build their own octokit from the org installation, so the git path has twins of them that use
+the job's scoped token. They differ from the REST helpers in four ways:
+
+- A failed PR lookup is retryable, not "no PR".
+- Every PR on the branch is checked for one merged at our commit.
+- An open PR is reused and gets the same `resolveAutoMerge` decision a new one would.
+- The merge is pinned to our commit, so a student push during the wait is never merged on our
+  behalf.
+
+One further fix is for idempotency:
 
 - **Before `createPullRequest`, call `findExistingSyncPR(R, B)`.** If it returns a merged PR whose
   head is `COMMIT`, return `{ merged: true, merge_sha }`. Today a crash after the merge but
@@ -307,7 +341,15 @@ Every step is either read-only, content-addressed, or a compare-and-swap:
 - The merge is already idempotent.
 
 So a retry from scratch after a crash at any point converges, and no progress needs to be
-persisted. `sync_data.phase` (`fetch | classify | push | pr | merge`) is written only for
+persisted.
+
+One input is not a pure function of the repository state: a `merge-file` that times out or is
+killed leaves its file to the student on that attempt, and a retry may merge it. The two
+attempts then build different commits. That is still safe. The retry finds the earlier attempt's
+commit on the branch, which is ours, and resets it under the lease after the safety check. The
+merge size cap is deterministic and does not cause this. With `S` null (the head stands in), a
+retry after `main` moved also builds a different commit, for the same reason and with the same
+outcome. `sync_data.phase` (`fetch | classify | push | pr | merge`) is written only for
 observability.
 
 ### 6.2 Matched pair
@@ -335,30 +377,51 @@ protects the branch.
   mis-merges.
 - For any file the student didn't touch the outcome is unchanged, because those never merge
   (§5.5).
+- A large text file the student edited used to be skipped whenever GitHub's compare omitted its
+  patch. It is now merged with `merge-file` up to `HANDOUT_SYNC_MAX_MERGE_BYTES` (§5.5).
+- On a handout whose history was rewritten, every entry used to arrive as "added" with no patch,
+  so a file the student edited was never merged. Now a modified file merges with `F`'s blob as
+  the base. That is a correct 3-way merge: rewriting history does not change the content the
+  student received at `F`.
 
 ## 7. Error taxonomy
 
-| Condition | Class | Result |
-|---|---|---|
-| Network or 5xx from GitHub, `git` exit with `RPC failed` / `early EOF` | retryable | throw; redelivered after VT |
-| Push lease rejected | retryable | throw |
-| `ENOSPC` on `/work` | retryable | throw; evict the template cache; alert on the `disk_full` tag |
-| Job deadline hit | retryable | kill children, throw |
-| `H` unfetchable after 5 retries | terminal `handout_revision_missing` | `sync_blocked_at` set |
-| Push `GH001` | terminal `file_too_large` | names the path |
-| Student repo has no `main` | terminal `student_repo_has_no_main` | §5.2 |
-| Handout diff has a non-UTF-8 path | terminal `non_utf8_path` | §5.3 |
-| HTTP 401/403 from git | retryable `auth_failed` | its own kind, so a revoked installation is visible in metrics |
-| Student or template repo over `HANDOUT_SYNC_MAX_REPO_KIB` | terminal `repo_too_large` | checked before fetching (§8.4) |
-| `template_repo` is the solution repo | terminal `template_is_solution_repo` | §8.3 |
-| Repo name or SHA fails validation | terminal `invalid_sync_input` | nothing is spawned (§8.1) |
-| Foreign commits on the sync branch | terminal `sync_branch_not_ours` (existing) | unchanged |
-| Repo 404 / not granted | terminal (existing) | unchanged |
-| `F` unfetchable / `S` unfetchable | degraded, not an error | tagged; safe-direction fallback (§5.1, §5.2) |
-| `merge-file` conflict / killed | degraded, per file | file left to the student |
+| Condition                                                              | Class                                          | Result                                                                           |
+| ---------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- |
+| Network or 5xx from GitHub, `git` exit with `RPC failed` / `early EOF` | retryable                                      | throw; redelivered after VT                                                      |
+| Push lease rejected                                                    | retryable, by redelivery                       | see below                                                                        |
+| `ENOSPC` on `/work`                                                    | retryable, by redelivery                       | evict the template cache; alert on the `disk_full` tag                           |
+| Job deadline hit                                                       | retryable, by redelivery                       | kill children; see below                                                         |
+| `git` stdout over 64 MiB or stderr over 1 MiB                          | retryable `output_cap_exceeded`, by redelivery | child killed; the error names the subcommand (§8.4)                              |
+| `H` unfetchable after 5 retries                                        | terminal `handout_revision_missing`            | `sync_blocked_at` set                                                            |
+| Push `GH001`                                                           | terminal `file_too_large`                      | names the path                                                                   |
+| Student repo has no `main`                                             | terminal `student_repo_has_no_main`            | §5.2                                                                             |
+| Handout diff has a non-UTF-8 path                                      | terminal `non_utf8_path`                       | §5.3; removing such a path is terminal too, since the index entry needs the path |
+| `F` unfetchable after 5 retries                                        | terminal `handout_base_missing`                | §5.1                                                                             |
+| HTTP 401/403 from git                                                  | retryable `auth_failed`                        | its own kind, so a revoked installation is visible in metrics                    |
+| Student or template repo over `HANDOUT_SYNC_MAX_REPO_KIB`              | terminal `repo_too_large`                      | checked before fetching (§8.4)                                                   |
+| `template_repo` is the solution repo                                   | terminal `template_is_solution_repo`           | §8.3                                                                             |
+| Repo name or SHA fails validation                                      | terminal `invalid_sync_input`                  | nothing is spawned (§8.1)                                                        |
+| Foreign commits on the sync branch                                     | terminal `sync_branch_not_ours` (existing)     | unchanged                                                                        |
+| Repo 404 / not granted, token creation fails                           | retryable, as today                            | REST flattens these into a retryable error too                                   |
+| `S` unfetchable                                                        | degraded, not an error                         | tagged; falls back to the current head (§5.2)                                    |
+| `merge-file` conflict / killed                                         | degraded, per file                             | file left to the student                                                         |
 
 Terminal errors flow through the existing `TerminalSyncError` → `terminal_reason` path, so the
 handler records them without pausing the org.
+
+Two retry paths exist, and which one a failure takes depends on whether it says anything about
+GitHub's health:
+
+- **The generic path** (throw → org circuit → `requeueWithDelay`) is kept for `network`,
+  `auth_failed` and `remote_repo_not_found`. These are GitHub-health signals, so pausing the
+  org's syncs is the right response, as it is for the REST path today.
+- **Redelivery** is used for every failure local to one job: `deadline_exceeded`, `disk_full`,
+  `lease_rejected`, `reset_check_mismatch`, `spawn_failed`, `output_cap_exceeded`, `git_failed`
+  and `timeout`. The git path returns `SyncResult.redeliver_kind`. The handler writes one
+  guarded `sync_data` error note and returns without archiving, and the message comes back
+  after one VT. The read cap then dead-letters a job that keeps failing. One slow or oversized
+  repository must not pause handout delivery for its whole org.
 
 ## 8. Security
 
@@ -370,16 +433,16 @@ calls `git`.
 
 ### 8.1 Inputs that reach git
 
-| Vector | Exposure | Enforcement |
-|---|---|---|
-| Remote URL transport (`ext::sh -c …`, `fd::`, `file::`) | `template_repo` is configurable per class and per assignment, so an instructor-controlled string reaches git | Stored strings never become URLs. `owner/repo` must match `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$` and must not be `.` or `..`. The URL is built as `https://github.com/<owner>/<repo>.git`. `GIT_ALLOW_PROTOCOL=https` is set (tests override it to `file`, §9.1) |
-| Argument injection (`fetch <url> --upload-pack=<cmd>`) | A "sha" or repo name starting with `-` becomes an option | SHAs must match `^[0-9a-f]{40}$`. Branch names are built from a validated SHA. Positionals follow `--` wherever the subcommand accepts it. Paths never appear in argv: `update-index` reads them from stdin with `-z`, and `merge-file` takes object ids |
-| Hooks | Fetch never copies hooks, and the worker creates every repo | `core.hooksPath=/dev/null` as a backstop |
-| Repo-supplied config | Fetch never copies `.git/config` | git runs only in directories the worker created. `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null` keep image or host config out |
-| `.gitattributes` drivers (merge, diff, textconv, filter) | Attributes can only name a driver, and the worker defines none. None of the builders consults attributes for a driver: `--numstat` runs no textconv, `merge-file` ignores attributes, and job repos have an unborn HEAD | Defense in depth, since no builder is exposed today: `attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904` (the empty tree), `core.attributesFile=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, and `--no-ext-diff --no-textconv` where they apply. WP1's tests show `attr.tree` alone stops a driver if a builder ever gains `-p --textconv`. It also keeps a student's `-diff` attribute from changing binary detection |
-| Submodules | Gitlinks are dropped (§5.3) and never fetched | `fetch.recurseSubmodules=false`, `submodule.recurse=false` |
-| Path traversal (`../`, `.git/…`, symlink tricks such as CVE-2024-32002) | Needs a working tree, and the worker never writes one. Symlink blobs (`120000`) are only stored | Never add a checkout step. A test asserts that no job directory contains anything outside the bare repo layout |
-| Bugs in git's own pack and object parsing | Student repos are untrusted input to git | Pin git in the image and rebuild for every git security release. The pod hardening in §8.5 limits what an exploit can reach |
+| Vector                                                                  | Exposure                                                                                                                                                                                                                | Enforcement                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Remote URL transport (`ext::sh -c …`, `fd::`, `file::`)                 | `template_repo` is configurable per class and per assignment, so an instructor-controlled string reaches git                                                                                                            | Stored strings never become URLs. `owner/repo` must match `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$` and must not be `.` or `..`. The URL is built as `https://github.com/<owner>/<repo>.git`. `GIT_ALLOW_PROTOCOL=https` is set (tests override it to `file`, §9.1)                                                                                                                         |
+| Argument injection (`fetch <url> --upload-pack=<cmd>`)                  | A "sha" or repo name starting with `-` becomes an option                                                                                                                                                                | SHAs must match `^[0-9a-f]{40}$`. Branch names are built from a validated SHA. Positionals follow `--` wherever the subcommand accepts it. Paths never appear in argv: `update-index` reads them from stdin with `-z`, and `merge-file` takes object ids                                                                                                                                                      |
+| Hooks                                                                   | Fetch never copies hooks, and the worker creates every repo                                                                                                                                                             | `core.hooksPath=/dev/null` as a backstop                                                                                                                                                                                                                                                                                                                                                                      |
+| Repo-supplied config                                                    | Fetch never copies `.git/config`                                                                                                                                                                                        | git runs only in directories the worker created. `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null` keep image or host config out                                                                                                                                                                                                                                                                      |
+| `.gitattributes` drivers (merge, diff, textconv, filter)                | Attributes can only name a driver, and the worker defines none. None of the builders consults attributes for a driver: `--numstat` runs no textconv, `merge-file` ignores attributes, and job repos have an unborn HEAD | Defense in depth, since no builder is exposed today: `attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904` (the empty tree), `core.attributesFile=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, and `--no-ext-diff --no-textconv` where they apply. WP1's tests show `attr.tree` alone stops a driver if a builder ever gains `-p --textconv`. It also keeps a student's `-diff` attribute from changing binary detection |
+| Submodules                                                              | Gitlinks are dropped (§5.3) and never fetched                                                                                                                                                                           | `fetch.recurseSubmodules=false`, `submodule.recurse=false`                                                                                                                                                                                                                                                                                                                                                    |
+| Path traversal (`../`, `.git/…`, symlink tricks such as CVE-2024-32002) | Needs a working tree, and the worker never writes one. Symlink blobs (`120000`) are only stored                                                                                                                         | Never add a checkout step. A test asserts that no job directory contains anything outside the bare repo layout                                                                                                                                                                                                                                                                                                |
+| Bugs in git's own pack and object parsing                               | Student repos are untrusted input to git                                                                                                                                                                                | Pin git in the image and rebuild for every git security release. The pod hardening in §8.5 limits what an exploit can reach                                                                                                                                                                                                                                                                                   |
 
 ### 8.2 Credentials
 
@@ -389,13 +452,19 @@ calls `git`.
   directory), `LANG=C`, the hardening variables from §8.1 and §8.6, and the job's auth header.
   `GIT_TRACE*` and `GIT_CURL_VERBOSE` are never passed, so nothing can print
   the header.
-- **The installation token is scoped per job.** `getScopedInstallationToken(org, repos,
-  permissions)` (new, `GitHubWrapper.ts`) calls `POST /app/installations/{id}/access_tokens` with
-  `repositories: [<student repo>, <template repo>]` and
-  `permissions: { contents: "write", pull_requests: "write", workflows: "write" }`. `workflows`
-  is required to push `.github/workflows/grade.yml`. A leaked token reaches two repos for at most
-  an hour, not the whole org. The PR and merge calls in §5.9 use an octokit built from the same
-  token.
+- **Two installation tokens per job, each scoped.** `getScopedInstallationToken(org, repos,
+permissions)` (new, `GitHubWrapper.ts`) calls `POST /app/installations/{id}/access_tokens`.
+  - The student token covers the student repo only, with
+    `{ contents: "write", pull_requests: "write", workflows: "write" }`. `workflows` is required
+    to push `.github/workflows/grade.yml`. This token is used for the student fetch, `ls-remote`,
+    the push, and every REST call in §5.9.
+  - The template token comes from the template org's installation, covers the template repo only,
+    and has `{ contents: "read" }`. It is used only for template fetches.
+
+  A template can live in another org (`inherit_from_source` copies another assignment's
+  `template_repo`), which a single installation token could not reach. A leaked token reaches
+  one repo for at most an hour.
+
 - **Where the token lives.** It is passed only through `GIT_CONFIG_COUNT`/`KEY`/`VALUE`
   (`http.https://github.com/.extraheader = AUTHORIZATION: basic <base64(x-access-token:TOKEN)>`).
   It never appears in argv, in a URL or in any `.git/config`, so it stays out of `ps` and of

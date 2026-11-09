@@ -1,4 +1,5 @@
 import Markdown from "@/components/ui/markdown";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
@@ -92,32 +93,34 @@ function WhatIfScoreCell({
   if (isEditing && whatIfEnabled) {
     return (
       <Box display="flex" flexDirection="column" alignItems="center">
-        <Input
-          minW="5em"
-          autoFocus
-          type="number"
-          step="any"
-          aria-label={`Hypothetical grade for ${column.name}`}
-          value={whatIfVal?.what_if === undefined ? "" : whatIfVal.what_if}
-          onChange={(e) => {
-            const v = e.target.value === "" ? undefined : Number(e.target.value.trim());
-            if (v !== undefined) {
-              whatIfController.setWhatIfGrade(column.id, v, null);
-              modifiedColumnsRef.current.add(column.id);
-            } else {
-              whatIfController.clearGrade(column.id);
-              modifiedColumnsRef.current.delete(column.id);
-            }
-          }}
-          // Blur means focus already moved elsewhere, so close without stealing it back.
-          onBlur={stopEditing}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Escape") {
-              e.preventDefault();
-              closeEditor();
-            }
-          }}
-        />
+        <ReportBlock>
+          <Input
+            minW="5em"
+            autoFocus
+            type="number"
+            step="any"
+            aria-label={`Hypothetical grade for ${column.name}`}
+            value={whatIfVal?.what_if === undefined ? "" : whatIfVal.what_if}
+            onChange={(e) => {
+              const v = e.target.value === "" ? undefined : Number(e.target.value.trim());
+              if (v !== undefined) {
+                whatIfController.setWhatIfGrade(column.id, v, null);
+                modifiedColumnsRef.current.add(column.id);
+              } else {
+                whatIfController.clearGrade(column.id);
+                modifiedColumnsRef.current.delete(column.id);
+              }
+            }}
+            // Blur means focus already moved elsewhere, so close without stealing it back.
+            onBlur={stopEditing}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") {
+                e.preventDefault();
+                closeEditor();
+              }
+            }}
+          />
+        </ReportBlock>
         <Text color="fg.muted">What If?</Text>
         <Text fontSize="sm" color="fg.muted" maxW="xs">
           Simulate your grade based on a hypothetical grade for this item.
@@ -181,23 +184,13 @@ function WhatIfScoreCell({
       )}
       {column.render_expression && (
         <Box pr={1}>
-          <Text fontSize="sm">
-            {" "}
-            {renderer(
-              isShowingWhatIf
-                ? {
-                    score: whatIfVal?.what_if ?? null,
-                    score_override: null,
-                    is_missing: false,
-                    is_excused: false,
-                    is_droppable: false,
-                    released: false,
-                    max_score: max_score
-                  }
-                : studentGrade
-                  ? { ...studentGrade, max_score }
-                  : {
-                      score: null,
+          <ReportBlock>
+            <Text fontSize="sm">
+              {" "}
+              {renderer(
+                isShowingWhatIf
+                  ? {
+                      score: whatIfVal?.what_if ?? null,
                       score_override: null,
                       is_missing: false,
                       is_excused: false,
@@ -205,20 +198,34 @@ function WhatIfScoreCell({
                       released: false,
                       max_score: max_score
                     }
-            )}
-          </Text>
+                  : studentGrade
+                    ? { ...studentGrade, max_score }
+                    : {
+                        score: null,
+                        score_override: null,
+                        is_missing: false,
+                        is_excused: false,
+                        is_droppable: false,
+                        released: false,
+                        max_score: max_score
+                      }
+              )}
+            </Text>
+          </ReportBlock>
         </Box>
       )}
       {/* Punctuation that only groups the rendered expression with the raw
           score visually — spoken it is just "left paren" noise, and the
           SpokenValue below already reads the score as a phrase. */}
       {column.render_expression && <chakra.span aria-hidden="true">(</chakra.span>}
-      <Text fontSize="sm" whiteSpace="nowrap">
-        <SpokenValue spoken={spokenScore}>
-          {scoreToShow}
-          {showMaxScore && `/${column.max_score}`}
-        </SpokenValue>
-      </Text>
+      <ReportBlock>
+        <Text fontSize="sm" whiteSpace="nowrap">
+          <SpokenValue spoken={spokenScore}>
+            {scoreToShow}
+            {showMaxScore && `/${column.max_score}`}
+          </SpokenValue>
+        </Text>
+      </ReportBlock>
       {column.render_expression && <chakra.span aria-hidden="true">)</chakra.span>}
       {whatIfEnabled && canEditColumn(column) && (
         // Keyboard path into what-if editing (WCAG 2.1.1): the card-level click

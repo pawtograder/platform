@@ -1,3 +1,4 @@
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { Assignment, AssignmentGroupWithMembersAndMentor, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -251,12 +252,24 @@ export default function BulkCreateGroup({
                           cursor="pointer"
                           _hover={{ bg: "gray.100" }}
                         >
-                          {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                          {data.value ? (
+                            <TagDisplay tag={data.value} />
+                          ) : (
+                            <ReportBlock>
+                              <div>{data.label}</div>
+                            </ReportBlock>
+                          )}
                         </Box>
                       ),
                       MultiValue: ({ data, ...props }) => (
                         <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
-                          {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                          {data.value ? (
+                            <TagDisplay tag={data.value} />
+                          ) : (
+                            <ReportBlock>
+                              <div>{data.label}</div>
+                            </ReportBlock>
+                          )}
                         </Box>
                       )
                     }}
