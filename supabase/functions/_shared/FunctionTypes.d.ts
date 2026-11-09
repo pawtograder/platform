@@ -366,6 +366,35 @@ export type RepositoryListCommitsRequest = {
   repo_name: string;
   page: number;
 };
+/** workspace-open and workspace-status (#1222). Without repository_id, the caller's own or group repository. */
+export type WorkspaceOpenRequest = {
+  assignment_id: number;
+  repository_id?: number;
+};
+/**
+ * Where the student's Coder workspace is. `step` names the startup step, as in #1170's card:
+ * `build` is the workspace build until the agent connects, `clone` the template's "Git Clone"
+ * script, and `editor` its "Startup Script" (git identity and code-server) plus code-server's
+ * health check.
+ */
+export type WorkspaceStep = "build" | "clone" | "editor";
+export type WorkspaceOpenResponse = {
+  status: "not_started" | "starting" | "ready" | "failed" | "needs_linking";
+  step?: WorkspaceStep;
+  message?: string;
+  /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */
+  redirect_url?: string;
+  /** needs_linking: Coder's page that links the student's Forgejo account. */
+  authenticate_url?: string;
+  coder_user_id?: string;
+  workspace_id?: string;
+  workspace_name?: string;
+  build?: { status: string; transition: string; error: string | null };
+  agent?: { lifecycle_state: string; status: string } | null;
+  failure?: { step: WorkspaceStep; script: string | null; exit_code: number | null; log_lines: string[] };
+  /** When the cleanup job (#1223) deletes the workspace. */
+  deletion_date?: string | null;
+};
 export type AutograderTriggerGradingWorkflowRequest = {
   repository: string;
   sha: string;
