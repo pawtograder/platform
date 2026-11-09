@@ -83,7 +83,7 @@ variable "code_server_version" {
 variable "image" {
   type        = string
   description = "Workspace container image."
-  default     = "ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005"
+  default     = "ghcr.io/pawtograder/coder-workspace:latest"
 }
 
 variable "external_auth_id" {

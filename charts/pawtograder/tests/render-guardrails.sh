@@ -3028,6 +3028,11 @@ apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id:
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
   --set coderBootstrap.workspaces.externalAuthId=git-school --show-only templates/coder-bootstrap.yaml
+apps_has "template: workspaces default to the chart's coder-workspace image" yes \
+  "image: \"ghcr.io/pawtograder/coder-workspace:$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART/Chart.yaml")\"" \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: a workspace image override is passed through" yes 'image: "registry.school.edu/ws:1"' \
+  --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 --show-only templates/coder-bootstrap.yaml
 apps_has "template: repo_url is pinned to Forgejo's public URL" yes 'forgejo_url: "https://git.example.com"' \
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: the pin follows Forgejo's ROOT_URL" yes 'forgejo_url: "https://code.school.edu/git"' \
