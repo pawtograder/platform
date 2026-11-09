@@ -885,6 +885,14 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "git_accounts.claimed_at": "none",
+  "git_accounts.created_at": "none",
+  "git_accounts.id": "none",
+  "git_accounts.instance_url": "none",
+  "git_accounts.login": "handle",
+  "git_accounts.provider": "none",
+  "git_accounts.remote_user_id": "handle",
+  "git_accounts.user_id": "none",
   "github_async_errors.created_at": "none",
   // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
   "github_async_errors.error_data": "free_text",
@@ -2324,6 +2332,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_git_account: "none",
   class_team_member_usernames: "handle",
   cleanup_discord_async_errors: "none",
   cleanup_expired_realtime_subscriptions: "none",
@@ -2433,6 +2442,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].expected_usernames": "handle",
     "$.results[*].error_message": "free_text"
   },
+  forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
   generate_anon_name: "name",
   get_all_class_metrics: "none",
   // UNCERTAIN: Returns a vault secret (hashing pepper), not personal data; no 'secret' kind exists, so marked free_text so it is always redacted
