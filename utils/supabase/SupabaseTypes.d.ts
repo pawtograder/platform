@@ -2170,6 +2170,164 @@ export type Database = {
           }
         ];
       };
+      coder_accounts: {
+        Row: {
+          coder_user_id: string;
+          coder_username: Pii<"handle", string>;
+          created_at: string;
+          id: number;
+          instance_url: string;
+          user_id: string;
+        };
+        Insert: {
+          coder_user_id: string;
+          coder_username: string;
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          user_id: string;
+        };
+        Update: {
+          coder_user_id?: string;
+          coder_username?: string;
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "coder_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      coder_workspaces: {
+        Row: {
+          assignment_archived_seen_at: string | null;
+          assignment_deleted_seen_at: string | null;
+          assignment_id: number | null;
+          class_archived_seen_at: string | null;
+          class_id: number | null;
+          cleanup_attempts: number;
+          cleanup_last_error: Pii<"free_text", string> | null;
+          cleanup_status: string;
+          coder_user_id: string;
+          coder_workspace_id: string | null;
+          coder_workspace_name: string;
+          created_at: string;
+          id: number;
+          instance_url: string;
+          profile_id: string | null;
+          repo_url: Pii<"handle", string>;
+          student_inactive_seen_at: string | null;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          assignment_archived_seen_at?: string | null;
+          assignment_deleted_seen_at?: string | null;
+          assignment_id?: number | null;
+          class_archived_seen_at?: string | null;
+          class_id?: number | null;
+          cleanup_attempts?: number;
+          cleanup_last_error?: string | null;
+          cleanup_status?: string;
+          coder_user_id: string;
+          coder_workspace_id?: string | null;
+          coder_workspace_name: string;
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          profile_id?: string | null;
+          repo_url: string;
+          student_inactive_seen_at?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          assignment_archived_seen_at?: string | null;
+          assignment_deleted_seen_at?: string | null;
+          assignment_id?: number | null;
+          class_archived_seen_at?: string | null;
+          class_id?: number | null;
+          cleanup_attempts?: number;
+          cleanup_last_error?: string | null;
+          cleanup_status?: string;
+          coder_user_id?: string;
+          coder_workspace_id?: string | null;
+          coder_workspace_name?: string;
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          profile_id?: string | null;
+          repo_url?: string;
+          student_inactive_seen_at?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "coder_workspaces_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "coder_workspaces_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       discord_async_errors: {
         Row: {
           created_at: string;
@@ -13536,6 +13694,10 @@ export type Database = {
         Returns: Json;
       };
       cloud_workspaces_enabled: { Args: { p_features: Json }; Returns: boolean };
+      coder_workspace_deletion_date: {
+        Args: { p_workspace_id: number };
+        Returns: string;
+      };
       complete_eligible_grading_reviews: {
         Args: { p_assignment_id: number };
         Returns: number;
