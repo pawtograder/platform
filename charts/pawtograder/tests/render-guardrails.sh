@@ -3122,6 +3122,8 @@ echo
 
 echo "== Coder template schedule =="
 
+apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'" \
+  --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \

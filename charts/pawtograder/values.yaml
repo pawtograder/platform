@@ -3058,7 +3058,7 @@ coderBootstrap:
   workspaceNamespace: ""
   # Reapplied on every install and upgrade, resetting changes made in Coder's UI.
   schedule:
-    defaultTTL: 2h
+    defaultTTL: 1h
     activityBump: 1h
     # Need a Coder Premium license; with either set non-zero on an unlicensed Coder the hook fails.
     dormancyThreshold: "0"
