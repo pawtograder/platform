@@ -37,6 +37,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<Reposit
     .select("*")
     .eq("repository", repo_name)
     .eq("class_id", course_id)
+    .eq("git_provider", "github")
     .maybeSingle();
   if (repoError) {
     throw new SecurityError(`Failed to load repository ${repo_name}: ${repoError.message}`);

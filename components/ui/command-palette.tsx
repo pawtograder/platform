@@ -4,6 +4,7 @@ import { SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, HStack, Icon, Input, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FaFile, FaSearch } from "react-icons/fa";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 type CommandPaletteProps = {
   files: SubmissionFile[];
@@ -257,12 +258,16 @@ export function CommandPalette({
                     <VStack align="stretch" gap={0} flex={1} minW={0}>
                       {item.type === "file" ? (
                         <>
-                          <Text fontSize="sm" fontWeight={isSelected ? "semibold" : "normal"} lineClamp={1}>
-                            {highlightText(item.file.name, item.matches)}
-                          </Text>
-                          <Text fontSize="xs" color="fg.muted" lineClamp={1}>
-                            {item.file.name}
-                          </Text>
+                          <ReportBlock>
+                            <Text fontSize="sm" fontWeight={isSelected ? "semibold" : "normal"} lineClamp={1}>
+                              {highlightText(item.file.name, item.matches)}
+                            </Text>
+                          </ReportBlock>
+                          <ReportBlock>
+                            <Text fontSize="xs" color="fg.muted" lineClamp={1}>
+                              {item.file.name}
+                            </Text>
+                          </ReportBlock>
                         </>
                       ) : (
                         <>

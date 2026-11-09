@@ -33,6 +33,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -42,8 +43,12 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
     thread.duplicate_original_subject && thread.duplicate_marked_by_display_name && thread.duplicate_marked_at ? (
       <Box w="100%" mb="3" py="2" px="3" rounded="l3" bg="orange.subtle" borderWidth="1px" borderColor="orange.muted">
         <Text fontSize="sm" color="fg.default">
-          This post was originally titled <strong>{thread.duplicate_original_subject}</strong>, then{" "}
-          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and merged it here.
+          This post was originally titled{" "}
+          <ReportBlock>
+            <strong>{thread.duplicate_original_subject}</strong>
+          </ReportBlock>
+          , then <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and merged it
+          here.
         </Text>
       </Box>
     ) : null;
@@ -112,9 +117,11 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
             )}
           </VStack>
         </HStack>
-        <Heading size="xl" pt="4" pb="4">
-          {thread.subject}
-        </Heading>
+        <ReportBlock>
+          <Heading size="xl" pt="4" pb="4">
+            {thread.subject}
+          </Heading>
+        </ReportBlock>
       </VStack>
     </Box>
   );
@@ -496,7 +503,9 @@ function DiscussionPost({ root_id }: { root_id: number }) {
             />
           </>
         ) : (
-          <Markdown>{rootThread.body}</Markdown>
+          <ReportBlock as="div">
+            <Markdown>{rootThread.body}</Markdown>
+          </ReportBlock>
         )}
       </Box>
       {rootThread.answer && <DiscussionThreadAnswer answer_id={rootThread.answer} />}

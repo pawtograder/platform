@@ -11,6 +11,7 @@ import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable references — see `components/ui/markdown.tsx` for why
 // `<Markdown>` props need stable identity (memoized internal `unified()`
@@ -257,11 +258,13 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
               </Text>
             </HStack>
 
-            <Box truncate>
-              <Markdown components={REQUEST_COMPONENTS} remarkPlugins={REQUEST_REMARK_PLUGINS}>
-                {request.request}
-              </Markdown>
-            </Box>
+            <ReportBlock>
+              <Box truncate>
+                <Markdown components={REQUEST_COMPONENTS} remarkPlugins={REQUEST_REMARK_PLUGINS}>
+                  {request.request}
+                </Markdown>
+              </Box>
+            </ReportBlock>
           </Stack>
         </HStack>
       </Link>

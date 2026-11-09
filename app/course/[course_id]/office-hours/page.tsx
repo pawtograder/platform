@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { QueueCard } from "@/components/help-queue/queue-card";
 import { RequestRow } from "@/components/help-queue/request-row";
@@ -380,9 +381,11 @@ export default function OfficeHoursPage() {
                           <HStack justify="space-between" align="flex-start" gap={4}>
                             <VStack align="flex-start" gap={0.5} flex="1">
                               <HStack gap={2} align="center">
-                                <Text fontSize="sm" fontWeight="medium">
-                                  {event.organizer_name || event.title}
-                                </Text>
+                                <ReportBlock>
+                                  <Text fontSize="sm" fontWeight="medium">
+                                    {event.organizer_name || event.title}
+                                  </Text>
+                                </ReportBlock>
                                 {isCurrentlyHappening && (
                                   <Text fontSize="xs" color="green.600" fontWeight="semibold">
                                     🟢 Now
@@ -395,9 +398,11 @@ export default function OfficeHoursPage() {
                                 <Text>{timeStr}</Text>
                               </HStack>
                               {event.location && (
-                                <Text fontSize="xs" color="fg.muted">
-                                  📍 {event.location}
-                                </Text>
+                                <ReportBlock>
+                                  <Text fontSize="xs" color="fg.muted">
+                                    📍 {event.location}
+                                  </Text>
+                                </ReportBlock>
                               )}
                             </VStack>
                           </HStack>
