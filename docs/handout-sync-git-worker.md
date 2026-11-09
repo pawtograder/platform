@@ -454,6 +454,7 @@ calls `git`.
   the header.
 - **Two installation tokens per job, each scoped.** `getScopedInstallationToken(org, repos,
 permissions)` (new, `GitHubWrapper.ts`) calls `POST /app/installations/{id}/access_tokens`.
+
   - The student token covers the student repo only, with
     `{ contents: "write", pull_requests: "write", workflows: "write" }`. `workflows` is required
     to push `.github/workflows/grade.yml`. This token is used for the student fetch, `ls-remote`,
