@@ -11,19 +11,24 @@ fail() {
   exit 1
 }
 
+# Equivalent spellings of one repository compare equal: no trailing / or .git, and the scheme and host in lowercase.
+normalize() {
+  printf '%s\n' "$1" | awk '{ sub(/\/+$/, ""); sub(/\.git$/, ""); if (match($0, /^[^:\/]+:\/\/[^\/]*/)) $0 = tolower(substr($0, 1, RLENGTH)) substr($0, RLENGTH + 1); print }'
+}
+
 # repo_url's validation lets "" through for template import, and Coder then accepts it at creation.
 [ -n "$URL" ] || fail "the workspace's repo_url is empty; recreate it with the repository's clone URL."
 
 if [ -e "$DIR" ] || [ -L "$DIR" ]; then
+  origin="$(git -C "$DIR" config --get remote.origin.url 2>/dev/null)"
   if [ -d "$DIR" ] && [ -z "$(ls -A "$DIR")" ]; then
     rmdir "$DIR"
   elif ! top="$(cd "$DIR" 2>/dev/null && pwd -P)" || [ "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" != "$top" ]; then
     fail "$DIR exists but isn't a git checkout. Nothing was changed; move it aside and restart the workspace."
-  elif ! git -C "$DIR" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null; then
-    fail "$DIR has no commit checked out (an interrupted clone?). Nothing was changed; move it aside and restart the workspace."
-  elif [ "$(git -C "$DIR" config --get remote.origin.url)" != "$URL" ]; then
-    fail "$DIR is a clone of '$(git -C "$DIR" config --get remote.origin.url)', not $URL. Nothing was changed; move it aside and restart the workspace."
+  elif [ "$(normalize "$origin")" != "$(normalize "$URL")" ]; then
+    fail "$DIR's origin is '$origin', not $URL. Nothing was changed; move it aside and restart the workspace."
   else
+    # Only a finished clone is renamed into place, so a checkout without a commit is an empty repository's.
     echo "$DIR is already a clone of $URL; keeping it."
     exit 0
   fi
