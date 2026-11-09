@@ -343,6 +343,13 @@ Internal service hostnames.
 {{- end -}}
 {{- end -}}
 
+{{/* Coder's public URL, CODER_ACCESS_URL from coder.coder.env (forgejo-coder-validations requires it). */}}
+{{- define "pawtograder.coder.url" -}}
+{{- $url := "" -}}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_ACCESS_URL" }}{{ $url = .value | default "" }}{{ end }}{{ end -}}
+{{- trimSuffix "/" $url -}}
+{{- end -}}
+
 {{- define "pawtograder.forgejo.servicePort" -}}
 {{- dig "service" "http" "port" 3000 .Values.forgejo -}}
 {{- end -}}

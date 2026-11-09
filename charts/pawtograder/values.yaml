@@ -239,8 +239,8 @@ secrets:
                                   #   and .../install/callback), not only by the
                                   #   worker. Omitting it makes the install button
                                   #   answer 500.
-    edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
-                                  #   canvas, sis, smtp, mcp, redis, sentry, misc
+    edgeFunctionsBundles: []      # subset of: github-app, coder-api, aws-chime,
+                                  #   discord, canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
     pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
