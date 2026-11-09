@@ -63,7 +63,7 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
       return check(
         await admin
           .from("coder_accounts")
-          .select("coder_user_id")
+          .select("coder_user_id, coder_username")
           .eq("user_id", userId)
           .eq("instance_url", instanceUrl)
           .maybeSingle(),
@@ -138,10 +138,33 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
           .update({ restart_started_at: now, updated_at: now })
           .eq("id", id)
           .or(`restart_started_at.is.null,restart_started_at.lt."${staleBefore}"`)
-          .select("id"),
+          .select("restart_started_at"),
         "Workspace restart claim"
       );
-      return (claimed ?? []).length > 0;
+      return claimed?.[0]?.restart_started_at ?? null;
+    },
+    async renewRestart(id, claim) {
+      const now = new Date().toISOString();
+      const renewed = check(
+        await admin
+          .from("coder_workspaces")
+          .update({ restart_started_at: now, updated_at: now })
+          .eq("id", id)
+          .eq("restart_started_at", claim)
+          .select("restart_started_at"),
+        "Workspace restart claim renewal"
+      );
+      return renewed?.[0]?.restart_started_at ?? null;
+    },
+    async releaseRestart(id, claim) {
+      check(
+        await admin
+          .from("coder_workspaces")
+          .update({ restart_started_at: null, updated_at: new Date().toISOString() })
+          .eq("id", id)
+          .eq("restart_started_at", claim),
+        "Workspace restart claim release"
+      );
     },
     async deletionDate(workspaceRowId) {
       return check(
