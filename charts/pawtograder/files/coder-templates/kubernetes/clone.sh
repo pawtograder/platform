@@ -44,7 +44,6 @@ unset out
 # a partial clone. Only that directory is ever removed; one a killed run left behind is left alone.
 TMP="$(mktemp -d "$(dirname "$DIR")/.$(basename "$DIR").cloning.XXXXXX")" || fail "couldn't create a staging directory beside $DIR"
 trap 'rm -rf "$TMP"' EXIT
-trap 'exit 1' HUP INT TERM
 echo "Cloning $URL into $DIR..."
 timeout -k 10 "$LIMIT" git clone -- "$URL" "$TMP/clone"
 code=$?
