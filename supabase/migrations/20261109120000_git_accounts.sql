@@ -41,6 +41,21 @@ CREATE POLICY git_accounts_select_class_staff ON public.git_accounts
     )
   );
 
+-- Same first-entry, boolean-only semantics as courseFeatureEnabled and #1128's provider trigger.
+-- A missing or malformed features value is off.
+CREATE OR REPLACE FUNCTION public.cloud_workspaces_enabled(p_features jsonb) RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = ''
+AS $$
+  SELECT coalesce((
+    SELECT f -> 'enabled' = 'true'::jsonb
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_features) = 'array' THEN p_features ELSE '[]'::jsonb END) f
+    WHERE f ->> 'name' = 'cloud-workspaces'
+    LIMIT 1
+  ), false);
+$$;
+
 -- Everyone with an enabled role in a cloud-workspaces class who has no finished account on this
 -- instance and no claim younger than the stale window.
 CREATE OR REPLACE FUNCTION public.forgejo_accounts_needed(
@@ -61,13 +76,7 @@ AS $$
       JOIN public.classes c ON c.id = ur.class_id
       WHERE ur.user_id = u.user_id
         AND NOT ur.disabled
-        -- Same first-entry, boolean-only semantics as courseFeatureEnabled. Missing/malformed is off.
-        AND coalesce((
-          SELECT f -> 'enabled' = 'true'::jsonb
-          FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.features) = 'array' THEN c.features ELSE '[]'::jsonb END) f
-          WHERE f ->> 'name' = 'cloud-workspaces'
-          LIMIT 1
-        ), false)
+        AND public.cloud_workspaces_enabled(c.features)
     )
     AND NOT EXISTS (
       SELECT 1 FROM public.git_accounts ga
@@ -101,6 +110,7 @@ AS $$
   SELECT EXISTS (SELECT 1 FROM claimed);
 $$;
 
+REVOKE ALL ON FUNCTION public.cloud_workspaces_enabled(jsonb) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.forgejo_accounts_needed(text, integer, integer) FROM public, anon, authenticated;
 REVOKE ALL ON FUNCTION public.claim_git_account(uuid, text, integer) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.forgejo_accounts_needed(text, integer, integer) TO service_role;

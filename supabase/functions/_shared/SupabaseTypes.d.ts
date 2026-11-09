@@ -13429,6 +13429,7 @@ export type Database = {
         };
         Returns: Json;
       };
+      cloud_workspaces_enabled: { Args: { p_features: Json }; Returns: boolean };
       complete_eligible_grading_reviews: {
         Args: { p_assignment_id: number };
         Returns: number;

@@ -2334,6 +2334,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
   claim_git_account: "none",
   class_team_member_usernames: "handle",
+  cloud_workspaces_enabled: "none",
   cleanup_discord_async_errors: "none",
   cleanup_expired_realtime_subscriptions: "none",
   cleanup_github_async_errors: "none",
