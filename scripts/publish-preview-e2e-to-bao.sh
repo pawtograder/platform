@@ -59,8 +59,15 @@ $CLI status >/dev/null 2>&1 || {
   exit 1
 }
 
-if ! kubectl get namespace "$NS" >/dev/null 2>&1; then
-  echo "ERROR: namespace $NS not found — was the preview deployed?" >&2
+# Probe a Secret, not the Namespace. `get namespace` is a CLUSTER-SCOPED read,
+# so requiring it would force this script's CI credential to be a ClusterRole —
+# and the job that runs this only ever needs to read two Secrets. Reading one
+# of them proves the same precondition (the preview's secrets job has run) while
+# keeping the credential a namespaced Role. The authoritative check is below
+# anyway: missing keys are a hard error a few lines down.
+# See docs/operations/preview-oidc-cluster-credentials.md.
+if ! kubectl -n "$NS" get secret pawtograder-jwt >/dev/null 2>&1; then
+  echo "ERROR: $NS/pawtograder-jwt not found — was the preview deployed?" >&2
   exit 1
 fi
 

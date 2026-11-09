@@ -9,6 +9,7 @@ import { LucideMail, X } from "lucide-react";
 import { useState, type CSSProperties } from "react";
 import { toaster } from "../ui/toaster";
 import Markdown from "../ui/markdown";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable style references. The notification dropdown renders
 // every notification on every parent re-render, and the surrounding
@@ -292,7 +293,9 @@ function HelpRequestNotificationTeaser({ notification }: { notification: Notific
     <VStack align="flex-start" gap="2">
       {message}
       {body.request_preview && (
-        <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.request_preview}`}</Markdown>
+        <ReportBlock as="div">
+          <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.request_preview}`}</Markdown>
+        </ReportBlock>
       )}
     </VStack>
   );
@@ -317,7 +320,9 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
           {`**${author.name}** replied to **${body.help_request_creator_name}**'s help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
         </Markdown>
         {body.message_preview && (
-          <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.message_preview}`}</Markdown>
+          <ReportBlock as="div">
+            <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.message_preview}`}</Markdown>
+          </ReportBlock>
         )}
       </VStack>
     </HStack>
@@ -388,11 +393,13 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
             Duplicate
           </Text>
         </Box>
-        <VStack align="flex-start" gap="1" flex="1">
-          <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-            {`**${staffName}** marked your post **${dupSubject}** as a duplicate of **${origSubject}** and merged it into that thread.`}
-          </Markdown>
-        </VStack>
+        <ReportBlock>
+          <VStack align="flex-start" gap="1" flex="1">
+            <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+              {`**${staffName}** marked your post **${dupSubject}** as a duplicate of **${origSubject}** and merged it into that thread.`}
+            </Markdown>
+          </VStack>
+        </ReportBlock>
       </HStack>
     );
   }
@@ -407,12 +414,14 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
         <Avatar.Image src={sanitizeImageSrc(author.avatar_url)} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
-      <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={NOTIFICATION_BODY_STYLE}>
-          {`**${author.name}** replied to thread **#${rootThread.ordinal}** **${rootThread.subject}**`}
-        </Markdown>
-        {body.teaser && <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.teaser}`}</Markdown>}
-      </VStack>
+      <ReportBlock>
+        <VStack align="flex-start" gap="1" flex="1">
+          <Markdown style={NOTIFICATION_BODY_STYLE}>
+            {`**${author.name}** replied to thread **#${rootThread.ordinal}** **${rootThread.subject}**`}
+          </Markdown>
+          {body.teaser && <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.teaser}`}</Markdown>}
+        </VStack>
+      </ReportBlock>
     </HStack>
   );
 }

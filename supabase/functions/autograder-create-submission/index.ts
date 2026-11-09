@@ -13,7 +13,7 @@ import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
-  cloneRepository,
+  assertJobTokenMatchesRepository,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
@@ -21,6 +21,7 @@ import {
   PrimaryRateLimitError,
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
@@ -105,6 +106,11 @@ function combinedHashFromPerFileHexHashes(file_hashes: Record<string, string>): 
 // push-direct). `sha256Hex` / `combinedHashFromPerFileHexHashes` are kept above
 // because the E2E_MOCK_GITHUB fast path still computes the empty hash inline.
 
+// Rolls back a submission this path just created. It clears only the child rows the
+// create-submission path writes. When that path starts writing to a new table that
+// references submissions, add the table here too. The foreign keys are NO ACTION, so a
+// missed table makes the final delete fail instead of leaving orphans; see "Deleting
+// repositories and submissions" in AGENTS.md and scripts/CheckDeletePaths.ts.
 async function safeCleanupRejectedSubmission(params: {
   adminSupabase: SupabaseClient<Database>;
   submissionId: number;
@@ -555,6 +561,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
+  await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
 
   const org = repository.split("/")[0];
   scope?.setTag("org", org);
@@ -1154,6 +1161,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               }
 
               if (!result.success) {
+                // A course with no allotment makes every assignment-level allowance moot; saying
+                // "only 0 remaining" reads as though the student spent tokens they never had.
+                if ((repoData.assignments.classes?.late_tokens_per_student ?? 0) <= 0) {
+                  throw new UserVisibleError(
+                    `${errorMessage}. This course does not give late tokens, so none could be applied. Contact your instructor if you need an extension.`,
+                    400
+                  );
+                }
                 throw new UserVisibleError(
                   `You don't have enough late tokens to submit. You need ${result.tokens_needed} token(s) but only have ${result.tokens_remaining} remaining.`,
                   400
@@ -1522,7 +1537,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         // Clone the repository
         const repoToClone = getRepoToCloneConsideringE2E(repository);
         const repo = await handleGitHubApiCall(
-          () => cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
+          () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
           org,
           "cloneRepository",
           adminSupabase,

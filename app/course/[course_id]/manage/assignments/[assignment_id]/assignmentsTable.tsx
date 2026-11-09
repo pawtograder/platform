@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
@@ -13,7 +14,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
-import { useAssignmentController, useAssignmentGroups } from "@/hooks/useAssignment";
+import { useAssignmentController, useAssignmentGroups, useRubric } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
@@ -187,9 +188,17 @@ function ScoreLinkWithProfile({
   }
   const label = score !== null && score !== undefined ? score : "—";
   if (submission_id == null) {
-    return <Text fontSize="inherit">{label}</Text>;
+    return (
+      <ReportBlock>
+        <Text fontSize="inherit">{label}</Text>
+      </ReportBlock>
+    );
   }
-  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+  return (
+    <ReportBlock>
+      <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>
+    </ReportBlock>
+  );
 }
 
 function ScoreLink({
@@ -212,9 +221,17 @@ function ScoreLink({
       return <Skeleton w="50px" h="1em" />;
     }
     if (submission_id == null) {
-      return <Text fontSize="inherit">{label}</Text>;
+      return (
+        <ReportBlock>
+          <Text fontSize="inherit">{label}</Text>
+        </ReportBlock>
+      );
     }
-    return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+    return (
+      <ReportBlock>
+        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>
+      </ReportBlock>
+    );
   }
   return (
     <ScoreLinkWithProfile
@@ -291,7 +308,7 @@ function TotalScoreCellUnknownStudent({
         assignment_id={assignment_id}
       />
       {hasIndividual && tooltipContent !== "" && (
-        <Tooltip content={`Individual portion(s): ${tooltipContent}`}>
+        <Tooltip content={<ReportBlock>{`Individual portion(s): ${tooltipContent}`}</ReportBlock>}>
           <Text fontSize="xs" color="fg.info" cursor="help">
             ⓘ
           </Text>
@@ -343,7 +360,7 @@ function TotalScoreCellWithStudent({
         assignment_id={assignment_id}
       />
       {showTooltip && (
-        <Tooltip content={tooltipContent}>
+        <Tooltip content={<ReportBlock>{tooltipContent}</ReportBlock>}>
           <Text fontSize="xs" color="fg.info" cursor="help">
             ⓘ
           </Text>
@@ -402,6 +419,9 @@ export default function AssignmentsTable({
     [assignmentGroups]
   );
   const showGroupMentorColumn = hasGroups && hasAnyGroupMentor;
+  // Code walks are released separately from the grading review (release_code_walk_reviews_for_assignment),
+  // so an assignment with a code-walk rubric shows both release states. Without one the table is unchanged.
+  const hasCodeWalk = Boolean(useRubric("code-walk"));
 
   // Column visibility state with dynamic defaults
   const [columnVisibility, setColumnVisibility] = useState(() => {
@@ -766,7 +786,7 @@ export default function AssignmentsTable({
       {
         id: "released",
         accessorKey: "released",
-        header: "Released",
+        header: hasCodeWalk ? "Grading released" : "Released",
         enableColumnFilter: true,
         cell: (props) => {
           return props.getValue() ? <Icon as={FaCheck} /> : <Icon as={FaTimes} />;
@@ -779,6 +799,41 @@ export default function AssignmentsTable({
           return values.includes(status);
         }
       },
+      ...(hasCodeWalk
+        ? ([
+            {
+              id: "code_walk_released",
+              accessorKey: "code_walk_released",
+              header: "Code walk released",
+              enableColumnFilter: true,
+              cell: (props) => {
+                const { code_walk_review_count, code_walk_completed, code_walk_released } = props.row.original;
+                if (!code_walk_review_count) {
+                  return (
+                    <Text color="fg.muted" title="No code walk review for this submission">
+                      —
+                    </Text>
+                  );
+                }
+                if (code_walk_released) return <Icon as={FaCheck} aria-label="Released" />;
+                if (!code_walk_completed) {
+                  return (
+                    <Text color="fg.muted" title="Code walk not complete; Release code walks skips it">
+                      Incomplete
+                    </Text>
+                  );
+                }
+                return <Icon as={FaTimes} aria-label="Not released" />;
+              },
+              filterFn: (row, id, filterValue) => {
+                if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+                const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+                const status = row.original.code_walk_released ? "Released" : "Not Released";
+                return values.includes(status);
+              }
+            }
+          ] satisfies ColumnDef<ActiveSubmissionsWithGradesForAssignment>[])
+        : []),
       {
         id: "placeholder",
         accessorKey: "is_placeholder",
@@ -804,7 +859,7 @@ export default function AssignmentsTable({
         }
       }
     ],
-    [timeZone, course_id, assignment_id, assignment, showGroupMentorColumn]
+    [timeZone, course_id, assignment_id, assignment, showGroupMentorColumn, hasCodeWalk]
   );
 
   const [internalTableController, setInternalTableController] = useState<TableController<"submissions"> | null>(null);
@@ -1189,6 +1244,7 @@ export default function AssignmentsTable({
                           h.id === "autograder_score" ||
                           h.id === "total_score" ||
                           h.id === "released" ||
+                          h.id === "code_walk_released" ||
                           h.id === "commit_history" ||
                           (h.id === "assignment_group_mentor_name" &&
                             showGroupMentorColumn &&
@@ -1410,6 +1466,21 @@ export default function AssignmentsTable({
                                 placeholder="Filter by release status..."
                               />
                             )}
+                            {header.id === "code_walk_released" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Released", value: "Released" },
+                                  { label: "Not Released", value: "Not Released" }
+                                ]}
+                                placeholder="Filter by code walk release..."
+                              />
+                            )}
                             {header.id === "placeholder" && (
                               <Select
                                 isMulti={true}
@@ -1571,6 +1642,7 @@ export default function AssignmentsTable({
                                 header.id === "autograder_score" ||
                                 header.id === "total_score" ||
                                 header.id === "released" ||
+                                header.id === "code_walk_released" ||
                                 header.id === "commit_history" ||
                                 (header.id === "assignment_group_mentor_name" &&
                                   showGroupMentorColumn &&
@@ -1631,6 +1703,7 @@ export default function AssignmentsTable({
                               c.column.id === "autograder_score" ||
                               c.column.id === "total_score" ||
                               c.column.id === "released" ||
+                              c.column.id === "code_walk_released" ||
                               c.column.id === "commit_history" ||
                               (c.column.id === "assignment_group_mentor_name" &&
                                 showGroupMentorColumn &&

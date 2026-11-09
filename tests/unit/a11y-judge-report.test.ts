@@ -262,7 +262,9 @@ describe("applyMutationFromEnv", () => {
       "243-tabindex-shuffle",
       "111-alt-degrade",
       "246-headings-generic",
-      "331-hide-error-text"
+      "331-hide-error-text",
+      // Paired mutation for the gradebook replay spec (issue #915).
+      "131-spoken-value-collapse"
     ]) {
       expect(getMutation(id)?.id).toBe(id);
     }

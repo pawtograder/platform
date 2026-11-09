@@ -13,16 +13,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!courseId) {
     throw new UserVisibleError("Course ID is required", 400);
   }
+  // This writes user_roles through the service-role client, which guard_admin_role_grant trusts,
+  // so the role has to be checked here. An admin row in any class is platform-wide admin.
+  if (!["student", "grader", "instructor"].includes(role)) {
+    throw new UserVisibleError("Valid role is required (student, grader, or instructor)", 400);
+  }
   scope?.setTag("function", "enrollments-add");
-  scope?.setTag("email", email);
-  scope?.setTag("name", name);
-  scope?.setTag("role", role);
+  // No email or name tags: Sentry events never carry a person's name or email. `role` is the
+  // caller's role (set below); the role being granted is `enrollment_role`.
+  scope?.setTag("enrollment_role", role);
   scope?.setTag("courseId", courseId.toString());
   //Validate that the user is an instructor for this course
   const { enrollment: instructorEnrollment } = await assertUserIsInstructor(
     courseId,
     req.headers.get("Authorization")!
   );
+  // The caller by ID, and their actual role: assertUserIsInstructor also admits platform admins,
+  // and returns their admin row.
+  scope?.setUser({ id: instructorEnrollment.user_id });
+  scope?.setTag("role", instructorEnrollment.role);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,

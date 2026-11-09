@@ -37,6 +37,7 @@ import PersonName from "@/components/ui/person-name";
 import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/SubmissionRegradeRequestsPanel";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import SubmissionReviewAssignments from "@/components/ui/submission-review-assignments";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -114,6 +115,7 @@ import {
   linkToSubPage
 } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -372,15 +374,25 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
           </Text>
           {hasSharedTweak && (
             <Text fontSize="sm">
-              Shared tweak (whole group): {sharedTweakNum}
-              {sharedNote ? ` — ${sharedNote}` : ""}
+              Shared tweak (whole group):{" "}
+              <ReportBlock>
+                {sharedTweakNum}
+                {sharedNote ? ` — ${sharedNote}` : ""}
+              </ReportBlock>
             </Text>
           )}
-          {!hasSharedTweak && sharedNote && <Text fontSize="sm">Instructor note (shared): {sharedNote}</Text>}
+          {!hasSharedTweak && sharedNote && (
+            <Text fontSize="sm">
+              Instructor note (shared): <ReportBlock>{sharedNote}</ReportBlock>
+            </Text>
+          )}
           {myId && (myT !== undefined || myN) && (
             <Text fontSize="sm" mt={1}>
-              Your additional tweak: {myT ?? 0}
-              {myN ? ` — ${myN}` : ""}
+              Your additional tweak:{" "}
+              <ReportBlock>
+                {myT ?? 0}
+                {myN ? ` — ${myN}` : ""}
+              </ReportBlock>
             </Text>
           )}
         </Box>
@@ -389,9 +401,17 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
     if (hasSharedTweak || sharedNote) {
       return (
         <Text fontSize="sm" mt={2}>
-          {hasSharedTweak && <>Includes instructor&apos;s tweak {sharedTweakNum}</>}
+          {hasSharedTweak && (
+            <>
+              Includes instructor&apos;s tweak <ReportBlock>{sharedTweakNum}</ReportBlock>
+            </>
+          )}
           {hasSharedTweak && sharedNote && " "}
-          {sharedNote && <>({sharedNote})</>}
+          {sharedNote && (
+            <>
+              (<ReportBlock>{sharedNote}</ReportBlock>)
+            </>
+          )}
         </Text>
       );
     }
@@ -416,21 +436,23 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
             <VStack align="stretch" gap={2}>
               <HStack align="center" gap={2} flexWrap="wrap">
                 <Text fontSize="sm">Points:</Text>
-                <input
-                  type="number"
-                  step="any"
-                  value={tweakValue ?? ""}
-                  onChange={handleTweakChange}
-                  onKeyDown={handleSharedKeyDown}
-                  style={{
-                    width: "100px",
-                    padding: "4px 8px",
-                    border: "1px solid #ccc",
-                    borderRadius: "4px",
-                    fontSize: "14px"
-                  }}
-                  aria-label="Shared tweak score"
-                />
+                <ReportBlock>
+                  <input
+                    type="number"
+                    step="any"
+                    value={tweakValue ?? ""}
+                    onChange={handleTweakChange}
+                    onKeyDown={handleSharedKeyDown}
+                    style={{
+                      width: "100px",
+                      padding: "4px 8px",
+                      border: "1px solid #ccc",
+                      borderRadius: "4px",
+                      fontSize: "14px"
+                    }}
+                    aria-label="Shared tweak score"
+                  />
+                </ReportBlock>
                 <Button size="sm" variant="surface" onClick={() => void saveSharedTweak()} loading={isSaving}>
                   Save
                 </Button>
@@ -442,33 +464,37 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
                 <Text fontSize="xs" color="text.muted" mb={1}>
                   Note (optional, staff-visible)
                 </Text>
-                <Textarea
-                  size="sm"
-                  rows={2}
-                  value={tweakNoteDraft}
-                  onChange={(e) => setTweakNoteDraft(e.target.value)}
-                  placeholder="Why this tweak? Who should know?"
-                />
+                <ReportBlock>
+                  <Textarea
+                    size="sm"
+                    rows={2}
+                    value={tweakNoteDraft}
+                    onChange={(e) => setTweakNoteDraft(e.target.value)}
+                    placeholder="Why this tweak? Who should know?"
+                  />
+                </ReportBlock>
               </Box>
             </VStack>
           ) : (
             <VStack align="stretch" gap={1}>
               <HStack>
                 <Text fontSize="sm">Tweak:</Text>
-                <Text
-                  as="span"
-                  cursor="pointer"
-                  color="blue.500"
-                  textDecoration="underline"
-                  fontSize="sm"
-                  onClick={() => setIsEditingShared(true)}
-                >
-                  {hasSharedTweak ? sharedTweakNum : "0 (click to edit)"}
-                </Text>
+                <ReportBlock>
+                  <Text
+                    as="span"
+                    cursor="pointer"
+                    color="blue.500"
+                    textDecoration="underline"
+                    fontSize="sm"
+                    onClick={() => setIsEditingShared(true)}
+                  >
+                    {hasSharedTweak ? sharedTweakNum : "0 (click to edit)"}
+                  </Text>
+                </ReportBlock>
               </HStack>
               {sharedNote && (
                 <Text fontSize="xs" color="text.muted">
-                  Note: {sharedNote}
+                  Note: <ReportBlock>{sharedNote}</ReportBlock>
                 </Text>
               )}
               <Button size="xs" variant="outline" alignSelf="flex-start" onClick={() => setIsEditingShared(true)}>
@@ -496,20 +522,24 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
                   <VStack align="stretch" gap={2}>
                     <HStack align="center" gap={2} flexWrap="wrap">
                       <Text fontSize="sm">Extra points:</Text>
-                      <input
-                        type="number"
-                        step="any"
-                        value={perStudentTweakDrafts[studentId] ?? ""}
-                        onChange={(e) => setPerStudentTweakDrafts((prev) => ({ ...prev, [studentId]: e.target.value }))}
-                        style={{
-                          width: "100px",
-                          padding: "4px 8px",
-                          border: "1px solid #ccc",
-                          borderRadius: "4px",
-                          fontSize: "14px"
-                        }}
-                        aria-label={`Extra tweak points for this student`}
-                      />
+                      <ReportBlock>
+                        <input
+                          type="number"
+                          step="any"
+                          value={perStudentTweakDrafts[studentId] ?? ""}
+                          onChange={(e) =>
+                            setPerStudentTweakDrafts((prev) => ({ ...prev, [studentId]: e.target.value }))
+                          }
+                          style={{
+                            width: "100px",
+                            padding: "4px 8px",
+                            border: "1px solid #ccc",
+                            borderRadius: "4px",
+                            fontSize: "14px"
+                          }}
+                          aria-label={`Extra tweak points for this student`}
+                        />
+                      </ReportBlock>
                       <Button
                         size="sm"
                         variant="surface"
@@ -539,21 +569,27 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
                       <Text fontSize="xs" color="text.muted" mb={1}>
                         Note (optional)
                       </Text>
-                      <Textarea
-                        size="sm"
-                        rows={2}
-                        value={perStudentNoteDrafts[studentId] ?? ""}
-                        onChange={(e) => setPerStudentNoteDrafts((prev) => ({ ...prev, [studentId]: e.target.value }))}
-                        placeholder="Reason for this student-only adjustment"
-                      />
+                      <ReportBlock>
+                        <Textarea
+                          size="sm"
+                          rows={2}
+                          value={perStudentNoteDrafts[studentId] ?? ""}
+                          onChange={(e) =>
+                            setPerStudentNoteDrafts((prev) => ({ ...prev, [studentId]: e.target.value }))
+                          }
+                          placeholder="Reason for this student-only adjustment"
+                        />
+                      </ReportBlock>
                     </Box>
                   </VStack>
                 ) : (
                   <VStack align="stretch" gap={0}>
-                    <Text fontSize="sm">Extra tweak: {savedT !== undefined ? savedT : "—"}</Text>
+                    <Text fontSize="sm">
+                      Extra tweak: <ReportBlock>{savedT !== undefined ? savedT : "—"}</ReportBlock>
+                    </Text>
                     {savedN && (
                       <Text fontSize="xs" color="text.muted">
-                        Note: {savedN}
+                        Note: <ReportBlock>{savedN}</ReportBlock>
                       </Text>
                     )}
                   </VStack>
@@ -580,22 +616,24 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
         <VStack align="stretch" gap={2}>
           <HStack align="center" gap={2} flexWrap="wrap">
             <Text fontSize="sm">Points:</Text>
-            <input
-              type="number"
-              step="any"
-              value={tweakValue ?? ""}
-              onChange={handleTweakChange}
-              onKeyDown={handleSharedKeyDown}
-              autoFocus
-              style={{
-                width: "100px",
-                padding: "4px 8px",
-                border: "1px solid #ccc",
-                borderRadius: "4px",
-                fontSize: "14px"
-              }}
-              aria-label="Tweak score"
-            />
+            <ReportBlock>
+              <input
+                type="number"
+                step="any"
+                value={tweakValue ?? ""}
+                onChange={handleTweakChange}
+                onKeyDown={handleSharedKeyDown}
+                autoFocus
+                style={{
+                  width: "100px",
+                  padding: "4px 8px",
+                  border: "1px solid #ccc",
+                  borderRadius: "4px",
+                  fontSize: "14px"
+                }}
+                aria-label="Tweak score"
+              />
+            </ReportBlock>
             <Button size="sm" variant="surface" onClick={() => void saveSharedTweak()} loading={isSaving}>
               Save
             </Button>
@@ -607,13 +645,15 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
             <Text fontSize="xs" color="text.muted" mb={1}>
               Note (optional, staff-visible)
             </Text>
-            <Textarea
-              size="sm"
-              rows={3}
-              value={tweakNoteDraft}
-              onChange={(e) => setTweakNoteDraft(e.target.value)}
-              placeholder="Why this tweak? Who should know?"
-            />
+            <ReportBlock>
+              <Textarea
+                size="sm"
+                rows={3}
+                value={tweakNoteDraft}
+                onChange={(e) => setTweakNoteDraft(e.target.value)}
+                placeholder="Why this tweak? Who should know?"
+              />
+            </ReportBlock>
           </Box>
         </VStack>
         {error && (
@@ -633,16 +673,18 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
       <HStack align="center" gap={2} flexWrap="wrap">
         <Text fontSize="sm">Points:</Text>
         {review.tweak !== null && review.tweak !== undefined && review.tweak !== 0 ? (
-          <Text
-            as="span"
-            cursor="pointer"
-            color="blue.500"
-            textDecoration="underline"
-            onClick={() => setIsEditingShared(true)}
-            aria-label="Click to edit tweak"
-          >
-            {review.tweak}
-          </Text>
+          <ReportBlock>
+            <Text
+              as="span"
+              cursor="pointer"
+              color="blue.500"
+              textDecoration="underline"
+              onClick={() => setIsEditingShared(true)}
+              aria-label="Click to edit tweak"
+            >
+              {review.tweak}
+            </Text>
+          </ReportBlock>
         ) : (
           <Text
             as="span"
@@ -658,7 +700,7 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
       </HStack>
       {sharedNote && (
         <Text fontSize="xs" color="text.muted" mt={1}>
-          Note: {sharedNote}
+          Note: <ReportBlock>{sharedNote}</ReportBlock>
         </Text>
       )}
       <Button size="xs" variant="outline" mt={1} onClick={() => setIsEditingShared(true)}>
@@ -1222,39 +1264,43 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={link}>
-                      {assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission"
-                        ? "N/A"
-                        : !historical_submission.grader_results
-                          ? "In Progress"
-                          : graderResultIndicatesFailure(historical_submission.grader_results.errors)
-                            ? "Error"
-                            : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
-                    </Link>
+                    <ReportBlock>
+                      <Link href={link}>
+                        {assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission"
+                          ? "N/A"
+                          : !historical_submission.grader_results
+                            ? "In Progress"
+                            : graderResultIndicatesFailure(historical_submission.grader_results.errors)
+                              ? "Error"
+                              : `${historical_submission.grader_results?.score}/${historical_submission.grader_results?.max_score}`}
+                      </Link>
+                    </ReportBlock>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={link}>
-                      {(() => {
-                        // View-as-student: a real student's RLS hides unreleased reviews, so
-                        // the embedded review is null and no total shows. An instructor
-                        // masquerading reads it via the staff RLS path, so mirror RLS here and
-                        // withhold the unreleased grade. Real staff still see it.
-                        const review =
-                          isReadOnly &&
-                          historical_submission.submission_reviews &&
-                          !historical_submission.submission_reviews.released
-                            ? null
-                            : historical_submission.submission_reviews;
-                        return (
-                          review?.completed_at &&
-                          (getDisplayedGradingTotalForStudent(review, private_profile_id) ??
-                            review.total_score ??
-                            "—") +
-                            "/" +
-                            (assignment?.total_points ?? <Skeleton height="20px" />)
-                        );
-                      })()}
-                    </Link>
+                    <ReportBlock>
+                      <Link href={link}>
+                        {(() => {
+                          // View-as-student: a real student's RLS hides unreleased reviews, so
+                          // the embedded review is null and no total shows. An instructor
+                          // masquerading reads it via the staff RLS path, so mirror RLS here and
+                          // withhold the unreleased grade. Real staff still see it.
+                          const review =
+                            isReadOnly &&
+                            historical_submission.submission_reviews &&
+                            !historical_submission.submission_reviews.released
+                              ? null
+                              : historical_submission.submission_reviews;
+                          return (
+                            review?.completed_at &&
+                            (getDisplayedGradingTotalForStudent(review, private_profile_id) ??
+                              review.total_score ??
+                              "—") +
+                              "/" +
+                              (assignment?.total_points ?? <Skeleton height="20px" />)
+                          );
+                        })()}
+                      </Link>
+                    </ReportBlock>
                   </Table.Cell>
                   <Table.Cell>
                     {historical_submission.is_active ? (
@@ -1549,7 +1595,11 @@ function TestResults() {
   return (
     <Box>
       <Heading as="h2" size="md" mt={2}>
-        Automated Check Results ({totalScore}/{totalMaxScore})
+        Automated Check Results (
+        <ReportBlock>
+          {totalScore}/{totalMaxScore}
+        </ReportBlock>
+        )
       </Heading>
       {testResults?.map((test) => {
         let icon;
@@ -1576,7 +1626,7 @@ function TestResults() {
                 old link-wrapping-heading markup sat inline. */}
             <Heading as="h3" size="sm" display="inline">
               <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
-                {test.name} {showScore ? test.score + "/" + test.max_score : ""}
+                {test.name} {showScore ? <ReportBlock>{test.score + "/" + test.max_score}</ReportBlock> : ""}
               </Link>
             </Heading>
             {testMatches.length > 0 && <ErrorPinCallout matches={testMatches} />}
@@ -1820,9 +1870,16 @@ function ReviewActions() {
   const isInstructor = useIsInstructor();
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  const showCompletionActions = isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader);
+  // One completion control at a time. While the viewer is working an incomplete review assignment,
+  // its "Complete Review Assignment" button in the toolbar is the control (completing the last
+  // assignment completes the submission review in the database). This sidebar button is for staff
+  // grading without an assignment, or after "View + Grade Full Rubric".
+  const workingAssignedReview = Boolean(activeReviewAssignment && !activeReviewAssignment.completed_at);
+  const showCompletionActions =
+    !workingAssignedReview && (isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader));
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -2021,14 +2078,16 @@ function PerStudentGradingTotalsDisplay({
                 )}
               </HStack>
               <DataListRoot orientation="horizontal" size="sm">
-                <DataListItem label="Shared" value={String(sharedNum)} />
-                <DataListItem label="Individual" value={String(individualNum)} />
+                <DataListItem label="Shared" value={<ReportBlock>{String(sharedNum)}</ReportBlock>} />
+                <DataListItem label="Individual" value={<ReportBlock>{String(individualNum)}</ReportBlock>} />
                 <DataListItem
                   label="Total"
                   value={
-                    <Text as="span" fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
-                      {totalLabel}
-                    </Text>
+                    <ReportBlock>
+                      <Text as="span" fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                        {totalLabel}
+                      </Text>
+                    </ReportBlock>
                   }
                 />
               </DataListRoot>
@@ -2099,9 +2158,11 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
                   </Text>
                 )}
               </HStack>
-              <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
-                {score}
-              </Text>
+              <ReportBlock>
+                <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                  {score}
+                </Text>
+              </ReportBlock>
             </HStack>
           );
         })}
@@ -2164,15 +2225,25 @@ function RubricView({
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
-        {reviewAssignment === undefined && activeReviewAssignmentId && <Skeleton height="100px" />}
-        {activeReviewAssignmentId && reviewAssignment && (
+        {/* Staff see every assignment on this submission (theirs, a colleague's, or none). Students
+            only ever have their own self-review, so they keep the single Review Task box. */}
+        {isGraderOrInstructor && <SubmissionReviewAssignments submissionId={submission.id} />}
+        {!isGraderOrInstructor && reviewAssignment === undefined && activeReviewAssignmentId && (
+          <Skeleton height="100px" />
+        )}
+        {!isGraderOrInstructor && activeReviewAssignmentId && reviewAssignment && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
             <Heading as="h2" size="md">
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
-            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
-              Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}
+            <Text fontSize="sm">
+              Assigned to:{" "}
+              {reviewAssignment.assignee_profile_id ? (
+                <PersonName uid={reviewAssignment.assignee_profile_id} showAvatar={false} />
+              ) : (
+                "N/A"
+              )}
             </Text>
             <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
               Due:{" "}
@@ -2196,7 +2267,11 @@ function RubricView({
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
             <Heading as="h2" size="xl">
-              Overall Score ({gradingReview.total_score}/{assignment.total_points})
+              Overall Score (
+              <ReportBlock>
+                {gradingReview.total_score}/{assignment.total_points}
+              </ReportBlock>
+              )
             </Heading>
           )}
         {showPerStudentGradingTotals && (
@@ -2299,18 +2374,37 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
   // No-submission assignments render the grading UI directly below (see isNoSubmissionAssignment
   // further down) regardless of the sub-route, so none of files/results/checks/etc.'s own page
   // components ever mount here to run their own redirect-to-default-tab effect. Canonicalize the
-  // URL to /grade ourselves so bookmarks, the back button, and stale links (e.g. "next incomplete
-  // review", which always points at /files) all settle on the one URL this assignment type supports.
+  // URL to /grade ourselves so bookmarks, the back button, and stale links (e.g. an old /files
+  // bookmark, or the submission root) all settle on a URL this assignment type supports.
   // Survey is exempt: a no-submission assignment can still have a linked survey, and that page
   // needs to actually render instead of getting bounced back to /grade.
   // The staff-prefixed route (isStaffGradeRoute) has no "/grade" sub-page at all -- its whole
   // /course/[course_id]/grade/... prefix already means "you're grading", the way this same
   // component's activeSubPage/defaultSubPage fallback already renders the right content without
   // needing a URL change. Redirecting there would 404. Skip the whole effect for that route.
+  // Staff grading a survey-linked no-submission assignment land on Survey instead: it shows the
+  // student's answers next to the editable rubric, which is everything they need to grade. Wait for
+  // the linked-survey query, or every load would bounce to /grade before the surveys arrive.
+  // An explicit /grade is left alone, so a grader who chose Grade keeps it from one submission to
+  // the next (navigation carries the current tab in the URL).
+  const { surveys: linkedSurveys, loading: linkedSurveysLoading } = useAssignmentLinkedSurveys(assignment?.id);
+  const hasLinkedSurveys = linkedSurveys.length > 0;
+  const noSubmissionLandingPage = isGraderOrInstructor && hasLinkedSurveys ? "survey" : "grade";
   useEffect(() => {
     if (isStaffGradeRoute || !isNoSubmissionAssignment || explicitSubPage === "grade" || isSurveySubPage) return;
-    router.replace(linkToSubPage(pathname, "grade", searchParams));
-  }, [isStaffGradeRoute, isNoSubmissionAssignment, explicitSubPage, isSurveySubPage, pathname, searchParams, router]);
+    if (linkedSurveysLoading) return;
+    router.replace(linkToSubPage(pathname, noSubmissionLandingPage, searchParams));
+  }, [
+    isStaffGradeRoute,
+    isNoSubmissionAssignment,
+    explicitSubPage,
+    isSurveySubPage,
+    linkedSurveysLoading,
+    noSubmissionLandingPage,
+    pathname,
+    searchParams,
+    router
+  ]);
   // On the Files tab on large screens, present the content + rubric as a resizable, fixed-height
   // IDE shell (panes scroll internally so the editor fills its column). Other tabs / small screens
   // keep the original long-scroll flex layout. `useStableDesktop` (not raw `useBreakpointValue`) so a
@@ -2331,8 +2425,6 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
   // Staff and students both get the Survey tab. RLS decides which surveys come back, and
   // the RPC behind the panel decides whose responses are in it, so there is no role gate
   // here — only "is there a survey linked to this assignment that you can see".
-  const { surveys: linkedSurveys } = useAssignmentLinkedSurveys(assignment?.id);
-  const hasLinkedSurveys = linkedSurveys.length > 0;
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
     assignmentGroupId: submission.assignment_group_id || undefined
@@ -2379,7 +2471,7 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
               {assignmentGroupWithMembers ? (
                 <HStack gap={1} flexWrap="wrap" alignItems="baseline">
                   <HStack gap={1}>
-                    Group {assignmentGroupWithMembers.name} (
+                    Group <ReportBlock>{assignmentGroupWithMembers.name}</ReportBlock> (
                     {[...assignmentGroupWithMembers.assignment_groups_members]
                       .sort((a, b) => a.id - b.id)
                       .map((member) => (
@@ -2625,7 +2717,7 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
         // No-submission assignments have no files/autograder content worth rendering, and their
         // only tab (Grade) points at a read-only ledger page, not the editable rubric. Show the
         // real grading UI (RubricView) directly, full width, regardless of which sub-route the URL
-        // happens to be on (stale "next incomplete review" links etc. still point at /files) --
+        // happens to be on (stale links and bookmarks can still point at /files) --
         // that sub-route's own page component is never mounted here for this assignment type.
         // Survey is exempt (see the redirect effect above) -- it falls through to the normal
         // content + rubric layout below so the linked survey actually renders.

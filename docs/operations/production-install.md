@@ -132,8 +132,9 @@ policy they hold, see [data-retention.md](./data-retention.md).
 - [ ] **Storage + backup buckets** created **with versioning on**
       (`storage.s3.bucket`, `backup.s3.bucket`).
 - [ ] **Noncurrent-version expiration** added to both buckets. Backup retention
-      is an `mc ilm` object-expiry rule the backup Job creates
-      (`templates/backup.yaml`, keyed off `backup.retentionDays`). On a
+      is a set of per-prefix `mc ilm` expiry rules the backup Job reconciles
+      (`templates/backup.yaml`, keyed off `backup.retention`). The Job keeps
+      rules it does not own, so this one survives. On a
       versioned bucket, object expiry only writes delete markers, so old
       noncurrent versions accumulate indefinitely and storage grows without
       bound. Add a noncurrent-version expiration rule to each bucket so
@@ -160,7 +161,7 @@ must be your prod namespace.
       floating `*-latest` tag is refused by the prod render guard.
 
 > **Known blocker, tracked for the prod-deploy repo work.** The web build bakes
-> `STAGING_GITHUB_OAUTH_CLIENT_ID`, `STAGING_BUGSINK_DSN`, and the staging
+> `STAGING_GITHUB_OAUTH_CLIENT_ID`, `STAGING_SENTRY_DSN`, and the staging
 > PostHog keys into every image with no prod override (`release-images.yml`, the
 > "Build & push web image" step), so a prod web image built today ships staging
 > OAuth, error reporting, and analytics. Do not patch the workflow here. It is
@@ -174,6 +175,7 @@ fill every `← ...` blank: [`values-prod.yaml`](../../charts/pawtograder/exampl
 (pre-created Secrets + in-chart Redis + existing wildcard cert). Then:
 
 ```bash
+charts/pawtograder/scripts/build-deps.sh   # fetch the subcharts Chart.lock pins
 helm upgrade --install <release> ./charts/pawtograder \
   -n "$NS" --create-namespace \
   -f <your-prod-values>.yaml --wait --wait-for-jobs

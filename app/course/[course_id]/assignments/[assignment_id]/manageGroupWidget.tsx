@@ -53,6 +53,7 @@ import { MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function showEdgeFunctionErrorToast(e: unknown, fallbackTitle = "Something went wrong") {
   if (e instanceof EdgeFunctionError) {
@@ -391,7 +392,9 @@ function JoinGroupButton({
                         <VStack w="100%" key={g.id}>
                           <HStack>
                             <GroupMember profile_id={g.inviter} />
-                            <Heading size="sm">invites you to join {g.group.name}</Heading>
+                            <Heading size="sm">
+                              invites you to join <ReportBlock>{g.group.name}</ReportBlock>
+                            </Heading>
                           </HStack>
                           <HStack w="100%" justifyContent="start">
                             <Button
@@ -473,7 +476,9 @@ function JoinGroupButton({
                   formatOptionLabel={({ group }) => {
                     return (
                       <HStack>
-                        <Text>{group.name}</Text>
+                        <ReportBlock>
+                          <Text>{group.name}</Text>
+                        </ReportBlock>
                         <Text>{group.assignment_groups_members.length} members:</Text>
                         <GroupMemberList group={group} />
                       </HStack>
@@ -514,7 +519,9 @@ function JoinGroupButton({
                       <Card.Root key={g.id} w="100%" bg={g.status === "pending" ? "bg.muted" : "bg.subtle"}>
                         <Flex flexDirection="row" p={2}>
                           <VStack alignItems="flex-start">
-                            <Card.Title mb={0}>{g.group.name}</Card.Title>
+                            <ReportBlock>
+                              <Card.Title mb={0}>{g.group.name}</Card.Title>
+                            </ReportBlock>
                             <Text fontSize="xs" color="fg.muted">
                               ({formatRelative(g.created_at, new Date())})
                             </Text>
@@ -826,7 +833,9 @@ function GroupDetails({
   return (
     <VStack alignItems="flex-start">
       <VStack alignItems="flex-start" gap={1}>
-        <Heading size="md">You are in group &quot;{group.name}&quot;</Heading>
+        <Heading size="md">
+          You are in group &quot;<ReportBlock>{group.name}</ReportBlock>&quot;
+        </Heading>
         {group.mentor_profile_id && (
           <HStack
             gap={2}
@@ -864,7 +873,27 @@ function GroupDetails({
   );
 }
 
-function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
+function RepositoryLabel({ repository }: { repository: Repository }) {
+  const { role } = useClassProfiles();
+  if (!role.github_org_confirmed) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {repository.repository} (requires GitHub authorization to access)
+      </Text>
+    );
+  }
+  return (
+    <Link
+      href={`https://github.com/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {repository.repository} {repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
+    </Link>
+  );
+}
+
+export function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (!repositories) {
     return <Skeleton height="100px" />;
   }
@@ -881,13 +910,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link
-          href={`https://github.com/${repositories[0].repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {repositories[0].repository} {repositories[0].is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        <RepositoryLabel repository={repositories[0]} />
       </HStack>
     );
   }
@@ -899,13 +922,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontWeight="bold" fontSize="sm">
           Current group repository:
         </Text>{" "}
-        <Link
-          href={`https://github.com/${groupRepo?.repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {groupRepo?.repository} {groupRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        {groupRepo && <RepositoryLabel repository={groupRepo} />}
       </HStack>
       <Text fontWeight="bold">
         Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
@@ -913,13 +930,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
       </Text>
       <Text>
         Individual repository (not in use, you are now in a group):{" "}
-        <Link
-          href={`https://github.com/${personalRepo?.repository}`}
-          data-visual-test="transparent"
-          data-visual-placeholder="repository"
-        >
-          {personalRepo?.repository} {personalRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
-        </Link>
+        {personalRepo && <RepositoryLabel repository={personalRepo} />}
       </Text>
     </VStack>
   );

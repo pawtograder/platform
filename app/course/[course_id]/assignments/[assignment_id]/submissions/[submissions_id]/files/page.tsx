@@ -16,6 +16,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
 import BinaryFilePreview from "@/components/ui/binary-file-preview";
+import ExamSubmissionRenderer from "@/components/ui/exam-submission-renderer";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -100,6 +101,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FaCheckCircle, FaColumns, FaDownload, FaEyeSlash, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable style — `<Markdown>` is `memo`-wrapped (see
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
@@ -339,7 +341,9 @@ function ArtifactAnnotation({
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
@@ -424,7 +428,9 @@ function ArtifactComment({
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
@@ -1052,17 +1058,39 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
       );
     }
     return <Spinner />;
+  } else if (artifact.data.format === "exam_v1") {
+    return <ExamSubmissionRenderer artifact={artifact} />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }
 }
 
-function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
+/**
+ * Whether this artifact is backed by a file in the `submission-artifacts` bucket.
+ *
+ * `plaintext`, `markdown`, `zip` and `png` all describe a stored file, and RenderedArtifact
+ * downloads it to render. `exam_v1` does not: `finalize` in the exam worker inserts the
+ * submission_artifacts row and there is no code path anywhere that uploads a file for one.
+ * Everything a grader sees comes from `artifact.data` plus the page images, which
+ * ExamSubmissionRenderer signs itself out of the separate `submission-files` bucket.
+ *
+ * Signing a key that cannot exist is what made every finalized exam render
+ * "Error downloading artifact: Object not found" instead of the answer crops (#1076).
+ */
+function artifactHasStoredFile(artifact: SubmissionArtifact): boolean {
+  return (artifact.data as { format?: string } | null)?.format !== "exam_v1";
+}
+
+export function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   // Load the artifact data from supabase
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const hasStoredFile = artifactHasStoredFile(artifact);
   useEffect(() => {
+    // Nothing to sign for a data-backed artifact, and asking would fail. downloadLink stays
+    // null, which the render path below already handles: the Download link is conditional.
+    if (!hasStoredFile) return;
     let isMounted = true;
     async function loadArtifact() {
       const client = createClient();
@@ -1080,7 +1108,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
     return () => {
       isMounted = false;
     };
-  }, [artifactKey]);
+  }, [artifactKey, hasStoredFile]);
   if (downloadError) {
     return <Text color="fg.error">{downloadError}</Text>;
   }
@@ -1150,7 +1178,7 @@ const DIFF_STATUS_META: Record<FileDiffStatus, { label: string; palette: string 
 function DiffBlock({ fileDiff }: { fileDiff: FileDiff }) {
   const meta = DIFF_STATUS_META[fileDiff.status];
   return (
-    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" overflow="hidden">
+    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" overflow="hidden" flexShrink={0}>
       <HStack bg="bg.muted" px={2} py={1} gap={2}>
         <Tag.Root colorPalette={meta.palette} size="sm">
           <Tag.Label>{meta.label}</Tag.Label>
@@ -1188,7 +1216,19 @@ function DiffBlock({ fileDiff }: { fileDiff: FileDiff }) {
  * GitHub compare link stays as the header and as the fallback when the base
  * fetch is empty or errors (e.g. the upstream clone failed).
  */
-function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+function PrDiffNotice({
+  submission,
+  children
+}: {
+  submission: SubmissionWithGraderResultsAndFiles;
+  /**
+   * The file navigator + editor. When given (desktop), the notice lays out the diff and the
+   * editor as a vertical resizable split so the diff can never take the editor's height away;
+   * the editor panel stays mounted as the diff is toggled. When omitted (mobile, where the page
+   * itself scrolls), the diff renders inline below the notice.
+   */
+  children?: ReactNode;
+}) {
   const base = submission.base_sha;
   const head = submission.head_sha;
   const submissionId = submission.id;
@@ -1197,6 +1237,9 @@ function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsA
   const [baseFiles, setBaseFiles] = useState<Record<string, string> | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Collapsed by default: this notice shares a fixed-height column with the file tree and editor,
+  // so an expanded diff must never be allowed to take that space away.
+  const [showDiff, setShowDiff] = useState(false);
 
   // Only fetch for PR submissions that have both endpoints of the diff.
   const isPrSubmission = !!base && !!head;
@@ -1229,7 +1272,11 @@ function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsA
   const fileDiffs = useMemo(() => (baseFiles ? computeFileDiffs(baseFiles, headFiles) : []), [baseFiles, headFiles]);
 
   if (!isPrSubmission) {
-    return null;
+    return children ? (
+      <Box flex="1" minH={0}>
+        {children}
+      </Box>
+    ) : null;
   }
   const baseShort = base!.substring(0, 7);
   const headShort = head!.substring(0, 7);
@@ -1241,40 +1288,68 @@ function PrDiffNotice({ submission }: { submission: SubmissionWithGraderResultsA
   // changes. Fall back to the compare-link notice.
   const hasInlineDiff = !fetchError && baseFiles !== null && Object.keys(baseFiles).length > 0 && fileDiffs.length > 0;
 
+  const diffList = (
+    <VStack align="stretch" gap={2} h="100%" maxH={children ? undefined : "50vh"} overflowY="auto" pb={2}>
+      <Heading size="sm">Changed files ({fileDiffs.length})</Heading>
+      {fileDiffs.map((fd) => (
+        <DiffBlock key={fd.path} fileDiff={fd} />
+      ))}
+    </VStack>
+  );
+  const diffOpen = hasInlineDiff && showDiff;
+
   return (
-    <Box mb={3}>
-      <Alert status="info" title="Pull request submission">
-        <VStack align="start" gap={1}>
-          <Text fontSize="sm">
-            This submission is a pull request: the diff below is the base ({baseShort}) → head ({headShort}) change.
+    <>
+      <Box flexShrink={0}>
+        <Alert status="info" title="Pull request submission">
+          <VStack align="start" gap={1}>
+            <Text fontSize="sm">
+              This submission is a pull request: the diff below is the base ({baseShort}) → head ({headShort}) change.
+            </Text>
+            {compareUrl && (
+              <Link href={compareUrl} target="_blank">
+                View the {baseShort}…{headShort} diff on GitHub
+              </Link>
+            )}
+          </VStack>
+        </Alert>
+        {isLoading ? (
+          <HStack mt={2} gap={2} color="fg.muted">
+            <Spinner size="sm" />
+            <Text fontSize="sm">Loading base→head diff…</Text>
+          </HStack>
+        ) : hasInlineDiff ? (
+          <Button mt={2} size="xs" variant="outline" onClick={() => setShowDiff((v) => !v)} aria-expanded={showDiff}>
+            {showDiff ? "Hide" : "Show"} changed files ({fileDiffs.length})
+          </Button>
+        ) : baseFiles !== null ? (
+          <Text fontSize="sm" color="fg.muted" mt={2}>
+            {fetchError
+              ? "Could not load the base tree for an inline diff; use the GitHub compare link above for the authoritative diff."
+              : "No text changes to display inline; use the GitHub compare link above for the full diff."}
           </Text>
-          {compareUrl && (
-            <Link href={compareUrl} target="_blank">
-              View the {baseShort}…{headShort} diff on GitHub
-            </Link>
-          )}
-        </VStack>
-      </Alert>
-      {isLoading ? (
-        <HStack mt={2} gap={2} color="fg.muted">
-          <Spinner size="sm" />
-          <Text fontSize="sm">Loading base→head diff…</Text>
-        </HStack>
-      ) : hasInlineDiff ? (
-        <VStack align="stretch" gap={2} mt={2}>
-          <Heading size="sm">Changed files ({fileDiffs.length})</Heading>
-          {fileDiffs.map((fd) => (
-            <DiffBlock key={fd.path} fileDiff={fd} />
-          ))}
-        </VStack>
-      ) : baseFiles !== null ? (
-        <Text fontSize="sm" color="fg.muted" mt={2}>
-          {fetchError
-            ? "Could not load the base tree for an inline diff; use the GitHub compare link above for the authoritative diff."
-            : "No text changes to display inline; use the GitHub compare link above for the full diff."}
-        </Text>
-      ) : null}
-    </Box>
+        ) : null}
+      </Box>
+      {children ? (
+        <Box flex="1" minH={0}>
+          <Group orientation="vertical" style={{ height: "100%" }}>
+            {diffOpen && (
+              <>
+                <Panel defaultSize="40" minSize="15">
+                  {diffList}
+                </Panel>
+                <PanelSeparator>
+                  <Box h="6px" w="100%" bg="bg.muted" _hover={{ bg: "border.emphasized" }} cursor="row-resize" />
+                </PanelSeparator>
+              </>
+            )}
+            <Panel minSize="25">{children}</Panel>
+          </Group>
+        </Box>
+      ) : (
+        diffOpen && diffList
+      )}
+    </>
   );
 }
 
@@ -2029,8 +2104,7 @@ export default function FilesView() {
 
   return (
     <Flex direction="column" h="100%" minH={0} gap={2}>
-      <PrDiffNotice submission={submission} />
-      <Box flex="1" minH={0}>
+      <PrDiffNotice submission={submission}>
         <Group orientation="horizontal" style={{ height: "100%" }}>
           <Panel defaultSize="20" minSize="12" maxSize="40">
             {fileNavigator}
@@ -2044,7 +2118,7 @@ export default function FilesView() {
             </Box>
           </Panel>
         </Group>
-      </Box>
+      </PrDiffNotice>
     </Flex>
   );
 }

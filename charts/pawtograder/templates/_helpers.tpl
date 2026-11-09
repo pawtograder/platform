@@ -151,6 +151,21 @@ Usage: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.p
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.placement" -}}
+{{- with (include "pawtograder.nodeSelector" .) }}
+nodeSelector:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with (include "pawtograder.tolerations" .) }}
+tolerations:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with (include "pawtograder.affinity" .) }}
+affinity:
+{{- . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
 {{/*
 Public URLs.
 */}}
@@ -284,6 +299,81 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
 {{- end -}}
 
+{{/* Must equal the subchart's ROOT_URL: Actions tokens carry it as their issuer. */}}
+{{- define "pawtograder.forgejo.url" -}}
+{{- $f := .Values.forgejo -}}
+{{- $server := $f.gitea.config.server | default dict -}}
+{{- $route := $f.httpRoute | default dict -}}
+{{- if $server.ROOT_URL -}}
+{{- trimSuffix "/" (tpl $server.ROOT_URL .) -}}
+{{- else -}}
+{{- $https := or (and $f.ingress.enabled (gt (len ($f.ingress.tls | default list)) 0)) (and $route.enabled $route.terminate) -}}
+{{- $proto := ternary "https" ($server.PROTOCOL | default "http") $https -}}
+{{- $domain := $server.DOMAIN -}}
+{{- if not $domain -}}
+{{- if and $route.enabled $route.hostnames -}}
+{{- $domain = index $route.hostnames 0 -}}
+{{- else -}}
+{{- $domain = (index $f.ingress.hosts 0).host -}}
+{{- end -}}
+{{- end -}}
+{{- printf "%s://%s" $proto (tpl $domain .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.forgejo.servicePort" -}}
+{{- dig "service" "http" "port" 3000 .Values.forgejo -}}
+{{- end -}}
+
+{{/* The subchart defaults HTTP_PORT to the Service port; NetworkPolicy matches the pod's. */}}
+{{- define "pawtograder.forgejo.containerPort" -}}
+{{- dig "gitea" "config" "server" "HTTP_PORT" (include "pawtograder.forgejo.servicePort" . | int) .Values.forgejo -}}
+{{- end -}}
+
+{{- define "pawtograder.forgejo.http" -}}
+{{- printf "%s-forgejo-http" .Release.Name -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.host" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- include "pawtograder.postgres.host" .ctx -}}
+{{- else -}}
+{{- printf "%s-%s-db" .ctx.Release.Name .app -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.port" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- .ctx.Values.postgres.service.port -}}
+{{- else -}}
+{{- dig "service" "port" 5432 (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.endpoint" -}}
+{{- printf "%s:%v" (include "pawtograder.appDatabase.host" .) (include "pawtograder.appDatabase.port" .) -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuser" -}}
+{{- ternary "supabase_admin" "postgres" (eq (index .ctx.Values .app).database "pawtograder") -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuserSecret" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- .ctx.Values.secrets.names.postgres -}}
+{{- else -}}
+{{- dig "settings" "existingSecret" (printf "%s-%s-db-superuser" .ctx.Release.Name .app) (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuserSecretKey" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+POSTGRES_PASSWORD
+{{- else -}}
+{{- (((index .ctx.Values (printf "%s-db" .app)).settings | default dict).superuserPassword | default dict).secretKey | default "POSTGRES_PASSWORD" -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Maintenance posture (maintenance.active): the replica count a WRITER tier
 renders. 0 while the posture is on, the caller's own count otherwise.
@@ -360,6 +450,13 @@ quietly become the default instead of failing.
 */}}
 {{- define "pawtograder.walg.retentionKeep" -}}
 {{- $raw := .Values.postgres.walg.retention.keepBackups -}}
+{{- /* Whole-number syntax before `int`, which would truncate 4.9 to 4, turn
+     `true` into 1, and read "010" as octal 8, each then passing the >= 1
+     check with a count nobody wrote. So no leading zero (which also rules out
+     0). A YAML 4 arrives as a float64 and renders "4", so it still matches. */ -}}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString $raw)) -}}
+{{- fail (printf "postgres.walg.retention.keepBackups must be an integer >= 1 (got %v) — a fraction or boolean would be truncated to a count nobody set, and `wal-g delete retain FULL 0` deletes every base backup and all WAL." $raw) -}}
+{{- end -}}
 {{- $keep := int $raw -}}
 {{- if lt $keep 1 -}}
 {{- fail (printf "postgres.walg.retention.keepBackups must be an integer >= 1 (got %v) — `wal-g delete retain FULL 0` deletes every base backup and all WAL." $raw) -}}
@@ -541,6 +638,23 @@ on — production and the chart default already disagree.
 */}}
 {{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
+{{- end -}}
+
+{{- define "pawtograder.cilium.portsExcept" -}}
+{{- $from := 1 }}
+{{- $sorted := list }}
+{{- range $p := . }}{{ $sorted = append $sorted (printf "%05d" (int $p)) }}{{ end }}
+{{- range $s := sortAlpha $sorted }}
+{{- $p := atoi (regexReplaceAll "^0+" $s "") }}
+{{- if lt $from $p }}
+- { port: {{ $from | quote }}, endPort: {{ sub $p 1 }}, protocol: TCP }
+{{- end }}
+{{- $from = add1 $p }}
+{{- end }}
+{{- if le $from 65535 }}
+- { port: {{ $from | quote }}, endPort: 65535, protocol: TCP }
+{{- end }}
+- { port: "1", endPort: 65535, protocol: UDP }
 {{- end -}}
 
 {{/*

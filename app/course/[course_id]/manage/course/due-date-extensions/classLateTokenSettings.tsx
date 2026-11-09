@@ -1,6 +1,7 @@
 "use client";
 
 import { Field } from "@/components/ui/field";
+import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
@@ -96,7 +97,12 @@ export default function ClassLateTokenSettings() {
         <VStack align="start">
           <Heading size="md">Class Late Token Settings</Heading>
           <Text fontSize="sm" color="fg.muted">
-            Configure how many late tokens each student gets in this class.
+            Configure how many late tokens each student gets in this class. Each assignment&apos;s Max late tokens
+            limits how many of these a student may spend on it.{" "}
+            <Link href="https://docs.pawtograder.com/staff/course-settings#class-late-token-policy" target="_blank">
+              Read the documentation
+            </Link>
+            .
           </Text>
         </VStack>
         {isEditingTokens ? (
@@ -149,6 +155,12 @@ export default function ClassLateTokenSettings() {
               </Text>{" "}
               late token{course.late_tokens_per_student !== 1 ? "s" : ""}
             </Text>
+            {course.late_tokens_per_student === 0 && (
+              <Text fontSize="sm" color="fg.muted">
+                Late tokens are off for this course: students cannot extend any deadline themselves, even on assignments
+                that allow late tokens.
+              </Text>
+            )}
             <Button size="sm" onClick={() => setIsEditingTokens(true)}>
               Edit Late Token Allocation
             </Button>

@@ -21,12 +21,12 @@ import {
   getDefaultBranchHeadSha,
   getFileFromRepo,
   getOctoKit,
-  triggerWorkflow,
   SecondaryRateLimitError,
   PrimaryRateLimitError,
   END_TO_END_REPO_PREFIX,
   repoHasFileAtRef
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
@@ -318,9 +318,10 @@ async function createPushDirectSubmission(
     /**
      * The assignment's automatic late-token policy, applied to a late push exactly as the
      * Actions path applies it. It belongs to the assignment, so a repo-only assignment honours
-     * it too.
+     * it too. `classLateTokensPerStudent` is the course-wide allotment every assignment draws from;
+     * it only shapes the rejection message, since the RPC reads the balance itself.
      */
-    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean };
+    lateTokenPolicy: { maxLateTokens: number; requireTokensBeforeDueDate: boolean; classLateTokensPerStudent: number };
     /**
      * The pusher is course staff pushing to a repository that is their own — the Instructor Test
      * Assignment case. The Actions path exempts staff-triggered submissions from the deadline,
@@ -456,12 +457,16 @@ async function createPushDirectSubmission(
   // (require_tokens_before_due_date, which is the default), or the student's own early
   // finalization may rule it out — and in each of those the balance is never read, so reporting
   // exhaustion states something we did not check and sends the student to the wrong remedy.
-  let lateTokenOutcome: "none_offered" | "not_automatic" | "finalized_early" | "exhausted" =
+  // A course with no allotment gets its own outcome: "no late tokens left" would suggest the
+  // student spent tokens they were never given.
+  let lateTokenOutcome: "none_offered" | "none_in_course" | "not_automatic" | "finalized_early" | "exhausted" =
     lateTokenPolicy.maxLateTokens <= 0
       ? "none_offered"
-      : lateTokenPolicy.requireTokensBeforeDueDate
-        ? "not_automatic"
-        : "exhausted";
+      : lateTokenPolicy.classLateTokensPerStudent <= 0
+        ? "none_in_course"
+        : lateTokenPolicy.requireTokensBeforeDueDate
+          ? "not_automatic"
+          : "exhausted";
   let stillLate = isLate;
   if (isLate && mayRecordSubmission) {
     if (await hasFinalizedEarly(adminSupabase, studentRepo, scope)) {
@@ -673,6 +678,7 @@ async function createPushDirectSubmission(
     console.log(`Push-direct submission for ${repoName}@${sha} is after the due date; recording a rejection`);
     const lateTokenClause = {
       none_offered: "",
+      none_in_course: ", and this course does not give late tokens, so none could be applied",
       not_automatic:
         ", and late tokens for this assignment have to be applied before the deadline, so none covered this push",
       finalized_early:
@@ -1659,6 +1665,11 @@ async function deactivateRejectedSubmission(
   }
 }
 
+// Rolls back a submission this path just created. It clears only the child rows the
+// push-direct submission path writes. When it starts writing to a new table that
+// references submissions, add the table here too. The foreign keys are NO ACTION, so a
+// missed table makes the final delete fail instead of leaving orphans; see "Deleting
+// repositories and submissions" in AGENTS.md and scripts/CheckDeletePaths.ts.
 async function cleanupPushDirectSubmission(
   adminSupabase: SupabaseClient<Database>,
   submissionId: number,
@@ -1809,8 +1820,9 @@ async function handlePushToStudentRepo(
   const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
     .from("assignments")
     .select(
-      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date"
+      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date, classes(late_tokens_per_student)"
     )
+    .eq("git_provider", "github")
     .eq("id", studentRepo.assignment_id)
     .maybeSingle();
   if (pushAssignmentErr) {
@@ -2163,7 +2175,8 @@ async function handlePushToStudentRepo(
       permitEmptySubmissions: pushAssignment.permit_empty_submissions ?? false,
       lateTokenPolicy: {
         maxLateTokens: pushAssignment.max_late_tokens ?? 0,
-        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false
+        requireTokensBeforeDueDate: pushAssignment.require_tokens_before_due_date ?? false,
+        classLateTokensPerStudent: pushAssignment.classes?.late_tokens_per_student ?? 0
       },
       // Staff pushing to their OWN repository — the Instructor Test Assignment flow — keeps the
       // bypasses the Actions path gives them. Losing that meant a no-autograder test assignment
@@ -2254,7 +2267,8 @@ async function handlePushToStudentRepo(
           permitEmptySubmissions: pushAssignment?.permit_empty_submissions ?? false,
           lateTokenPolicy: {
             maxLateTokens: pushAssignment?.max_late_tokens ?? 0,
-            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false
+            requireTokensBeforeDueDate: pushAssignment?.require_tokens_before_due_date ?? false,
+            classLateTokensPerStudent: pushAssignment?.classes?.late_tokens_per_student ?? 0
           },
           actorIsStaffOwner: fallbackStanding.isOwnerStaff,
           scope
@@ -2287,7 +2301,7 @@ async function handlePushToStudentRepo(
     if (!currentStatus.workflow_triggered_at) {
       maybeCrash("push.student.before_trigger_workflow");
       try {
-        await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+        await getGitProvider().startGrading(repoName, payload.head_commit.id);
       } catch (triggerErr) {
         console.error("Error triggering workflow:", triggerErr);
         const rt = detectRateLimitType(triggerErr);
@@ -2437,6 +2451,7 @@ async function handlePushToGraderSolution(
         const { data: handoutTarget, error: handoutTargetError } = await adminSupabase
           .from("assignments")
           .select("template_repo, latest_template_sha, class_id")
+          .eq("git_provider", "github")
           .eq("id", autograder.id)
           .maybeSingle();
         if (handoutTargetError) {
@@ -2854,6 +2869,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const { data: studentRepo, error: studentRepoError } = await adminSupabase
         .from("repositories")
         .select("*")
+        .eq("git_provider", "github")
         .eq("repository", repoName)
         .maybeSingle();
       if (studentRepoError) {
@@ -2884,7 +2900,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       scope.setTag("repo_type", "grader_solution");
       const { data: graderSolution, error: graderSolutionError } = await adminSupabase
         .from("autograder")
-        .select("*")
+        .select("*, assignments!inner(git_provider)")
+        .eq("assignments.git_provider", "github")
         .eq("grader_repo", repoName);
       if (graderSolutionError) {
         console.error(graderSolutionError);
@@ -2902,6 +2919,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const { data: templateRepo, error: templateRepoError } = await adminSupabase
         .from("assignments")
         .select("*")
+        .eq("git_provider", "github")
         .eq("template_repo", repoName);
       if (templateRepoError) {
         console.error(templateRepoError);
@@ -2937,7 +2955,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
-          .select("*")
+          .select("*, repositories!inner(git_provider)")
+          .eq("repositories.git_provider", "github")
           .eq("check_run_id", payload.check_run.id)
           .maybeSingle();
         if (checkRun && checkRun.data) {
@@ -2969,7 +2988,7 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
             );
             maybeCrash("check_run.before_trigger_workflow");
             try {
-              await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
+              await getGitProvider().startGrading(payload.repository.full_name, payload.check_run.head_sha);
             } catch (triggerErr) {
               // Log the error with proper fingerprinting to prevent notification storms
               const repoName = payload.repository.full_name;
@@ -3551,6 +3570,7 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
     const { data: matchedRepo, error: repoError } = await adminSupabase
       .from("repositories")
       .select("id, class_id")
+      .eq("git_provider", "github")
       .eq("repository", repository.full_name)
       .maybeSingle();
 
@@ -3678,6 +3698,7 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
     const { data: matchedRepo, error: repoError } = await adminSupabase
       .from("repositories")
       .select("id, class_id")
+      .eq("git_provider", "github")
       .eq("repository", repoFullName)
       .maybeSingle();
     if (repoError) {
@@ -3697,7 +3718,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
       // head_sha silently drops deployments for push-mode submissions.
       const { data: matchedSubmission, error: submissionError } = await adminSupabase
         .from("submissions")
-        .select("class_id")
+        .select("class_id, assignments!inner(git_provider)")
+        .eq("assignments.git_provider", "github")
         .eq("repository", repoFullName)
         .or(`head_sha.eq.${sha},sha.eq.${sha}`)
         .limit(1)
@@ -3810,6 +3832,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const { data: assignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
     .select("id, class_id, upstream_base_branch, pr_identification, pr_branch_convention")
+    .eq("git_provider", "github")
     .eq("submission_mode", "pr")
     .ilike("upstream_repo", upstreamRepoPattern);
   if (assignmentsError) {
@@ -3883,6 +3906,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const { data: repoRow, error: repoRowError } = await adminSupabase
     .from("repositories")
     .select("id, profile_id, assignment_group_id, assignment_id, class_id")
+    .eq("git_provider", "github")
     .eq("repository", headRepo)
     .maybeSingle();
   if (repoRowError) {
@@ -4111,7 +4135,8 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       // Find the repository in our database
       const { data: repo, error: repoError } = await adminSupabase
         .from("repositories")
-        .select("id, synced_handout_sha, desired_handout_sha")
+        .select("id, synced_handout_sha, desired_handout_sha, sync_data, sync_blocked_at")
+        .eq("git_provider", "github")
         .eq("repository", repoFullName)
         .maybeSingle();
 
@@ -4131,8 +4156,53 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       const shortSha = branchName.replace("sync-to-", "");
 
       // Use the full SHA from desired_handout_sha if it matches the short SHA prefix,
-      // otherwise fall back to the short SHA (handles edge cases)
-      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha) ? repo.desired_handout_sha : shortSha;
+      // otherwise fall back to the short SHA (handles edge cases). synced_handout_sha is tried
+      // too: when a LATER revision has already raised desired_handout_sha, it is the row's
+      // other recorded sha that this branch can still name in full.
+      const syncedSha = repo.desired_handout_sha?.startsWith(shortSha)
+        ? repo.desired_handout_sha
+        : repo.synced_handout_sha?.startsWith(shortSha)
+          ? repo.synced_handout_sha
+          : shortSha;
+
+      // WHICH REVISION THIS PULL REQUEST IS FOR, and why the answer decides what survives.
+      //
+      // A sync that could not be delivered records `blocked_by_student_changes` along with the
+      // revision it was blocked at and the paths that blocked it, and it carries forward the
+      // pull request an EARLIER revision opened, because that PR is still open and still the
+      // thing the student has to merge. When they merge it, this handler runs -- for the older
+      // revision. Replacing sync_data wholesale then deleted a live revision's status and its
+      // unresolved paths, while sync_blocked_at stayed set: the row read "Sync Finalizing",
+      // the instructor lost the only record of what was actually blocking, and the durable
+      // marker sat there with nothing to explain it.
+      //
+      // The branch name carries the revision as its 7-character prefix, which is what makes
+      // the two cases distinguishable at all.
+      const priorSyncData = (repo.sync_data ?? {}) as {
+        status?: string;
+        blocked_handout_sha?: string;
+        unresolved_paths?: string[];
+        last_sync_error?: string;
+        terminal_reason?: string;
+        branch_name?: string;
+      };
+      // The durable COLUMN, not a display status, is what says a person is still needed. Two
+      // outcomes set it and both carry an earlier revision's pull request: the blocked one
+      // ("every changed file is the student's own work") and a terminal failure
+      // (sync_branch_not_ours, sync_branch_moved, sync_tree_too_large). Recognizing only the
+      // first meant merging that older PR cleared the marker and overwrote a terminal
+      // failure's state -- and because desired_handout_sha already equalled the newer
+      // revision, non-forced queueing then skipped the repository as up to date while it sat
+      // on the older one.
+      const wasBlocked = repo.sync_blocked_at !== null;
+      const blockedRevision = wasBlocked ? priorSyncData.blocked_handout_sha : undefined;
+      // Only a blocker on a DIFFERENT revision survives. When the merged PR is the blocked
+      // revision's own, merging it is what resolved it. A blocker whose revision was not
+      // recorded is preserved: an unreadable marker is not a cleared one, and the failure
+      // direction has to be a repository that stays visibly stuck rather than one that
+      // reports itself finished.
+      const stillBlockedOnNewerRevision = wasBlocked && !blockedRevision?.startsWith(shortSha);
+      scope.setTag("sync_pr_merge_preserves_block", String(stillBlockedOnNewerRevision));
 
       // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
       const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
@@ -4147,7 +4217,33 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
         .update({
           synced_handout_sha: syncedSha,
           synced_repo_sha: effectiveMergeSha,
+          // The marker is cleared by a merge of the revision it was set for, and only that.
+          // A newer revision is still undelivered and still needs a person, so its retry
+          // record has to outlive an older pull request being merged.
+          ...(stillBlockedOnNewerRevision ? {} : { sync_blocked_at: null, sync_block_reason: null }),
           sync_data: {
+            // The newer revision's blocker, kept ahead of this PR's bookkeeping so a merge of
+            // an older pull request cannot report the repository as finished. Its own status
+            // is carried rather than assumed, because the two shapes are not interchangeable:
+            // one names the files the student has to apply, the other names the error class a
+            // person has to act on.
+            ...(stillBlockedOnNewerRevision
+              ? {
+                  status: priorSyncData.status,
+                  blocked_handout_sha: blockedRevision,
+                  unresolved_paths: priorSyncData.unresolved_paths,
+                  last_sync_error: priorSyncData.last_sync_error,
+                  terminal_reason: priorSyncData.terminal_reason
+                }
+              : // Nothing newer is blocked, so this merge IS the outcome -- but a sync can
+                // write some files and still leave others to the student, and those paths are
+                // recorded alongside the open pull request. They are the only record that
+                // those handout changes never arrived, and they do not stop being absent
+                // because the PR carrying the rest was merged. Carried when this merge is the
+                // pull request they were recorded with.
+                priorSyncData.branch_name === branchName && priorSyncData.unresolved_paths?.length
+                ? { unresolved_paths: priorSyncData.unresolved_paths }
+                : {}),
             pr_number: payload.pull_request.number,
             pr_url: payload.pull_request.html_url,
             pr_state: "merged",

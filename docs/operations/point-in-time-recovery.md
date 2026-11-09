@@ -193,6 +193,7 @@ recovery, repoint, rebuild — in a scratch namespace you can delete afterward.
      --from-literal=AWS_ACCESS_KEY_ID="$DRILL_S3_KEY" \
      --from-literal=AWS_SECRET_ACCESS_KEY="$DRILL_S3_SECRET"
 
+   charts/pawtograder/scripts/build-deps.sh   # fetch the subcharts Chart.lock pins
    helm install drill charts/pawtograder -n "$DRILL_NS" \
      -f charts/pawtograder/examples/values-preview.yaml \
      --set fullnameOverride=drill \
@@ -430,7 +431,7 @@ asserts row count, cleans up — no orphan scratch DB or volume.
   bucket is roughly `keepBackups × database size` plus the WAL between them.
 - **Only the `walg-retention` CronJob prunes.** It runs hourly from its own pod,
   so changing `postgres.walg.retention.keepBackups` restarts nothing. Before
-  0.4.0 the `base-backup` sidecar also pruned, with the count baked into the
+  0.4.1 the `base-backup` sidecar also pruned, with the count baked into the
   primary's pod template, so changing it restarted Postgres;
   `baseBackup.keepBackups` is now refused. A one-off prune by hand (from the
   `base-backup` container) is `wal-g delete retain FULL <n>` to preview and

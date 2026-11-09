@@ -104,3 +104,42 @@ export function describeReleaseAllResult({
     description: `${pastVerb(action)} the grading review for ${submissions} in this assignment. ${ROUNDS_UNCHANGED}`
   };
 }
+
+/** The code-walk RPCs filter on rubrics.review_round = 'code-walk', so the other rounds never change. */
+const NON_CODE_WALK_ROUNDS_UNCHANGED = "Grading, self-review and meta-grading reviews were not changed.";
+
+/**
+ * Same wording rules as {@link describeReleaseAllResult}, for the assignment-wide
+ * "Release code walks" / "Unrelease code walks" RPCs
+ * (`supabase/migrations/20261020120000_release_code_walk_reviews_for_assignment.sql`).
+ *
+ * `affected` counts code-walk reviews, one per active submission per code-walk rubric. Release
+ * skips code walks that are not complete yet, and the toast says so: an instructor who releases
+ * 280 of 300 code walks needs to know the other 20 were skipped on purpose, not lost.
+ */
+export function describeCodeWalkReleaseResult({
+  affected,
+  action
+}: {
+  affected: number;
+  action: BulkReleaseAction;
+}): BulkReleaseMessage {
+  if (affected === 0) {
+    return {
+      status: "warning",
+      title: noOpTitle(action),
+      description:
+        action === "released"
+          ? "No code walks changed. Every completed code walk in this assignment was already released, or no active submission has a completed code walk."
+          : "No code walks changed. No active submission in this assignment has a released code walk."
+    };
+  }
+
+  const reviews = `${affected} code walk${affected === 1 ? "" : "s"}`;
+  const skipped = action === "released" ? " Code walks that are not complete were not released." : "";
+  return {
+    status: "success",
+    title: "Success",
+    description: `${pastVerb(action)} ${reviews} in this assignment.${skipped} ${NON_CODE_WALK_ROUNDS_UNCHANGED}`
+  };
+}

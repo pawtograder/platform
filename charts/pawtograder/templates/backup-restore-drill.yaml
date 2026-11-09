@@ -89,13 +89,30 @@ spec:
                     chmod +x /usr/local/bin/mc
                   fi
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
-                  LATEST=$(mc ls "s3/${S3_BUCKET}/" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true)
-                  if [ -z "$LATEST" ]; then
-                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}"; exit 1
+                  # Newest dump under daily/, falling back to the bucket root
+                  # (chart <= 0.3.27) only when daily/ is EMPTY, never when
+                  # its listing fails. Same selection as backup-verify.
+                  newest() {
+                    local out
+                    out=$(mc ls "s3/${S3_BUCKET}/$1") || return 1
+                    printf '%s\n' "$out" | awk '{print $NF}' | grep '^pawtograder-.*\.dump$' | sort | tail -1 || true
+                  }
+                  DIR=daily/
+                  if ! LATEST=$(newest daily/); then
+                    echo "[drill] FATAL: could not list s3/${S3_BUCKET}/daily/"; exit 1
                   fi
-                  echo "[drill] newest backup: $LATEST"
-                  mc cp "s3/${S3_BUCKET}/${LATEST}" /work/latest.dump
-                  echo "$LATEST" > /work/dump-name
+                  if [ -z "$LATEST" ]; then
+                    DIR=""
+                    if ! LATEST=$(newest ""); then
+                      echo "[drill] FATAL: could not list s3/${S3_BUCKET}/"; exit 1
+                    fi
+                  fi
+                  if [ -z "$LATEST" ]; then
+                    echo "[drill] FATAL: no pawtograder-*.dump objects in s3/${S3_BUCKET}/daily/ or the bucket root"; exit 1
+                  fi
+                  echo "[drill] newest backup: ${DIR}${LATEST}"
+                  mc cp "s3/${S3_BUCKET}/${DIR}${LATEST}" /work/latest.dump
+                  echo "${DIR}${LATEST}" > /work/dump-name
               env:
                 - name: S3_ENDPOINT
                   value: {{ required "backup.s3.endpoint is required" .Values.backup.s3.endpoint | quote }}

@@ -3,12 +3,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
 import {
-  createRepo,
+  getDefaultBranchHeadSha,
   isUserInOrg,
   NonRetryableRepoError,
-  reinviteToOrgTeam,
-  syncRepoPermissions
+  reinviteToOrgTeam
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -252,10 +252,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
-      "class_id, github_org_confirmed, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
+      "class_id, github_org_confirmed, classes(slug, github_org, assignments(git_provider)), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
     .eq("disabled", false)
-    .eq("user_id", userId); //.eq("role", "student");
+    .eq("user_id", userId)
+    .is("classes.assignments.archived_at", null)
+    .not("classes.assignments.repo_mode", "in", "(none,no_submission)");
 
   // If class_id is provided, filter to only that class
   if (classId) {
@@ -270,8 +272,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!classData) {
     throw new UserVisibleError("User is not a student", 400);
   }
+  // The query keeps only live repo-backed assignments, since no-repo ones default to GitHub. Skip a
+  // class only when all of those are on Forgejo; a class with none still gets its GitHub org invite.
+  const githubClasses = classData.filter(
+    (c) => !c.classes.assignments.length || c.classes.assignments.some((a) => a.git_provider === "github")
+  );
   const allClasses = await Promise.all(
-    classData.map(async (c) => {
+    githubClasses.map(async (c) => {
       // Guard against missing github_org
       if (!c.classes.github_org) {
         console.warn(`Class ${c.class_id} has no github_org configured, setting isInOrg to false`);
@@ -415,6 +422,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       classes!.map((c) => c!.class_id)
     )
     .eq("classes.user_roles.user_id", userId)
+    .eq("git_provider", "github")
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .limit(1000);
@@ -441,6 +449,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
         if (!assignment.template_repo?.includes("/")) {
+          return;
+        }
+        // This assignment comes from the membership embed, not the filtered assignments query.
+        if (assignment.git_provider !== "github") {
           return;
         }
         // Skip if assignment_id is specified and this assignment doesn't match
@@ -536,7 +548,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
             // jobScope (not the shared request scope) so this repo's step timings and github_*
             // tags land on an object only this job writes to.
-            const headSha = await createRepo(
+            const headSha = await getGitProvider().createRepo(
               c.classes!.github_org!,
               repoName,
               strategy.sourceRepo,
@@ -553,7 +565,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // group's real pushes would be ignored until a reconciler happened to fix
             // it. Sync first, then flag: a permission failure must leave the row
             // unready, because the reconciler only repairs is_github_ready=false rows.
-            await syncRepoPermissions(
+            await getGitProvider().syncRepoPermissions(
               c.classes!.github_org!,
               repoName,
               c.classes!.slug!,
@@ -568,9 +580,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             // which only requeues unready rows — would never revisit it, leaving synced_repo_sha
             // null and later handout syncs with no repo-side merge base. Readiness must not be
             // able to outlive the sha it is supposed to accompany.
+            //
+            // Which is why `headSha || null` is gone. It wrote the null and marked the row ready
+            // in the same statement, so the very row the sentence above rules out was reachable
+            // whenever createRepo returned nothing, and the reconciler skips ready rows, so the
+            // baseline was never filled in later. The repo exists on GitHub by this point, so
+            // read its head; if even that comes back empty, leave the row unready and let the
+            // reconciler have another go.
+            const baselineSha =
+              headSha || (await getDefaultBranchHeadSha(`${c.classes!.github_org!}/${repoName}`, jobScope));
+            if (!baselineSha) {
+              throw new UserVisibleError(
+                `Group repository ${repoName} was created but GitHub reported no head commit for it. ` +
+                  `Please retry: syncing the handout into it needs that commit as its baseline.`
+              );
+            }
             const { error: readyError } = await adminSupabase
               .from("repositories")
-              .update({ synced_repo_sha: headSha || null, is_github_ready: true })
+              .update({ synced_repo_sha: baselineSha, is_github_ready: true })
               .eq("id", dbRepo!.id);
             if (readyError) {
               // Propagate, as the individual-repo branch does. Logging alone let this
@@ -605,7 +632,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
 
         try {
-          await syncRepoPermissions(
+          await getGitProvider().syncRepoPermissions(
             c.classes!.github_org!,
             repoName,
             c.classes!.slug!,
@@ -783,7 +810,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             .eq("id", dbRepo!.id);
           return `e2e-skip-${repoName}`;
         }
-        const new_repo_sha = await createRepo(
+        const new_repo_sha = await getGitProvider().createRepo(
           assignment.classes!.github_org!,
           repoName,
           sourceTemplateRepo,
@@ -794,7 +821,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           jobScope
         );
         console.log(`courseSlug: ${courseSlug}`);
-        await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername], jobScope);
+        await getGitProvider().syncRepoPermissions(
+          assignment.classes!.github_org!,
+          repoName,
+          courseSlug!,
+          [githubUsername],
+          jobScope
+        );
         const { error: readyError } = await adminSupabase
           .from("repositories")
           .update({
@@ -842,6 +875,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Sync permissions for existing individual repos
     const individualRepoSyncPromises = existingIndividualRepos
+      .filter((repo) => repo.git_provider === "github")
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
@@ -852,7 +886,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const [orgName, repoName] = repo.repository.split("/");
           const classSlug = classes.find((c) => c.class_id === repo.class_id)?.classes?.slug;
           if (classSlug) {
-            await syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], jobScope);
+            await getGitProvider().syncRepoPermissions(orgName, repoName, classSlug, [githubUsername], jobScope);
             console.log(`Synced permissions for individual repo: ${repo.repository}`);
           }
         } catch (e) {
@@ -866,6 +900,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     // Sync permissions for existing group repos
     const groupRepoSyncPromises = existingGroupRepos
+      .filter((repo) => repo.git_provider === "github")
       .filter((repo) => repo.repository && repo.repository.includes("/"))
       .filter((repo) => assignmentId === undefined || repo.assignment_id === assignmentId)
       .map(async (repo) => {
@@ -886,7 +921,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .filter((m) => m.user_roles && m.user_roles.users.github_username)
               .map((m) => m.user_roles.users.github_username!);
 
-            await syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, jobScope);
+            await getGitProvider().syncRepoPermissions(orgName, repoName, classSlug, groupMemberUsernames, jobScope);
             console.log(`Synced permissions for group repo: ${repo.repository}`);
           }
         } catch (e) {

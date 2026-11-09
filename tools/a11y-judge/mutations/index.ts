@@ -15,6 +15,7 @@ import path from "path";
 import type { Page } from "@playwright/test";
 import type { Mutation } from "./types";
 import mutation111 from "./111-alt-degrade";
+import mutation131 from "./131-spoken-value-collapse";
 import mutation132 from "./132-survey-options-first";
 import mutation243 from "./243-tabindex-shuffle";
 import mutation246 from "./246-headings-generic";
@@ -31,6 +32,7 @@ export const MUTATION_ENV_VAR = "A11Y_MUTATION";
 /** All registered seeded-defect injectors. */
 export const MUTATIONS: Mutation[] = [
   mutation111,
+  mutation131,
   mutation132,
   mutation243,
   mutation246,
