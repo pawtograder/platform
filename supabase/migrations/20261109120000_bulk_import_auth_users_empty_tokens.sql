@@ -6,6 +6,11 @@
 --   converting NULL to string is unsupported
 -- Redefine the function to set every GoTrue string column, and backfill the
 -- rows it already created.
+--
+-- Also fixes two pre-existing bugs in the same body:
+-- * notifications.subject is jsonb, so the text subject made every direct
+--   enrollment fail when p_notify was true; wrap it in to_jsonb().
+-- * a NULL p_import_mode slipped past the NOT IN check.
 
 CREATE OR REPLACE FUNCTION public.bulk_csv_import_enrollment(
   p_class_id bigint,
@@ -38,7 +43,7 @@ BEGIN
   END IF;
 
   -- Validate import mode
-  IF p_import_mode NOT IN ('email', 'sis_id') THEN
+  IF p_import_mode IS NULL OR p_import_mode NOT IN ('email', 'sis_id') THEN
     RAISE EXCEPTION 'Invalid import mode: %. Must be "email" or "sis_id"', p_import_mode;
   END IF;
 
@@ -155,7 +160,7 @@ BEGIN
           ) VALUES (
             rec.user_id,
             p_class_id,
-            'You have been added to ' || v_course_name,
+            to_jsonb('You have been added to ' || v_course_name),
             jsonb_build_object(
               'type', 'course_enrollment',
               'action', 'create',
@@ -287,7 +292,7 @@ BEGIN
           ) VALUES (
             rec.user_id,
             p_class_id,
-            'You have been added to ' || v_course_name,
+            to_jsonb('You have been added to ' || v_course_name),
             jsonb_build_object(
               'type', 'course_enrollment',
               'action', 'create',
@@ -410,7 +415,7 @@ BEGIN
           ) VALUES (
             v_user_id,
             p_class_id,
-            'You have been added to ' || v_course_name,
+            to_jsonb('You have been added to ' || v_course_name),
             jsonb_build_object(
               'type', 'course_enrollment',
               'action', 'create',
