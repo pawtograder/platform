@@ -52,8 +52,14 @@ CREATE TABLE public.coder_workspaces (
   -- (they changed groups), cleared if they open this one again. The old workspace may hold unpushed
   -- work, so it gets the same 14 days as the conditions below.
   superseded_at timestamptz,
-  -- While one workspace-open stops and starts the workspace after a failed startup. Others wait.
+  -- The restart claim, while a workspace is stopped and started again after a failed startup:
+  -- `stopping` from workspace-open's stop, then `starting` from the moment one call wins the right
+  -- to post the start (a conditional update on the token) until it has posted it. restart_token
+  -- says which call holds it. A claim older than 5 minutes is abandoned.
   restart_started_at timestamptz,
+  restart_phase text CHECK (restart_phase IN ('stopping', 'starting')),
+  restart_token uuid,
+  CHECK ((restart_started_at IS NULL) = (restart_phase IS NULL) AND (restart_phase IS NULL) = (restart_token IS NULL)),
   -- When the cleanup job first saw each condition. Cleared when it goes away, so a recurrence
   -- starts a fresh grace period.
   class_archived_seen_at timestamptz,
