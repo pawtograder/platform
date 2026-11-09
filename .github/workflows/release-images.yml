@@ -566,6 +566,7 @@ jobs:
         with:
           context: charts/pawtograder/images/coder-workspace
           push: true
+          platforms: linux/amd64
           tags: ${{ format('{0}/{1}/coder-workspace:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
           cache-from: type=gha,scope=coder-workspace
           cache-to: type=gha,scope=coder-workspace,mode=max
