@@ -1,4 +1,4 @@
--- Proof harness for 20261101120000_handout_sync_queue_and_routing.sql (build plan WP4).
+-- Proof harness for 20261109120000_handout_sync_queue_and_routing.sql (build plan WP4).
 --
 -- Run it through run.sh in this directory, which points it at a database you name and refuses the
 -- shared local stack. Everything happens in one transaction that ends in ROLLBACK, and it builds
@@ -117,8 +117,8 @@ select pg_temp.press(array[910001]::bigint[]) as baseline_answer;
 insert into t_baseline select message from pgmq.q_async_calls;
 select pg_temp.expect('baseline: old function sent one message', '1', (select count(*)::text from t_baseline));
 
-\echo '=== applying 20261101120000 ==='
-\i supabase/migrations/20261101120000_handout_sync_queue_and_routing.sql
+\echo '=== applying 20261109120000 ==='
+\i supabase/migrations/20261109120000_handout_sync_queue_and_routing.sql
 set local client_min_messages = error;
 
 -- Routing ---------------------------------------------------------------------------------------

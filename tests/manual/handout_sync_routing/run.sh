@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Proof harness for supabase/migrations/20261101120000_handout_sync_queue_and_routing.sql.
+# Proof harness for supabase/migrations/20261109120000_handout_sync_queue_and_routing.sql.
 #
 #   tests/manual/handout_sync_routing/run.sh postgresql://postgres:postgres@127.0.0.1:<port>/postgres
 #
-# The database must be fully migrated up to, but not necessarily including, 20261101120000: the
+# The database must be fully migrated up to, but not necessarily including, 20261109120000: the
 # script loads the migration itself (after loading the revision of queue_repository_syncs it
 # replaces, for the baseline), and the migration is idempotent, so a database that already has it
 # works too. No seed is needed. Everything runs in one transaction that ends in ROLLBACK.
