@@ -23,23 +23,23 @@ sections it implements, the gates it passed with their command output, and anyth
 
 ### Gates that apply to every WP
 
-| ID | Gate | Notes |
-|---|---|---|
-| G-check | `deno check` on every touched entrypoint | Compare against a `git archive` of `staging`. `github-async-worker` has known baseline errors ([[platform-isolated-test-stack]]), so only new errors fail the gate |
-| G-test | `npm run test:functions` plus the WP's new tests | New tests must fail on a deliberately broken implementation at least once (the supervisor checks this by mutating one line) |
-| G-lint | `npm run lint` and prettier on touched files only | Never commit drift from unrelated files ([[platform-generated-file-drift]]). Worktrees symlink `node_modules`, and the gates leave it untracked ([[platform-deno-gate-node-modules-trap]]) |
-| G-review | A reviewer agent with the diff and the spec | Every CONFIRMED finding is fixed or answered in the PR |
-| G-spec | Supervisor diff review | Every behavior in the WP's spec sections is either implemented and tested or listed as deferred |
+| ID       | Gate                                              | Notes                                                                                                                                                                                      |
+| -------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G-check  | `deno check` on every touched entrypoint          | Compare against a `git archive` of `staging`. `github-async-worker` has known baseline errors ([[platform-isolated-test-stack]]), so only new errors fail the gate                         |
+| G-test   | `npm run test:functions` plus the WP's new tests  | New tests must fail on a deliberately broken implementation at least once (the supervisor checks this by mutating one line)                                                                |
+| G-lint   | `npm run lint` and prettier on touched files only | Never commit drift from unrelated files ([[platform-generated-file-drift]]). Worktrees symlink `node_modules`, and the gates leave it untracked ([[platform-deno-gate-node-modules-trap]]) |
+| G-review | A reviewer agent with the diff and the spec       | Every CONFIRMED finding is fixed or answered in the PR                                                                                                                                     |
+| G-spec   | Supervisor diff review                            | Every behavior in the WP's spec sections is either implemented and tested or listed as deferred                                                                                            |
 
 ## Decisions
 
-| ID | Question | Spec | Decision (2026-11-01) |
-|---|---|---|---|
-| D1 | Commit date | §5.7 | The handout commit's date (deterministic) |
-| D2 | Egress: plain `NetworkPolicy` or `CiliumNetworkPolicy` with `toFQDNs` | §8.5, §11.5 | Settled in WP6 after checking the prod cluster |
-| D3 | Rollout flag | §10 | One deployment-wide switch: the `public.system_settings` row `handout_sync_engine` = `{"engine": "rest" \| "git", "shadow": bool}`. No per-class routing |
-| D4 | `HANDOUT_SYNC_MAX_REPO_KIB` default | §8.4 | 2 GiB |
-| D5 | Does the GitHub App on staging and prod have the `workflows` permission? | §8.2 | Claude checks with `GET /app` before WP3 merges. If it is missing, stop and ask |
+| ID  | Question                                                                 | Spec        | Decision (2026-11-01)                                                                                                                                    |
+| --- | ------------------------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Commit date                                                              | §5.7        | The handout commit's date (deterministic)                                                                                                                |
+| D2  | Egress: plain `NetworkPolicy` or `CiliumNetworkPolicy` with `toFQDNs`    | §8.5, §11.5 | Settled in WP6 after checking the prod cluster                                                                                                           |
+| D3  | Rollout flag                                                             | §10         | One deployment-wide switch: the `public.system_settings` row `handout_sync_engine` = `{"engine": "rest" \| "git", "shadow": bool}`. No per-class routing |
+| D4  | `HANDOUT_SYNC_MAX_REPO_KIB` default                                      | §8.4        | 2 GiB                                                                                                                                                    |
+| D5  | Does the GitHub App on staging and prod have the `workflows` permission? | §8.2        | Claude checks with `GET /app` before WP3 merges. If it is missing, stop and ask                                                                          |
 
 ## Phase 1: build
 
@@ -103,6 +103,14 @@ Acceptance:
   no diff, other than removals the spec lists for Phase 3.
 - G-* gates.
 
+Also covered, from the WP1 review:
+
+- The template cache's stale-lock cleanup (spec §5.1).
+- The merge size cap (spec §5.5).
+- The no-`main` and non-UTF-8 terminals (spec §5.2, §5.3).
+- Cases: a template cache holding a stale `shallow.lock`; a student repo with no `main`; a
+  student file above the merge cap.
+
 Size: large. Depends on WP1. The supervisor reviews in two rounds: first the fixtures and the
 §5.3 and §5.4 mapping, then tree building, commit and push.
 
@@ -153,8 +161,9 @@ One migration:
   `shadow` on, it also sends a copy to `handout_sync` marked `shadow: true`. The copy carries the inputs
   the REST job will use (`from_sha`, `synced_repo_sha`) as read at enqueue time, so the shadow
   run is not racing the REST job's row updates
-- a `handout_sync_shadow_results` table (`repository_id`, `to_sha`, inputs, `predicted_tree`,
-  `predicted_commit_parent`, `unresolved`, `error`, `created_at`), service_role only
+- a `handout_sync_shadow_results` table (`msg_id` unique, `repository_id`, `to_sha`, inputs,
+  `predicted_tree`, `predicted_commit_parent`, `unresolved`, `error`, `created_at`), service_role
+  only. The unique `msg_id` makes a redelivered shadow job's insert idempotent
 - dedupe across `handout_sync` and `async_calls`
 
 Plus an audit, written into the PR, of every SQL and TypeScript producer of
@@ -211,6 +220,10 @@ Carried over from the WP4 audit:
   its own row type.
 - Read the env knobs WP6 defined (`HANDOUT_SYNC_*`, including
   `HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS`) and emit the metric names in WP6's table.
+- Exercise the image's Deno permissions once `main.ts` exists. Sentry's integrations may need
+  `--allow-read=/app` and more `--allow-sys`. `--allow-net` can be narrowed per release, with
+  the chart passing Kong, Redis, the GitHub hosts and the metrics listener; that constrains JS
+  only, not git.
 - `/healthz` reports whether the poll loop is alive, not job progress. Set V8's
   `--max-old-space-size` inside the 1 Gi limit.
 
@@ -324,6 +337,12 @@ These are spec §9.3, run with the git engine actually pushing for one staging c
 
 ### S4. Prod shadow **[Jon]**
 
+Before this step: the real prod overlay (`prod-charts/values/values-prod.yaml`) pulls every
+image from the Khoury Harbor registry, and `release-images.yml` pushes the worker image only to
+ghcr. So mirror the worker image into Harbor the way the other images get there, and set
+`handoutSyncWorker.image.repository` in the overlay. Replace the example's placeholder CIDRs with
+the cluster's real ones (D2).
+
 Deploy to prod with replicas at 2 and set `{"engine": "rest", "shadow": true}`. Run the S2
 comparison on 7 days of prod traffic.
 
@@ -356,6 +375,14 @@ Acceptance:
   indefinitely, and an assignment delete can refuse (55006) while a stale marker matches a
   queued `handout_sync` msg_id. Never set `engine: "git"` with the worker scaled to 0.
 - Bump the chart version when the WP6 PR merges.
+
+## Follow-ups outside this project
+
+- `syncConflictGuard.findBlockingAncestor` compares type and sha but not mode. A student's
+  mode-only change (e.g. `chmod +x config`) on a file the handout replaces with a directory is
+  lost, while the file is reported as left untouched. This is a pre-existing gap shared by the
+  REST and git paths, and the fix belongs in the guard module (compare modes in
+  `handoutPutItThere`). Found in the WP2 round B review.
 
 ## Stop conditions
 

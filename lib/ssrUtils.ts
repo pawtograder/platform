@@ -6,6 +6,7 @@ import { classScopedTableTags, courseTag } from "@/lib/next-cache-tags";
 import { classifySupabase, timeRpc } from "@/lib/metrics";
 import { createClient } from "@supabase/supabase-js";
 import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
+import { createClient as createUserClient } from "@/utils/supabase/server";
 import { cookies } from "next/headers";
 import type {
   Assignment,
@@ -161,6 +162,20 @@ async function getUserRolesForCourseUntimed(
     return idx === -1 ? roleHierarchy.length : idx;
   };
   return { value: [...userRoles].sort((a, b) => rank(a.role) - rank(b.role))[0], error };
+}
+
+/**
+ * Whether the signed-in user holds `capability` in the class, asked with their own session so
+ * `user_class_capabilities()` answers for them — the same rule RLS and `useCapability` use
+ * (docs/capabilities.md). Uncached, so a role change applies on the next page load. Fails closed.
+ */
+export async function userHasClassCapability(course_id: number, capability: string): Promise<boolean> {
+  const client = await createUserClient();
+  const { data, error } = await client
+    .rpc("user_class_capabilities")
+    .eq("class_id", course_id)
+    .eq("capability", capability);
+  return !error && (data?.length ?? 0) > 0;
 }
 
 export type EffectiveCourseIdentity = UserRoleData & {
