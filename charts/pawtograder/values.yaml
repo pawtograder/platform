@@ -2763,6 +2763,10 @@ forgejo:
       indexer:
         ISSUE_INDEXER_TYPE: bleve
         REPO_INDEXER_ENABLED: false
+      webhook:
+        # GitHub's cap. forgejo-repo-webhook records only the commits a push payload lists, and
+        # Forgejo's default of 15 would drop the rest of a larger push from the commit history.
+        PAYLOAD_COMMIT_LIMIT: 2048
 
 forgejo-db:
   enabled: false

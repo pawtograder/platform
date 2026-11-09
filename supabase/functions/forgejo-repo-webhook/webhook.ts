@@ -71,6 +71,8 @@ export type ForgejoPushPayload = {
   repository: { full_name: string; html_url?: string; default_branch?: string | null };
   head_commit?: ForgejoCommit | null;
   commits?: ForgejoCommit[] | null;
+  /** The push's commit count. `commits` lists at most `webhook.PAYLOAD_COMMIT_LIMIT` of them. */
+  total_commits?: number | null;
   pusher?: { login?: string; username?: string } | null;
   sender?: { login?: string } | null;
 };
@@ -98,6 +100,7 @@ export function fromForgejoPush(payload: ForgejoPushPayload): RepoPush {
     // Forgejo lists the newest commit first. RepoPush, like GitHub, lists the oldest first, so the
     // commit history rows are written in the order the commits were made.
     commits: [...(payload.commits ?? [])].reverse().map(toRepoPushCommit),
+    totalCommits: payload.total_commits ?? undefined,
     pusherName: payload.pusher?.login || payload.pusher?.username || payload.sender?.login || ""
   };
 }
@@ -145,7 +148,17 @@ export async function handleForgejoPush(
   if (!accepted) {
     return;
   }
-  for (const commit of push.commits) {
+  if (push.totalCommits !== undefined && push.totalCommits > push.commits.length) {
+    scope.setTag("commits_truncated", "true");
+    console.warn(
+      `[forgejo-repo-webhook] ${push.repository}: the push has ${push.totalCommits} commits but the payload ` +
+        `lists ${push.commits.length}; recording the ones it lists`
+    );
+  }
+  // Forgejo sends head_commit separately, so it is there even when the commit list is empty
+  // (PAYLOAD_COMMIT_LIMIT = 0). acceptStudentRepoPush has already refused a push without one.
+  const commits = push.commits.length > 0 ? push.commits : push.headCommit ? [push.headCommit] : [];
+  for (const commit of commits) {
     await recordCommitCheckRun(adminSupabase, studentRepo, push, commit, scope);
   }
 }

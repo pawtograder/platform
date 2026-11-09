@@ -37,6 +37,8 @@ export type RepoPush = {
   headCommit: RepoPushCommit | null;
   /** Oldest first. */
   commits: RepoPushCommit[];
+  /** How many commits the push had, when the payload says. `commits` can list fewer. */
+  totalCommits?: number;
   pusherName: string;
 };
 

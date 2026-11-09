@@ -141,6 +141,7 @@ Deno.test("fromForgejoPush lists commits oldest first, without git's trailing ne
         removed: []
       }
     ],
+    totalCommits: 2,
     pusherName: "alex"
   });
 });
@@ -308,4 +309,50 @@ Deno.test("handleForgejoPush writes nothing for a push to another branch or a pr
   const prMode = fakeSupabase(t);
   await handleForgejoPush(prMode.client, fromForgejoPush(forgejoPayload()), new Sentry.Scope());
   assertEquals(prMode.inserts, []);
+});
+
+/** Runs `fn` with `console[method]` captured, and returns what it printed. */
+async function captureConsole(method: "warn" | "error", fn: () => Promise<void>): Promise<string[]> {
+  const original = console[method];
+  const lines: string[] = [];
+  console[method] = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+  try {
+    await fn();
+  } finally {
+    console[method] = original;
+  }
+  return lines;
+}
+
+const recordedShas = (inserts: { row: Record<string, unknown> }[]) => inserts.map(({ row }) => row.sha);
+
+Deno.test("handleForgejoPush records the head commit when the payload lists no commits", async () => {
+  // What Forgejo sends with webhook.PAYLOAD_COMMIT_LIMIT = 0: no commits, but head_commit and the total.
+  const { client, inserts } = fakeSupabase(tables());
+  const push = fromForgejoPush({ ...forgejoPayload(), commits: [] });
+  await captureConsole("warn", () => handleForgejoPush(client, push, new Sentry.Scope()));
+  assertEquals(recordedShas(inserts), [HEAD]);
+  assertEquals((inserts[0].row as { commit_message: string }).commit_message, "Finish part 1 #submit");
+});
+
+Deno.test("handleForgejoPush records a truncated payload's commits and warns with both counts", async () => {
+  // A 16-commit push under Forgejo's default limit of 15 lists only the newest; here it lists one.
+  const payload = forgejoPayload();
+  payload.commits = payload.commits!.slice(0, 1);
+  payload.total_commits = 16;
+  const { client, inserts } = fakeSupabase(tables());
+  const warnings = await captureConsole("warn", () =>
+    handleForgejoPush(client, fromForgejoPush(payload), new Sentry.Scope())
+  );
+  assertEquals(recordedShas(inserts), [HEAD]);
+  assertEquals(warnings.length, 1);
+  assert(warnings[0].includes("cs101/hw1-alex"), warnings[0]);
+  assert(warnings[0].includes("has 16 commits") && warnings[0].includes("lists 1"), warnings[0]);
+
+  // A complete payload doesn't warn.
+  const complete = fakeSupabase(tables());
+  const none = await captureConsole("warn", () =>
+    handleForgejoPush(complete.client, fromForgejoPush(forgejoPayload()), new Sentry.Scope())
+  );
+  assertEquals(none, []);
 });
