@@ -3122,6 +3122,11 @@ echo
 
 echo "== Coder template schedule =="
 
+apps_has "edge functions: CODER_URL is Coder's access URL" yes 'value: "https://coder.example.com"' \
+  --show-only templates/edge-functions.yaml
+apps_has "edge functions: no CODER_URL without Coder" no "name: CODER_URL" \
+  --set coder.enabled=false --set coderBootstrap.enabled=false --show-only templates/edge-functions.yaml
+
 apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'" \
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
