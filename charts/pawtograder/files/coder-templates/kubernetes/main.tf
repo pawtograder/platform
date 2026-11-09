@@ -86,6 +86,12 @@ variable "image" {
   default     = "ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005"
 }
 
+variable "external_auth_id" {
+  type        = string
+  description = "ID of the Coder external auth provider (CODER_EXTERNAL_AUTH_<n>_ID) whose token clones and pushes the repository."
+  default     = "forgejo"
+}
+
 data "coder_parameter" "cpu" {
   name         = "cpu"
   display_name = "CPU"
@@ -130,8 +136,30 @@ data "coder_parameter" "home_disk_size" {
   }
 }
 
+data "coder_parameter" "repo_url" {
+  name         = "repo_url"
+  display_name = "Repository"
+  description  = "HTTPS clone URL of the repository to work on."
+  type         = "string"
+  mutable      = false
+}
+
+# Coder refuses to create a workspace until the owner links this provider; the agent's GIT_ASKPASS then hands git its token.
+data "coder_external_auth" "git" {
+  id = var.external_auth_id
+}
+
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
+
+# Clones on a start whose target directory is missing or empty, so a restart keeps the work on the home volume.
+module "git_clone" {
+  source   = "registry.coder.com/coder/git-clone/coder"
+  version  = "2.0.4"
+  agent_id = coder_agent.main.id
+  url      = data.coder_parameter.repo_url.value
+  base_dir = "/home/coder"
+}
 
 locals {
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
@@ -146,10 +174,17 @@ locals {
 }
 
 resource "coder_agent" "main" {
-  os             = "linux"
-  arch           = var.arch
+  os   = "linux"
+  arch = var.arch
+  # Passed as variables so a quote in a name can't break the script.
+  env = {
+    OWNER_GIT_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+    OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
+  }
   startup_script = <<-EOT
     set -e
+    git config --global user.name "$OWNER_GIT_NAME"
+    git config --global user.email "$OWNER_GIT_EMAIL"
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
     if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
@@ -195,7 +230,7 @@ resource "coder_app" "code_server" {
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "VS Code"
-  url          = "http://localhost:13337/?folder=/home/coder"
+  url          = "http://localhost:13337/?folder=${module.git_clone.repo_dir}"
   icon         = "/icon/code.svg"
   subdomain    = true
   share        = "owner"
