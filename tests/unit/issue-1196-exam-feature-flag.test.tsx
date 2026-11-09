@@ -125,3 +125,30 @@ describe("issue #1196: the nav entry stays behind the flag", () => {
     expect(source).toContain("!item.feature || courseFeatureEnabled(courseFeatures, item.feature)");
   });
 });
+
+describe("issue #1196: the new-assignment form only offers Paper exam where it works", () => {
+  // The assignment type can't be changed after creation, so creating a Paper exam in a course
+  // that hasn't opted in leaves an assignment whose every route is the "not enabled" notice,
+  // with no way back. This pins that rule.
+  //
+  // Read as source for the same reason as the nav assertions above: rendering this form means
+  // standing up react-hook-form, refine's data provider, the course controller, class profiles
+  // and the table controllers. Coarse, and it only proves the wiring is still there -- but
+  // dropping either line is a one-line change nothing else would catch.
+  const FORM = join(__dirname, "..", "..", "app", "course", "[course_id]", "manage", "assignments", "new", "form.tsx");
+  const source = readFileSync(FORM, "utf8");
+
+  it("the exam option is disabled unless the type is available", () => {
+    expect(source).toContain('<option value="exam" disabled={!examTypeAvailable}>');
+  });
+
+  it("an existing assignment keeps the option, so editing still shows its own type", () => {
+    // isEditing has to come first: the select is disabled while editing, and an exam assignment
+    // in a course that later turned the flag off must still render its own value.
+    expect(source).toContain("const examTypeAvailable = isEditing || examsEnabled;");
+  });
+
+  it("the flag is read live, through the course controller", () => {
+    expect(source).toContain("useFeatureEnabled(COURSE_FEATURES.EXAMS)");
+  });
+});
