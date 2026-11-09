@@ -37,6 +37,8 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
 
 Run `npm run seed` to create a test class with students, assignments, and login credentials. The output includes instructor/grader/student emails (all with password `change-it`). The instructor dashboard is at `/course/<class_id>`.
 
+Every template also seeds the exam and quiz scenarios in `scripts/examTemplates.ts`: paper exams with generated or uploaded templates, scan batches in each state, finalized and graded submissions, and in-app quizzes with autograded attempts. `--exams none` skips them, `--exams midterm-1,quiz-1` picks some, and `--exam-scans <n>` caps how many students get scanned papers per exam. Page images are rendered with sharp and need a system font to show text.
+
 ### Before committing
 
 **Always** run `npm run format` before committing. This runs Prettier on the entire codebase. CI will reject unformatted code.
