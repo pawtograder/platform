@@ -527,6 +527,12 @@ function restartUnderWay(deps: Deps, row: WorkspaceRow, ws: CoderWorkspace): boo
   return restartClaimed(deps, row) || (row.restart_token !== null && ws.latest_build.transition === "stop");
 }
 
+async function recordWorkspaceId(db: WorkspaceDb, row: WorkspaceRow, ws: CoderWorkspace): Promise<WorkspaceRow> {
+  if (row.coder_workspace_id === ws.id) return row;
+  await db.updateWorkspaceRow(row.id, { coder_workspace_id: ws.id });
+  return { ...row, coder_workspace_id: ws.id };
+}
+
 function isStopped(ws: CoderWorkspace): boolean {
   return ws.latest_build.transition === "stop" && ws.latest_build.status === "stopped";
 }
@@ -709,8 +715,12 @@ export async function openWorkspace(
   }
 
   let restarting = false;
+  // The id is recorded before anything the budget may cut off: status reads find the workspace by it.
   let ws = await getWorkspaceByName(coder, user.id, name);
-  if (ws) row = await settleRestart(deps, row, ws);
+  if (ws) {
+    row = await recordWorkspaceId(db, row, ws);
+    row = await settleRestart(deps, row, ws);
+  }
   if (!ws) {
     const created = await createWorkspace(coder, user.id, {
       template_id: template.id,
@@ -736,6 +746,7 @@ export async function openWorkspace(
       ws = created.workspace;
     }
     if (!ws) throw new Error(`Coder workspace ${name} was neither created nor found`);
+    row = await recordWorkspaceId(db, row, ws);
   } else if (needsRestart(ws)) {
     // Retry after a startup failure, such as a clone that timed out, or a lost agent.
     ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
@@ -755,9 +766,6 @@ export async function openWorkspace(
 
   // Out of time in a restart: answer with what's known, and leave the rest to status reads.
   if (outOfTime(deps)) return await describeWorkspace(coder, ws, restarting);
-  if (row.coder_workspace_id !== ws.id) {
-    await db.updateWorkspaceRow(row.id, { coder_workspace_id: ws.id });
-  }
   return await withDeletionDate(deps, row.id, await describeWorkspace(coder, ws, restarting));
 }
 
