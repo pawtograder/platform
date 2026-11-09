@@ -3,6 +3,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import { useConnectionStatus, useHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpQueue, HelpQueueAssignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
@@ -64,38 +65,37 @@ export default function HelpQueueAssignmentManagement() {
   // Loading state - wait for realtime data
   const isLoading = realtimeLoading;
 
+  // refine's success/errorNotification options do nothing here (no notificationProvider), so report
+  // the outcome with the toaster directly.
   const handleEndAssignment = async (assignmentId: number) => {
-    await updateAssignment({
-      resource: "help_queue_assignments",
-      id: assignmentId,
-      values: {
-        is_active: false,
-        ended_at: new Date().toISOString()
-      },
-      successNotification: {
-        message: "Assignment ended successfully",
-        type: "success"
-      },
-      errorNotification: {
-        message: "Failed to end assignment",
-        type: "error"
-      }
-    });
+    try {
+      await updateAssignment({
+        resource: "help_queue_assignments",
+        id: assignmentId,
+        values: {
+          is_active: false,
+          ended_at: new Date().toISOString()
+        }
+      });
+      toaster.success({ title: "Assignment ended successfully" });
+    } catch (error) {
+      toaster.error({
+        title: "Failed to end assignment",
+        description: error instanceof Error ? error.message : String(error)
+      });
+    }
   };
 
   const handleDeleteAssignment = async (assignmentId: number) => {
-    await deleteAssignment({
-      resource: "help_queue_assignments",
-      id: assignmentId,
-      successNotification: {
-        message: "Assignment deleted successfully",
-        type: "success"
-      },
-      errorNotification: {
-        message: "Failed to delete assignment",
-        type: "error"
-      }
-    });
+    try {
+      await deleteAssignment({ resource: "help_queue_assignments", id: assignmentId });
+      toaster.success({ title: "Assignment deleted successfully" });
+    } catch (error) {
+      toaster.error({
+        title: "Failed to delete assignment",
+        description: error instanceof Error ? error.message : String(error)
+      });
+    }
   };
 
   if (isLoading) return <Text>Loading assignments...</Text>;

@@ -304,8 +304,16 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
           })
         );
     }
-    await Promise.all([saveAdditions(), saveDeletions()]);
-    setSaveLoading(false);
+    try {
+      await Promise.all([saveAdditions(), saveDeletions()]);
+    } catch (error) {
+      toaster.error({
+        title: "Failed to save regression tests",
+        description: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setSaveLoading(false);
+    }
   }, [selectedRepos, regressionTestRepos, assignment_id, createRegressionTest, deleteRegressionTest]);
   const toggleRepo = useCallback(
     (repo: string) => {

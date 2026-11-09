@@ -4,6 +4,7 @@ import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
+import { toaster } from "@/components/ui/toaster";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -64,6 +65,10 @@ export function useNotifications(resource?: string, id?: number) {
     [update_notification, isReadOnly]
   );
 
+  // Removes the notification from the local store right away, then deletes it. Never rejects:
+  // a notification that is already gone (another tab, a double click) resolves in the data
+  // provider, and any other failure puts the notification back and shows a toast here, so
+  // callers (including fire-and-forget onClick handlers) don't need their own catch.
   const dismiss = useCallback(
     async (notification: Notification) => {
       if (isReadOnly) return;
@@ -75,7 +80,20 @@ export function useNotifications(resource?: string, id?: number) {
         channel: "resources/notifications",
         date: new Date()
       });
-      await delete_notification({ id: notification.id, resource: "notifications" });
+      try {
+        await delete_notification({ id: notification.id, resource: "notifications" });
+      } catch (error) {
+        controller.handleGenericDataEvent("notifications", {
+          type: "created",
+          payload: notification,
+          channel: "resources/notifications",
+          date: new Date()
+        });
+        toaster.error({
+          title: "Failed to dismiss notification",
+          description: error instanceof Error ? error.message : String(error)
+        });
+      }
     },
     [delete_notification, controller, isReadOnly]
   );
