@@ -459,6 +459,14 @@ export default function GraderResults() {
   );
   const hasBuildError = query.data.data.grader_results.lint_output === "Gradle build failed";
   const data = query.data.data;
+  // PostgREST returns embedded rows in no guaranteed order. Sort by id (the order the grader
+  // reported them) so parts stay grouped and the table renders the same way on every load.
+  const sortedTests = [...(data.grader_results?.grader_result_tests ?? [])].sort((a, b) => a.id - b.id);
+  // The rows the summary table shows. Part headers are computed from this list, not the raw
+  // one: a hidden first test without a part used to drop the first part header.
+  const tableTests = sortedTests.filter(
+    (r) => (r.extra_data as GraderResultTestExtraData)?.hide_score !== "true" && (showHiddenOutput || r.is_released)
+  );
   // Outputs the current viewer can see (students don't see instructor-only debug output).
   // Hoisted so the tab label's `.length === 1` check counts the *visible* tabs, not the
   // raw list — otherwise a student with one visible + one instructor-only output gets a
@@ -547,68 +555,59 @@ export default function GraderResults() {
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {data.grader_results?.grader_result_tests &&
-                  data.grader_results?.grader_result_tests.length > 0 &&
-                  data.grader_results?.grader_result_tests[0]?.part && (
-                    <Table.Row>
-                      <Table.Cell bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">
-                        {data.grader_results?.grader_result_tests[0]?.part}
-                      </Table.Cell>
-                    </Table.Row>
-                  )}
-                {data.grader_results?.grader_result_tests
-                  ?.filter(
-                    (r) =>
-                      (r.extra_data as GraderResultTestExtraData)?.hide_score !== "true" &&
-                      (showHiddenOutput || r.is_released)
-                  )
-                  .map((result, index) => {
-                    const isNewPart =
-                      index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
-                    return (
-                      <Fragment key={result.id}>
-                        {isNewPart && (
-                          <Table.Row>
-                            <Table.Cell colSpan={3} textAlign="center" bg="bg.muted" fontWeight="bold">
-                              {result.part}
-                            </Table.Cell>
-                          </Table.Row>
-                        )}
+                {tableTests[0]?.part && (
+                  <Table.Row>
+                    <Table.Cell bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">
+                      {tableTests[0].part}
+                    </Table.Cell>
+                  </Table.Row>
+                )}
+                {tableTests.map((result, index) => {
+                  const isNewPart = index > 0 && result.part !== tableTests[index - 1].part;
+                  return (
+                    <Fragment key={result.id}>
+                      {isNewPart && (
                         <Table.Row>
-                          <Table.Cell>
-                            {(() => {
-                              const extraData = result.extra_data as GraderResultTestExtraData;
-                              if (extraData?.llm?.prompt || extraData?.llm?.result) {
-                                return (
-                                  <SpokenValue spoken="AI-assisted check">
-                                    <FaRobot />
-                                  </SpokenValue>
-                                );
-                              }
-                              const passed = result.score === result.max_score;
-                              return (
-                                <SpokenValue spoken={passed ? "Passed" : "Failed"}>{passed ? "✅" : "❌"}</SpokenValue>
-                              );
-                            })()}
+                          <Table.Cell colSpan={3} textAlign="center" bg="bg.muted" fontWeight="bold">
+                            {result.part}
                           </Table.Cell>
-                          <Table.Cell>
-                            <Link variant="underline" href={`#test-${result.id}`}>
-                              {result.name}
-                            </Link>
-                          </Table.Cell>
-                          <ReportBlock>
-                            <Table.Cell>
-                              {result.score}/{result.max_score}
-                            </Table.Cell>
-                          </ReportBlock>
                         </Table.Row>
-                      </Fragment>
-                    );
-                  })}
+                      )}
+                      <Table.Row>
+                        <Table.Cell>
+                          {(() => {
+                            const extraData = result.extra_data as GraderResultTestExtraData;
+                            if (extraData?.llm?.prompt || extraData?.llm?.result) {
+                              return (
+                                <SpokenValue spoken="AI-assisted check">
+                                  <FaRobot />
+                                </SpokenValue>
+                              );
+                            }
+                            const passed = result.score === result.max_score;
+                            return (
+                              <SpokenValue spoken={passed ? "Passed" : "Failed"}>{passed ? "✅" : "❌"}</SpokenValue>
+                            );
+                          })()}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <Link variant="underline" href={`#test-${result.id}`}>
+                            {result.name}
+                          </Link>
+                        </Table.Cell>
+                        <ReportBlock>
+                          <Table.Cell>
+                            {result.score}/{result.max_score}
+                          </Table.Cell>
+                        </ReportBlock>
+                      </Table.Row>
+                    </Fragment>
+                  );
+                })}
               </Table.Body>
             </Table.Root>
-            {data.grader_results?.grader_result_tests
-              ?.filter((result) => result.is_released || showHiddenOutput)
+            {sortedTests
+              .filter((result) => result.is_released || showHiddenOutput)
               .map((result) => {
                 const hasInstructorOutput = showHiddenOutput && result.grader_result_test_output.length > 0;
                 const extraData = result.extra_data as GraderResultTestExtraData | undefined;

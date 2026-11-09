@@ -185,7 +185,24 @@ test.describe("Report a bug dialog, replay review", () => {
     expect(after).toContain("Unmask harness");
     // The preview's last frame, with the redaction in it (the first frame is the page loading).
     await visualScreenshot(page, "Report a bug dialog replay preview after a redaction", {
-      element: dialog.getByTestId("report-bug-replay-player")
+      element: dialog.getByTestId("report-bug-replay-player"),
+      // The recording ends while the "Support & Documentation" menu that opened this dialog is
+      // closing, so its last frame has the menu open on some runs and closed on others. Hide
+      // replayed menus and popovers inside the player's iframe; the redaction is what this checks.
+      beforeScreenshot: async () => {
+        await dialog
+          .getByTestId("report-bug-replay-player")
+          .locator("iframe")
+          .evaluate((iframe: HTMLIFrameElement) => {
+            const doc = iframe.contentDocument;
+            if (!doc?.head || doc.getElementById("vt-hide-replayed-menus")) return;
+            const style = doc.createElement("style");
+            style.id = "vt-hide-replayed-menus";
+            style.textContent =
+              '[role="menu"], [data-part="positioner"], [data-scope="menu"], [data-scope="popover"] { display: none !important; }';
+            doc.head.appendChild(style);
+          });
+      }
     });
 
     await dialog.getByRole("textbox", { name: /What happened/ }).fill("E3 report");

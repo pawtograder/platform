@@ -136,7 +136,13 @@ export async function waitForVisualIdle(page: Page) {
       .waitForFunction(
         () => {
           const lines = Array.from(document.querySelectorAll(".monaco-editor .view-lines .view-line"));
-          return lines.length > 0 && lines.some((line) => line.querySelector('span[class*="mtk"]'));
+          const tokenized = lines.length > 0 && lines.some((line) => line.querySelector('span[class*="mtk"]'));
+          // Tokens appear before Monaco has measured its container. Mid-layout the editor is
+          // ~0px wide and word-wraps one character per line, so also require every editor to
+          // have a real width.
+          const editors = Array.from(document.querySelectorAll<HTMLElement>(".monaco-editor"));
+          const laidOut = editors.every((editor) => editor.getBoundingClientRect().width > 200);
+          return tokenized && laidOut;
         },
         undefined,
         { timeout: 30_000, polling: 200 }
@@ -160,6 +166,49 @@ export async function waitForVisualIdle(page: Page) {
       .catch(() => {
         // These strings are page-specific; absence/visibility is handled by each
         // test's domain assertions when it matters.
+      });
+  }
+
+  // Recharts (survey analytics, poll results, time tracking) draws its axes and legend first and
+  // the data marks after ResponsiveContainer measures itself, then animates them in with JS (so the
+  // CSS animation freeze below does not stop it). The survey overview was captured with empty
+  // panels. Wait until every chart has at least one visible mark and the marks' total size stops
+  // changing. Bounded and non-fatal so a chart with no data cannot hang the capture.
+  if ((await page.locator(".recharts-wrapper").count()) > 0) {
+    await page
+      .evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            const markSelector =
+              ".recharts-bar-rectangle, .recharts-line-curve, .recharts-scatter-symbol, .recharts-dot, .recharts-area-area, .recharts-pie-sector, .recharts-rectangle";
+            const signature = () => {
+              const charts = Array.from(document.querySelectorAll(".recharts-wrapper"));
+              let total = 0;
+              for (const chart of charts) {
+                let size = 0;
+                chart.querySelectorAll<SVGGraphicsElement>(markSelector).forEach((mark) => {
+                  const box = mark.getBoundingClientRect();
+                  size += box.width + box.height;
+                });
+                if (size === 0) return -1;
+                total += size;
+              }
+              return Math.round(total);
+            };
+            let last = -2;
+            let iterations = 0;
+            const check = () => {
+              const current = signature();
+              if (current > 0 && current === last) return resolve();
+              last = current;
+              if (++iterations > 40) return resolve();
+              setTimeout(check, 200);
+            };
+            check();
+          })
+      )
+      .catch(() => {
+        /* navigation/context race — proceed without the chart wait */
       });
   }
 
@@ -197,6 +246,13 @@ async function freezeAnimationsAndCaret(page: Page) {
         }
         .monaco-editor .cursor,
         .monaco-editor .cursors-layer > .cursor { visibility: hidden !important; }
+        /* Monaco's scrollbar thumb fades out on a timer, so captures differ by fade phase. */
+        .monaco-scrollable-element > .scrollbar { visibility: hidden !important; }
+        /* Whether an element still holds focus at capture time depends on timing (a click that
+           opened a comment box, a retried click). Drop focus outlines so focus does not show up as
+           a diff. Not blurring the element: blur handlers close menus and popovers that tests
+           deliberately capture open. */
+        *:focus, *:focus-visible { outline: none !important; }
         /* @uiw/react-md-editor (comment boxes) overlays a <textarea> whose text is hidden via
            -webkit-text-fill-color:transparent while color stays inherited — so its blinking CARET
            stays visible and, in WebKit, follows 'color' (WebKit ignores caret-color here). The
@@ -250,6 +306,38 @@ export async function stabilizeRubricSidebar(page: Page, rubricName: string | Re
 }
 
 /**
+ * Park the mouse in the top-left corner. Elements that appear under the pointer after a click
+ * (e.g. the regrade "Add a comment" box) otherwise render in their hover state on some runs.
+ */
+async function parkPointer(page: Page) {
+  await page.mouse.move(0, 0).catch(() => {
+    /* page closed — nothing to move */
+  });
+}
+
+/**
+ * Scroll every inner scroll container (not the page itself) back to its top-left corner.
+ * Focusing a comment box or retrying a click scrolls the code-file pane and the rubric sidebar by
+ * a different amount each run, so the self-review screenshots showed different code lines. Monaco
+ * scrolls virtually rather than through scrollTop, so its view is unaffected. Runs before the
+ * rubric stabilizer, which then positions the rubric deliberately.
+ */
+async function resetInnerScroll(page: Page) {
+  await page
+    .evaluate(() => {
+      const root = document.scrollingElement;
+      document.querySelectorAll<HTMLElement>("body *").forEach((el) => {
+        if (el === root) return;
+        if (el.scrollTop !== 0) el.scrollTop = 0;
+        if (el.scrollLeft !== 0) el.scrollLeft = 0;
+      });
+    })
+    .catch(() => {
+      /* navigation/context race — nothing to reset */
+    });
+}
+
+/**
  * Pin every position:sticky element to static. Sticky banners (e.g. the "Grading for
  * <student>" rubric scope banner) get "stuck" at a scroll-dependent offset while Playwright
  * scrolls to tile a full-page screenshot, overlaying different content each run. Sticky is
@@ -290,7 +378,9 @@ async function restoreStickyPositions(page: Page) {
 export async function visualScreenshot(page: Page, name: string, options: VisualScreenshotOptions = {}) {
   const { stabilizeRubric, beforeScreenshot, ...argosOptions } = options;
 
+  await parkPointer(page);
   await waitForVisualIdle(page);
+  await resetInnerScroll(page);
   if (stabilizeRubric) {
     await stabilizeRubricSidebar(page, stabilizeRubric);
   }
@@ -299,7 +389,9 @@ export async function visualScreenshot(page: Page, name: string, options: Visual
     return await argosScreenshot(page, name, {
       ...argosOptions,
       beforeScreenshot: async (api) => {
+        await parkPointer(page);
         await waitForVisualIdle(page);
+        await resetInnerScroll(page);
         if (stabilizeRubric) {
           await stabilizeRubricSidebar(page, stabilizeRubric);
         }
