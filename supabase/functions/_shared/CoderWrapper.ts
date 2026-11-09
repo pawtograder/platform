@@ -258,16 +258,18 @@ export async function createWorkspace(
   return { workspace: data, error };
 }
 
-/** 409 means another build is already running, which the caller can treat as started. */
-export async function startWorkspace(config: CoderConfig, workspaceId: string): Promise<CoderApiError | null> {
+/** Starts or stops a workspace. 409 means another build is already active, which the caller decides about. */
+export async function postBuild(
+  config: CoderConfig,
+  workspaceId: string,
+  transition: "start" | "stop"
+): Promise<CoderApiError | null> {
   const { error } = await coder(
     config,
-    "workspace start",
+    `workspace ${transition}`,
     "POST",
     `/workspaces/${encodeURIComponent(workspaceId)}/builds`,
-    {
-      transition: "start"
-    }
+    { transition }
   );
   return error;
 }
