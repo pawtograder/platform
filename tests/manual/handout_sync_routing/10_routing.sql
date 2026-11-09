@@ -415,6 +415,41 @@ begin
       where attrelid = 'public.handout_sync_shadow_results'::regclass and attname = 'msg_id'));
 end $$;
 
+\echo '=== 9. access check: manage_assignments, not instructors-only ==='
+-- 9. Access check: carried over from 20261106140000 (admins or manage_assignments holders). A
+-- student of the class must be refused, and the function must still ask the capability helper
+-- rather than the old instructors-only check.
+insert into auth.users (id, email, aud, role, instance_id)
+values ('00000000-0000-0000-0000-0000000c4002', 'wp4-student@example.com', 'authenticated', 'authenticated',
+        '00000000-0000-0000-0000-000000000000');
+insert into users (user_id, email, name) values ('00000000-0000-0000-0000-0000000c4002', 'wp4-student@example.com', 'WP4 Student')
+on conflict (user_id) do nothing;
+insert into user_privileges (user_id, class_id, role) values ('00000000-0000-0000-0000-0000000c4002', 910001, 'student')
+on conflict do nothing;
+do $$
+declare
+  v_outcome text;
+begin
+  perform pg_temp.reset();
+  begin
+    perform set_config('request.jwt.claims',
+      json_build_object('sub', '00000000-0000-0000-0000-0000000c4002', 'role', 'authenticated')::text, true);
+    perform set_config('role', 'authenticated', true);
+    perform public.queue_repository_syncs(array[910001]::bigint[], false);
+    v_outcome := 'queued';
+  exception when others then
+    v_outcome := sqlerrm;
+  end;
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+  perform pg_temp.expect('9 a student is refused with the manage_assignments message',
+    'manage_assignments is required to queue repository syncs for class 910001', v_outcome);
+  perform pg_temp.expect('9 nothing was queued for the refused press', '0', pg_temp.n('handout_sync', 910001));
+  perform pg_temp.expect('9 the access check asks the capability helper', 'true',
+    (pg_get_functiondef('public.queue_repository_syncs(bigint[], boolean)'::regprocedure)
+      like '%user_class_ids_with_capability(''manage_assignments'')%')::text);
+end $$;
+
 -- delete_assignment_with_all_data ------------------------------------------------------------
 \echo '=== 8. assignment delete sees handout_sync ==='
 do $$
