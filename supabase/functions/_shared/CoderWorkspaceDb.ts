@@ -177,6 +177,7 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
     },
     async takeRestartStart(id, token) {
       // One UPDATE: Postgres rechecks the WHERE on the row a concurrent winner left, so one call wins.
+      // Every claim and move writes a new token, so the token alone names the phase the caller read.
       const now = new Date().toISOString();
       const taken = check(
         await admin
@@ -189,7 +190,6 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
           })
           .eq("id", id)
           .eq("restart_token", token)
-          .eq("restart_phase", "stopping")
           .select("restart_token"),
         "Workspace restart start claim"
       );
