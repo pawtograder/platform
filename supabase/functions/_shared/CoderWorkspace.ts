@@ -50,8 +50,17 @@ export const STATUS_BUDGET_MS = 20_000;
 /** Every Coder and database call is cut off this long before the deadline, to leave time to answer. */
 const RESPONSE_RESERVE_MS = 2_000;
 const RESTART_POLL_MS = 2_000;
-/** A restart claim older than this is abandoned, and the next open may restart again. */
-const RESTART_CLAIM_MS = 5 * 60_000;
+/**
+ * A restart claim is taken only with this much of the budget left: time for its build request to
+ * reach Coder and for the answer. A claim taken and then cut off would hold the restart up.
+ */
+const CLAIM_MIN_LEFT_MS = 5_000;
+/**
+ * A restart claim older than this has no live holder, since every holder answers within its 20 s
+ * budget; the margin covers clocks that differ between function instances. Its restart may then be
+ * taken over: by an open, or by a status read once the workspace is stopped.
+ */
+export const RESTART_CLAIM_MS = 60_000;
 const BUILD_IN_PROGRESS = new Set(["pending", "starting", "stopping", "canceling", "deleting"]);
 
 export type Caller = { userId: string; email: string; name: string | null };
@@ -125,8 +134,9 @@ export interface WorkspaceDb {
    */
   claimRestart(id: number, staleBefore: string): Promise<string | null>;
   /**
-   * Moves the claim from `stopping` to `starting` with a new token, if `token` still holds it in
-   * `stopping`. One conditional update, so one caller wins and posts the start. Null if not.
+   * Moves the claim to `starting` with a new token, if `token` still holds it. Every move makes a new
+   * token, so this is the claim in the phase the caller read. One conditional update, so one caller
+   * wins and posts the start. Null if not.
    */
   takeRestartStart(id: number, token: string): Promise<string | null>;
   /** Clears the claim if `token` still holds it. */
@@ -509,6 +519,14 @@ function restartClaimed(deps: Deps, row: WorkspaceRow): boolean {
   return row.restart_started_at !== null && Date.parse(row.restart_started_at) > clock(deps)() - RESTART_CLAIM_MS;
 }
 
+/**
+ * A restart is under way: its claim is fresh, or its stop is Coder's to finish. A stop can outlast
+ * the claim (a pod held by a finalizer), and the first read after it posts the start.
+ */
+function restartUnderWay(deps: Deps, row: WorkspaceRow, ws: CoderWorkspace): boolean {
+  return restartClaimed(deps, row) || (row.restart_token !== null && ws.latest_build.transition === "stop");
+}
+
 function isStopped(ws: CoderWorkspace): boolean {
   return ws.latest_build.transition === "stop" && ws.latest_build.status === "stopped";
 }
@@ -525,19 +543,22 @@ async function settleRestart(deps: Deps, row: WorkspaceRow, ws: CoderWorkspace):
 }
 
 /**
- * Posts the start of a restart whose stop has finished, if this call wins the claim's move from
- * `stopping` (held by `token`) to `starting`. Whoever loses posts nothing: while the claim is
- * `starting`, its holder is the only caller that may. The claim is given up once the start is
- * posted. A failed start leaves the workspace stopped, which reads not_started, and the next open
- * starts it. Returns restarting: true when another call posts the start, or this one ran out of time.
+ * Posts the start of a restart whose stop has finished, if this call wins the claim's move from the
+ * state `token` holds to `starting`. Whoever loses posts nothing: while the claim is `starting`, its
+ * holder is the only caller that may. The claim is given up once the start is posted. A failed start
+ * leaves the workspace stopped, which reads not_started, and the next open starts it. Returns
+ * restarting: true when another call posts the start, or this one has or had too little time.
  */
 async function startRestart(
   deps: Deps,
   rowId: number,
   token: string,
-  ws: CoderWorkspace
+  ws: CoderWorkspace,
+  deadline: number
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
   const { db, coder } = deps;
+  // The claim stays as it is for a call with more time.
+  if (deadline - clock(deps)() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
   try {
     const starting = await db.takeRestartStart(rowId, token);
     if (!starting) return { ws, restarting: true };
@@ -553,17 +574,19 @@ async function startRestart(
 }
 
 /**
- * The start of a restart whose stop finished after the open that stopped it answered. Only a
- * `stopping` claim can be taken: a `starting` one has its poster. Returns restarting: true when
- * another call posts the start.
+ * The start of a restart whose stop has finished: the open that stopped it answered first, or its
+ * holder is gone. A fresh `starting` claim has its poster. A stale one's holder answered long ago
+ * (RESTART_CLAIM_MS), and its start never reached Coder, or the workspace wouldn't read stopped.
+ * Returns restarting: true when another call posts the start.
  */
 async function finishRestart(
   deps: Deps,
   row: WorkspaceRow,
-  ws: CoderWorkspace
+  ws: CoderWorkspace,
+  deadline: number
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
-  if (row.restart_phase !== "stopping") return { ws, restarting: true };
-  return await startRestart(deps, row.id, row.restart_token!, ws);
+  if (row.restart_phase === "starting" && restartClaimed(deps, row)) return { ws, restarting: true };
+  return await startRestart(deps, row.id, row.restart_token!, ws, deadline);
 }
 
 /**
@@ -581,6 +604,8 @@ async function restartWorkspace(
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
   const { db, coder } = deps;
   const now = clock(deps);
+  // Too little time to post the stop: the workspace stays as it is for the next open.
+  if (deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
   const token = await db.claimRestart(row.id, new Date(now() - RESTART_CLAIM_MS).toISOString());
   if (!token) return { ws, restarting: true };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -609,7 +634,7 @@ async function restartWorkspace(
     if (outOfTime(deps)) return { ws, restarting: true };
     throw e;
   }
-  return await startRestart(deps, row.id, token, ws);
+  return await startRestart(deps, row.id, token, ws, deadline);
 }
 
 /**
@@ -714,9 +739,10 @@ export async function openWorkspace(
   } else if (needsRestart(ws)) {
     // Retry after a startup failure, such as a clone that timed out, or a lost agent.
     ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
-  } else if (isStopped(ws) && restartClaimed(deps, row)) {
-    // An earlier open's restart, whose stop has finished.
-    ({ ws, restarting } = await finishRestart(deps, row, ws));
+  } else if (isStopped(ws) && row.restart_token) {
+    // A restart whose stop has finished: an earlier open's, or one whose holder is gone. Taken
+    // through the claim like a status read does, so the two never both post its start.
+    ({ ws, restarting } = await finishRestart(deps, row, ws, deadline));
   } else if (isStopped(ws) || ws.latest_build.status === "failed" || ws.latest_build.status === "canceled") {
     // Stopped after an hour unused, or a build that failed (Retry). An abandoned claim goes too.
     const error = await postBuild(coder, ws.id, "start");
@@ -724,7 +750,7 @@ export async function openWorkspace(
     if (error && error.status !== 409) throw error;
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
   } else {
-    restarting = restartClaimed(deps, row);
+    restarting = restartUnderWay(deps, row, ws);
   }
 
   // Out of time in a restart: answer with what's known, and leave the rest to status reads.
@@ -745,17 +771,19 @@ export async function workspaceStatus(
   request: WorkspaceOpenRequest
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
+  const deadline = deps.budget?.deadline ?? clock(deps)() + STATUS_BUDGET_MS;
   const { repo } = await resolveRepository(db, caller, request);
   let row = await db.getWorkspaceRow(caller.userId, repo.id, coder.url);
   if (!row?.coder_workspace_id) return { status: "not_started" };
   let ws = await getWorkspace(coder, row.coder_workspace_id);
   if (!ws) return await withDeletionDate(deps, row.id, { status: "not_started" });
   row = await settleRestart(deps, row, ws);
-  let restarting = restartClaimed(deps, row);
-  if (restarting && isStopped(ws)) {
-    // workspace-open stopped the workspace to restart it and answered before the stop finished.
-    // Nothing else would start it, so this is the one build a status read posts.
-    ({ ws, restarting } = await finishRestart(deps, row, ws));
+  let restarting = restartUnderWay(deps, row, ws);
+  if (row.restart_token && isStopped(ws)) {
+    // workspace-open stopped the workspace to restart it and answered before the stop finished, or
+    // the call that held the claim is gone. Nothing else would start it, so this is the one build a
+    // status read posts. A stale claim on a workspace that isn't stopped is left to the next open.
+    ({ ws, restarting } = await finishRestart(deps, row, ws, deadline));
   }
   return await withDeletionDate(deps, row.id, await describeWorkspace(coder, ws, restarting));
 }
