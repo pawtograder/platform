@@ -19,6 +19,7 @@ for installs that WANT drains to stop and wait at the database.
       "storage"   (list .Values.storage "storage")
       "imgproxy"  (list .Values.imgproxy "imgproxy")
       "supavisor" (list .Values.supavisor "supavisor")
+      "handoutSyncWorker" (list .Values.handoutSyncWorker "handout-sync-worker")
 }}
 {{- range $name, $pair := $components }}
 {{- $comp := index $pair 0 }}

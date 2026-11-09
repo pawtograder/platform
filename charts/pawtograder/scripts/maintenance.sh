@@ -85,8 +85,13 @@ INSTANCE_LABEL="app.kubernetes.io/instance=${RELEASE}"
 
 # Writer Deployments fenced (scaled to 0) in one step (channels web-*/functions-*
 # are discovered at runtime). `functions` is included here so it is captured,
-# scaled, gated, and restored uniformly with the rest.
-STABLE_WRITERS=(functions web rest auth storage realtime)
+# scaled, gated, and restored uniformly with the rest. `handout-sync-worker`
+# writes through PostgREST and pushes to GitHub; it is absent (and so skipped)
+# unless handoutSyncWorker.enabled. On SIGTERM it waits at most
+# handoutSyncWorker.shutdownGraceSeconds (240) for in-flight syncs, then aborts
+# them (they redeliver and converge), so it terminates well inside
+# DRAIN_TIMEOUT_SECONDS.
+STABLE_WRITERS=(functions web rest auth storage realtime handout-sync-worker)
 
 # Write-capable CronJobs to suspend for the window (component suffixes).
 SUSPEND_CRONJOBS=(audit-partitions backup-restore-drill backup-pitr-drill backup-verify walg-retention)

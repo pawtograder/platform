@@ -386,6 +386,28 @@ migrations:
 supavisor:
   enabled: false
 
+# ----- Handout sync worker (docs/handout-sync-git-worker.md) -----------------
+# OFF until WP5 merges handout-sync-worker/main.ts: release-images.yml does not
+# build the image before then, so enabling this would ImagePullBackOff and fail
+# the deploy's --wait. Turned on for build-plan step S1. The tag follows
+# edgeFunctions.image.tag, which deploy-staging pins per build.
+handoutSyncWorker:
+  enabled: false
+  replicas: 2
+  # Staging keeps the GitHub App and Sentry DSN in their own Secrets (see
+  # edgeFunctions.envFromSecrets above), not in pawtograder-edge-functions.
+  secretSources:
+    github: pawtograder-github-app
+    sentry: pawtograder-sentry
+  networkPolicy:
+    enabled: true
+    # PLACEHOLDERS: Talos' default pod and service subnets. Confirm the
+    # cluster's real ranges before enabling (decision D2 in
+    # docs/handout-sync-git-build-plan.md); if this cluster's Cilium permits
+    # namespace-scoped toFQDNs policies, set cilium.enabled instead and these
+    # stop mattering.
+    clusterCIDRs: ["10.244.0.0/16", "10.96.0.0/12"]
+
 # ----- Shared in-cluster Redis (same instance previews use) -----------------
 # Staging deliberately uses `shared`, NOT the chart's `internal` Redis: staging
 # and PR previews share one cluster-wide Redis so Bottleneck rate-limiter state

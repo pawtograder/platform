@@ -1837,6 +1837,182 @@ edgeFunctions:
   affinity: {}
 
 # -----------------------------------------------------------------------------
+# Handout sync worker (docs/handout-sync-git-worker.md). A long-running
+# `deno run` process with git, NOT an edge function: it reads the pgmq queue
+# `handout_sync` and runs processEnvelope() from github-async-worker, with the
+# handout content moved by git on local disk instead of through a 256 MiB
+# isolate. Which queue sync messages land in is a database setting
+# (public.system_settings `handout_sync_engine`, spec §10), not a chart value,
+# so enabling this Deployment changes nothing until that setting says "git" or
+# turns on shadow mode.
+#
+# Off by default. Its image runs supabase/functions/handout-sync-worker/main.ts,
+# which does not exist until WP5 of docs/handout-sync-git-build-plan.md; the
+# image build is skipped until then.
+#
+# Enabling this requires the image tag to EXIST in the registry. The image
+# build is not a prerequisite of deploy-staging or publish-chart in
+# release-images.yml (so a flaky fetch there cannot block unrelated deploys),
+# which means a deploy can reference a tag that was never pushed. The visible
+# failure is an ImagePullBackOff on this Deployment alone; check the
+# build-handout-sync-worker job for that commit.
+# -----------------------------------------------------------------------------
+handoutSyncWorker:
+  enabled: false
+  # Spec §3.1: 2 replicas x 2 jobs per pod. Production runs 0 until the Phase 2
+  # cutover (S4 in the build plan); the Deployment still renders, so flipping the
+  # count is the only change on the day. maintenance.active renders 0 like every
+  # other writer, and scripts/maintenance.sh scales it in `down`.
+  replicas: 2
+  image:
+    repository: ghcr.io/pawtograder/handout-sync-worker
+    # Empty = edgeFunctions.image.tag, then chart appVersion. The worker imports
+    # processEnvelope() and _shared/ from the same commit as the edge functions,
+    # and both call the same RPCs, so the two images must come from one build.
+    # Set this only to roll the worker on its own.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Jobs in flight per pod (HANDOUT_SYNC_CONCURRENCY). The REST footprint of a
+  # git sync is 3-5 calls; the rest is disk and network I/O in git children, so
+  # memory scales with this through pack windows (64m each, spec §3.1), not heap.
+  concurrency: 2
+  # pgmq visibility timeout for a claimed message, extended by a heartbeat
+  # (pgmq set_vt) while the job runs. A pod that dies mid-job stops
+  # heartbeating, so its messages are visible again within this many seconds
+  # rather than after the edge worker's 480s. heartbeatSeconds must leave room
+  # for at least one missed beat inside the timeout; the chart refuses
+  # heartbeatSeconds * 2 > visibilityTimeoutSeconds.
+  visibilityTimeoutSeconds: 120
+  heartbeatSeconds: 45
+  # Hard per-job deadline (spec §3.1). On expiry the worker aborts the job and
+  # kills its git children; the message redelivers until maxReadCount.
+  jobDeadlineSeconds: 900
+  # pgmq read_ct above which a message goes to handout_sync_dlq with its error.
+  maxReadCount: 5
+  # Repo-size ceiling in KiB (spec §8.4, decision D4: 2 GiB). Either repo over it
+  # is terminal `repo_too_large`. Must stay well under workSizeLimit, or one
+  # oversized fetch fills /work and evicts the pod with its neighbors' jobs.
+  maxRepoKib: 2097152
+  # /work: template cache plus per-job bare repos, an emptyDir on the node's
+  # disk. Exceeding sizeLimit evicts THIS pod only (its jobs redeliver after the
+  # visibility timeout). The worker evicts cached templates by LRU above
+  # workEvictPercent of this size (spec §5.1), so the gap between that and 100%
+  # is the headroom for in-flight job scratch.
+  workSizeLimit: 20Gi
+  workEvictPercent: 70
+  # /tmp is HOME for the Deno process. git children get the job directory as
+  # HOME instead (spec §8.2), so this only needs room for Deno's own scratch.
+  tmpSizeLimit: 256Mi
+  # Serves /metrics and /healthz. Not routed through Kong and not exposed by any
+  # Ingress; it is reachable only from the release's own pods and the monitoring
+  # namespace when networkPolicy.enabled.
+  metricsPort: 9464
+  # Shutdown (spec §3.1). On SIGTERM the worker stops reading, waits up to
+  # shutdownGraceSeconds (HANDOUT_SYNC_SHUTDOWN_GRACE_SECONDS) for in-flight
+  # jobs, then aborts their git children and exits. It does NOT run jobs to the
+  # 15-minute jobDeadlineSeconds: an aborted job's message becomes visible again
+  # after visibilityTimeoutSeconds and converges on the rerun, because every
+  # step is safe to repeat (spec §6.1). That keeps a rollout, a node drain and
+  # `scripts/maintenance.sh down` (DRAIN_TIMEOUT_SECONDS, 900 by default) to a
+  # few minutes instead of a quarter of an hour.
+  #
+  # terminationGracePeriodSeconds is the SIGKILL backstop above that wait: it
+  # has to cover the abort, the children's exit and the process's own cleanup.
+  # The chart refuses anything under shutdownGraceSeconds + 30.
+  shutdownGraceSeconds: 240
+  terminationGracePeriodSeconds: 300
+  # Spec §3.1: the JS heap holds metadata only. Do not set ephemeral-storage
+  # here: the chart renders the request as workSizeLimit + tmpSizeLimit (and
+  # refuses a hand-set one), so the scheduler only places the pod where that
+  # disk exists. Without it, a node short on disk hits node-pressure eviction
+  # (which takes neighbors) before this pod reaches its own sizeLimit.
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits: { cpu: "2", memory: "1Gi" }
+  # Where the worker's secret keys come from. The pod does NOT envFrom the edge
+  # functions Secret: it gets exactly the keys processEnvelope's module graph
+  # reads (see templates/handout-sync-worker.yaml for the list and where each is
+  # read). Empty = secrets.names.edgeFunctions, which is where the
+  # `github-app` ESO bundle lands; installs that keep the GitHub App in its own
+  # Secret (staging: pawtograder-github-app) name it here.
+  secretSources:
+    github: ""   # GITHUB_APP_ID, GITHUB_PRIVATE_KEY_STRING, GITHUB_APP_SLUG (optional)
+    sentry: ""   # SENTRY_DSN (optional)
+    # REDIS_URL / UPSTASH_REDIS_REST_* when redis.provider=external. With
+    # shared/internal Redis, REDIS_URL comes from pawtograder-redis, as for the
+    # edge functions.
+    redis: ""
+  # Plain env entries appended after the chart's own (same shape as
+  # edgeFunctions.extraEnv). Not a route for secrets. NODE_ENV and
+  # INJECT_DLQ_FAILURE are refused: together they make processEnvelope() fail
+  # messages on purpose.
+  extraEnv: []
+  # The worker's own NetworkPolicy (spec §8.5). Egress: DNS, Kong, Redis, and
+  # HTTPS to public addresses (GitHub), nothing else. Ingress: the metrics port
+  # from networkPolicy.monitoringNamespaceSelector when monitoring.enabled,
+  # nothing otherwise. Independent of the release-wide networkPolicy.enabled,
+  # whose same-release rule excludes this pod. Requires a CNI that enforces
+  # NetworkPolicy.
+  networkPolicy:
+    enabled: true
+    # REQUIRED for the plain NetworkPolicy (not for cilium.enabled): every in-cluster range (pod CIDR, service CIDR, and
+    # the node/LB range if in-cluster services are reachable there). Plain
+    # NetworkPolicy cannot match hostnames, so "GitHub" is expressed as "443 to
+    # anything in externalCIDRs except these". An empty list would let the 443
+    # rule reach every in-cluster HTTPS endpoint, so the chart refuses it.
+    clusterCIDRs: []
+    externalCIDRs: ["0.0.0.0/0"]
+    dns:
+      namespace: kube-system
+      podLabels: { k8s-app: kube-dns }
+    # The Redis the worker's REDIS_URL points at, for redis.provider=shared.
+    # Defaults match examples/shared-redis/. provider=internal targets this
+    # release's own Redis pod and ignores namespace/podLabels; provider=external
+    # (Upstash) is reached over 443 and needs no rule here.
+    redis:
+      namespace: pawtograder-shared-redis
+      podLabels: { app.kubernetes.io/name: pawtograder-shared-redis }
+      port: 6379
+    # Extra NetworkPolicyEgressRule entries, e.g. an in-cluster Sentry/Bugsink.
+    # Needed for ANY private address: the 443 rule always excepts RFC 1918,
+    # CGNAT, link-local and loopback ranges (not configurable), so a Sentry or
+    # Upstash endpoint on a LAN address is unreachable without a rule here.
+    extraEgress: []
+    # Replace the plain NetworkPolicy with a CiliumNetworkPolicy whose HTTPS rule
+    # is toFQDNs instead of "anything outside the cluster". The two are not
+    # rendered together: allow rules are a union, so the plain policy's wide 443
+    # rule would make the FQDN list meaningless. Decision D2 in the build plan;
+    # whether this works depends on the cluster's Cilium (DNS proxy enabled,
+    # namespace-scoped CNPs permitted).
+    cilium:
+      enabled: false
+      fqdns:
+        - github.com
+        - api.github.com
+        - codeload.github.com
+      # Hosts outside GitHub the worker must still reach over 443, such as the
+      # Sentry/Bugsink DSN host or Upstash. Without them those calls fail closed.
+      extraFQDNs: []
+      # DNS names the Cilium DNS proxy lets through. "*" resolves anything (the
+      # FQDN rule still gates connections); narrowing it also blocks data
+      # exfiltration through DNS queries, but every search-domain expansion the
+      # resolver tries must then match.
+      dnsMatchPatterns: ["*"]
+      # Extra CiliumNetworkPolicy egress rules.
+      extraEgress: []
+  # Pod placement, same semantics as the other components.
+  priorityClassName: ""
+  spreadAcrossNodes: true
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -----------------------------------------------------------------------------
 # Kong (API gateway)
 # -----------------------------------------------------------------------------
 kong:
@@ -2507,6 +2683,24 @@ monitoring:
     # Raise it only if a real stall is drifting faster than 2 msg/min; lowering it re-admits the
     # release pages. charts/pawtograder/tests/promrules-unit.sh fails if the change inverts the guard.
     queueDrainMessagesPerMinute: 2
+    # PawtograderHandoutSyncQueueAging, two tiers: oldest handout_sync message age (seconds)
+    # for the warning and the critical, and the drain floor (messages/minute) both share.
+    # Warning at 1800s: a healthy message can reach ~1800s behind deadline-length jobs, and one
+    # repo that hits its deadline on every read stays ~85 minutes before the DLQ takes it.
+    # Critical at 5400s: past what any single message can spend before the DLQ, so the worker
+    # is not progressing. Must be above the warning. The floor is half the 1 msg/min that 4
+    # slots of 4-minute jobs drain. Re-derive all three from the staging bulk release (build
+    # plan S3.2) before cutover. See the rule's comment.
+    handoutSyncOldestSeconds: 1800
+    handoutSyncOldestCriticalSeconds: 5400
+    handoutSyncDrainMessagesPerMinute: 0.5
+    # Growth in handout_sync_dlq over an hour above which PawtograderHandoutSyncDLQGrowing
+    # fires. Each message is a student repo that did not receive a handout update.
+    handoutSyncDlqGrowthPerHour: 3
+    # Fraction of handoutSyncWorker.workSizeLimit above which PawtograderHandoutSyncWorkDiskHigh
+    # fires. Must sit above handoutSyncWorker.workEvictPercent, where the worker starts
+    # evicting its template cache, or the alert fires on normal cache use.
+    handoutSyncWorkUsageRatio: 0.85
     # Growth in the Discord DLQ over an hour above which PawtograderDiscordDLQGrowing fires.
     # A rate, not a level: a poison message sits in the DLQ forever, so a level alert would fire
     # permanently and get silenced.
