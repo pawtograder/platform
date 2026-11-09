@@ -23,23 +23,23 @@ sections it implements, the gates it passed with their command output, and anyth
 
 ### Gates that apply to every WP
 
-| ID | Gate | Notes |
-|---|---|---|
-| G-check | `deno check` on every touched entrypoint | Compare against a `git archive` of `staging`. `github-async-worker` has known baseline errors ([[platform-isolated-test-stack]]), so only new errors fail the gate |
-| G-test | `npm run test:functions` plus the WP's new tests | New tests must fail on a deliberately broken implementation at least once (the supervisor checks this by mutating one line) |
-| G-lint | `npm run lint` and prettier on touched files only | Never commit drift from unrelated files ([[platform-generated-file-drift]]). Worktrees symlink `node_modules`, and the gates leave it untracked ([[platform-deno-gate-node-modules-trap]]) |
-| G-review | A reviewer agent with the diff and the spec | Every CONFIRMED finding is fixed or answered in the PR |
-| G-spec | Supervisor diff review | Every behavior in the WP's spec sections is either implemented and tested or listed as deferred |
+| ID       | Gate                                              | Notes                                                                                                                                                                                      |
+| -------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G-check  | `deno check` on every touched entrypoint          | Compare against a `git archive` of `staging`. `github-async-worker` has known baseline errors ([[platform-isolated-test-stack]]), so only new errors fail the gate                         |
+| G-test   | `npm run test:functions` plus the WP's new tests  | New tests must fail on a deliberately broken implementation at least once (the supervisor checks this by mutating one line)                                                                |
+| G-lint   | `npm run lint` and prettier on touched files only | Never commit drift from unrelated files ([[platform-generated-file-drift]]). Worktrees symlink `node_modules`, and the gates leave it untracked ([[platform-deno-gate-node-modules-trap]]) |
+| G-review | A reviewer agent with the diff and the spec       | Every CONFIRMED finding is fixed or answered in the PR                                                                                                                                     |
+| G-spec   | Supervisor diff review                            | Every behavior in the WP's spec sections is either implemented and tested or listed as deferred                                                                                            |
 
 ## Decisions
 
-| ID | Question | Spec | Decision (2026-11-01) |
-|---|---|---|---|
-| D1 | Commit date | §5.7 | The handout commit's date (deterministic) |
-| D2 | Egress: plain `NetworkPolicy` or `CiliumNetworkPolicy` with `toFQDNs` | §8.5, §11.5 | Settled in WP6 after checking the prod cluster |
-| D3 | Rollout flag | §10 | One deployment-wide switch: the `public.system_settings` row `handout_sync_engine` = `{"engine": "rest" \| "git", "shadow": bool}`. No per-class routing |
-| D4 | `HANDOUT_SYNC_MAX_REPO_KIB` default | §8.4 | 2 GiB |
-| D5 | Does the GitHub App on staging and prod have the `workflows` permission? | §8.2 | Claude checks with `GET /app` before WP3 merges. If it is missing, stop and ask |
+| ID  | Question                                                                 | Spec        | Decision (2026-11-01)                                                                                                                                    |
+| --- | ------------------------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Commit date                                                              | §5.7        | The handout commit's date (deterministic)                                                                                                                |
+| D2  | Egress: plain `NetworkPolicy` or `CiliumNetworkPolicy` with `toFQDNs`    | §8.5, §11.5 | Settled in WP6 after checking the prod cluster                                                                                                           |
+| D3  | Rollout flag                                                             | §10         | One deployment-wide switch: the `public.system_settings` row `handout_sync_engine` = `{"engine": "rest" \| "git", "shadow": bool}`. No per-class routing |
+| D4  | `HANDOUT_SYNC_MAX_REPO_KIB` default                                      | §8.4        | 2 GiB                                                                                                                                                    |
+| D5  | Does the GitHub App on staging and prod have the `workflows` permission? | §8.2        | Claude checks with `GET /app` before WP3 merges. If it is missing, stop and ask                                                                          |
 
 ## Phase 1: build
 
@@ -161,8 +161,9 @@ One migration:
   `shadow` on, it also sends a copy to `handout_sync` marked `shadow: true`. The copy carries the inputs
   the REST job will use (`from_sha`, `synced_repo_sha`) as read at enqueue time, so the shadow
   run is not racing the REST job's row updates
-- a `handout_sync_shadow_results` table (`repository_id`, `to_sha`, inputs, `predicted_tree`,
-  `predicted_commit_parent`, `unresolved`, `error`, `created_at`), service_role only
+- a `handout_sync_shadow_results` table (`msg_id` unique, `repository_id`, `to_sha`, inputs,
+  `predicted_tree`, `predicted_commit_parent`, `unresolved`, `error`, `created_at`), service_role
+  only. The unique `msg_id` makes a redelivered shadow job's insert idempotent
 - dedupe across `handout_sync` and `async_calls`
 
 Plus an audit, written into the PR, of every SQL and TypeScript producer of
