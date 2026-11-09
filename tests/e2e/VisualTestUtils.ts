@@ -9,6 +9,12 @@ type VisualScreenshotOptions = ArgosScreenshotOptions & {
    * accessible region label.
    */
   stabilizeRubric?: string | RegExp;
+  /**
+   * Scroll inner scroll containers back to the top-left before capture (default true). Pass false
+   * when the test scrolled a container on purpose, e.g. the gradebook scrolled right to show its
+   * virtualized columns.
+   */
+  resetInnerScroll?: boolean;
 };
 
 function escapeRegExp(value: string) {
@@ -376,11 +382,16 @@ async function restoreStickyPositions(page: Page) {
 }
 
 export async function visualScreenshot(page: Page, name: string, options: VisualScreenshotOptions = {}) {
-  const { stabilizeRubric, beforeScreenshot, ...argosOptions } = options;
+  const {
+    stabilizeRubric,
+    beforeScreenshot,
+    resetInnerScroll: shouldResetInnerScroll = true,
+    ...argosOptions
+  } = options;
 
   await parkPointer(page);
   await waitForVisualIdle(page);
-  await resetInnerScroll(page);
+  if (shouldResetInnerScroll) await resetInnerScroll(page);
   if (stabilizeRubric) {
     await stabilizeRubricSidebar(page, stabilizeRubric);
   }
@@ -391,7 +402,7 @@ export async function visualScreenshot(page: Page, name: string, options: Visual
       beforeScreenshot: async (api) => {
         await parkPointer(page);
         await waitForVisualIdle(page);
-        await resetInnerScroll(page);
+        if (shouldResetInnerScroll) await resetInnerScroll(page);
         if (stabilizeRubric) {
           await stabilizeRubricSidebar(page, stabilizeRubric);
         }

@@ -626,9 +626,18 @@ export default function GraderResults() {
                   }
                   return <CardBody>{content}</CardBody>;
                 };
-                const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
-                const showScore = result.max_score !== 0;
-                const isFailing = (result.max_score ?? 0) > 0 && (result.score ?? 0) < (result.max_score ?? 0);
+                // hide_score keeps a test out of the summary table; the card must not reveal it
+                // either (score, pass/fail colour, or the failing-test help button). Staff still see it.
+                const hideScore = extraData?.hide_score === "true" && !showHiddenOutput;
+                const style =
+                  hideScore || result.max_score === 0
+                    ? "info"
+                    : result.score === result.max_score
+                      ? "success"
+                      : "error";
+                const showScore = !hideScore && result.max_score !== 0;
+                const isFailing =
+                  !hideScore && (result.max_score ?? 0) > 0 && (result.score ?? 0) < (result.max_score ?? 0);
 
                 const testMatches = errorPinMatches.get(result.id) || [];
 
