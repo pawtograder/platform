@@ -93,3 +93,7 @@ coder:
         enable: true
         secretName: example-wildcard-tls
         wildcardSecretName: example-wildcard-tls
+
+coderBootstrap:
+  workspaces:
+    image: registry.example.com/pawtograder/coder-workspace:4.143.1-jdk21
