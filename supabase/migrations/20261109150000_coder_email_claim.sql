@@ -11,8 +11,13 @@
 -- with CODER_OIDC_ACCESS_TOKEN_CLAIMS and verifies that token like an ID token, which requires the
 -- OAuth client id in `aud`.
 --
--- Only tokens the OAuth server issues to a client (they carry client_id) change. Pawtograder's own
--- sessions get the event back unchanged, as before.
+-- Only tokens issued to Coder's OAuth client change. That client is the one
+-- scripts/setup-sso-clients.sh registers: named "Coder", with Coder's OIDC callback
+-- (<coder url>/api/v2/users/oidc/callback) as a redirect URI. The script recognises its own Coder
+-- client the same way, and tests/e2e/sso/register-oauth-clients.ts registers the same name and URI.
+-- GoTrue's client id is auth.oauth_clients.id, and redirect_uris is comma-separated
+-- (internal/models/oauth_client.go). Pawtograder's own sessions (no client_id) and every other
+-- client's tokens, such as Forgejo's, get the event back unchanged.
 CREATE OR REPLACE FUNCTION public.custom_access_token_hook(event jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -24,6 +29,19 @@ DECLARE
   aud jsonb;
 BEGIN
   IF coalesce(claims->>'client_id', '') = '' THEN
+    RETURN event;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM auth.oauth_clients c
+    WHERE c.id::text = claims->>'client_id'
+      AND c.deleted_at IS NULL
+      AND c.client_name = 'Coder'
+      AND EXISTS (
+        SELECT 1 FROM unnest(string_to_array(c.redirect_uris, ',')) AS r(uri)
+        WHERE r.uri LIKE '%/api/v2/users/oidc/callback'
+      )
+  ) THEN
     RETURN event;
   END IF;
   aud := CASE jsonb_typeof(claims->'aud')
