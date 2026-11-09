@@ -77,6 +77,9 @@ export async function findStudentRepository(
   repository: string,
   scope: Sentry.Scope
 ): Promise<RepositoryRow | null> {
+  if (provider === "forgejo") {
+    return await findForgejoStudentRepository(adminSupabase, repository, scope);
+  }
   const { data: studentRepo, error: studentRepoError } = await adminSupabase
     .from("repositories")
     .select("*")
@@ -91,6 +94,48 @@ export async function findStudentRepository(
     throw studentRepoError;
   }
   return studentRepo;
+}
+
+/** `value` as an ILIKE pattern that matches only itself (ignoring case): `\`, `%` and `_` escaped. */
+export function ilikeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
+/**
+ * Forgejo owner and repository names are case-insensitive, and a push carries the name's current
+ * casing, so the stored `owner/name` is matched ignoring case. Repository names can contain `_`,
+ * hence the escaping. (They can't contain `*`, which PostgREST would read as `%`.) A name that
+ * matches more than one Forgejo row is refused rather than guessed.
+ */
+async function findForgejoStudentRepository(
+  adminSupabase: SupabaseClient<Database>,
+  repository: string,
+  scope: Sentry.Scope
+): Promise<RepositoryRow | null> {
+  const { data: studentRepos, error: studentRepoError } = await adminSupabase
+    .from("repositories")
+    .select("*")
+    .eq("git_provider", "forgejo")
+    .ilike("repository", ilikeLiteral(repository))
+    .limit(2);
+  if (studentRepoError) {
+    console.error(studentRepoError);
+    scope.setTag("error_source", "student_repo_lookup_failed");
+    scope.setTag("error_context", "Error getting student repo");
+    Sentry.captureException(studentRepoError, scope);
+    throw studentRepoError;
+  }
+  if (studentRepos.length > 1) {
+    const message = `${repository} matches more than one Forgejo repository ignoring case (ids ${studentRepos
+      .map((r) => r.id)
+      .join(", ")}); recording nothing`;
+    console.error(message);
+    scope.setTag("error_source", "ambiguous_student_repo");
+    scope.setTag("error_context", "Repository name matches more than one Forgejo repository");
+    Sentry.captureException(new Error(message), scope);
+    return null;
+  }
+  return studentRepos[0] ?? null;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   acceptStudentRepoPush,
   findStudentRepository,
   fromGitHubPush,
+  ilikeLiteral,
   isDefaultBranchPush,
   recordCommitCheckRun,
   type GitHubPushPayload,
@@ -157,6 +158,31 @@ Deno.test("findStudentRepository only matches a repository on the given provider
 
   const forgejoOnly = fakeSupabase({ repositories: [repositoryRow({ id: 2, git_provider: "forgejo" })] });
   assertEquals(await findStudentRepository(forgejoOnly.client, "github", name, new Sentry.Scope()), null);
+});
+
+Deno.test("findStudentRepository ignores case for Forgejo only", async () => {
+  const both = fakeSupabase(tables());
+  assertEquals((await findStudentRepository(both.client, "forgejo", "CS101/HW1-Alex", new Sentry.Scope()))?.id, 2);
+  // GitHub's lookup is unchanged: an exact, case-sensitive `eq`.
+  assertEquals(await findStudentRepository(both.client, "github", "CS101/HW1-Alex", new Sentry.Scope()), null);
+  assertEquals(
+    both.queries.map((q) => q.filters),
+    [
+      [
+        ["git_provider", "forgejo"],
+        ["repository", { ilike: "CS101/HW1-Alex" }]
+      ],
+      [
+        ["git_provider", "github"],
+        ["repository", "CS101/HW1-Alex"]
+      ]
+    ]
+  );
+});
+
+Deno.test("ilikeLiteral escapes the ILIKE wildcards and the escape character", () => {
+  assertEquals(ilikeLiteral("cs101/hw1-alex"), "cs101/hw1-alex");
+  assertEquals(ilikeLiteral("cs_101/100%\\done"), "cs\\_101/100\\%\\\\done");
 });
 
 Deno.test("acceptStudentRepoPush ignores an assignment on the other provider", async () => {

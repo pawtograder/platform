@@ -271,7 +271,7 @@ Deno.test("handleForgejoPush records each pushed commit, oldest first, in the co
   await handleForgejoPush(client, fromForgejoPush(forgejoPayload()), new Sentry.Scope());
   assertEquals(queries[0].filters, [
     ["git_provider", "forgejo"],
-    ["repository", "cs101/hw1-alex"]
+    ["repository", { ilike: "cs101/hw1-alex" }]
   ]);
   assertEquals(
     inserts.map(({ table, row }) => [
@@ -355,4 +355,47 @@ Deno.test("handleForgejoPush records a truncated payload's commits and warns wit
     handleForgejoPush(complete.client, fromForgejoPush(forgejoPayload()), new Sentry.Scope())
   );
   assertEquals(none, []);
+});
+
+/** A push to `fullName`, which Forgejo reports with the repository's current casing. */
+function pushTo(fullName: string): RepoPush {
+  const payload = forgejoPayload();
+  payload.repository.full_name = fullName;
+  return fromForgejoPush(payload);
+}
+
+Deno.test("handleForgejoPush matches the owner and repository name ignoring case", async () => {
+  const { client, inserts } = fakeSupabase(tables());
+  await handleForgejoPush(client, pushTo("CS101/HW1-Alex"), new Sentry.Scope());
+  assertEquals(
+    inserts.map(({ row }) => row.repository_id),
+    [7, 7]
+  );
+});
+
+Deno.test("handleForgejoPush treats _ in a name literally, not as a wildcard", async () => {
+  // Unescaped, `hw1_alex` would match the stored `hw1-alex`.
+  const dash = fakeSupabase(tables());
+  await handleForgejoPush(dash.client, pushTo("cs101/hw1_alex"), new Sentry.Scope());
+  assertEquals(dash.inserts, []);
+
+  const t = tables();
+  t.repositories[0] = repositoryRow({ id: 7, repository: "cs101/hw1_alex", git_provider: "forgejo" });
+  const underscore = fakeSupabase(t);
+  await handleForgejoPush(underscore.client, pushTo("CS101/HW1_Alex"), new Sentry.Scope());
+  assertEquals(underscore.inserts.length, 2);
+});
+
+Deno.test("handleForgejoPush refuses a name that matches more than one Forgejo row ignoring case", async () => {
+  const t = tables();
+  t.repositories.push(repositoryRow({ id: 8, repository: "cs101/HW1-alex", git_provider: "forgejo" }));
+  const { client, inserts } = fakeSupabase(t);
+  const errors = await captureConsole("error", () =>
+    handleForgejoPush(client, fromForgejoPush(forgejoPayload()), new Sentry.Scope())
+  );
+  assertEquals(inserts, []);
+  assert(
+    errors.some((line) => line.includes("cs101/hw1-alex matches more than one Forgejo repository")),
+    errors.join("\n")
+  );
 });
