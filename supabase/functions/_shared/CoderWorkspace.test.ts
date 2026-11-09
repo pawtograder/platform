@@ -72,6 +72,11 @@ class FakeCoder {
   logs: { id: number; output: string; source_id: string; level: string }[] = [];
   calls: Call[] = [];
   conflicts = 0;
+  /**
+   * How a create for a taken name fails: 409 from Coder's name check, or the 500 its unique index
+   * gives when two creates both passed that check (seen live, see evidence/cw17c.md).
+   */
+  conflictAs: 409 | 500 = 409;
   private seq = 0;
 
   newId(prefix: string) {
@@ -183,6 +188,13 @@ class FakeCoder {
       }
       if (this.workspaces.some((w) => w.owner_id === owner.id && w.name === body.name)) {
         this.conflicts++;
+        if (this.conflictAs === 500) {
+          return json(500, {
+            message: "Internal server error",
+            detail:
+              'execute transaction: insert workspace: pq: duplicate key value violates unique constraint "workspaces_owner_id_lower_idx"'
+          });
+        }
         return json(409, { message: `Workspace "${body.name}" already exists.` });
       }
       const ws = this.build(owner, body.name, body.rich_parameter_values[0].value);
@@ -444,30 +456,37 @@ Deno.test("a stopped workspace is started", async () => {
   assertEquals(res.step, "build");
 });
 
-Deno.test("two concurrent first calls make one user and one workspace; the loser takes Coder's 409", async () => {
-  const { coder, db, deps } = setup();
-  await openWorkspace(deps, ALEX, { assignment_id: 41 });
-  signInAndLink(coder, ALEX);
-  const [a, b] = await Promise.all([
-    openWorkspace(deps, ALEX, { assignment_id: 41 }),
-    openWorkspace(deps, ALEX, { assignment_id: 41 })
-  ]);
-  assertEquals(coder.workspaces.length, 1);
-  assertEquals(coder.conflicts, 1);
-  assertEquals(a.workspace_id, b.workspace_id);
-  assertEquals(db.rows.length, 1);
-  assertEquals(db.rows[0].coder_workspace_id, a.workspace_id);
+Deno.test(
+  "two concurrent first calls make one user and one workspace; the loser takes Coder's 409 or 500",
+  async () => {
+    for (const conflictAs of [409, 500] as const) {
+      const { coder, db, deps } = setup();
+      coder.conflictAs = conflictAs;
+      await openWorkspace(deps, ALEX, { assignment_id: 41 });
+      signInAndLink(coder, ALEX);
+      const [a, b] = await Promise.all([
+        openWorkspace(deps, ALEX, { assignment_id: 41 }),
+        openWorkspace(deps, ALEX, { assignment_id: 41 })
+      ]);
+      assertEquals(coder.workspaces.length, 1);
+      assertEquals(coder.conflicts, 1);
+      assertEquals(a.workspace_id, b.workspace_id);
+      assertEquals(b.status, "starting");
+      assertEquals(db.rows.length, 1);
+      assertEquals(db.rows[0].coder_workspace_id, a.workspace_id);
+    }
 
-  // And for the user: two first calls by a new student.
-  const fresh = setup();
-  const [c, d] = await Promise.all([
-    openWorkspace(fresh.deps, JORDAN, { assignment_id: 41 }),
-    openWorkspace(fresh.deps, JORDAN, { assignment_id: 41 })
-  ]);
-  assertEquals(c.coder_user_id, d.coder_user_id);
-  assertEquals(fresh.coder.users.length, 2);
-  assertEquals(fresh.db.accounts.length, 1);
-});
+    // And for the user: two first calls by a new student.
+    const fresh = setup();
+    const [c, d] = await Promise.all([
+      openWorkspace(fresh.deps, JORDAN, { assignment_id: 41 }),
+      openWorkspace(fresh.deps, JORDAN, { assignment_id: 41 })
+    ]);
+    assertEquals(c.coder_user_id, d.coder_user_id);
+    assertEquals(fresh.coder.users.length, 2);
+    assertEquals(fresh.db.accounts.length, 1);
+  }
+);
 
 Deno.test("a failed clone returns the failing step, its exit code and its last log lines", async () => {
   const { coder, deps } = setup();
