@@ -27,6 +27,17 @@ data:
   CODER_OIDC_SCOPES: "openid,profile,email"
   CODER_OIDC_ALLOW_SIGNUPS: {{ .Values.coder.oidc.allowSignups | quote }}
   CODER_OIDC_SIGN_IN_TEXT: {{ .Values.coder.oidc.signInText | quote }}
+  # Coder finds a first sign-in's user by email. Pawtograder creates each Coder user with
+  # <auth user id>@coder.pawtograder.invalid, and GoTrue's access token hook puts the same address
+  # in coder_email, so a real email that moved to another account can't pick the user (#1222).
+  # Coder reads that claim only from the access token, and only with userinfo off.
+  CODER_OIDC_EMAIL_FIELD: "coder_email"
+  CODER_OIDC_EMAIL_DOMAIN: "coder.pawtograder.invalid"
+  CODER_OIDC_IGNORE_USERINFO: "true"
+  CODER_OIDC_ACCESS_TOKEN_CLAIMS: "true"
+  # With the email claim missing, Coder would take the username claim as the email if it parses as
+  # one, and preferred_username is user metadata the user can set. `sub` never parses.
+  CODER_OIDC_USERNAME_FIELD: "sub"
   {{- end }}
 ---
 {{- end }}
