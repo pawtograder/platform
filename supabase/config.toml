@@ -845,3 +845,16 @@ entrypoint = "./functions/bug-report-retention-purge/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/index-submission/index.ts"
+
+# The functions check the caller's JWT themselves, like the other user-facing functions.
+[functions.workspace-open]
+enabled = true
+verify_jwt = false
+import_map = "./functions/workspace-open/deno.json"
+entrypoint = "./functions/workspace-open/index.ts"
+
+[functions.workspace-status]
+enabled = true
+verify_jwt = false
+import_map = "./functions/workspace-status/deno.json"
+entrypoint = "./functions/workspace-status/index.ts"

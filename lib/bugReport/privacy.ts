@@ -3108,5 +3108,22 @@ export const EDGE_FUNCTIONS: Readonly<Record<string, JsonPathMap>> = {
   },
   // calls RPCs only (attach_no_repo_submission_files, create_no_repo_submission, create_submission_for_student); RPCS classifies the results
   uploadNoRepoSubmission: { $: "none" },
-  userFetchAzureProfile: { $: "none", "$.message": "free_text", "$.sis_user_id": "handle", "$.error": "free_text" }
+  userFetchAzureProfile: { $: "none", "$.message": "free_text", "$.sis_user_id": "handle", "$.error": "free_text" },
+  // Coder URLs carry the student's Coder username; log lines are git and startup-script output
+  workspaceOpen: {
+    $: "none",
+    "$.message": "free_text",
+    "$.redirect_url": "handle",
+    "$.authenticate_url": "handle",
+    "$.failure.log_lines[*]": "free_text",
+    "$.error": "free_text"
+  },
+  workspaceStatus: {
+    $: "none",
+    "$.message": "free_text",
+    "$.redirect_url": "handle",
+    "$.authenticate_url": "handle",
+    "$.failure.log_lines[*]": "free_text",
+    "$.error": "free_text"
+  }
 };

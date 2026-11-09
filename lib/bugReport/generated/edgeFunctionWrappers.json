@@ -46,5 +46,7 @@
   "repository-list-commits": ["repositoryListCommits"],
   "repository-list-files": ["repositoryListFiles"],
   "repository-write-file": ["repositoryWriteFile"],
-  "user-fetch-azure-profile": ["userFetchAzureProfile"]
+  "user-fetch-azure-profile": ["userFetchAzureProfile"],
+  "workspace-open": ["workspaceOpen"],
+  "workspace-status": ["workspaceStatus"]
 }
