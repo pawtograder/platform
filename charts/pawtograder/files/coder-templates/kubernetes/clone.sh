@@ -5,8 +5,6 @@ URL='${url}'
 DIR='${dir}'
 LIMIT=${limit}
 AUTH='${auth}'
-# The clone lands here and is renamed into place, so DIR never holds a partial clone.
-TMP="$(dirname "$DIR")/.$(basename "$DIR").cloning"
 
 fail() {
   echo "Git Clone failed: $*" >&2
@@ -37,16 +35,18 @@ if ! out="$(timeout 60 coder external-auth access-token "$AUTH" 2>&1)"; then
 fi
 unset out
 
-rm -rf "$TMP"
+# The clone lands in a new directory beside DIR, on the same filesystem, and is renamed into place, so DIR never holds
+# a partial clone. Only that directory is ever removed; one a killed run left behind is left alone.
+TMP="$(mktemp -d "$(dirname "$DIR")/.$(basename "$DIR").cloning.XXXXXX")" || fail "couldn't create a staging directory beside $DIR"
+trap 'rm -rf "$TMP"' EXIT
+trap 'exit 1' HUP INT TERM
 echo "Cloning $URL into $DIR..."
-timeout -k 10 "$LIMIT" git clone -- "$URL" "$TMP"
+timeout -k 10 "$LIMIT" git clone -- "$URL" "$TMP/clone"
 code=$?
-if [ "$code" -ne 0 ]; then
-  rm -rf "$TMP"
-  case "$code" in
-    124 | 137) fail "git clone didn't finish within $LIMIT seconds (is the server reachable, and the $AUTH account still linked?)" ;;
-    *) fail "git clone exited with $code" ;;
-  esac
-fi
-mv "$TMP" "$DIR" || fail "couldn't move the clone into $DIR"
+case "$code" in
+  0) ;;
+  124 | 137) fail "git clone didn't finish within $LIMIT seconds (is the server reachable, and the $AUTH account still linked?)" ;;
+  *) fail "git clone exited with $code" ;;
+esac
+mv "$TMP/clone" "$DIR" || fail "couldn't move the clone into $DIR"
 echo "Cloned $URL into $DIR."
