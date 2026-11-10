@@ -104,7 +104,7 @@ export async function ensureAccountForUser(
     if (res.status === 422 && /user already exists|name is reserved/i.test(message)) continue;
     throw new Error(`Forgejo user create failed: ${res.status} ${reason(message)}`);
   }
-  throw new Error(`No free Forgejo username for ${base}`);
+  throw new Error("No free Forgejo username after 20 attempts");
 }
 
 /**
@@ -122,6 +122,6 @@ export async function downloadArchive(
     headers: { Authorization: config.authorization },
     signal: AbortSignal.timeout(timeoutMs)
   });
-  if (!res.ok) throw await failure(res, `archive of ${repository}@${sha}`);
+  if (!res.ok) throw await failure(res, "archive download");
   return new Uint8Array(await res.arrayBuffer());
 }
