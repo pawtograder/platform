@@ -281,9 +281,13 @@ export function RepositoryCommitHistoryDialog({
                   {entries.map((entry) => (
                     <Table.Row key={entry.sha}>
                       <Table.Cell>
-                        <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                        {entry.htmlUrl || gitProvider !== "forgejo" ? (
+                          <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                            <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
+                          </Link>
+                        ) : (
                           <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
-                        </Link>
+                        )}
                       </Table.Cell>
                       <Table.Cell>
                         {entry.commitDate ? (
