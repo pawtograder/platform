@@ -1,4 +1,4 @@
-// Forgejo admin API calls for the accounts Pawtograder creates (#1092).
+// Forgejo admin API calls for the accounts (#1092) and repos (#1093) Pawtograder creates.
 //
 // Admin Basic auth, not an admin token: a token can't act on other users' behalf (Forgejo answers
 // 401 "auth method not allowed"), which repo provisioning (#1093) needs.
@@ -88,4 +88,48 @@ export async function ensureAccountForUser(
     throw new Error(`Forgejo user create failed: ${res.status} ${message.slice(0, 300)}`);
   }
   throw new Error(`No free Forgejo username for ${base}`);
+}
+
+/** Creates the private org if it doesn't exist. Repo creation (#1093) owns these orgs. */
+export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
+  const found = await forgejo(config, "GET", `/orgs/${encodeURIComponent(org)}`);
+  if (found.ok) return;
+  if (found.status !== 404) throw await failure(found, "org lookup");
+  const res = await forgejo(config, "POST", "/orgs", { username: org, visibility: "private" });
+  if (res.ok) return;
+  const message = await res.text();
+  // Another pass created it between the lookup and the create.
+  if (res.status === 422 && /user already exists/i.test(message)) return;
+  throw new Error(`Forgejo org create failed: ${res.status} ${message.slice(0, 300)}`);
+}
+
+/**
+ * Generates owner/name from the template, or adopts the repo if it already exists: a pass that died
+ * after creating it, or one running at the same time. The template must be marked as a template.
+ */
+export async function ensureRepoFromTemplate(
+  config: ForgejoConfig,
+  template: string,
+  owner: string,
+  name: string
+): Promise<void> {
+  const res = await forgejo(config, "POST", `/repos/${template}/generate`, {
+    owner,
+    name,
+    private: true,
+    git_content: true
+  });
+  if (res.ok || res.status === 409) return;
+  throw await failure(res, `generate ${owner}/${name} from ${template}`);
+}
+
+/** Gives login write access, then reports whether Forgejo says they have it. */
+export async function grantWrite(config: ForgejoConfig, repository: string, login: string): Promise<boolean> {
+  const user = encodeURIComponent(login);
+  const put = await forgejo(config, "PUT", `/repos/${repository}/collaborators/${user}`, { permission: "write" });
+  if (!put.ok) throw await failure(put, `add ${login} to ${repository}`);
+  const res = await forgejo(config, "GET", `/repos/${repository}/collaborators/${user}/permission`);
+  if (!res.ok) throw await failure(res, `permission read for ${login} on ${repository}`);
+  const { permission } = (await res.json()) as { permission: string };
+  return permission === "write" || permission === "admin";
 }

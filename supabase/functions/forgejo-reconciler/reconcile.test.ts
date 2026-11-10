@@ -1,11 +1,19 @@
 /**
- * The reconcile pass for #1092, against a fake Supabase client and a stubbed account step.
+ * The reconcile passes for accounts (#1092) and repos (#1093), against a fake Supabase client and
+ * stubbed Forgejo steps.
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net forgejo-reconciler/
  */
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";
-import { MAX_ACCOUNTS_PER_PASS, reconcileForgejoAccounts, STALE_CLAIM_MINUTES } from "./reconcile.ts";
+import {
+  MAX_ACCOUNTS_PER_PASS,
+  MAX_REPOS_PER_PASS,
+  reconcileForgejoAccounts,
+  reconcileForgejoRepos,
+  type RepoOps,
+  STALE_CLAIM_MINUTES
+} from "./reconcile.ts";
 
 const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "Basic eA==", authSourceId: 3 };
 
@@ -114,4 +122,121 @@ Deno.test("reconcile: one user's failure is recorded and the pass carries on", a
 Deno.test("reconcile: a failed backlog query fails the pass", async () => {
   const { client } = fakeSupabase([], { neededError: new Error("PostgREST 502") });
   await assertRejects(() => reconcileForgejoAccounts(client, config), Error, "PostgREST 502");
+});
+
+type NeededRepo = {
+  assignment_id: number;
+  class_id: number;
+  profile_id: string;
+  login: string;
+  owner: string;
+  name: string;
+  template_repo: string;
+};
+
+const neededRepo = (login: string, owner = "cs4535"): NeededRepo => ({
+  assignment_id: 9,
+  class_id: 3,
+  profile_id: `profile-${login}`,
+  login,
+  owner,
+  name: `hw1-${login}`,
+  template_repo: "cs4535/hw1-handout"
+});
+
+function fakeRepoSupabase(needed: NeededRepo[]) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const upserts: { row: Record<string, unknown>; options: unknown }[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      return Promise.resolve({ data: needed, error: null });
+    },
+    from(table: string) {
+      assertEquals(table, "repositories");
+      return {
+        upsert(row: Record<string, unknown>, options: unknown) {
+          upserts.push({ row, options });
+          return Promise.resolve({ error: null });
+        }
+      };
+    }
+  };
+  return { client: client as unknown as Parameters<typeof reconcileForgejoRepos>[0], rpcCalls, upserts };
+}
+
+function stubOps(overrides: Partial<RepoOps> = {}) {
+  const calls: string[] = [];
+  const ops: RepoOps = {
+    ensureOrg: (_cfg, org) => {
+      calls.push(`org ${org}`);
+      return Promise.resolve();
+    },
+    ensureRepoFromTemplate: (_cfg, template, owner, name) => {
+      calls.push(`repo ${owner}/${name} from ${template}`);
+      return Promise.resolve();
+    },
+    grantWrite: (_cfg, repository, login) => {
+      calls.push(`write ${login} on ${repository}`);
+      return Promise.resolve(true);
+    },
+    ...overrides
+  };
+  return { ops, calls };
+}
+
+Deno.test("repos: asks for this instance's backlog with the pass size", async () => {
+  const { client, rpcCalls } = fakeRepoSupabase([]);
+  await reconcileForgejoRepos(client, config, stubOps().ops);
+  assertEquals(rpcCalls, [
+    { name: "forgejo_repos_needed", args: { p_instance_url: config.url, p_limit: MAX_REPOS_PER_PASS } }
+  ]);
+});
+
+Deno.test("repos: creates each repo, grants write, then records it as a ready Forgejo repo", async () => {
+  const { client, upserts } = fakeRepoSupabase([neededRepo("a"), neededRepo("b")]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(result, { created: 2, failures: [] });
+  // The org is checked once per pass, not once per repo.
+  assertEquals(calls, [
+    "org cs4535",
+    "repo cs4535/hw1-a from cs4535/hw1-handout",
+    "write a on cs4535/hw1-a",
+    "repo cs4535/hw1-b from cs4535/hw1-handout",
+    "write b on cs4535/hw1-b"
+  ]);
+  assertEquals(upserts[0], {
+    row: {
+      assignment_id: 9,
+      class_id: 3,
+      profile_id: "profile-a",
+      repository: "cs4535/hw1-a",
+      git_provider: "forgejo",
+      is_github_ready: true
+    },
+    options: { onConflict: "repository" }
+  });
+});
+
+Deno.test("repos: a repo the student can't write to is not recorded, and the pass carries on", async () => {
+  const { client, upserts } = fakeRepoSupabase([neededRepo("a"), neededRepo("b"), neededRepo("c", "other")]);
+  const { ops } = stubOps({
+    grantWrite: (_cfg, _repository, login) => Promise.resolve(login !== "a"),
+    ensureOrg: (_cfg, org) =>
+      org === "other" ? Promise.reject(new Error("Forgejo org create failed: 403")) : Promise.resolve()
+  });
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(result.created, 1);
+  assertEquals(
+    result.failures.map((f) => [f.repository, (f.error as Error).message]),
+    [
+      ["cs4535/hw1-a", "Forgejo doesn't report write access for a"],
+      ["other/hw1-c", "Forgejo org create failed: 403"]
+    ]
+  );
+  assertEquals(
+    upserts.map((u) => u.row.repository),
+    ["cs4535/hw1-b"]
+  );
 });

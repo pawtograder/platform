@@ -8,14 +8,16 @@ import { sentryIdentity } from "../_shared/SentryContext.ts";
 import "../_shared/SentryScrub.ts";
 import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
-import { reconcileForgejoAccounts } from "./reconcile.ts";
+import { reconcileForgejo } from "./reconcile.ts";
 
 /**
- * Forgejo Account Reconciler (#1092)
+ * Forgejo Reconciler
  *
- * Creates a Forgejo account for everyone enrolled in a cloud-workspaces class, so repos can be
- * created for them (#1093) before they first sign in. Invoked hourly via pg_cron, and kicked when
- * someone joins such a class or a class turns the flag on (20261109130000_forgejo_reconciler.sql).
+ * Creates a Forgejo account for everyone enrolled in a cloud-workspaces class (#1092), then a repo
+ * for each student in each released Forgejo assignment (#1093), so both exist before the student
+ * first signs in. Invoked hourly via pg_cron, and kicked when someone joins such a class, a class
+ * turns the flag on (20261109130000_forgejo_reconciler.sql) or a Forgejo assignment is released
+ * (20261110120000_forgejo_repos.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
@@ -59,19 +61,37 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { provisioned, failures } = await reconcileForgejoAccounts(supabase, config);
-    console.log(`[forgejo-reconciler] Provisioned ${provisioned}, failed ${failures.length}`);
-    if (failures.length > 0) {
-      // One event per pass, not per user: an outage or a bad credential fails everyone at once.
-      scope.setFingerprint(["forgejo-reconciler", "provision-failed"]);
-      scope.setContext("failures", {
-        count: failures.length,
-        user_ids: failures.slice(0, 20).map((f) => f.userId)
+    const { accounts, repos } = await reconcileForgejo(supabase, config);
+    console.log(
+      `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
+        `repos ${repos.created} (failed ${repos.failures.length})`
+    );
+    // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
+    if (accounts.failures.length > 0) {
+      const accountScope = scope.clone();
+      accountScope.setFingerprint(["forgejo-reconciler", "provision-failed"]);
+      accountScope.setContext("failures", {
+        count: accounts.failures.length,
+        user_ids: accounts.failures.slice(0, 20).map((f) => f.userId)
       });
-      Sentry.captureException(failures[0].error, scope);
+      Sentry.captureException(accounts.failures[0].error, accountScope);
+    }
+    if (repos.failures.length > 0) {
+      const repoScope = scope.clone();
+      repoScope.setFingerprint(["forgejo-reconciler", "repo-failed"]);
+      repoScope.setContext("failures", {
+        count: repos.failures.length,
+        repositories: repos.failures.slice(0, 20).map((f) => f.repository)
+      });
+      Sentry.captureException(repos.failures[0].error, repoScope);
     }
     await Sentry.flush(2000);
-    return json({ provisioned, failed: failures.length });
+    return json({
+      provisioned: accounts.provisioned,
+      failed: accounts.failures.length,
+      repos_created: repos.created,
+      repos_failed: repos.failures.length
+    });
   } catch (error) {
     console.error("[forgejo-reconciler] Error:", error);
     Sentry.captureException(error, scope);

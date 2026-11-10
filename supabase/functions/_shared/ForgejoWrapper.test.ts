@@ -1,11 +1,19 @@
 /**
- * Forgejo account creation for #1092. Forgejo is stubbed at fetch; the response bodies and 422
- * messages are the ones Forgejo 15.0.9 returns.
+ * Forgejo account (#1092) and repo (#1093) creation. Forgejo is stubbed at fetch; the status codes,
+ * response bodies and messages are the ones Forgejo 15.0.9 returns.
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
-import { ensureAccountForUser, forgejoConfig, type ForgejoConfig, usernameFromEmail } from "./ForgejoWrapper.ts";
+import {
+  ensureAccountForUser,
+  ensureOrg,
+  ensureRepoFromTemplate,
+  forgejoConfig,
+  type ForgejoConfig,
+  grantWrite,
+  usernameFromEmail
+} from "./ForgejoWrapper.ts";
 
 const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "Basic eA==", authSourceId: 3 };
 const user = { userId: "7d1c7c9e-0000-4000-8000-000000000001", email: "Alex.Kim@northeastern.edu", name: "Alex Kim" };
@@ -136,5 +144,70 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
   await withForgejo([new Response("bad gateway", { status: 502 })], async (calls) => {
     await assertRejects(() => ensureAccountForUser(config, user), Error, "user search failed: 502");
     assertEquals(calls.length, 1);
+  });
+});
+
+const status = (code: number, message = "") => new Response(JSON.stringify({ message }), { status: code });
+
+Deno.test("ensureOrg: leaves an existing org alone", async () => {
+  await withForgejo([ok({ username: "cs4535" })], async (calls) => {
+    await ensureOrg(config, "cs4535");
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      ["GET https://git.example.edu/api/v1/orgs/cs4535"]
+    );
+  });
+});
+
+Deno.test("ensureOrg: creates a missing org as private, and accepts losing a race to create it", async () => {
+  await withForgejo([status(404), ok({}, 201)], async (calls) => {
+    await ensureOrg(config, "cs4535");
+    assertEquals(calls[1].body, { username: "cs4535", visibility: "private" });
+  });
+  await withForgejo([status(404), unprocessable("user already exists [name: cs4535]")], async () => {
+    await ensureOrg(config, "cs4535");
+  });
+  await withForgejo([status(404), status(403, "forbidden")], async () => {
+    await assertRejects(() => ensureOrg(config, "cs4535"), Error, "403");
+  });
+});
+
+Deno.test(
+  "ensureRepoFromTemplate: generates a private repo with the template's content, adopting one that exists",
+  async () => {
+    await withForgejo([ok({}, 201)], async (calls) => {
+      await ensureRepoFromTemplate(config, "cs4535/hw1-handout", "cs4535", "hw1-alex.kim");
+      assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-handout/generate");
+      assertEquals(calls[0].body, { owner: "cs4535", name: "hw1-alex.kim", private: true, git_content: true });
+    });
+    await withForgejo([status(409, "The repository with the same name already exists.")], async () => {
+      await ensureRepoFromTemplate(config, "cs4535/hw1-handout", "cs4535", "hw1-alex.kim");
+    });
+    await withForgejo([unprocessable("this is not a template repo")], async () => {
+      await assertRejects(
+        () => ensureRepoFromTemplate(config, "cs4535/hw1-handout", "cs4535", "hw1-alex.kim"),
+        Error,
+        "not a template"
+      );
+    });
+  }
+);
+
+Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo reports back", async () => {
+  await withForgejo([new Response(null, { status: 204 }), ok({ permission: "write" })], async (calls) => {
+    assertEquals(await grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), true);
+    assertEquals(calls[0].method, "PUT");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/collaborators/alex.kim");
+    assertEquals(calls[0].body, { permission: "write" });
+    assertEquals(
+      calls[1].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/collaborators/alex.kim/permission"
+    );
+  });
+  await withForgejo([new Response(null, { status: 204 }), ok({ permission: "read" })], async () => {
+    assertEquals(await grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), false);
+  });
+  await withForgejo([status(404)], async () => {
+    await assertRejects(() => grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), Error, "404");
   });
 });
