@@ -528,9 +528,6 @@ forgejo:
       - secretName: staging-wildcard-tls
         hosts: [git.staging.pawtograder.net]
 
-# Before deploying: create the job namespace, and both token Secrets in pawtograder-staging
-# (README "Actions runner" and "Action mirrors"). The dispatcher and mirror hook fail without them,
-# and `helm upgrade --wait` fails with them.
 forgejoRunner:
   enabled: true
   # Not pawtograder-staging-workspaces: the dispatcher's Role there could mount workspace Secrets.
@@ -538,14 +535,12 @@ forgejoRunner:
   image:
     repository: ghcr.io/pawtograder/forgejo-runner
     tag: staging-latest # deploy-staging pins this to the build's tag
-  # Job pods use the chart's per-job requests (1 CPU, 2Gi) and limits (2 CPU, 4Gi).
-  # Set `quota` from pawtograder-staging-actions' ResourceQuota once it exists (README "Sizing capacity").
   capacity: 2
   dispatcher:
-    # Site admin token, scope write:admin: runs jobs from every org, since course orgs aren't fixed yet.
+    # Site admin token (write:admin): course orgs aren't fixed yet.
     tokenSecret: pawtograder-forgejo-runner-token
   actions:
-    # Scopes write:organization,write:repository; the post-upgrade hook mirrors actions/checkout and assignment-action.
+    # Scopes: write:organization,write:repository.
     tokenSecret: pawtograder-forgejo-mirror-token
 
 coder:
