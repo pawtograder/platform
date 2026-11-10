@@ -528,11 +528,17 @@ forgejo:
       - secretName: staging-wildcard-tls
         hosts: [git.staging.pawtograder.net]
 
+# Create the job namespace and both token Secrets before deploying this (README "Actions runner").
 forgejoRunner:
-  enabled: false
+  enabled: true
+  jobNamespace: pawtograder-staging-actions
+  dispatcher:
+    tokenSecret: pawtograder-forgejo-runner-token
+  actions:
+    tokenSecret: pawtograder-forgejo-mirror-token
   image:
     repository: ghcr.io/pawtograder/forgejo-runner
-    tag: staging-latest
+    tag: staging-latest # deploy-staging pins staging-<sha>
 
 coder:
   enabled: true
