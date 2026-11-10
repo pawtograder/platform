@@ -1,7 +1,7 @@
 -- CW-12 (#1092): one Forgejo account per Pawtograder user enrolled in a cloud-workspaces class.
 --
 -- Forgejo's chart leaves auto-registration off, so a student can only sign in to Forgejo once
--- Pawtograder has created their account. forgejo-account-reconciler does that: it asks
+-- Pawtograder has created their account. forgejo-reconciler does that: it asks
 -- forgejo_accounts_needed() who is missing, claims each user with claim_git_account(), creates or
 -- adopts the account through Forgejo's admin API, then fills in remote_user_id and login.
 --
@@ -25,7 +25,7 @@ CREATE TABLE public.git_accounts (
 );
 
 COMMENT ON TABLE public.git_accounts IS
-  'Accounts Pawtograder created for its users on other git hosts. Written only by forgejo-account-reconciler.';
+  'Accounts Pawtograder created for its users on other git hosts. Written only by forgejo-reconciler.';
 
 ALTER TABLE public.git_accounts ENABLE ROW LEVEL SECURITY;
 
