@@ -3016,6 +3016,10 @@ forgejoCoderSecrets:
     coderPath: ""
     forgejoOAuthPath: ""
     coderOIDCPath: ""
+    # With forgejoRunner on: the path holding dispatcher_token and mirror_token, written by
+    # scripts/setup-forgejo-runner-tokens.sh. Syncs forgejoRunner.dispatcher.tokenSecret and
+    # forgejoRunner.actions.tokenSecret (key token). Empty: create those Secrets by hand.
+    runnerPath: ""
     storeName: openbao
     storeKind: ClusterSecretStore
     refreshInterval: 1h

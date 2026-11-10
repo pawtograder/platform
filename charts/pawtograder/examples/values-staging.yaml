@@ -511,6 +511,8 @@ forgejoCoderSecrets:
     # Not Ready (PawtograderExternalSecretNotReady fires) until scripts/setup-sso-clients.sh writes them.
     forgejoOAuthPath: apps/pawtograder/forgejo-oauth-staging
     coderOIDCPath: apps/pawtograder/coder-oidc-staging
+    # dispatcher_token / mirror_token of the forgejo-actions-bot site admin; scripts/setup-forgejo-runner-tokens.sh.
+    runnerPath: apps/pawtograder/forgejo-runner-staging
 
 # Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
 networkPolicy:
@@ -532,12 +534,41 @@ forgejo:
     tls:
       - secretName: staging-wildcard-tls
         hosts: [git.staging.pawtograder.net]
+  gitea:
+    # "Sign in with Pawtograder". The init container adds or updates this source on every start, which
+    # needs pawtograder-forgejo-oauth (key, secret; synced from forgejoOAuthPath once
+    # scripts/setup-sso-clients.sh has run) and the discovery URL answering 200: Forgejo fetches it and
+    # the init container fails until it can. Adding the source this way, before Forgejo starts, is what
+    # makes the first sign-in send PKCE (README "Sign in with Pawtograder").
+    oauth:
+      - name: pawtograder
+        provider: openidConnect
+        existingSecret: pawtograder-forgejo-oauth
+        autoDiscoverUrl: https://api.staging.pawtograder.net/auth/v1/.well-known/openid-configuration
+        scopes: email profile
+    config:
+      oauth2_client:
+        # ENABLE_AUTO_REGISTRATION stays unset (off): sign-in reaches only provisioned accounts.
+        # The ID token has no preferred_username; userid names accounts after the GoTrue sub,
+        # where email would collide on the local part (alex@a.edu vs alex@b.edu).
+        USERNAME: userid
+        ACCOUNT_LINKING: disabled
 
 forgejoRunner:
-  enabled: false
+  enabled: true
+  # Not pawtograder-staging-workspaces: the dispatcher's Role there could mount workspace Secrets.
+  jobNamespace: pawtograder-staging-actions
   image:
     repository: ghcr.io/pawtograder/forgejo-runner
-    tag: staging-latest
+    tag: staging-latest # deploy-staging pins this to the build's tag
+  capacity: 2
+  dispatcher:
+    # Site admin token (write:admin): course orgs aren't fixed yet. Both token Secrets sync from
+    # forgejoCoderSecrets.externalSecret.runnerPath (scripts/setup-forgejo-runner-tokens.sh).
+    tokenSecret: pawtograder-forgejo-runner-token
+  actions:
+    # Scopes: write:organization,write:repository.
+    tokenSecret: pawtograder-forgejo-mirror-token
 
 coder:
   enabled: true

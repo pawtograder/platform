@@ -605,8 +605,8 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    # Add build-forgejo-runner (and pin forgejoRunner.image.tag) once values-staging.yaml enables the runner.
-    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup]
+    needs:
+      [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup, build-forgejo-runner]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable
@@ -693,6 +693,7 @@ jobs:
             --set edgeFunctions.image.tag="$VERSION" \
             --set migrations.image.tag="$VERSION" \
             --set backup.image.tag="$VERSION" \
+            --set forgejoRunner.image.tag="$VERSION" \
             --set maintenance.enabled=true \
             --set maintenance.image.repository=ghcr.io/pawtograder/maintenance \
             --set maintenance.image.tag="$VERSION" \

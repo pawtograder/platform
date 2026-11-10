@@ -3029,6 +3029,42 @@ else echo "ok   [$label]"; fi
 
 echo
 
+echo "== forgejo runner: token Secrets from OpenBao =="
+ES=templates/forgejo-coder-externalsecrets.yaml
+RUNNER_ES=("${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.runnerPath=apps/t/forgejo-runner)
+apps_has "runner ES: the dispatcher token Secret syncs from runnerPath" yes "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: it targets forgejoRunner.dispatcher.tokenSecret by its full name" yes "name: pawtograder-forgejo-runner-token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the mirror hook's token syncs too" yes "property: mirror_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the other Secrets keep their pawtograder-<name> names" yes "name: pawtograder-forgejo-oauth" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: without runnerPath the token Secrets stay hand-made" no "pawtograder-forgejo-runner-token" \
+  "${SSO_ES[@]}" --show-only "$ES"
+apps_has "runner ES: source=upstream syncs no mirror token" no "property: mirror_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.source=upstream --show-only "$ES"
+apps_has "runner ES: with the runner off, no token Secrets" no "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.enabled=false --show-only "$ES"
+apps_refused "runner ES: one Secret for both tokens is refused" "name the same Secret" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.tokenSecret=pawtograder-forgejo-runner-token
+for k in forgejoPath coderPath forgejoOAuthPath coderOIDCPath; do
+  p="$(printf '%s\n' "${SSO_ES[@]}" | sed -n "s|^forgejoCoderSecrets.externalSecret.$k=||p")"
+  apps_refused "runner ES: runnerPath equal to $k is refused" "the same path as $k" \
+    "${SSO_ES[@]}" --set "forgejoCoderSecrets.externalSecret.runnerPath=/$p/"
+done
+label="runner ES: staging adds the Forgejo login source and syncs both runner tokens"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  --set forgejoRunner.image.tag=staging-test >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-runner-staging" "$OUTFILE" \
+  || ! grep -qF "property: mirror_token" "$OUTFILE" \
+  || ! grep -qF -- "--name \"pawtograder\" --provider \"openidConnect\"" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a runner token ExternalSecret or the pawtograder login source"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
 echo "== Coder template variables =="
 
 # The CLI parses each --variable as CSV, so a JSON value (quotes, commas) fails
