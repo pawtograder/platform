@@ -140,6 +140,26 @@ Deno.test("ensureAccountForUser: an email already in use fails instead of trying
   );
 });
 
+Deno.test("Forgejo errors keep the status and a known reason, never the response text", async () => {
+  for (const body of [
+    JSON.stringify({ message: "e-mail already in use: Alex.Kim@northeastern.edu" }),
+    "<html>500 Internal Server Error for alex.kim@northeastern.edu</html>"
+  ]) {
+    await withForgejo([ok([]), new Response(body, { status: 500 })], async () => {
+      const err = await assertRejects(() => ensureAccountForUser(config, user));
+      assertEquals(err instanceof Error && /alex\.kim/i.test(err.message), false, String(err));
+      assertEquals(err instanceof Error && err.message.includes("500"), true, String(err));
+    });
+  }
+  await withForgejo([new Response("<html>bad gateway alex.kim</html>", { status: 502 })], async () => {
+    await assertRejects(
+      () => ensureAccountForUser(config, user),
+      Error,
+      "user search failed: 502 unrecognized response"
+    );
+  });
+});
+
 Deno.test("ensureAccountForUser: a failed search is an error, not a reason to create", async () => {
   await withForgejo([new Response("bad gateway", { status: 502 })], async (calls) => {
     await assertRejects(() => ensureAccountForUser(config, user), Error, "user search failed: 502");
