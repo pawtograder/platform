@@ -8,7 +8,7 @@
 {{- if $es.enabled }}
 {{- /* setup-sso-clients.sh's kv put replaces the whole secret, so a shared path wipes the apps' passwords. */}}
 {{- $norm := dict }}
-{{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" }}
+{{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" "runnerPath" }}
 {{- $_ := set $norm $key (trimAll "/" (toString (index $es $key | default ""))) }}
 {{- end }}
 {{- $appPaths := compact (list $norm.forgejoPath $norm.coderPath) }}
@@ -16,6 +16,14 @@
 {{- $p := index $norm $key }}
 {{- if and $p (has $p $appPaths) }}
 {{- fail (printf "forgejoCoderSecrets.externalSecret.%s is %q, which also holds an app's passwords; give the SSO client its own path" $key (index $es $key)) }}
+{{- end }}
+{{- end }}
+{{- /* setup-forgejo-runner-tokens.sh's kv put replaces its whole path too. */}}
+{{- if $norm.runnerPath }}
+{{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" }}
+{{- if eq $norm.runnerPath (index $norm $key) }}
+{{- fail (printf "forgejoCoderSecrets.externalSecret.runnerPath is %q, the same path as %s; give the runner tokens their own path" (index $es "runnerPath") $key) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if and $norm.forgejoOAuthPath (eq $norm.forgejoOAuthPath $norm.coderOIDCPath) }}
