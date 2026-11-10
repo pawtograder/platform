@@ -108,7 +108,7 @@ export const CHECK_IN_WINDOW_MINUTES = 10;
 
 /**
  * `check_in_expires_at` for a CLI close, following finish_help_request
- * (20261103130000_help_request_escalation.sql): resolving a ticket someone was
+ * (20261110130000_help_request_escalation.sql): resolving a ticket someone was
  * helping opens the student's check-in, so they can escalate if it wasn't fixed.
  * Closing (staff "End ticket"), or resolving a ticket nobody picked up, does not.
  */

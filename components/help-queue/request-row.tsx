@@ -11,6 +11,7 @@ import { sanitizeImageSrc } from "@/lib/sanitizeImageSrc";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { isEscalated } from "@/lib/helpRequestEscalation";
 import { EscalationBadge } from "./escalation-badge";
 
@@ -291,11 +292,13 @@ export function RequestRow({
               </Text>
             </HStack>
 
-            <Box truncate>
-              <Markdown components={REQUEST_COMPONENTS} remarkPlugins={REQUEST_REMARK_PLUGINS}>
-                {request.request}
-              </Markdown>
-            </Box>
+            <ReportBlock>
+              <Box truncate>
+                <Markdown components={REQUEST_COMPONENTS} remarkPlugins={REQUEST_REMARK_PLUGINS}>
+                  {request.request}
+                </Markdown>
+              </Box>
+            </ReportBlock>
             {escalationNote && isActive && (
               <Text truncate fontSize="sm" color="purple.fg">
                 Still unresolved: {escalationNote}

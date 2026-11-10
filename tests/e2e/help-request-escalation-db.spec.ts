@@ -11,7 +11,7 @@ import {
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 // Contract tests for office hours escalation
-// (supabase/migrations/20261103130000_help_request_escalation.sql). No browser: these pin the
+// (supabase/migrations/20261110130000_help_request_escalation.sql). No browser: these pin the
 // guardrails the UI relies on, because the UI only hides buttons and a student can call PostgREST
 // directly.
 //   * only the staff member currently helping can escalate, and only while in_progress;

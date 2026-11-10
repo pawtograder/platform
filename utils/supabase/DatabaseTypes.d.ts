@@ -821,6 +821,7 @@ export type YmlRubricPartType = Omit<
   | "assignment_id"
   | "is_individual_grading"
   | "is_assign_to_student"
+  | "exam_question_id"
 > & {
   criteria: YmlRubricCriteriaType[];
   id?: number;
@@ -843,6 +844,7 @@ export type YmlRubricCriteriaType = Omit<
   | "max_checks_per_submission"
   | "min_checks_per_submission"
   | "total_points"
+  | "exam_question_id"
 > & {
   checks: YmlRubricChecksType[];
   id?: number;
@@ -871,6 +873,7 @@ export type YmlRubricChecksType = Omit<
   | "data"
   | "kpi_category"
   | "references"
+  | "exam_question_id"
 > & {
   id?: number;
   description?: string;

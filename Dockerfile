@@ -72,8 +72,9 @@ ARG NEXT_PUBLIC_SUPABASE_URL=""
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=""
 ARG NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=""
 ARG NEXT_PUBLIC_PAWTOGRADER_WEB_URL=""
+ARG NEXT_PUBLIC_SENTRY_DSN=""
+# Pre-rename name of NEXT_PUBLIC_SENTRY_DSN, still honored (with a warning) for one release.
 ARG NEXT_PUBLIC_BUGSINK_DSN=""
-ARG NEXT_PUBLIC_BUGSINK_HOST=""
 ARG NEXT_PUBLIC_POSTHOG_KEY=""
 ARG NEXT_PUBLIC_POSTHOG_HOST=""
 ARG NEXT_PUBLIC_POSTHOG_UI_HOST=""
@@ -86,11 +87,13 @@ ARG NEXT_PUBLIC_GIT_COMMIT_SHA=""
 ARG NEXT_PUBLIC_PAWTOGRADER_CHANNEL=""
 ARG NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=""
 ARG SENTRY_RELEASE=""
-# Source map upload target. Set SENTRY_URL to a self-hosted Bugsink base URL to
-# upload there; leave empty to skip upload entirely. sentry.io is never a valid
-# target — a token without a URL is an error, not a silent upload to the SaaS
-# endpoint. The auth token is NOT an ARG — it arrives as a BuildKit secret below.
+# Source map upload target. Set SENTRY_URL to the self-hosted Sentry base URL to
+# upload there (and SENTRY_IS_BUGSINK=1 if that is still a Bugsink, which lacks
+# the release API); leave it empty to skip upload entirely. sentry.io is never a
+# valid target — a token without a URL is an error, not a silent upload to the
+# SaaS endpoint. The auth token is NOT an ARG — it arrives as a BuildKit secret below.
 ARG SENTRY_URL=""
+ARG SENTRY_IS_BUGSINK=""
 ARG SENTRY_ORG=""
 ARG SENTRY_PROJECT=""
 # Cache key for the build layer that performs the upload. BuildKit deliberately
@@ -107,8 +110,8 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
     NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=$NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID \
     NEXT_PUBLIC_PAWTOGRADER_WEB_URL=$NEXT_PUBLIC_PAWTOGRADER_WEB_URL \
+    NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN \
     NEXT_PUBLIC_BUGSINK_DSN=$NEXT_PUBLIC_BUGSINK_DSN \
-    NEXT_PUBLIC_BUGSINK_HOST=$NEXT_PUBLIC_BUGSINK_HOST \
     NEXT_PUBLIC_POSTHOG_KEY=$NEXT_PUBLIC_POSTHOG_KEY \
     NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST \
     NEXT_PUBLIC_POSTHOG_UI_HOST=$NEXT_PUBLIC_POSTHOG_UI_HOST \
@@ -118,6 +121,7 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_CHANNEL_HOST_SUFFIX=$NEXT_PUBLIC_CHANNEL_HOST_SUFFIX \
     SENTRY_RELEASE=$SENTRY_RELEASE \
     SENTRY_URL=$SENTRY_URL \
+    SENTRY_IS_BUGSINK=$SENTRY_IS_BUGSINK \
     SENTRY_ORG=$SENTRY_ORG \
     SENTRY_PROJECT=$SENTRY_PROJECT \
     SENTRY_UPLOAD_ID=$SENTRY_UPLOAD_ID \
@@ -143,12 +147,12 @@ RUN --mount=type=secret,id=sentry_auth_token \
       if [ -z "${SENTRY_URL:-}" ]; then \
         echo "ERROR: sentry_auth_token was supplied without SENTRY_URL. The bundler" >&2; \
         echo "       plugin treats a missing URL as sentry.io, so this would ship" >&2; \
-        echo "       private source maps to the SaaS endpoint. Pass the Bugsink base" >&2; \
+        echo "       private source maps to the SaaS endpoint. Pass the Sentry base" >&2; \
         echo "       URL as SENTRY_URL, or drop the secret to skip the upload." >&2; \
         exit 1; \
       fi; \
-      if [ -z "${NEXT_PUBLIC_BUGSINK_DSN:-}" ]; then \
-        echo "ERROR: sentry_auth_token was supplied without NEXT_PUBLIC_BUGSINK_DSN." >&2; \
+      if [ -z "${NEXT_PUBLIC_SENTRY_DSN:-}${NEXT_PUBLIC_BUGSINK_DSN:-}" ]; then \
+        echo "ERROR: sentry_auth_token was supplied without NEXT_PUBLIC_SENTRY_DSN." >&2; \
         echo "       The DSN is what enables the bundler plugin that performs the" >&2; \
         echo "       upload, so without it this build would report an upload and" >&2; \
         echo "       send nothing. It is also what makes the app report the errors" >&2; \

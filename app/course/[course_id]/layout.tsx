@@ -2,10 +2,13 @@ import { Box } from "@chakra-ui/react";
 
 import React from "react";
 
+import { BugReportIngestArm } from "@/components/bugReport/BugReportIngestArm";
 import { EscalationCheckInDialog } from "@/components/help-queue/escalation-check-in-dialog";
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { GlobalSearchProvider } from "@/components/ui/global-search";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
+import { ClassCapabilitiesProvider } from "@/hooks/useClassCapabilities";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { fetchCourseControllerData, getCourse, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
@@ -61,9 +64,15 @@ const ProtectedLayout = async ({
   // Get course information for timezone
   const course = await getCourse(Number.parseInt(course_id));
   const courseTimeZone = course?.time_zone || "America/New_York";
+  const bugReportRecording = courseFeatureEnabled(
+    course?.features as { name: string; enabled: boolean }[] | null | undefined,
+    COURSE_FEATURES.BUG_REPORT_RECORDING
+  );
 
   return (
     <Box minH="100vh">
+      {/* Before the controller providers: it must arm during render, ahead of their first fetch. */}
+      <BugReportIngestArm courseId={Number.parseInt(course_id)} recording={bugReportRecording} />
       <NavigationProgressProvider>
         <TimeZoneProvider courseTimeZone={courseTimeZone}>
           <CourseControllerProvider
@@ -72,34 +81,36 @@ const ProtectedLayout = async ({
             role={user_role.role}
             initialData={initialData}
           >
-            <OfficeHoursControllerProvider
-              classId={Number.parseInt(course_id)}
-              profileId={user_role.private_profile_id}
-              role={user_role.role}
-            >
-              <HelpDrawerProvider>
-                <GlobalSearchProvider>
-                  <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
-                    <ViewAsBanner />
-                    <DynamicCourseNav />
-                    <Box
-                      as="main"
-                      id="main-content"
-                      tabIndex={-1}
-                      pt="0"
-                      ml="0"
-                      mr="0"
-                      pb="80px"
-                      _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
-                    >
-                      {children}
-                    </Box>
-                    <FloatingHelpRequestWidget />
-                    <EscalationCheckInDialog />
-                  </KeyboardShortcutsProvider>
-                </GlobalSearchProvider>
-              </HelpDrawerProvider>
-            </OfficeHoursControllerProvider>
+            <ClassCapabilitiesProvider>
+              <OfficeHoursControllerProvider
+                classId={Number.parseInt(course_id)}
+                profileId={user_role.private_profile_id}
+                role={user_role.role}
+              >
+                <HelpDrawerProvider>
+                  <GlobalSearchProvider>
+                    <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
+                      <ViewAsBanner />
+                      <DynamicCourseNav />
+                      <Box
+                        as="main"
+                        id="main-content"
+                        tabIndex={-1}
+                        pt="0"
+                        ml="0"
+                        mr="0"
+                        pb="80px"
+                        _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+                      >
+                        {children}
+                      </Box>
+                      <FloatingHelpRequestWidget />
+                      <EscalationCheckInDialog />
+                    </KeyboardShortcutsProvider>
+                  </GlobalSearchProvider>
+                </HelpDrawerProvider>
+              </OfficeHoursControllerProvider>
+            </ClassCapabilitiesProvider>
           </CourseControllerProvider>
         </TimeZoneProvider>
       </NavigationProgressProvider>

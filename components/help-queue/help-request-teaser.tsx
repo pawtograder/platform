@@ -7,6 +7,7 @@ import { formatRelative } from "date-fns";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { EscalationBadge } from "./escalation-badge";
 
 // Module-stable references — see `components/ui/markdown.tsx`. Inline
@@ -215,11 +216,13 @@ export const HelpRequestTeaser = (props: Props) => {
             )}
           </HStack>
         </HStack>
-        <Box truncate>
-          <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
-            {message}
-          </Markdown>
-        </Box>
+        <ReportBlock>
+          <Box truncate>
+            <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
+              {message}
+            </Markdown>
+          </Box>
+        </ReportBlock>
         {escalationNote && !props.data.isResolved && (
           <Text truncate color="purple.fg">
             Still unresolved: {escalationNote}

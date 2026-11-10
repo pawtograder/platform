@@ -89,4 +89,4 @@ Each metric has a baseline we can compute from existing tables (`help_requests`,
 - Interview notes and synthesis: [`prd-oh-escalation-interviews.md`](prd-oh-escalation-interviews.md)
 - Final PRD: TODO
 - Clickable prototype (mock data): https://claude.ai/artifact/7ZB62gNYXo3iJywFkV163K
-- Migration: `supabase/migrations/20261103130000_help_request_escalation.sql`
+- Migration: `supabase/migrations/20261110130000_help_request_escalation.sql`
