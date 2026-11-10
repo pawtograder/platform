@@ -3014,6 +3014,8 @@ forgejoCoderSecrets:
     enabled: false
     forgejoPath: ""
     coderPath: ""
+    forgejoOAuthPath: ""
+    coderOIDCPath: ""
     storeName: openbao
     storeKind: ClusterSecretStore
     refreshInterval: 1h

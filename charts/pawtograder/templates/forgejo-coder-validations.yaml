@@ -4,6 +4,25 @@
 {{- end }}
 {{- end }}
 
+{{- $es := .Values.forgejoCoderSecrets.externalSecret }}
+{{- if $es.enabled }}
+{{- /* setup-sso-clients.sh's kv put replaces the whole secret, so a shared path wipes the apps' passwords. */}}
+{{- $norm := dict }}
+{{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" }}
+{{- $_ := set $norm $key (trimAll "/" (toString (index $es $key | default ""))) }}
+{{- end }}
+{{- $appPaths := compact (list $norm.forgejoPath $norm.coderPath) }}
+{{- range $key := list "forgejoOAuthPath" "coderOIDCPath" }}
+{{- $p := index $norm $key }}
+{{- if and $p (has $p $appPaths) }}
+{{- fail (printf "forgejoCoderSecrets.externalSecret.%s is %q, which also holds an app's passwords; give the SSO client its own path" $key (index $es $key)) }}
+{{- end }}
+{{- end }}
+{{- if and $norm.forgejoOAuthPath (eq $norm.forgejoOAuthPath $norm.coderOIDCPath) }}
+{{- fail "forgejoCoderSecrets.externalSecret.forgejoOAuthPath and coderOIDCPath must differ; each SSO client has its own path" }}
+{{- end }}
+{{- end }}
+
 {{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
 {{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
 {{- end }}

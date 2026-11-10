@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Usage: setup-sso-clients.sh --api-url URL [--forgejo-url URL] [--coder-url URL] (env: NAMESPACE, RELEASE, JWT_SECRET_NAME, FORGEJO_SOURCE_NAME, ROLLOUT_TIMEOUT)
+# Usage: setup-sso-clients.sh --api-url URL [--forgejo-url URL] [--coder-url URL] (env: NAMESPACE, RELEASE, JWT_SECRET_NAME, FORGEJO_SOURCE_NAME, ROLLOUT_TIMEOUT, BAO_MOUNT, SYNC_TIMEOUT)
 # Run after deploying auth.oauthServer.enabled=true and before setting forgejo.gitea.oauth (Forgejo's init container needs the Secret).
 # Sets up only the apps whose URLs are given. Leave out the URL of an app the release doesn't install.
+# Secrets owned by an ExternalSecret are written through OpenBao (needs bao or vault, BAO_ADDR/BAO_TOKEN); others with kubectl.
+# Keep the client names Forgejo and Coder: the access token hook finds Coder's client by name and callback.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-pawtograder}"
@@ -32,6 +34,48 @@ require_deploy() {
 }
 [ -z "$forgejo_url" ] || require_deploy "$RELEASE-forgejo" --forgejo-url
 [ -z "$coder_url" ] || require_deploy coder --coder-url
+
+# Errors are fatal, not a kubectl fallback: ESO would overwrite a kubectl-written Secret at its next refresh.
+eso=""
+eso_resources="$(kubectl api-resources --api-group=external-secrets.io -o name)"
+! grep -q '^externalsecrets\.' <<<"$eso_resources" || eso=1
+bao_path() {
+  [ -n "$eso" ] || return 0
+  local es path
+  es="$(kubectl -n "$NAMESPACE" get externalsecret "$1" --ignore-not-found -o name)" || return 1
+  [ -n "$es" ] || return 0
+  path="$(kubectl -n "$NAMESPACE" get externalsecret "$1" -o jsonpath='{.spec.data[0].remoteRef.key}')" || return 1
+  [ -n "$path" ] || { echo "externalsecret/$1 has no remoteRef.key; can't tell where its client goes" >&2; return 1; }
+  printf '%s' "$path"
+}
+store_mount() {
+  local kind name
+  kind="$(kubectl -n "$NAMESPACE" get externalsecret "$1" -o jsonpath='{.spec.secretStoreRef.kind}')" || return 1
+  name="$(kubectl -n "$NAMESPACE" get externalsecret "$1" -o jsonpath='{.spec.secretStoreRef.name}')" || return 1
+  if [ "$kind" = ClusterSecretStore ]; then
+    kubectl get clustersecretstore "$name" -o jsonpath='{.spec.provider.vault.path}'
+  else
+    kubectl -n "$NAMESPACE" get secretstore "$name" -o jsonpath='{.spec.provider.vault.path}'
+  fi || { echo "can't read the store of externalsecret/$1; set BAO_MOUNT to its KV mount" >&2; return 1; }
+}
+fj_bao="" cd_bao=""
+if [ -n "$forgejo_url" ]; then fj_bao="$(bao_path "$RELEASE-forgejo-oauth")"; fi
+if [ -n "$coder_url" ]; then cd_bao="$(bao_path "$RELEASE-coder-oidc")"; fi
+CLI=""
+if [ -n "$fj_bao$cd_bao" ]; then
+  if [ -z "${BAO_MOUNT:-}" ]; then
+    BAO_MOUNT="$(store_mount "$RELEASE-$([ -n "$fj_bao" ] && echo forgejo-oauth || echo coder-oidc)")"
+    [ -n "$BAO_MOUNT" ] || { echo "the ExternalSecret's store names no vault path; set BAO_MOUNT" >&2; exit 1; }
+  fi
+  if command -v bao >/dev/null; then CLI=bao
+  elif command -v vault >/dev/null; then
+    CLI=vault
+    : "${VAULT_ADDR:=${BAO_ADDR:-}}"; : "${VAULT_TOKEN:=${BAO_TOKEN:-}}"; export VAULT_ADDR VAULT_TOKEN
+  else echo "ExternalSecrets manage the client Secrets, so this needs bao or vault on PATH" >&2; exit 1; fi
+  # Check the token before create_client: failing after it would orphan the new client.
+  $CLI token lookup >/dev/null 2>&1 || {
+    echo "$CLI token lookup failed; set BAO_ADDR/BAO_TOKEN (or VAULT_*) and log in" >&2; exit 1; }
+fi
 
 service_key="$(kubectl -n "$NAMESPACE" get secret "$JWT_SECRET_NAME" -o jsonpath='{.data.SERVICE_ROLE_KEY}' | base64 -d)"
 [ -n "$service_key" ] || { echo "no SERVICE_ROLE_KEY in $NAMESPACE/$JWT_SECRET_NAME" >&2; exit 1; }
@@ -89,6 +133,27 @@ apply_secret() {
   echo "  wrote $NAMESPACE/$name"
 }
 
+# Restarting the app before ESO syncs the new client ID would load the old client.
+store_client() {
+  local name="$1" path="$2" id_key="$3" secret_key="$4" client="$5" id deadline
+  id="$(echo "$client" | jq -r .client_id)"
+  if [ -z "$path" ]; then
+    apply_secret "$name" "$id_key=$id" "$secret_key=$(echo "$client" | jq -r .client_secret)"
+    return
+  fi
+  echo "$client" | jq '{client_id, client_secret}' | $CLI kv put -mount="$BAO_MOUNT" "$path" - >/dev/null
+  echo "  wrote $BAO_MOUNT/$path"
+  kubectl -n "$NAMESPACE" annotate externalsecret "$name" "force-sync=$(date +%s)" --overwrite >/dev/null
+  deadline=$(( $(date +%s) + ${SYNC_TIMEOUT:-120} ))
+  until [ "$(secret_value "$name" "$id_key")" = "$id" ]; do
+    [ "$(date +%s)" -lt "$deadline" ] || {
+      echo "  $NAMESPACE/$name didn't get the new client within ${SYNC_TIMEOUT:-120}s; check: kubectl -n $NAMESPACE describe externalsecret $name" >&2
+      exit 1; }
+    sleep 2
+  done
+  echo "  ESO synced $NAMESPACE/$name"
+}
+
 restart() {
   kubectl -n "$NAMESPACE" rollout restart "deploy/$1" >/dev/null
   kubectl -n "$NAMESPACE" rollout status "deploy/$1" --timeout="${ROLLOUT_TIMEOUT:-10m}" >/dev/null
@@ -100,7 +165,7 @@ if [ -n "$forgejo_url" ]; then
   fj_cb="$forgejo_url/user/oauth2/$FORGEJO_SOURCE_NAME/callback"
   fj_old="$(old_ids Forgejo "$fj_cb" "$(secret_value "$RELEASE-forgejo-oauth" key)")"
   fj="$(create_client Forgejo "$fj_cb")"
-  apply_secret "$RELEASE-forgejo-oauth" "key=$(echo "$fj" | jq -r .client_id)" "secret=$(echo "$fj" | jq -r .client_secret)"
+  store_client "$RELEASE-forgejo-oauth" "$fj_bao" key secret "$fj"
   restart "$RELEASE-forgejo"
   revoke "$fj_old"
 fi
@@ -110,8 +175,7 @@ if [ -n "$coder_url" ]; then
   cd_cb="$coder_url/api/v2/users/oidc/callback"
   cd_old="$(old_ids Coder "$cd_cb" "$(secret_value "$RELEASE-coder-oidc" CODER_OIDC_CLIENT_ID)")"
   cd_="$(create_client Coder "$cd_cb")"
-  apply_secret "$RELEASE-coder-oidc" "CODER_OIDC_CLIENT_ID=$(echo "$cd_" | jq -r .client_id)" \
-    "CODER_OIDC_CLIENT_SECRET=$(echo "$cd_" | jq -r .client_secret)"
+  store_client "$RELEASE-coder-oidc" "$cd_bao" CODER_OIDC_CLIENT_ID CODER_OIDC_CLIENT_SECRET "$cd_"
   restart coder
   revoke "$cd_old"
 fi

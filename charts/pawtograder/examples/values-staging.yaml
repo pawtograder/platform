@@ -175,6 +175,8 @@ auth:
     # https://api.staging.pawtograder.net/auth/v1/callback.
     discord:
       enabled: true
+  oauthServer:
+    enabled: true
   # Pawtograder's email templates. Their links go straight to the app's token_hash pages
   # (/auth/reset-password, /auth/confirm, /auth/accept-invitation, /auth/magic-link), which is
   # the flow those pages implement. GoTrue's built-in templates go through /verify and land on
@@ -506,6 +508,9 @@ forgejoCoderSecrets:
     enabled: true
     forgejoPath: apps/pawtograder/forgejo-staging
     coderPath: apps/pawtograder/coder-staging
+    # Not Ready (PawtograderExternalSecretNotReady fires) until scripts/setup-sso-clients.sh writes them.
+    forgejoOAuthPath: apps/pawtograder/forgejo-oauth-staging
+    coderOIDCPath: apps/pawtograder/coder-oidc-staging
 
 # Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
 networkPolicy:
@@ -536,6 +541,8 @@ forgejoRunner:
 
 coder:
   enabled: true
+  oidc:
+    enabled: true
   coder:
     nodeSelector: { tier: prod-staging }
     tolerations:
