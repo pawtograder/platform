@@ -138,20 +138,31 @@ esac
 [ "$(admin "$API/users/$BOT" | jq -r .is_admin)" = true ] || { echo "ERROR: $BOT isn't a site admin" >&2; exit 1; }
 
 if [ "$ROTATE" -eq 1 ] || [ "$current_version" = 0 ] || [ -n "${current_version_deleted:-}" ]; then
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  # A random suffix keeps two runs in the same second from colliding on a token name.
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$(openssl rand -hex 3)"
   mint() {  # mint <name> <scope,...>  -> token on stdout (captured, never printed)
     jq -n --arg n "$1" --arg s "$2" '{name: $n, scopes: ($s | split(","))}' \
       | bot -X POST --data-binary @- "$API/users/$BOT/tokens" | jq -r '.sha1 // empty'
   }
-  # Delete whatever this run minted, so a partial failure leaves no live token behind.
+  # Delete only the tokens this run actually minted, and say so when a delete fails,
+  # so an operator can revoke a token that is live but recorded nowhere.
+  minted=()
   drop_new() {
-    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/actions-dispatcher-$stamp" 2>/dev/null || true
-    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/action-mirrors-$stamp" 2>/dev/null || true
+    local name
+    for name in ${minted[@]+"${minted[@]}"}; do
+      if bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/$name"; then
+        echo "  deleted new token $name" >&2
+      else
+        echo "ERROR: could not delete new token $name; revoke it by hand (Forgejo: $BOT > Settings > Applications)" >&2
+      fi
+    done
   }
   DISPATCHER_TOKEN="$(mint "actions-dispatcher-$stamp" write:admin || true)"
-  [ ${#DISPATCHER_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no dispatcher token" >&2; drop_new; exit 1; }
+  [ ${#DISPATCHER_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no dispatcher token" >&2; exit 1; }
+  minted+=("actions-dispatcher-$stamp")
   MIRROR_TOKEN="$(mint "action-mirrors-$stamp" write:organization,write:repository || true)"
-  [ ${#MIRROR_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no mirror token; deleted the new dispatcher token" >&2; drop_new; exit 1; }
+  [ ${#MIRROR_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no mirror token" >&2; drop_new; exit 1; }
+  minted+=("action-mirrors-$stamp")
 
   CAS=(-cas="$current_version")
   [ -z "${current_version_deleted:-}" ] || CAS=()
@@ -169,7 +180,12 @@ if [ "$ROTATE" -eq 1 ] || [ "$current_version" = 0 ] || [ -n "${current_version_
 fi
 
 if [ "$REVOKE_OLD" -eq 1 ]; then
-  keep="$($CLI kv get -mount="$BAO_MOUNT" -format=json "$BAO_PATH" | jq -re '.data.data | .dispatcher_token_name, .mirror_token_name')" \
+  # Both names must be non-empty strings, checked together: jq -e looks only at the last
+  # output, so a missing dispatcher name would otherwise leave it out of $keep and revoke it.
+  keep="$($CLI kv get -mount="$BAO_MOUNT" -format=json "$BAO_PATH" | jq -re '.data.data
+      | if ((.dispatcher_token_name | type) == "string" and (.dispatcher_token_name | length) > 0
+            and (.mirror_token_name | type) == "string" and (.mirror_token_name | length) > 0)
+        then .dispatcher_token_name, .mirror_token_name else error("token names missing") end')" \
     || { echo "ERROR: could not read the current token names from ${BAO_MOUNT}/${BAO_PATH}" >&2; exit 1; }
   names="$(list_tokens)" || { echo "ERROR: could not list $BOT's tokens" >&2; exit 1; }
   revoke_failed=0
