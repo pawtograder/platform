@@ -126,7 +126,9 @@ Deno.test("ensureAccountForUser: an email already in use fails instead of trying
   await withForgejo(
     [ok([]), unprocessable("e-mail already in use [email: Alex.Kim@northeastern.edu]")],
     async (calls) => {
-      await assertRejects(() => ensureAccountForUser(config, user), Error, "e-mail already in use");
+      const err = await assertRejects(() => ensureAccountForUser(config, user), Error, "e-mail already in use");
+      // The error goes to Sentry, so Forgejo's bracketed email must not be in it.
+      assertEquals(err.message.includes("Alex.Kim"), false);
       assertEquals(calls.length, 2);
     }
   );
