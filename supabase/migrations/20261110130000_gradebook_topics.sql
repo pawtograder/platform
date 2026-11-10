@@ -80,7 +80,13 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
+  -- Clearing each attempt would otherwise regenerate the standing from the attempts still left,
+  -- ending at score_expression 'null' once the last one goes. A deleted topic's standing column
+  -- survives the delete and keeps its last generated expression, so suppress regeneration for
+  -- this topic while its attempts are cleared.
+  PERFORM set_config('pawtograder.gradebook_topic_deleting_' || OLD.id, 'true', true);
   UPDATE public.gradebook_columns SET topic_id = NULL, attempt_number = NULL WHERE topic_id = OLD.id;
+  PERFORM set_config('pawtograder.gradebook_topic_deleting_' || OLD.id, 'false', true);
   RETURN OLD;
 END;
 $$;
@@ -238,7 +244,8 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  IF TG_OP <> 'INSERT' AND OLD.topic_id IS NOT NULL THEN
+  IF TG_OP <> 'INSERT' AND OLD.topic_id IS NOT NULL
+     AND COALESCE(current_setting('pawtograder.gradebook_topic_deleting_' || OLD.topic_id, true), '') <> 'true' THEN
     PERFORM public.gradebook_topic_regenerate_standing(OLD.topic_id);
   END IF;
   IF TG_OP <> 'DELETE' AND NEW.topic_id IS NOT NULL
@@ -597,6 +604,17 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
+
+  -- An edited suggestion can name a standing column as an attempt (of its own topic or another).
+  -- gradebook_columns_set_topic and gradebook_topic_set_standing both refuse that pairing, so
+  -- refuse it here too, after every topic is written, so either order is caught.
+  IF EXISTS (
+    SELECT 1 FROM public.gradebook_columns c
+    JOIN public.gradebook_topics t ON t.standing_column_id = c.id
+    WHERE c.gradebook_id = p_gradebook_id AND c.topic_id IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'A topic''s standing column cannot also be an attempt' USING ERRCODE = '22023';
+  END IF;
   RETURN v_created;
 END;
 $$;

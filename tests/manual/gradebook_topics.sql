@@ -102,7 +102,10 @@ BEGIN
   PERFORM gradebook_columns_set_topic(pg_temp.col('quiz-5'), NULL, NULL);
   SELECT score_expression INTO v_expr FROM gradebook_columns WHERE id = v_standing;
   IF v_expr LIKE '%quiz-5%' THEN RAISE EXCEPTION 'removed attempt still in expression'; END IF;
+  SELECT score_expression INTO v_expr FROM gradebook_columns WHERE id = v_standing;
   DELETE FROM gradebook_topics WHERE id = v_topic;
+  IF (SELECT score_expression FROM gradebook_columns WHERE id = v_standing) IS DISTINCT FROM v_expr THEN
+    RAISE EXCEPTION 'topic delete rewrote the standing expression'; END IF;
   IF EXISTS (SELECT 1 FROM gradebook_columns WHERE topic_id = v_topic OR (topic_id IS NULL AND attempt_number IS NOT NULL)) THEN
     RAISE EXCEPTION 'attempts not cleared on topic delete'; END IF;
   IF NOT EXISTS (SELECT 1 FROM gradebook_columns WHERE id = v_standing) THEN RAISE EXCEPTION 'standing column deleted'; END IF;
@@ -199,6 +202,18 @@ BEGIN
                                         WHERE (a->>'column_id')::bigint <> (SELECT id FROM gradebook_columns WHERE gradebook_id = (SELECT gradebook_id FROM t2100) AND slug = '2svm')))
       ELSE x END)
     FROM jsonb_array_elements(v_s->'topics') x));
+  -- An edit that lists a topic's standing column as one of its attempts is refused.
+  IF NOT pg_temp.raises(format('SELECT gradebook_topics_apply_suggestion(%s, %L::jsonb)', (SELECT gradebook_id FROM t2100),
+      jsonb_set(v_s, '{topics}', (
+        SELECT jsonb_agg(CASE WHEN x->>'name' LIKE 'Coupling%' AND x->>'standing_column_id' IS NOT NULL
+          THEN jsonb_set(x, '{attempts}', (x->'attempts') || jsonb_build_array(jsonb_build_object(
+                 'column_id', (x->>'standing_column_id')::bigint, 'attempt_number', 9)))
+          ELSE x END)
+        FROM jsonb_array_elements(v_s->'topics') x)))) THEN
+    RAISE EXCEPTION 'a standing column was applied as an attempt'; END IF;
+  IF (SELECT x->>'standing_column_id' FROM jsonb_array_elements(v_s->'topics') x WHERE x->>'name' LIKE 'Coupling%') IS NULL THEN
+    RAISE EXCEPTION 'expected Suggest to find the Coupling standing column'; END IF;
+
   SELECT score_expression INTO v_expr FROM gradebook_columns WHERE gradebook_id = (SELECT gradebook_id FROM t2100) AND slug = 'topic_cce';
   v_n := gradebook_topics_apply_suggestion((SELECT gradebook_id FROM t2100), v_s);
   IF v_n <> 2 THEN RAISE EXCEPTION 'expected 2 topics, got %', v_n; END IF;

@@ -598,8 +598,13 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  PERFORM public.gradebook_auto_layout_inner(p_gradebook_id);
+  -- Take the per-gradebook lock first, the same order every other group write uses. The inner
+  -- function locks (17031, id) and then, through the sort_order trigger, the per-gradebook key on
+  -- each row it updates; taking the per-gradebook key only afterwards could deadlock with
+  -- gradebook_columns_set_group, which holds it while it updates rows.
+  PERFORM public.gradebook_require_instructor(p_gradebook_id);
   PERFORM pg_advisory_xact_lock(p_gradebook_id);
+  PERFORM public.gradebook_auto_layout_inner(p_gradebook_id);
   PERFORM public.gradebook_columns_compact_groups(p_gradebook_id);
 END;
 $$;
