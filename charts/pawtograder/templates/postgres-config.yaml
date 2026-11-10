@@ -1,4 +1,10 @@
 {{- if .Values.postgres.enabled }}
+{{- $sharedApps := list }}
+{{- range $app := list "forgejo" "coder" }}
+{{- if and (index $.Values $app).enabled (eq (index $.Values $app).database "pawtograder") }}
+{{- $sharedApps = append $sharedApps $app }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -38,6 +44,16 @@ data:
     archive_timeout = '{{ .Values.postgres.walg.archiveTimeout | default "60s" }}'
     {{- end }}
   pg_hba.conf: |
+    {{- if $sharedApps }}
+    # Postgres grants CONNECT to PUBLIC, so confine each app role to its own database.
+    {{- range $app := $sharedApps }}
+    {{- range $cidr := list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" }}
+    {{ printf "host    %-15s %-15s %-23s md5" $app $app $cidr }}
+    {{- end }}
+    {{- end }}
+    {{ printf "host    %-15s %-15s %-23s reject" "all" (join "," $sharedApps) "0.0.0.0/0" }}
+    {{ printf "host    %-15s %-15s %-23s reject" "all" (join "," $sharedApps) "::/0" }}
+    {{- end }}
     local   all             all                                     trust
     host    all             all             127.0.0.1/32            trust
     host    all             all             ::1/128                 trust

@@ -115,6 +115,11 @@ networkPolicy:
   # Extra NetworkPolicyIngressRule entries appended to a release-wide allow
   # policy (e.g. another namespace that consumes the API in-cluster).
   extraIngressRules: []
+  # true asserts the CNI enforces job/workspace egress policies and nothing else allows them more.
+  cniEnforcesEgress: false
+  cilium:
+    # Needs Cilium and RBAC on ciliumnetworkpolicies.cilium.io.
+    enabled: false
 
 # -----------------------------------------------------------------------------
 # Deployment channels (A/B by course)
@@ -222,6 +227,10 @@ secrets:
     # Backward-compatible alias for edgeFunctionsBundles. Prefer setting
     # edgeFunctionsBundles explicitly in new overlays.
     bundles: []
+    # Exam/quiz features need the `exam-vision` bundle here: the worker's
+    # getExamVisionProvider() fails closed when EXAM_VISION_PROVIDER is unset, so an
+    # overlay that enables exam grading without this bundle errors every OCR and
+    # template-extraction job instead of silently producing placeholder OCR.
     webBundles: []                # usually: web, llm, discord
                                   #   `discord` belongs here as well as in
                                   #   edgeFunctionsBundles: DISCORD_APPLICATION_ID
@@ -355,6 +364,43 @@ postgres:
     #     trident.netapp.io/unixPermissions: "0777"
     annotations: {}
 
+  # /dev/shm sizing for the primary.
+  #
+  # dynamic_shared_memory_type=posix means every parallel query allocates its
+  # DSM segments as files under /dev/shm. Kubernetes gives a container the
+  # runtime default of 64Mi and there is no way to raise it from postgresql.conf
+  # -- it is a volume property, so it has to be set here.
+  #
+  # 64Mi is not enough for this workload. On Khoury prod (2026-09-22) /dev/shm
+  # was observed at 94%, then 98%, then 64% over about half an hour, so
+  # occupancy tracks parallel-query load and segments ARE reclaimed -- just
+  # slowly enough that the peaks reach the ceiling. Size this for the PEAK, not
+  # the average; a restart is not a fix, because the peak returns with the
+  # load. When it does hit the ceiling, a parallel worker's segment resize
+  # fails with SQLSTATE 53100:
+  #
+  #   could not resize shared memory segment "/PostgreSQL.NNN" to 2097152
+  #   bytes: No space left on device
+  #
+  # That error is what makes this worth a chart change rather than a tuning
+  # knob: PostgREST treats 53100 as a FATAL connection error, so it tears down
+  # and rebuilds its entire pool and re-queries the schema cache. Every request
+  # in flight on that replica gets a 503. Measured over 24h on prod: 204 such
+  # errors -> 225 pool rebuilds across 3 rest replicas -> 190 user-facing 503s,
+  # the bulk of them GET /submissions. The database never logged a problem and
+  # no alert covered it; see PawtograderPostgresSharedMemoryHigh.
+  #
+  # sizeLimit is a Gi/Mi/Ki or plain-byte quantity (fractions such as 1.5Gi
+  # are fine). pawtograder.quantityToBytes in _helpers.tpl converts it, and
+  # the exporter query and alert threshold are both derived from this value.
+  #
+  # NOTE: medium=Memory emptyDir counts against the container memory LIMIT
+  # (postgres.resources.limits.memory), it is not extra headroom. Keep
+  # sizeLimit well under that limit or the pod is OOMKilled when shm fills.
+  shm:
+    enabled: true
+    sizeLimit: 1Gi
+
   # postgresql.conf overrides — bumped for Realtime fan-out + supavisor.
   config:
     max_connections: "400"
@@ -416,19 +462,35 @@ postgres:
     # (disk-fill risk), so archiving must keep up. archive_timeout forces a
     # segment switch so idle periods still bound RPO.
     archiveTimeout: "60s"
-    # Base backups: the sidecar loop cadence and how many full backups to keep.
-    # WAL older than the oldest retained base backup is pruned with it. Sizing:
-    # retention window ≈ baseBackupIntervalHours × keepBackups.
+    # Base backups: the sidecar loop cadence. How many to keep is
+    # retention.keepBackups below (baseBackup.keepBackups was removed in 0.4.1
+    # and is refused). Retention window ≈ intervalHours × retention.keepBackups.
     baseBackup:
       enabled: true
       intervalHours: 24
-      keepBackups: 8
       # Wait this long after the sidecar starts before the FIRST base backup,
       # so postgres + archiving are healthy first.
       initialDelaySeconds: 120
       resources:
         requests: { cpu: "50m",  memory: "128Mi" }
         limits:   { cpu: "1",    memory: "512Mi" }
+    # Retention CronJob (templates/walg-retention.yaml): `wal-g delete retain
+    # FULL <keepBackups>` in its own pod, the only thing that prunes WAL-G. It
+    # lives outside the primary's pod so changing the count restarts nothing.
+    # WAL older than the oldest retained base backup is deleted with it.
+    retention:
+      enabled: true
+      # Hourly: the prune is a listing plus deletes, and running it every hour
+      # keeps it close behind each base backup however far the sidecar's
+      # interval loop has drifted from its start time.
+      schedule: "17 * * * *"
+      # Full base backups to keep. Must be an integer >= 1.
+      keepBackups: 8
+      startingDeadlineSeconds: 1800
+      activeDeadlineSeconds: 1800
+      resources:
+        requests: { cpu: "10m",  memory: "64Mi" }
+        limits:   { cpu: "500m", memory: "256Mi" }
 
   # ---------------------------------------------------------------------------
   # Streaming standby replica. A separate StatefulSet that bootstraps from the
@@ -449,6 +511,15 @@ postgres:
       accessMode: ReadWriteOnce
       # Same as postgres.persistence.annotations (e.g. Trident unixPermissions).
       annotations: {}
+    # Same /dev/shm problem as the primary (see postgres.shm). The standby
+    # runs read-only query traffic, so it allocates DSM too -- it just fills
+    # slower (prod standby sat at 2% while the primary was at 98%), which means
+    # a standby promoted during an incident inherits a fresh 64Mi ceiling and
+    # hits the same wall under primary write+read load. Sized independently
+    # because the replica has its own, smaller, memory limit.
+    shm:
+      enabled: true
+      sizeLimit: 1Gi
     resources:
       requests: { cpu: "500m", memory: "2Gi" }
       limits:   { cpu: "2",    memory: "8Gi" }
@@ -679,6 +750,11 @@ auth:
   customAccessTokenHook:
     enabled: true
     uri: pg-functions://postgres/public/custom_access_token_hook
+
+  oauthServer:
+    enabled: false
+    authorizationPath: /oauth/consent
+    allowDynamicRegistration: false
 
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
@@ -1829,6 +1905,8 @@ kong:
     limits: { cpu: "2", memory: "6Gi" }
   service:
     port: 8000
+  # `admin` exposes Kong's unauthenticated POST /config on :8001; `status` serves /metrics on :8100 with admin off.
+  metricsListener: admin
   terminationGracePeriodSeconds: 45
   preStopSleepSeconds: 10
   spreadAcrossNodes: true
@@ -2560,6 +2638,12 @@ monitoring:
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # /dev/shm occupancy (used/limit) above which the PawtograderPostgresSharedMemory*
+    # alerts fire. Lower than the connection thresholds on purpose: occupancy is a
+    # leak rather than load -- observed pinned at 94-98% with the database idle -- so
+    # there is no burst to ride out and the only useful warning is an early one.
+    sharedMemoryPercentWarning: 70
+    sharedMemoryPercentCritical: 90
     # Schema-cache reloads per PostgREST pod per hour above which
     # PawtograderPostgrestSchemaCacheChurn fires. A reload means EITHER the pool
     # was rebuilt after a fatal connection error (everything in flight on that
@@ -2651,3 +2735,319 @@ tests:
     resources:
       requests: { cpu: "10m", memory: "16Mi" }
       limits:   { cpu: "100m", memory: "64Mi" }
+
+forgejo:
+  enabled: false
+  database: pawtograder
+  # Mirrored by .github/workflows/mirror-third-party.yml; a new tag goes in .github/mirror.yaml first.
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/forgejo/forgejo
+    tag: "15.0.9"
+  strategy:
+    type: Recreate # RWO repo volume
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile: { type: RuntimeDefault }
+  # Subchart's rootless set minus SYS_CHROOT (SSH is off); also applies to its init containers.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities: { drop: [ALL] }
+    privileged: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi } # 1Gi OOMKilled finishing a job's log upload
+  initContainers:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  persistence:
+    enabled: true
+    size: 20Gi
+  # The chart's test pod sets no resources, so limit-tracking quotas reject it.
+  test:
+    enabled: false
+  ingress:
+    enabled: true
+    className: nginx
+    hosts: []
+  gitea:
+    admin:
+      existingSecret: pawtograder-forgejo-admin
+      passwordMode: keepUpdated
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
+    config:
+      server:
+        DISABLE_SSH: true
+        START_SSH_SERVER: false
+        LFS_START_SERVER: true
+      database:
+        DB_TYPE: postgres
+        # Set here, not via env, so a change rolls Forgejo via the config checksum.
+        HOST: pawtograder-postgres:5432
+        NAME: forgejo
+        USER: forgejo
+        SSL_MODE: disable
+      service:
+        DISABLE_REGISTRATION: true
+      actions:
+        ENABLED: true
+      session:
+        PROVIDER: db
+      cache:
+        ADAPTER: memory
+      queue:
+        TYPE: level
+      indexer:
+        ISSUE_INDEXER_TYPE: bleve
+        REPO_INDEXER_ENABLED: false
+
+forgejo-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  podSecurityContext:
+    seccompProfile: { type: RuntimeDefault }
+  settings:
+    existingSecret: pawtograder-forgejo-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+forgejoRunner:
+  enabled: false
+  # Required: an existing namespace other than the release's.
+  jobNamespace: ""
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  arch: amd64
+  imagePullSecrets: [] # must exist in both the release and job namespaces
+  # Size from jobNamespace's ResourceQuota; see README "Sizing capacity".
+  capacity: 2
+  # jobNamespace's ResourceQuota `hard`; when set, the render fails unless capacity × per-job values fit.
+  quota: {}
+  labels:
+    - ubuntu-latest:host
+    - ubuntu-24.04:host
+    - ubuntu-22.04:host
+  jobTimeout: 1h
+  podDeadlineSeconds: 4200
+  pendingTimeoutSeconds: 900
+  pollInterval: 5
+  workdirSizeLimit: 20Gi
+  resources:
+    requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi }
+    limits: { cpu: "2", memory: 4Gi, ephemeral-storage: 24Gi }
+  dispatcher:
+    # Required: Secret with a Forgejo `token` (write:admin, or write:organization from each org's owner with `orgs`).
+    tokenSecret: ""
+    # Empty uses the admin API (every repository).
+    orgs: []
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+  networkPolicy:
+    enabled: true
+    privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+    extraEgress: []
+  actions:
+    # mirrors: unlisted bare `uses:` names fail to resolve. upstream: jobs clone from upstreamURL.
+    source: mirrors
+    upstreamURL: https://github.com
+    # Forgejo's floor is [mirror] MIN_INTERVAL, 10m.
+    mirrorInterval: 8h
+    # The hook fails unless ref exists in the mirror.
+    mirrors:
+      - { repo: actions/checkout, ref: v4 }
+      - { repo: pawtograder/assignment-action, ref: v4 }
+    # Required with source=mirrors: Secret with a Forgejo `token` scoped write:organization and write:repository.
+    tokenSecret: ""
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+
+coder:
+  enabled: false
+  database: pawtograder
+  oidc:
+    enabled: false
+    signInText: Sign in with Pawtograder
+    # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
+    allowSignups: false
+  coder:
+    image:
+      repo: ghcr.io/pawtograder/mirror/coder/coder
+      tag: v2.37.3
+    env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
+    envFrom:
+      - configMapRef: { name: pawtograder-coder-env }
+      - secretRef: { name: pawtograder-coder-db }
+      - secretRef: { name: pawtograder-coder-oidc, optional: true }
+    # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
+    initContainers:
+      - name: first-owner
+        image: ghcr.io/pawtograder/mirror/coder/coder:v2.37.3
+        imagePullPolicy: IfNotPresent
+        command:
+          - sh
+          - -ec
+          - |
+            for v in "$ADMIN_EMAIL" "$ADMIN_USERNAME" "$ADMIN_PASSWORD"; do
+              case "$v" in *[[:cntrl:]]*) echo "pawtograder-coder-admin has a control character (trailing newline?)" >&2; exit 1 ;; esac
+            done
+            /opt/coder server >/tmp/first-owner.log 2>&1 &
+            pid=$!
+            url=http://127.0.0.1:3000
+            c() { curl --connect-timeout 5 --max-time 30 "$@"; }
+            deadline=$(( $(date +%s) + 600 ))
+            until c -fsS -o /dev/null "$url/healthz"; do
+              kill -0 "$pid" 2>/dev/null || { cat /tmp/first-owner.log >&2; exit 1; }
+              [ "$(date +%s)" -lt "$deadline" ] || { echo "coderd not healthy after 10m" >&2; tail -50 /tmp/first-owner.log >&2; exit 1; }
+              sleep 2
+            done
+            # Coder answers 200 once a user exists and 404 before.
+            status=$(c -sS -o /dev/null -w '%{http_code}' "$url/api/v2/users/first")
+            if [ "$status" = 200 ]; then
+              echo "first user exists"
+            elif [ "$status" != 404 ]; then
+              echo "GET /api/v2/users/first returned $status" >&2; exit 1
+            else
+              esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+              printf '{"email":"%s","username":"%s","password":"%s","trial":false}' \
+                "$(esc "$ADMIN_EMAIL")" "$(esc "$ADMIN_USERNAME")" "$(esc "$ADMIN_PASSWORD")" \
+                | c -fsS -o /dev/null -X POST -H 'Content-Type: application/json' --data-binary @- "$url/api/v2/users/first"
+              echo "created first owner $ADMIN_USERNAME"
+            fi
+            kill "$pid"
+            wait "$pid" 2>/dev/null || true
+        env:
+          - { name: CODER_HTTP_ADDRESS, value: "127.0.0.1:3000" }
+          - { name: CODER_ACCESS_URL, value: "http://127.0.0.1:3000" }
+          - { name: CODER_PROVISIONER_DAEMONS, value: "0" }
+          - { name: CODER_CACHE_DIRECTORY, value: /tmp/coder-cache }
+          - name: ADMIN_EMAIL
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: email } }
+          - name: ADMIN_USERNAME
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
+          - name: ADMIN_PASSWORD
+            valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        envFrom:
+          - configMapRef: { name: pawtograder-coder-env }
+          - secretRef: { name: pawtograder-coder-db }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: [ALL] }
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile: { type: RuntimeDefault }
+        resources:
+          requests: { cpu: 250m, memory: 512Mi }
+          limits: { cpu: "1", memory: 1Gi }
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    # Merged into the subchart's defaults.
+    securityContext:
+      capabilities: { drop: [ALL] }
+    service:
+      type: ClusterIP
+    ingress:
+      enable: true
+      className: nginx
+      host: ""
+      wildcardHost: ""
+    serviceAccount:
+      workspacePerms: true
+      enableDeployments: true
+
+coder-db:
+  enabled: false
+  image:
+    registry: ghcr.io
+    repository: pawtograder/mirror/postgres
+    tag: "18.6"
+  podSecurityContext:
+    seccompProfile: { type: RuntimeDefault }
+  settings:
+    existingSecret: pawtograder-coder-db-superuser
+    superuserPassword:
+      secretKey: POSTGRES_PASSWORD
+  storage:
+    requestedSize: 5Gi
+    keepPvc: true
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: 500m, memory: 1Gi }
+  initResources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: false
+    forgejoPath: ""
+    coderPath: ""
+    forgejoOAuthPath: ""
+    coderOIDCPath: ""
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+
+coderBootstrap:
+  enabled: true
+  workspaceNamespace: ""
+  # Reapplied on every install and upgrade, resetting changes made in Coder's UI.
+  schedule:
+    defaultTTL: 2h
+    activityBump: 1h
+    # Need a Coder Premium license; with either set non-zero on an unlicensed Coder the hook fails.
+    dormancyThreshold: "0"
+    dormancyAutoDeletion: "0" # deletes the workspace and its home volume
+  workspaces:
+    image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    # "" uses the image's code-server.
+    codeServerVersion: 4.143.1
+    arch: amd64
+    priorityClassName: ""
+    imagePullPolicy: IfNotPresent
+    imagePullSecrets: [] # Secret names in the workspace namespace
+    storageClass: ""
+    ephemeralStorageLimit: 4Gi
+    networkPolicy:
+      privateCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      extraEgress: []
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+appDatabases:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }

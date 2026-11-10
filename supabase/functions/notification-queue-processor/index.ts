@@ -554,8 +554,9 @@ async function sendEmailViaTransporter(
     });
     return true;
   } catch (error) {
+    // No recipient address: Sentry events never carry a person's email. The caller's scope
+    // already identifies the recipient by user ID.
     scope.setContext("smtp_error", {
-      recipient: recipient,
       error_message: error instanceof Error ? error.message : String(error),
       smtp_host: Deno.env.get("SMTP_HOST"),
       smtp_port: Deno.env.get("SMTP_PORT")
@@ -692,9 +693,10 @@ async function sendEmail(params: {
     );
 
     // Add email context to scope
+    // No address or subject: Sentry events never carry a person's email, and subjects can
+    // include names. The user ID identifies the recipient.
     scope.setContext("email", {
-      recipient: recipient.email,
-      subject: emailContent.subject,
+      recipient_user_id: recipient.user_id,
       cc_count: ccEmails.length,
       template_type: body.type
     });
