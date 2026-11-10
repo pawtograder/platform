@@ -103,6 +103,11 @@ export function groupChoiceFor(groupId: number | null | undefined): GroupChoice 
   return groupId == null ? { kind: "none" } : { kind: "existing", id: groupId };
 }
 
+/** "New group…" picked with no name yet: a form must not save in this state. */
+export function isIncompleteGroupChoice(choice: GroupChoice): boolean {
+  return choice.kind === "new" && choice.name.trim() === "";
+}
+
 /** Apply a GroupChoice to one column, doing nothing when it is unchanged. */
 export async function applyGroupChoice(
   actions: ReturnType<typeof useColumnGroupActions>,
@@ -114,7 +119,10 @@ export async function applyGroupChoice(
     if (currentGroupId != null) await actions.setGroup([columnId], null);
   } else if (choice.kind === "existing") {
     if (choice.id !== currentGroupId) await actions.setGroup([columnId], choice.id);
-  } else if (choice.name.trim() !== "") {
+  } else {
+    // The forms disable Save for a blank name; refuse here too rather than report a group that
+    // was never created.
+    if (isIncompleteGroupChoice(choice)) throw new Error("Name the new group before saving.");
     await actions.createGroup(choice.name.trim(), [columnId]);
   }
 }

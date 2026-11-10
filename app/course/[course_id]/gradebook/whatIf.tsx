@@ -613,6 +613,10 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
   // "Expand all" followed by a group being created or renamed doesn't collapse everything again.
   const collapseInitializedRef = useRef(false);
   useEffect(() => {
+    // Decide here, not inside the updater: React may run an updater twice (Strict Mode), and a
+    // ref written there would make the second run skip the first collapse.
+    const collapseAll = !collapseInitializedRef.current && collapsibleGroupKeys.length > 0;
+    if (collapseAll) collapseInitializedRef.current = true;
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -623,8 +627,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
         }
       });
 
-      if (!collapseInitializedRef.current && collapsibleGroupKeys.length > 0) {
-        collapseInitializedRef.current = true;
+      if (collapseAll) {
         collapsibleGroupKeys.forEach((key) => newSet.add(key));
       }
 

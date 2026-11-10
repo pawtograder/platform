@@ -134,8 +134,9 @@ export interface SeedingConfiguration {
   /** Exam and quiz assignments (see examTemplates.ts). Omit to seed none. */
   examConfig?: ExamConfig;
   gradingScheme?: "current" | "specification";
-  /** Plant the extra gradebook columns the CS 4535 column-groups assignment is written against
-   * (see createColumnGroupFixtures). Off everywhere except the `cs4535` template. */
+  /** Plant the extra gradebook columns that exercise column groups, first written for the CS 4535
+   * column-groups assignment (see createColumnGroupFixtures). Off everywhere except the `cs4535`
+   * template. */
   columnGroupFixtures?: boolean;
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
@@ -5131,21 +5132,23 @@ final;`,
   }
 
   /**
-   * Extra gradebook columns for the CS 4535 "gradebook column groups" onboarding assignment.
+   * Extra gradebook columns that exercise column groups. They began as the gradebook for the
+   * CS 4535 "gradebook column groups" onboarding assignment, written when grouping was derived at
+   * render time from the slug prefix plus a contiguity check on sort_order. Groups are now stored
+   * (gradebook_column_groups, docs/adr/gradebook-column-groups-and-topics.md), and seed() runs the
+   * same auto-group a course gets when an instructor turns groups on. So a seeded class shows the
+   * stored groups with the auto-group corrections applied: the quiz-3 hole no longer splits the
+   * quizzes, and "Ai" becomes "AI Usage Logs". Turn the gradebook-column-groups feature off for
+   * the class to see the slug-guessed layout these columns were designed to break.
    *
-   * Column grouping in the gradebook is not a stored concept. The `groupedColumns` memo in
-   * manage/gradebook/gradebookTable.tsx derives it at render time from the slug prefix plus a
-   * contiguity check on sort_order. Students are asked to replace that with a schema and to
-   * backfill it, so the seeded gradebook has to show them both halves of the problem: grouping
-   * that works, and the cases where the heuristic gets it wrong.
-   *
-   * Neither half survives the stock templates. createAssignments alternates labs and non-labs,
-   * so `assignment-lab-*` and `assignment-assignment-*` columns interleave and each one lands in
+   * The stock templates show neither real groups nor the heuristic going wrong.
+   * createAssignments alternates labs and non-labs, so `assignment-lab-*` and
+   * `assignment-assignment-*` columns interleave and each one lands in
    * a group of one; `skill-*` is the only multi-column group a seeded gradebook has ever had.
    *
    * What this adds:
    *   - exam-1..3        a third real family, so there is something worth collapsing
-   *   - quiz-1,2,4,5     a family with a hole in sort_order where quiz-3 used to be. The
+   *   - quiz-1,2,4,5     a family with a hole in sort_order where quiz-3 used to be. The slug
    *                      heuristic renders it as two groups, both titled "Quiz"
    *   - attendance       no "-" in the slug, so it is its own group of one
    *   - ai-usage-log-*   a family the heuristic titles "Ai"
@@ -5154,7 +5157,8 @@ final;`,
    *
    * It then renumbers sort_order across the whole gradebook. The layout has to be identical on
    * every run, because the assignment is graded on a backfill and a backfill can't be checked
-   * against a gradebook that reshuffles; the renumber is also what clusters the lab and
+   * against a gradebook that reshuffles (the SQL harnesses in tests/manual pin the same layout);
+   * the renumber is also what clusters the lab and
    * assignment columns the assignment trigger created interleaved.
    *
    * quiz-3 is created and then deleted the same way the gradebook UI deletes a column (scores

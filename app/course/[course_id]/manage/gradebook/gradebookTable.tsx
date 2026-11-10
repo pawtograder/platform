@@ -121,6 +121,7 @@ import type { ValidationResult } from "@/lib/gradebookExpressionTester";
 import GradebookCell from "./gradebookCell";
 import {
   applyGroupChoice,
+  isIncompleteGroupChoice,
   ColumnGroupsContext,
   ColumnGroupSelect,
   groupChoiceFor,
@@ -487,16 +488,32 @@ function AddColumnDialog() {
         gradebook_id: gradebookController.gradebook_id,
         sort_order: gradebookController.gradebook_columns.rows.length
       });
+      // The column is committed at this point. If grouping fails, close the dialog anyway: a
+      // retry would only fail on the now-taken slug. The group action has shown its own error.
+      let grouped = true;
       if (columnGroupsEnabled) {
-        await applyGroupChoice(columnGroupActions, created.id, null, groupChoice);
+        try {
+          await applyGroupChoice(columnGroupActions, created.id, null, groupChoice);
+        } catch {
+          grouped = false;
+        }
       }
 
       setIsLoading(false);
-      toaster.create({
-        title: "Success",
-        description: "Column created successfully",
-        type: "success"
-      });
+      if (grouped) {
+        toaster.create({
+          title: "Success",
+          description: "Column created successfully",
+          type: "success"
+        });
+      } else {
+        toaster.create({
+          title: "Column created without a group",
+          description:
+            "The column was created, but adding it to the group failed. Use Group… on the column to try again.",
+          type: "warning"
+        });
+      }
       setIsOpen(false);
     } catch (e) {
       setIsLoading(false);
@@ -657,7 +674,10 @@ function AddColumnDialog() {
                     type="submit"
                     colorPalette="green"
                     loading={isLoading}
-                    disabled={shouldBlockSave(validation, scoreExpression)}
+                    disabled={
+                      shouldBlockSave(validation, scoreExpression) ||
+                      (columnGroupsEnabled && isIncompleteGroupChoice(groupChoice))
+                    }
                   >
                     Save
                   </Button>
@@ -1006,7 +1026,10 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     type="submit"
                     colorPalette="green"
                     loading={isLoading}
-                    disabled={canEditScoreExpression && shouldBlockSave(validation, scoreExpression)}
+                    disabled={
+                      (canEditScoreExpression && shouldBlockSave(validation, scoreExpression)) ||
+                      (columnGroupsEnabled && isIncompleteGroupChoice(groupChoice))
+                    }
                   >
                     Save
                   </Button>
@@ -2737,6 +2760,10 @@ export default function GradebookTable() {
   // "Expand all" followed by a group being created or renamed doesn't collapse everything again.
   const collapseInitializedRef = useRef(false);
   useEffect(() => {
+    // Decide here, not inside the updater: React may run an updater twice (Strict Mode), and a
+    // ref written there would make the second run skip the first collapse.
+    const collapseAll = !collapseInitializedRef.current && collapsibleGroupKeys.length > 0;
+    if (collapseAll) collapseInitializedRef.current = true;
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -2747,8 +2774,7 @@ export default function GradebookTable() {
         }
       });
 
-      if (!collapseInitializedRef.current && collapsibleGroupKeys.length > 0) {
-        collapseInitializedRef.current = true;
+      if (collapseAll) {
         collapsibleGroupKeys.forEach((key) => newSet.add(key));
       }
 
