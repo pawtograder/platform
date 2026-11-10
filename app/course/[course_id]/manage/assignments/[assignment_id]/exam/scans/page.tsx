@@ -1,5 +1,7 @@
 "use client";
 
+import { ExamFeatureGate } from "../ExamFeatureGate";
+
 import { toaster } from "@/components/ui/toaster";
 import { uploadExamScanBatch } from "@/lib/exam/examClient";
 import { createClient } from "@/utils/supabase/client";
@@ -10,7 +12,7 @@ import MatchReview from "../MatchReview";
 
 type Batch = { id: number; status: string; total_pages: number; pages_per_exam: number; error: string | null };
 
-export default function ExamScansPage() {
+function ExamScansPageContent() {
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -168,5 +170,13 @@ export default function ExamScansPage() {
         {batches.length === 0 && <Text color="fg.muted">No scan batches yet.</Text>}
       </VStack>
     </VStack>
+  );
+}
+
+export default function ExamScansPage() {
+  return (
+    <ExamFeatureGate>
+      <ExamScansPageContent />
+    </ExamFeatureGate>
   );
 }
