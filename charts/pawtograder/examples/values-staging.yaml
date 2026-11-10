@@ -513,6 +513,8 @@ forgejoCoderSecrets:
     coderOIDCPath: apps/pawtograder/coder-oidc-staging
     # dispatcher_token / mirror_token of the forgejo-actions-bot site admin; scripts/setup-forgejo-runner-tokens.sh.
     runnerPath: apps/pawtograder/forgejo-runner-staging
+    # Written by scripts/setup-coder-forgejo-auth.sh --env staging; run it before deploying coder.externalAuth.
+    coderExternalAuthPath: apps/pawtograder/coder-external-auth-staging
 
 # Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
 networkPolicy:
@@ -574,6 +576,10 @@ coder:
   enabled: true
   oidc:
     enabled: true
+  # Workspaces clone students' private Forgejo repositories (README "Cloning private repositories").
+  externalAuth:
+    forgejo:
+      enabled: true
   coder:
     nodeSelector: { tier: prod-staging }
     tolerations:
