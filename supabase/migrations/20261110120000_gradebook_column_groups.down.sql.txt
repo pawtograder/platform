@@ -1,4 +1,4 @@
--- Down path for 20261109120000_gradebook_column_groups.sql. Not applied by the Supabase CLI
+-- Down path for 20261110120000_gradebook_column_groups.sql. Not applied by the Supabase CLI
 -- (wrong extension); run by hand with psql --single-transaction if the feature has to come out.
 --
 -- Grades are never touched by the up migration. What is lost: the groups themselves and the

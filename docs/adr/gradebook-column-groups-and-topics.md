@@ -166,7 +166,7 @@ rosters.
 ## Down path
 
 Run by hand, topics first:
-`supabase/migrations/20261109130000_gradebook_topics.down.sql.txt`, then
-`supabase/migrations/20261109120000_gradebook_column_groups.down.sql.txt`. Each drops its table
+`supabase/migrations/20261110130000_gradebook_topics.down.sql.txt`, then
+`supabase/migrations/20261110120000_gradebook_column_groups.down.sql.txt`. Each drops its table
 before the `gradebook_columns` column that the table's policy reads; two submissions' down scripts
 failed on that ordering. Standing columns stay, keeping their last expression.

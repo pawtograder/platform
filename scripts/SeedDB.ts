@@ -13,6 +13,7 @@ import {
   type DiscussionConfig,
   type SurveyConfig
 } from "./DatabaseSeedingUtils";
+import type { ExamConfig } from "./ExamSeeding";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -36,6 +37,7 @@ interface SeederConfig {
   helpRequests?: HelpRequestConfig;
   discussions?: DiscussionConfig;
   surveyConfig?: SurveyConfig;
+  examConfig?: ExamConfig;
   gradingScheme?: "current" | "specification";
   columnGroupFixtures?: boolean;
   rateLimitOverrides?: Record<string, { maxInsertsPerSecond: number; description: string; batchSize?: number }>;
@@ -91,7 +93,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       submissionRate: 0.85,
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
-    }
+    },
+    examConfig: { maxScannedStudents: 30 }
   },
 
   small: {
@@ -144,7 +147,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       submissionRate: 0.85,
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
-    }
+    },
+    examConfig: { maxScannedStudents: 40 }
   },
 
   large: {
@@ -202,7 +206,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       submissionRate: 0.8,
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
-    }
+    },
+    examConfig: { maxScannedStudents: 60 }
   },
 
   tcrs: {
@@ -257,7 +262,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       linkToGroupAssignments: true,
       includeTeamCollaboration: true,
       completeResponsesForFirstNAssignmentSurveys: 9 // First 9 surveys: all students respond (submitted); last 1: none
-    }
+    },
+    examConfig: { maxScannedStudents: 25 }
   },
 
   // Marketing screenshot class: a believable ~500-student CS course tuned to
@@ -328,7 +334,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
         maxInsertsPerSecond: 1,
         description: "Assignment creation (500 students → many gradebook columns per assignment)"
       }
-    }
+    },
+    examConfig: { maxScannedStudents: 60 }
   },
 
   // CS 4535 onboarding: the "gradebook column groups" assignment. A small course whose
@@ -442,7 +449,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
     },
-    rateLimitOverrides: {}
+    rateLimitOverrides: {},
+    examConfig: { maxScannedStudents: 40 }
   }
 };
 
@@ -488,6 +496,10 @@ async function runSeeding(config: SeederConfig) {
     .withSurveys(config.surveyConfig!)
     .withGradingScheme(config.gradingScheme!)
     .withColumnGroupFixtures(config.columnGroupFixtures === true);
+
+  if (config.examConfig) {
+    chain = chain.withExams(config.examConfig);
+  }
 
   if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student || fixedUsers.admin) {
     // Don't log the raw emails — they may be real reviewer addresses
@@ -536,6 +548,9 @@ interface CLIArgs {
   rubricMaxCriteria?: number;
   rubricMinChecks?: number;
   rubricMaxChecks?: number;
+  /** Comma-separated exam scenario keys, "all", or "none". */
+  exams?: string;
+  examScans?: number;
 }
 
 function parseArgs(): CLIArgs {
@@ -622,6 +637,21 @@ function parseArgs(): CLIArgs {
           i++;
         }
         break;
+      case "--exams":
+        if (nextArg && !nextArg.startsWith("--")) {
+          result.exams = nextArg;
+          i++;
+        }
+        break;
+      case "--exam-scans":
+        // Not `startsWith("--")`: that would take "-1" as a value, and parseInt accepts "5x".
+        if (!nextArg || !/^\d+$/.test(nextArg)) {
+          console.error(`--exam-scans needs a non-negative integer, got ${nextArg ?? "nothing"}`);
+          process.exit(1);
+        }
+        result.examScans = Number(nextArg);
+        i++;
+        break;
       case "--discussion-posts":
         if (nextArg && !nextArg.startsWith("--")) {
           result.discussionPosts = parseInt(nextArg, 10);
@@ -662,6 +692,11 @@ Help Request Options:
 
 Discussion Options:
       --discussion-posts <number>     Posts per discussion topic
+
+Exam Options:
+      --exams <list|all|none>         Exam and quiz scenarios to seed, comma-separated
+                                      [choices: midterm-1, midterm-3, midterm-2, final, pop-quiz, quiz-1, quiz-2, quiz-3] [default: all]
+      --exam-scans <number>           Most students with scanned papers per paper exam
 
   -h, --help                         Show this help
 
@@ -730,6 +765,19 @@ async function main() {
         ...template.discussions!,
         postsPerTopic: argv.discussionPosts
       };
+    }
+
+    // Override exams if specified
+    if (argv.exams !== undefined || argv.examScans !== undefined) {
+      if (argv.exams === "none") {
+        config.examConfig = undefined;
+      } else {
+        config.examConfig = {
+          ...template.examConfig,
+          ...(argv.exams && argv.exams !== "all" && { scenarios: argv.exams.split(",").map((s) => s.trim()) }),
+          ...(argv.examScans !== undefined && { maxScannedStudents: argv.examScans })
+        };
+      }
     }
 
     // Display final configuration

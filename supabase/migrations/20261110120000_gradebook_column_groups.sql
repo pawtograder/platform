@@ -12,7 +12,7 @@
 -- (gradebook_enable_column_groups).
 --
 -- Design record: docs/adr/gradebook-column-groups-and-topics.md (CS 4535 bake-off, Fall 2026).
--- Down path: 20261109120000_gradebook_column_groups.down.sql.txt (not applied by the CLI).
+-- Down path: 20261110120000_gradebook_column_groups.down.sql.txt (not applied by the CLI).
 
 -- ---------------------------------------------------------------------------------------------
 -- 1. Schema

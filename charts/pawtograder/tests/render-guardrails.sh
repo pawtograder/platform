@@ -537,12 +537,12 @@ assert_renders "prometheus rules allowUnselectedRules renders" \
 
 echo "== walg retention CronJob =="
 WALG_ON=(--set postgres.walg.enabled=true --set postgres.walg.s3Prefix=s3://b/walg)
-assert_rendered_contains "walg-retention inherits baseBackup.keepBackups" \
+assert_rendered_contains "walg-retention keeps 8 by default" \
   templates/walg-retention.yaml "KEEP=8" "${WALG_ON[@]}"
 assert_rendered_contains "walg-retention keepBackups overrides" \
   templates/walg-retention.yaml "KEEP=4" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=4
 # 0 is the dangerous value (`retain FULL 0` deletes every backup), and the one
-# sprig's `default` would have quietly swapped for baseBackup.keepBackups.
+# sprig's `default` would have quietly swapped for the default.
 assert_refused "walg-retention keepBackups=0 is refused" "must be an integer >= 1" \
   "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=0
 assert_refused "walg-retention keepBackups non-integer is refused" "must be an integer >= 1" \
@@ -563,6 +563,22 @@ assert_rendered_contains "walg-retention inherits postgres tolerations" \
   --set 'postgres.tolerations[0].key=dedicated-db' --set 'postgres.tolerations[0].operator=Exists'
 assert_rendered_contains "walg-retention inherits global nodeSelector" \
   templates/walg-retention.yaml "pool: s3" "${WALG_ON[@]}" --set global.nodeSelector.pool=s3
+# 0.4.1 moved the count out of the sidecar. The old key must be refused, not
+# ignored, or an overlay that still sets it looks like it controls retention.
+assert_refused "baseBackup.keepBackups is refused" "removed in chart 0.4.1" \
+  "${WALG_ON[@]}" --set postgres.walg.baseBackup.keepBackups=4
+# The CronJob is now the only prune; without it the bucket grows forever.
+assert_refused "walg retention disabled in production" "nothing prunes WAL-G" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.enabled=false
+assert_renders "walg retention disabled allowed on dev" \
+  --set global.environment=dev "${WALG_ON[@]}" --set postgres.walg.retention.enabled=false
+if helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null \
+    | grep -q "wal-g delete"; then
+  echo "FAIL [base-backup sidecar no longer prunes]: postgres-statefulset still renders wal-g delete"
+  FAILED=1
+else
+  echo "ok   [base-backup sidecar no longer prunes]"
+fi
 # The point of the CronJob: changing retention must not touch the primary's pod
 # template, or the StatefulSet restarts Postgres.
 sts_a="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"
@@ -2962,6 +2978,131 @@ apps_has "app nologin: Coder turned off gets a NOLOGIN step" yes "name: coder-sh
 apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %I NOLOGIN" \
   "${APP_HBA_OWN_CODER[@]}" --show-only templates/app-databases.yaml
 
+echo
+
+echo "== SSO client Secrets from OpenBao =="
+
+SSO_ES=(--set forgejoCoderSecrets.externalSecret.enabled=true
+  --set forgejoCoderSecrets.externalSecret.forgejoPath=apps/t/forgejo
+  --set forgejoCoderSecrets.externalSecret.coderPath=apps/t/coder
+  --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo-oauth
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder-oidc)
+SSO_ONLY=(--show-only templates/forgejo-coder-externalsecrets.yaml)
+apps_has "sso: Forgejo's client syncs from its path" yes "key: apps/t/forgejo-oauth" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Forgejo's Secret keeps the key/secret names the login source reads" yes "secretKey: secret" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's client syncs from its path" yes "key: apps/t/coder-oidc" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's Secret carries CODER_OIDC_CLIENT_SECRET" yes "secretKey: CODER_OIDC_CLIENT_SECRET" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+label="sso: client Secrets outlive their ExternalSecrets, the apps' passwords don't"
+if ! apps "${SSO_ES[@]}" "${SSO_ONLY[@]}" >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'creationPolicy: Orphan' "$OUTFILE")" -ne 2 ] || [ "$(grep -c 'creationPolicy: Owner' "$OUTFILE")" -ne 4 ]; then
+  echo "FAIL [$label]: want 2 Orphan (forgejo-oauth, coder-oidc) and 4 Owner"; FAILED=1
+else echo "ok   [$label]"; fi
+apps_has "sso: no Coder client ExternalSecret with coder.oidc off" no "name: pawtograder-coder-oidc" \
+  "${SSO_ES[@]}" --set coder.oidc.enabled=false "${SSO_ONLY[@]}"
+apps_has "sso: no client ExternalSecrets without their paths" no "-oauth" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath= \
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath= "${SSO_ONLY[@]}"
+apps_refused "sso: a client path that holds Coder's passwords is refused" \
+  'coderOIDCPath is "apps/t/coder", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder
+apps_refused "sso: a client path that holds Forgejo's passwords is refused" \
+  'forgejoOAuthPath is "apps/t/forgejo", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo
+apps_refused "sso: the same path spelled with slashes is still refused" \
+  'coderOIDCPath is "/apps/t/coder/", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=/apps/t/coder/
+apps_refused "sso: one path for both clients is refused" "forgejoOAuthPath and coderOIDCPath must differ" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/forgejo-oauth
+label="sso: staging syncs both clients from OpenBao and turns on Coder's OIDC"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-oauth-staging" "$OUTFILE" \
+  || ! grep -qF "key: apps/pawtograder/coder-oidc-staging" "$OUTFILE" \
+  || ! grep -qF "CODER_OIDC_ISSUER_URL" "$OUTFILE" \
+  || ! grep -qF "GOTRUE_OAUTH_SERVER_ENABLED" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a client ExternalSecret, Coder's OIDC settings or GoTrue's OAuth server"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
+echo "== forgejo runner: token Secrets from OpenBao =="
+ES=templates/forgejo-coder-externalsecrets.yaml
+RUNNER_ES=("${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.runnerPath=apps/t/forgejo-runner)
+apps_has "runner ES: the dispatcher token Secret syncs from runnerPath" yes "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: it targets forgejoRunner.dispatcher.tokenSecret by its full name" yes "name: pawtograder-forgejo-runner-token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the mirror hook's token syncs too" yes "property: mirror_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the other Secrets keep their pawtograder-<name> names" yes "name: pawtograder-forgejo-oauth" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: without runnerPath the token Secrets stay hand-made" no "pawtograder-forgejo-runner-token" \
+  "${SSO_ES[@]}" --show-only "$ES"
+apps_has "runner ES: source=upstream syncs no mirror token" no "property: mirror_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.source=upstream --show-only "$ES"
+apps_has "runner ES: with the runner off, no token Secrets" no "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.enabled=false --show-only "$ES"
+apps_refused "runner ES: one Secret for both tokens is refused" "name the same Secret" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.tokenSecret=pawtograder-forgejo-runner-token
+for k in forgejoPath coderPath forgejoOAuthPath coderOIDCPath; do
+  p="$(printf '%s\n' "${SSO_ES[@]}" | sed -n "s|^forgejoCoderSecrets.externalSecret.$k=||p")"
+  apps_refused "runner ES: runnerPath equal to $k is refused" "the same path as $k" \
+    "${SSO_ES[@]}" --set "forgejoCoderSecrets.externalSecret.runnerPath=/$p/"
+done
+label="runner ES: staging adds the Forgejo login source and syncs both runner tokens"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  --set forgejoRunner.image.tag=staging-test >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-runner-staging" "$OUTFILE" \
+  || ! grep -qF "property: mirror_token" "$OUTFILE" \
+  || ! grep -qF -- "--name \"pawtograder\" --provider \"openidConnect\"" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a runner token ExternalSecret or the pawtograder login source"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
+echo "== Coder template variables =="
+
+# The CLI parses each --variable as CSV, so a JSON value (quotes, commas) fails
+# to parse ("bare \" in non-quoted-field") or splits. Variables must go through
+# --variables-file, with every value a JSON string literal that decodes to the
+# string Terraform expects; the JSON-typed ones must decode again to JSON.
+apps_has "variables: push uses no --variable flag" no "--variable " \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "variables: push reads the variables file" yes '--variables-file "$vars"' \
+  --show-only templates/coder-bootstrap.yaml
+label="variables: every value is a string, JSON ones decode"
+if ! apps "${WS_NS[@]}" --set-json 'coderBootstrap.workspaces.imagePullSecrets=[{"name":"a"},{"name":"b"}]' \
+  --show-only templates/coder-bootstrap.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif msg="$(python3 - "$OUTFILE" <<'PYCHECK'
+import json, re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r"<<'VARS'\n(.*?)\n\s*VARS\n", text, re.S)
+if not m:
+    sys.exit("no variables heredoc")
+vals = {}
+for line in m.group(1).splitlines():
+    k, _, v = line.strip().partition(": ")
+    vals[k] = json.loads(v)
+    if not isinstance(vals[k], str):
+        sys.exit(f"{k} is not a string")
+for k in ("node_selector", "tolerations", "image_pull_secrets", "node_affinity"):
+    json.loads(vals[k])
+if vals["namespace"] != "pawtograder-ws":
+    sys.exit("namespace is " + vals["namespace"])
+if json.loads(vals["image_pull_secrets"]) != [{"name": "a"}, {"name": "b"}]:
+    sys.exit("image_pull_secrets was split or mangled")
+PYCHECK
+)"; then
+  echo "ok   [$label]"
+else
+  echo "FAIL [$label]: $msg"; FAILED=1
+fi
 echo
 
 echo "== Coder template schedule =="

@@ -1,4 +1,4 @@
--- Proof harness for 20261109130000_gradebook_topics.sql.
+-- Proof harness for 20261110130000_gradebook_topics.sql.
 --
 -- Needs a local stack with both column-groups and topics migrations applied and the cs4535
 -- template seeded. Ends in ROLLBACK:
@@ -16,11 +16,11 @@
 BEGIN;
 
 \echo '=== down path, then up again ==='
-\i supabase/migrations/20261109130000_gradebook_topics.down.sql.txt
+\i supabase/migrations/20261110130000_gradebook_topics.down.sql.txt
 DO $$ BEGIN
   IF to_regclass('public.gradebook_topics') IS NOT NULL THEN RAISE EXCEPTION 'down left the table'; END IF;
 END $$;
-\i supabase/migrations/20261109130000_gradebook_topics.sql
+\i supabase/migrations/20261110130000_gradebook_topics.sql
 
 CREATE TEMP TABLE t AS
 SELECT c.id AS class_id, c.gradebook_id,

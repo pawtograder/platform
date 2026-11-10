@@ -5,9 +5,9 @@
 -- quiz session covers several topics. The session stays a group; the topic is stored here.
 --
 -- Gated by the `gradebook-topics` course feature, written disabled for existing classes by
--- 20261109120000_gradebook_column_groups.sql. Design record:
+-- 20261110120000_gradebook_column_groups.sql. Design record:
 -- docs/adr/gradebook-column-groups-and-topics.md.
--- Down path: 20261109130000_gradebook_topics.down.sql.txt (not applied by the CLI).
+-- Down path: 20261110130000_gradebook_topics.down.sql.txt (not applied by the CLI).
 
 -- ---------------------------------------------------------------------------------------------
 -- 1. Schema

@@ -51,6 +51,7 @@ import {
 } from "@/tests/fixtures/teamCollaborationSurvey";
 import type { QuestionAnalyticsConfig, SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import { SURVEYJS_TEMPLATES } from "./surveyTemplates";
+import { seedExams, validateExamConfig, type ExamConfig } from "./ExamSeeding";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -130,6 +131,8 @@ export interface SeedingConfiguration {
   helpRequestConfig?: HelpRequestConfig;
   discussionConfig?: DiscussionConfig;
   surveyConfig?: SurveyConfig;
+  /** Exam and quiz assignments (see examTemplates.ts). Omit to seed none. */
+  examConfig?: ExamConfig;
   gradingScheme?: "current" | "specification";
   /** Plant the extra gradebook columns the CS 4535 column-groups assignment is written against
    * (see createColumnGroupFixtures). Off everywhere except the `cs4535` template. */
@@ -1312,6 +1315,13 @@ export class DatabaseSeeder {
     return this;
   }
 
+  withExams(config: ExamConfig): this {
+    // Validate here, not in seedExams, so a bad config fails before the class is created.
+    validateExamConfig(config);
+    this.config.examConfig = config;
+    return this;
+  }
+
   // -------- Demo-mode builders --------
   withDemoFixtures(bundle: FixtureBundle): this {
     this.config.demoFixtures = bundle;
@@ -1433,6 +1443,7 @@ export class DatabaseSeeder {
       helpRequestConfig: this.config.helpRequestConfig,
       discussionConfig: this.config.discussionConfig,
       surveyConfig: this.config.surveyConfig,
+      examConfig: this.config.examConfig,
       gradingScheme: this.config.gradingScheme || "current",
       columnGroupFixtures: this.config.columnGroupFixtures === true,
       className: this.config.className || "Test Class",
@@ -1720,6 +1731,14 @@ export class DatabaseSeeder {
       // Create surveys if configured
       if (config.surveyConfig) {
         await this.createSurveys(config.surveyConfig, class_id, students, instructors, assignments);
+      }
+
+      // Exams and quizzes are their own assignments, with their own submissions and grading.
+      if (config.examConfig) {
+        const exams = await seedExams({ classId: class_id, students, graders, instructors }, config.examConfig);
+        for (const exam of exams.assignments) {
+          console.log(`   ${exam.title} [${exam.type}]: assignment ${exam.id}, ${exam.submissions} submissions`);
+        }
       }
 
       // Display final summary

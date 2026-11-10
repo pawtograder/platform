@@ -1,4 +1,4 @@
--- Down path for 20261109130000_gradebook_topics.sql. Not applied by the Supabase CLI; run by
+-- Down path for 20261110130000_gradebook_topics.sql. Not applied by the Supabase CLI; run by
 -- hand with psql --single-transaction. Run it before the column-groups down path.
 --
 -- Standing columns are ordinary computed columns and stay, with whatever expression they have:

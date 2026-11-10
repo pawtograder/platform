@@ -15,7 +15,8 @@ export const COURSE_FEATURES = {
   GEMINI_API_KEY_SETUP: "gemini-api-key-setup",
   BUG_REPORT_RECORDING: "bug-report-recording",
   GRADEBOOK_COLUMN_GROUPS: "gradebook-column-groups",
-  GRADEBOOK_TOPICS: "gradebook-topics"
+  GRADEBOOK_TOPICS: "gradebook-topics",
+  EXAMS: "exams"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -171,6 +172,19 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Use gradebook topics",
     ariaLabel: "Enable gradebook topics for this course"
+  },
+  {
+    name: COURSE_FEATURES.EXAMS,
+    title: "Paper exams",
+    description:
+      "Scanning, OCR and grading of paper exams. When off, the Exam (Scan & OCR) entry is hidden for graders and instructors, and the exam pages say the feature is not enabled. Assignments of type 'exam' are otherwise unaffected.",
+    // Off unless a course opts in. This flag exists because paper exams land as a single large
+    // feature; defaulting on would turn scanning, OCR and the Gemini calls behind it on for every
+    // course the moment it merges, which is not a change any of those courses asked for.
+    defaultWhenMissing: false,
+    navAffectsStaff: true,
+    switchLabel: "Enable paper exam scanning and grading",
+    ariaLabel: "Enable paper exams for this course"
   }
 ];
 
