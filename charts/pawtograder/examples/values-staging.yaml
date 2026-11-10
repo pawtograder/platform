@@ -175,9 +175,6 @@ auth:
     # https://api.staging.pawtograder.net/auth/v1/callback.
     discord:
       enabled: true
-  # Pawtograder as the identity provider for Forgejo and Coder (README "Sign in with Pawtograder").
-  # Turns on Coder's OIDC below; register the clients with scripts/setup-sso-clients.sh after this
-  # deploys, then a later change adds forgejo.gitea.oauth, which needs pawtograder-forgejo-oauth.
   oauthServer:
     enabled: true
   # Pawtograder's email templates. Their links go straight to the app's token_hash pages
@@ -511,9 +508,7 @@ forgejoCoderSecrets:
     enabled: true
     forgejoPath: apps/pawtograder/forgejo-staging
     coderPath: apps/pawtograder/coder-staging
-    # Written by scripts/setup-sso-clients.sh. Until it runs, these two ExternalSecrets aren't Ready
-    # (PawtograderExternalSecretNotReady warns after 15m). Nothing waits on them: Coder's Secret is
-    # optional, and no Forgejo login source reads its one yet.
+    # Not Ready (PawtograderExternalSecretNotReady fires) until scripts/setup-sso-clients.sh writes them.
     forgejoOAuthPath: apps/pawtograder/forgejo-oauth-staging
     coderOIDCPath: apps/pawtograder/coder-oidc-staging
 
@@ -546,7 +541,6 @@ forgejoRunner:
 
 coder:
   enabled: true
-  # Sign-ups stay off (coder.oidc.allowSignups), so only Coder users that already exist can sign in.
   oidc:
     enabled: true
   coder:

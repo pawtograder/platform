@@ -6,7 +6,7 @@
 
 {{- $es := .Values.forgejoCoderSecrets.externalSecret }}
 {{- if $es.enabled }}
-{{- /* setup-sso-clients.sh's kv put replaces the whole secret, so sharing a path would wipe the apps' passwords. */}}
+{{- /* setup-sso-clients.sh's kv put replaces the whole secret, so a shared path wipes the apps' passwords. */}}
 {{- $norm := dict }}
 {{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" }}
 {{- $_ := set $norm $key (trimAll "/" (toString (index $es $key | default ""))) }}

@@ -2,10 +2,8 @@
 # Usage: setup-sso-clients.sh --api-url URL [--forgejo-url URL] [--coder-url URL] (env: NAMESPACE, RELEASE, JWT_SECRET_NAME, FORGEJO_SOURCE_NAME, ROLLOUT_TIMEOUT, BAO_MOUNT, SYNC_TIMEOUT)
 # Run after deploying auth.oauthServer.enabled=true and before setting forgejo.gitea.oauth (Forgejo's init container needs the Secret).
 # Sets up only the apps whose URLs are given. Leave out the URL of an app the release doesn't install.
-# When the chart renders an ExternalSecret for an app's Secret (forgejoCoderSecrets.externalSecret.forgejoOAuthPath
-# or coderOIDCPath), the client goes to the OpenBao path it names (mount BAO_MOUNT, default kv) and ESO syncs it.
-# That needs bao or vault logged in (BAO_ADDR/BAO_TOKEN). Otherwise the script writes the Secret with kubectl.
-# The client names stay Forgejo and Coder: the access token hook finds Coder's client by that name and its callback.
+# Secrets owned by an ExternalSecret are written through OpenBao (needs bao or vault, BAO_ADDR/BAO_TOKEN); others with kubectl.
+# Keep the client names Forgejo and Coder: the access token hook finds Coder's client by name and callback.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-pawtograder}"
@@ -37,13 +35,10 @@ require_deploy() {
 [ -z "$forgejo_url" ] || require_deploy "$RELEASE-forgejo" --forgejo-url
 [ -z "$coder_url" ] || require_deploy coder --coder-url
 
-# The OpenBao path of the ExternalSecret that owns a Secret, or nothing when ESO doesn't manage it.
-# ESO would overwrite a Secret written with kubectl at its next refresh, so the path decides where the client goes,
-# and any error reading the ExternalSecret stops the script instead of falling back to kubectl.
+# Errors are fatal, not a kubectl fallback: ESO would overwrite a kubectl-written Secret at its next refresh.
 eso=""
 eso_resources="$(kubectl api-resources --api-group=external-secrets.io -o name)"
 ! grep -q '^externalsecrets\.' <<<"$eso_resources" || eso=1
-# set -e doesn't reach into $(...), so every kubectl here returns its failure explicitly.
 bao_path() {
   [ -n "$eso" ] || return 0
   local es path
@@ -53,7 +48,6 @@ bao_path() {
   [ -n "$path" ] || { echo "externalsecret/$1 has no remoteRef.key; can't tell where its client goes" >&2; return 1; }
   printf '%s' "$path"
 }
-# The KV mount is the ExternalSecret's store's, unless BAO_MOUNT says otherwise.
 store_mount() {
   local kind name
   kind="$(kubectl -n "$NAMESPACE" get externalsecret "$1" -o jsonpath='{.spec.secretStoreRef.kind}')" || return 1
@@ -78,7 +72,7 @@ if [ -n "$fj_bao$cd_bao" ]; then
     CLI=vault
     : "${VAULT_ADDR:=${BAO_ADDR:-}}"; : "${VAULT_TOKEN:=${BAO_TOKEN:-}}"; export VAULT_ADDR VAULT_TOKEN
   else echo "ExternalSecrets manage the client Secrets, so this needs bao or vault on PATH" >&2; exit 1; fi
-  # status passes without a token, so check the token too, before any client is registered.
+  # Check the token before create_client: failing after it would orphan the new client.
   $CLI token lookup >/dev/null 2>&1 || {
     echo "$CLI token lookup failed; set BAO_ADDR/BAO_TOKEN (or VAULT_*) and log in" >&2; exit 1; }
 fi
@@ -139,9 +133,7 @@ apply_secret() {
   echo "  wrote $NAMESPACE/$name"
 }
 
-# store_client SECRET BAO_PATH ID_KEY SECRET_KEY CLIENT_JSON: put the client in the app's Secret, through OpenBao when
-# BAO_PATH is set. ESO refreshes hourly, so force a sync and wait until the Secret holds the new client ID; restarting
-# the app before that would load the old client.
+# Restarting the app before ESO syncs the new client ID would load the old client.
 store_client() {
   local name="$1" path="$2" id_key="$3" secret_key="$4" client="$5" id deadline
   id="$(echo "$client" | jq -r .client_id)"
