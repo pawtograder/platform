@@ -19,7 +19,10 @@ const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "
 
 type Needed = { user_id: string; email: string | null; name: string };
 
-function fakeSupabase(needed: Needed[], opts: { claimable?: Set<string>; neededError?: unknown } = {}) {
+function fakeSupabase(
+  needed: Needed[],
+  opts: { claimable?: Set<string>; neededError?: unknown; claimErrorFor?: string } = {}
+) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const saved: { values: Record<string, unknown>; filters: [string, unknown][] }[] = [];
   const client = {
@@ -29,6 +32,9 @@ function fakeSupabase(needed: Needed[], opts: { claimable?: Set<string>; neededE
         return Promise.resolve(
           opts.neededError ? { data: null, error: opts.neededError } : { data: needed, error: null }
         );
+      }
+      if (args.p_user_id === opts.claimErrorFor) {
+        return Promise.resolve({ data: null, error: new Error("insert violates foreign key constraint") });
       }
       const claimable = opts.claimable ?? new Set(needed.map((n) => n.user_id));
       return Promise.resolve({ data: claimable.has(args.p_user_id as string), error: null });
@@ -115,6 +121,23 @@ Deno.test("reconcile: one user's failure is recorded and the pass carries on", a
       ["u1", "e-mail already in use"],
       ["u2", "user has no email, which Forgejo requires"]
     ]
+  );
+  assertEquals(saved.length, 1);
+});
+
+Deno.test("reconcile: a failed claim is recorded for that user and the pass carries on", async () => {
+  const { client, saved } = fakeSupabase(
+    [
+      { user_id: "u1", email: "a@x.edu", name: "A" },
+      { user_id: "u2", email: "b@x.edu", name: "B" }
+    ],
+    { claimErrorFor: "u1" }
+  );
+  const result = await reconcileForgejoAccounts(client, config, () => Promise.resolve(account(12, "b")));
+  assertEquals(result.provisioned, 1);
+  assertEquals(
+    result.failures.map((f) => f.userId),
+    ["u1"]
   );
   assertEquals(saved.length, 1);
 });

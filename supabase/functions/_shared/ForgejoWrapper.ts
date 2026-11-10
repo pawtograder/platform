@@ -25,12 +25,26 @@ async function forgejo(config: ForgejoConfig, method: string, path: string, body
   return await fetch(`${config.url}/api/v1${path}`, {
     method,
     headers: { Authorization: config.authorization, "Content-Type": "application/json", Accept: "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: body === undefined ? undefined : JSON.stringify(body),
+    // A stalled call would hold up the rest of a sequential pass until the runtime limit.
+    signal: AbortSignal.timeout(15_000)
   });
 }
 
+// These errors go to Sentry, and Forgejo names the offending value in brackets
+// ("e-mail already in use [email: a@b.edu]"), so only the message without them is kept.
+function reason(text: string): string {
+  let message = text;
+  try {
+    message = (JSON.parse(text) as { message?: string }).message ?? text;
+  } catch {
+    // Not JSON: use the text as it came.
+  }
+  return message.replace(/\s*\[[^\]]*\]/g, "").slice(0, 200);
+}
+
 async function failure(res: Response, what: string): Promise<Error> {
-  return new Error(`Forgejo ${what} failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  return new Error(`Forgejo ${what} failed: ${res.status} ${reason(await res.text())}`);
 }
 
 // Forgejo caps usernames at 40 characters; 30 leaves room for a collision suffix.
@@ -85,7 +99,7 @@ export async function ensureAccountForUser(
     const message = await res.text();
     // A taken or reserved name gets the next suffix. "e-mail already in use" doesn't: another name won't help.
     if (res.status === 422 && /user already exists|name is reserved/i.test(message)) continue;
-    throw new Error(`Forgejo user create failed: ${res.status} ${message.slice(0, 300)}`);
+    throw new Error(`Forgejo user create failed: ${res.status} ${reason(message)}`);
   }
   throw new Error(`No free Forgejo username for ${base}`);
 }
