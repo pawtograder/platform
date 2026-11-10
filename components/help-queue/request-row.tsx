@@ -300,9 +300,11 @@ export function RequestRow({
               </Box>
             </ReportBlock>
             {escalationNote && isActive && (
-              <Text truncate fontSize="sm" color="purple.fg">
-                Still unresolved: {escalationNote}
-              </Text>
+              <ReportBlock>
+                <Text truncate fontSize="sm" color="purple.fg">
+                  Still unresolved: {escalationNote}
+                </Text>
+              </ReportBlock>
             )}
           </Stack>
         </HStack>

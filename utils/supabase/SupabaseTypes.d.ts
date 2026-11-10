@@ -5413,7 +5413,7 @@ export type Database = {
           escalated_by: string;
           help_request_id: number;
           id: number;
-          note: string;
+          note: Pii<"free_text", string>;
           previous_assignee: string | null;
           source: Database["public"]["Enums"]["help_request_escalation_source"];
         };

@@ -7,6 +7,7 @@ import { HelpRequest, HelpRequestEscalation } from "@/utils/supabase/DatabaseTyp
 import { Box, DataList, Heading, Stack, Text } from "@chakra-ui/react";
 import { format } from "date-fns";
 import { useMemo } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function ProfileName({ id }: { id: string | null }) {
   const profile = useUserProfile(id);
@@ -28,9 +29,11 @@ function EscalationEntry({ escalation, index }: { escalation: HelpRequestEscalat
           </>
         )}
       </Text>
-      <Text fontSize="sm" whiteSpace="pre-wrap">
-        {escalation.note}
-      </Text>
+      <ReportBlock>
+        <Text fontSize="sm" whiteSpace="pre-wrap">
+          {escalation.note}
+        </Text>
+      </ReportBlock>
     </Box>
   );
 }

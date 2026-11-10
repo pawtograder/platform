@@ -224,9 +224,11 @@ export const HelpRequestTeaser = (props: Props) => {
           </Box>
         </ReportBlock>
         {escalationNote && !props.data.isResolved && (
-          <Text truncate color="purple.fg">
-            Still unresolved: {escalationNote}
-          </Text>
+          <ReportBlock>
+            <Text truncate color="purple.fg">
+              Still unresolved: {escalationNote}
+            </Text>
+          </ReportBlock>
         )}
       </Stack>
     </HStack>
