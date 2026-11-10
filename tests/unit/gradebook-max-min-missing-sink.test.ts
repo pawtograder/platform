@@ -56,7 +56,7 @@ function evaluate(expression: string, scores: Record<string, number | null>) {
       if (name === "gradebook_columns" && args[0]?.type === "ConstantNode") {
         const pattern = (args[0] as mathjs.ConstantNode).value as unknown as string;
         if (pattern.includes("*")) {
-          const prefix = pattern.replace("*", "");
+          const prefix = pattern.slice(0, pattern.indexOf("*"));
           args[0] = new math.ArrayNode(
             Object.keys(values)
               .filter((k) => k.startsWith(prefix))
