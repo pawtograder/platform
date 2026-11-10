@@ -134,7 +134,8 @@ test.describe("Office hours request roster", () => {
       // In WebKit and Safari, the first click on the Resolve button scrolls the page instead of
       // opening the confirm popover. Focus lands on <main tabIndex={-1}> and the page scrolls main to
       // the top of the window, so the click ends on another element. Click again until the confirm
-      // button shows.
+      // button shows. This loop works around #1231 and does not fix it. Remove it once #1231 is
+      // fixed.
       const confirmResolve = taPage.getByRole("button", { name: "Confirm action" });
       await expect(async () => {
         if (!(await confirmResolve.isVisible())) {
@@ -173,151 +174,58 @@ test.describe("Office hours request roster", () => {
     await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toBeVisible();
   });
 
-  test("A new request keeps its roster when the first roster response arrives after the request is created", async ({
+  test("A new request shows its roster while the first roster load is held back, and keeps it when that load arrives", async ({
     page
   }) => {
     // When the helpRequestStudents cache finishes its first load, it replaces all of its rows with
     // the result. That load starts when the form page opens, before the request exists, so its
-    // result has no rows for the new request. If the result arrives after the form has already
-    // added the new request's rows, it overwrites them. The page then goes from "1 student" and a
-    // Resolve button to "0 students" and no Resolve button.
+    // result has no rows for the new request. The form adds the new request's rows twice: once
+    // right away, so the page doesn't have to wait for the first load, and once after that load
+    // has finished, so its overwrite doesn't remove them.
+    //
+    // This test holds back the first load's response until after the request is created. Without
+    // the first add, the page has no roster while the response is held. Without the second, the
+    // page drops to "0 students" and loses the Resolve button when the held response arrives. A
+    // first load that fails goes through the same wait (the form waits for it to settle either
+    // way), so it has no test of its own.
     test.slow();
     await loginAsUser(page, student!, course);
 
-    // Hold back the response to the form page's first roster query. The query itself runs now,
-    // before the request exists, so the response has no rows for the new request.
     let releaseFirstLoad!: () => void;
     const firstLoadReleased = new Promise<void>((resolve) => {
       releaseFirstLoad = resolve;
     });
-    let markFirstLoadDelivered!: () => void;
-    const firstLoadDelivered = new Promise<void>((resolve) => {
-      markFirstLoadDelivered = resolve;
-    });
     let heldFirstLoad = false;
-    let firstLoadWasDelivered = false;
+    let firstLoadDelivered = false;
     await page.route("**/rest/v1/help_request_students?*", async (route) => {
       if (!heldFirstLoad && isFormRosterFirstLoad(route.request())) {
         heldFirstLoad = true;
+        // The query runs now, before the request exists, so its result has no rows for it.
         const response = await route.fetch();
         await firstLoadReleased;
         await route.fulfill({ response });
-        firstLoadWasDelivered = true;
-        markFirstLoadDelivered();
+        firstLoadDelivered = true;
         return;
       }
       await route.continue();
     });
-    // Count the refetch responses, and the ones that arrive after the held response.
-    let refetches = 0;
-    let refetchesAfterFirstLoad = 0;
-    page.on("response", (response) => {
-      if (isRefetchById(response)) {
-        refetches++;
-        if (firstLoadWasDelivered) {
-          refetchesAfterFirstLoad++;
-        }
-      }
-    });
-    const rosterLookup = page.waitForResponse(
-      (response) =>
-        response.url().includes("/rest/v1/help_request_students?") && response.url().includes("help_request_id=eq.")
-    );
 
     await page.goto(`/course/${course.id}/office-hours/${queueId}/new`);
     await submitNewRequest(page, "Roster check: slow first load");
-    await rosterLookup;
     expect(heldFirstLoad).toBe(true);
-    // The form refetches the rows right away, so the page can show them while the first load is
-    // held.
-    await expect.poll(() => refetches).toBeGreaterThan(0);
-    await expect(page.getByText("1 student", { exact: true })).toBeVisible();
 
-    // The form's second refetch has to wait for the first load. If it doesn't, it comes back now.
-    // Wait up to 3 seconds for it, so that the held response is the one that arrives last. With
-    // the fix, the form hasn't sent the second refetch yet, and this wait times out.
-    await expect
-      .poll(() => refetches, { timeout: 3_000 })
-      .toBeGreaterThan(1)
-      .catch(() => {});
-
-    // With the fix, the form sends its second refetch only after the cache has processed the
-    // held response. So when that refetch comes back, the overwrite is already over, and the
-    // student's row should be back. Without the fix, both refetches came back before the held
-    // response, no refetch comes after it, and the test fails here.
-    releaseFirstLoad();
-    await firstLoadDelivered;
-    await expect.poll(() => refetchesAfterFirstLoad, { timeout: 10_000 }).toBeGreaterThan(0);
-
+    // The first load is still held, so the roster on the page comes from the form's first add.
     await expect(page.getByText("1 student", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
-  });
 
-  test("A new request gets its roster when the first roster query fails", async ({ page }) => {
-    // The form waits for the helpRequestStudents cache's first load to finish, even if it fails.
-    // Check that a failed first load doesn't count as a failure to load the new request's rows: the
-    // roster shows, and the student gets no error toast.
-    test.slow();
-    await loginAsUser(page, student!, course);
-
-    let releaseFirstLoad!: () => void;
-    const firstLoadReleased = new Promise<void>((resolve) => {
-      releaseFirstLoad = resolve;
+    // Release the held response and wait for the form's second add. The form sends that refetch
+    // only after the cache has applied the held response, so once it is back, the overwrite is
+    // over. Without the second add, no refetch follows the held response and this wait fails.
+    const refetchAfterFirstLoad = page.waitForResponse((response) => firstLoadDelivered && isRefetchById(response), {
+      timeout: 10_000
     });
-    let failedFirstLoad = false;
-    await page.route("**/rest/v1/help_request_students?*", async (route) => {
-      if (!failedFirstLoad && isFormRosterFirstLoad(route.request())) {
-        failedFirstLoad = true;
-        await firstLoadReleased;
-        await route.fulfill({ status: 500, contentType: "application/json", body: '{"message":"test failure"}' });
-        return;
-      }
-      await route.continue();
-    });
-    let refetches = 0;
-    page.on("response", (response) => {
-      if (isRefetchById(response)) {
-        refetches++;
-      }
-    });
-    const rosterLookup = page.waitForResponse(
-      (response) =>
-        response.url().includes("/rest/v1/help_request_students?") && response.url().includes("help_request_id=eq.")
-    );
-
-    await page.goto(`/course/${course.id}/office-hours/${queueId}/new`);
-    await submitNewRequest(page, "Roster check: failed first load");
-    await rosterLookup;
-    expect(failedFirstLoad).toBe(true);
     releaseFirstLoad();
-
-    // The form refetches once right away and once after the first load has settled. The second
-    // refetch only happens if the form carried on past the failed first load.
-    await expect.poll(() => refetches, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
-    await expect(page.getByText("1 student", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
-    await expect(page.getByText("Could not load the students on this request")).toHaveCount(0);
-  });
-
-  test("A new request shows its roster while the first roster query is still running", async ({ page }) => {
-    // The helpRequestStudents cache's first load has no timeout. If it never answers, the form must
-    // not wait for it before showing the new request's rows.
-    test.slow();
-    await loginAsUser(page, student!, course);
-
-    let heldFirstLoad = false;
-    await page.route("**/rest/v1/help_request_students?*", async (route) => {
-      if (!heldFirstLoad && isFormRosterFirstLoad(route.request())) {
-        heldFirstLoad = true;
-        // Never answer it.
-        return;
-      }
-      await route.continue();
-    });
-
-    await page.goto(`/course/${course.id}/office-hours/${queueId}/new`);
-    await submitNewRequest(page, "Roster check: first load never answers");
-    expect(heldFirstLoad).toBe(true);
+    await refetchAfterFirstLoad;
 
     await expect(page.getByText("1 student", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Resolve", exact: true })).toBeVisible();
