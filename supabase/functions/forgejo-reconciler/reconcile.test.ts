@@ -252,10 +252,10 @@ Deno.test("repos: a repo the student can't write to is not recorded, and the pas
   const result = await reconcileForgejoRepos(client, config, ops);
   assertEquals(result.created, 1);
   assertEquals(
-    result.failures.map((f) => [f.repository, (f.error as Error).message]),
+    result.failures.map((f) => [f.profileId, (f.error as Error).message]),
     [
-      ["cs4535/hw1-a", "Forgejo doesn't report write access for a"],
-      ["other/hw1-c", "Forgejo org create failed: 403"]
+      ["profile-a", "Forgejo doesn't report write access for the student"],
+      ["profile-c", "Forgejo org create failed: 403"]
     ]
   );
   assertEquals(

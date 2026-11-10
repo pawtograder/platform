@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
       repoScope.setFingerprint(["forgejo-reconciler", "repo-failed"]);
       repoScope.setContext("failures", {
         count: repos.failures.length,
-        repositories: repos.failures.slice(0, 20).map((f) => f.repository)
+        repos: repos.failures.slice(0, 20).map((f) => ({ assignment_id: f.assignmentId, profile_id: f.profileId }))
       });
       Sentry.captureException(repos.failures[0].error, repoScope);
     }

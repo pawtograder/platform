@@ -75,7 +75,12 @@ export type RepoOps = {
   grantWrite: typeof grantWrite;
 };
 
-export type RepoReconcileResult = { created: number; failures: { repository: string; error: unknown }[] };
+// Failures go to Sentry, so they name the assignment and profile, not the repo: its name ends in a login
+// made from the student's email.
+export type RepoReconcileResult = {
+  created: number;
+  failures: { assignmentId: number; profileId: string; error: unknown }[];
+};
 
 export async function reconcileForgejoRepos(
   supabase: SupabaseClient<Database>,
@@ -100,7 +105,7 @@ export async function reconcileForgejoRepos(
       }
       await ops.ensureRepoFromTemplate(config, repo.template_repo, repo.owner, repo.name);
       if (!(await ops.grantWrite(config, repository, repo.login))) {
-        throw new Error(`Forgejo doesn't report write access for ${repo.login}`);
+        throw new Error("Forgejo doesn't report write access for the student");
       }
       // Written only once the student can push, so a row never points at a repo they can't use.
       const { error: saveError } = await supabase.from("repositories").upsert(
@@ -117,7 +122,7 @@ export async function reconcileForgejoRepos(
       if (saveError) throw saveError;
       result.created++;
     } catch (failure) {
-      result.failures.push({ repository, error: failure });
+      result.failures.push({ assignmentId: repo.assignment_id, profileId: repo.profile_id, error: failure });
     }
   }
   return result;

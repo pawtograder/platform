@@ -117,7 +117,7 @@ export async function ensureOrg(config: ForgejoConfig, org: string): Promise<voi
   const message = await res.text();
   // Another pass created it between the lookup and the create.
   if (res.status === 422 && /user already exists/i.test(message)) return;
-  throw new Error(`Forgejo org create failed: ${res.status} ${message.slice(0, 300)}`);
+  throw new Error(`Forgejo org create failed: ${res.status} ${reason(message)}`);
 }
 
 /**
@@ -137,16 +137,16 @@ export async function ensureRepoFromTemplate(
     git_content: true
   });
   if (res.ok || res.status === 409) return;
-  throw await failure(res, `generate ${owner}/${name} from ${template}`);
+  throw await failure(res, "repo generate from template");
 }
 
 /** Gives login write access, then reports whether Forgejo says they have it. */
 export async function grantWrite(config: ForgejoConfig, repository: string, login: string): Promise<boolean> {
   const user = encodeURIComponent(login);
   const put = await forgejo(config, "PUT", `/repos/${repository}/collaborators/${user}`, { permission: "write" });
-  if (!put.ok) throw await failure(put, `add ${login} to ${repository}`);
+  if (!put.ok) throw await failure(put, "collaborator add");
   const res = await forgejo(config, "GET", `/repos/${repository}/collaborators/${user}/permission`);
-  if (!res.ok) throw await failure(res, `permission read for ${login} on ${repository}`);
+  if (!res.ok) throw await failure(res, "collaborator permission read");
   const { permission } = (await res.json()) as { permission: string };
   return permission === "write" || permission === "admin";
 }
