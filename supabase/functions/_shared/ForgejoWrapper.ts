@@ -104,5 +104,5 @@ export async function ensureAccountForUser(
     if (res.status === 422 && /user already exists|name is reserved/i.test(message)) continue;
     throw new Error(`Forgejo user create failed: ${res.status} ${reason(message)}`);
   }
-  throw new Error(`No free Forgejo username for ${base}`);
+  throw new Error("No free Forgejo username after 20 attempts");
 }
