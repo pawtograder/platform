@@ -31,16 +31,19 @@ async function forgejo(config: ForgejoConfig, method: string, path: string, body
   });
 }
 
-// These errors go to Sentry, and Forgejo names the offending value in brackets
-// ("e-mail already in use [email: a@b.edu]"), so only the message without them is kept.
+// These errors go to Sentry, and Forgejo's response text can name the user ("e-mail already in use
+// [email: a@b.edu]"). So only a known message is kept, never the text itself; the status stays.
+const KNOWN_REASONS = [
+  "e-mail already in use",
+  "user already exists",
+  "name is reserved",
+  "this is not a template repo",
+  "the repository with the same name already exists"
+];
+
 function reason(text: string): string {
-  let message = text;
-  try {
-    message = (JSON.parse(text) as { message?: string }).message ?? text;
-  } catch {
-    // Not JSON: use the text as it came.
-  }
-  return message.replace(/\s*\[[^\]]*\]/g, "").slice(0, 200);
+  const lower = text.toLowerCase();
+  return KNOWN_REASONS.find((known) => lower.includes(known)) ?? "unrecognized response";
 }
 
 async function failure(res: Response, what: string): Promise<Error> {
