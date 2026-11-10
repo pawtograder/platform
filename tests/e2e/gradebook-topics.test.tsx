@@ -21,7 +21,7 @@ import { visualScreenshot } from "./VisualTestUtils";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-test.setTimeout(240_000);
+test.setTimeout(480_000);
 
 test.describe("Gradebook topics (CS 2100-style course)", () => {
   test.describe.configure({ mode: "serial" });
@@ -30,7 +30,7 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
 
   test.beforeAll(async () => {
     // The fixture waits for the recalculation worker, which runs on a one-minute cron.
-    test.setTimeout(240_000);
+    test.setTimeout(480_000);
     fixture = await createCs2100StyleGradebook();
   });
 

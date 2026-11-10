@@ -114,9 +114,10 @@ async function insertColumns(
  * Wait until recalculation has caught up with every write made since `since`: each of the class's
  * per-student recalculation states (private and public) was processed after it, and none is still
  * dirty or mid-recalculation. A recalculation that leaves a score unchanged doesn't rewrite the
- * cell, so the row state, not the cell, is the signal. The worker runs on a one-minute cron.
+ * cell, so the row state, not the cell, is the signal. The worker runs on a one-minute cron, and
+ * behind a full CI run (six workers) it can take several minutes to reach a new class.
  */
-export async function waitForGradebookRecalculation(class_id: number, since: Date, timeoutMs = 180_000): Promise<void> {
+export async function waitForGradebookRecalculation(class_id: number, since: Date, timeoutMs = 360_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const { data, error } = await supabase
