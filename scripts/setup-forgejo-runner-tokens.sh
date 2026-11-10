@@ -143,9 +143,15 @@ if [ "$ROTATE" -eq 1 ] || [ "$current_version" = 0 ] || [ -n "${current_version_
     jq -n --arg n "$1" --arg s "$2" '{name: $n, scopes: ($s | split(","))}' \
       | bot -X POST --data-binary @- "$API/users/$BOT/tokens" | jq -r '.sha1 // empty'
   }
-  DISPATCHER_TOKEN="$(mint "actions-dispatcher-$stamp" write:admin)"
-  MIRROR_TOKEN="$(mint "action-mirrors-$stamp" write:organization,write:repository)"
-  [ ${#DISPATCHER_TOKEN} -ge 40 ] && [ ${#MIRROR_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no token" >&2; exit 1; }
+  # Delete whatever this run minted, so a partial failure leaves no live token behind.
+  drop_new() {
+    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/actions-dispatcher-$stamp" 2>/dev/null || true
+    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/action-mirrors-$stamp" 2>/dev/null || true
+  }
+  DISPATCHER_TOKEN="$(mint "actions-dispatcher-$stamp" write:admin || true)"
+  [ ${#DISPATCHER_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no dispatcher token" >&2; drop_new; exit 1; }
+  MIRROR_TOKEN="$(mint "action-mirrors-$stamp" write:organization,write:repository || true)"
+  [ ${#MIRROR_TOKEN} -ge 40 ] || { echo "ERROR: Forgejo returned no mirror token; deleted the new dispatcher token" >&2; drop_new; exit 1; }
 
   CAS=(-cas="$current_version")
   [ -z "${current_version_deleted:-}" ] || CAS=()
@@ -155,8 +161,7 @@ if [ "$ROTATE" -eq 1 ] || [ "$current_version" = 0 ] || [ -n "${current_version_
       '{bot_username: $u, dispatcher_token: $ENV.T_D, mirror_token: $ENV.T_M, dispatcher_token_name: $nd, mirror_token_name: $nm}' \
       | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$BAO_PATH" - >/dev/null; then
     echo "ERROR: could not write ${BAO_MOUNT}/${BAO_PATH} (changed since this run read it?). Deleting the new tokens." >&2
-    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/actions-dispatcher-$stamp" || true
-    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/action-mirrors-$stamp" || true
+    drop_new
     exit 1
   fi
   unset DISPATCHER_TOKEN MIRROR_TOKEN
@@ -164,11 +169,16 @@ if [ "$ROTATE" -eq 1 ] || [ "$current_version" = 0 ] || [ -n "${current_version_
 fi
 
 if [ "$REVOKE_OLD" -eq 1 ]; then
-  keep="$($CLI kv get -mount="$BAO_MOUNT" -format=json "$BAO_PATH" | jq -r '.data.data | .dispatcher_token_name, .mirror_token_name')"
-  for name in $(list_tokens); do
+  keep="$($CLI kv get -mount="$BAO_MOUNT" -format=json "$BAO_PATH" | jq -re '.data.data | .dispatcher_token_name, .mirror_token_name')" \
+    || { echo "ERROR: could not read the current token names from ${BAO_MOUNT}/${BAO_PATH}" >&2; exit 1; }
+  names="$(list_tokens)" || { echo "ERROR: could not list $BOT's tokens" >&2; exit 1; }
+  revoke_failed=0
+  for name in $names; do
     grep -qxF "$name" <<<"$keep" && continue
-    bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/$name" && echo "  revoked $name"
+    if bot -o /dev/null -X DELETE "$API/users/$BOT/tokens/$name"; then echo "  revoked $name"
+    else echo "ERROR: could not revoke $name" >&2; revoke_failed=1; fi
   done
+  [ "$revoke_failed" -eq 0 ] || exit 1
 fi
 unset ADMIN_PW BOT_PW
 
