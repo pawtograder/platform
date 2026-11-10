@@ -1,7 +1,7 @@
 /**
  * The reconcile pass for #1092, against a fake Supabase client and a stubbed account step.
  *
- * Run from supabase/functions:  deno test --no-check --allow-env --allow-net forgejo-account-reconciler/
+ * Run from supabase/functions:  deno test --no-check --allow-env --allow-net forgejo-reconciler/
  */
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";

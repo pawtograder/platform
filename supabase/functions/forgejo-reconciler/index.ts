@@ -15,7 +15,7 @@ import { reconcileForgejoAccounts } from "./reconcile.ts";
  *
  * Creates a Forgejo account for everyone enrolled in a cloud-workspaces class, so repos can be
  * created for them (#1093) before they first sign in. Invoked hourly via pg_cron, and kicked when
- * someone joins such a class or a class turns the flag on (20261109130000_forgejo_account_reconciler.sql).
+ * someone joins such a class or a class turns the flag on (20261109130000_forgejo_reconciler.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
@@ -36,7 +36,7 @@ function json(body: unknown, status = 200): Response {
 
 Deno.serve(async (req) => {
   const scope = new Sentry.Scope();
-  scope.setTag("function", "forgejo-account-reconciler");
+  scope.setTag("function", "forgejo-reconciler");
 
   // x-supabase-webhook-source is an attacker-settable label; only the shared secret grants access.
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
@@ -47,7 +47,7 @@ Deno.serve(async (req) => {
   const config = forgejoConfig();
   if (!config) {
     // A deployment without Forgejo, or one not configured yet: nothing to do, and nothing to page on.
-    console.log("[forgejo-account-reconciler] Skipped: FORGEJO_URL, admin credentials or auth source id unset");
+    console.log("[forgejo-reconciler] Skipped: FORGEJO_URL, admin credentials or auth source id unset");
     return json({ skipped: "forgejo_not_configured" });
   }
 
@@ -60,10 +60,10 @@ Deno.serve(async (req) => {
 
   try {
     const { provisioned, failures } = await reconcileForgejoAccounts(supabase, config);
-    console.log(`[forgejo-account-reconciler] Provisioned ${provisioned}, failed ${failures.length}`);
+    console.log(`[forgejo-reconciler] Provisioned ${provisioned}, failed ${failures.length}`);
     if (failures.length > 0) {
       // One event per pass, not per user: an outage or a bad credential fails everyone at once.
-      scope.setFingerprint(["forgejo-account-reconciler", "provision-failed"]);
+      scope.setFingerprint(["forgejo-reconciler", "provision-failed"]);
       scope.setContext("failures", {
         count: failures.length,
         user_ids: failures.slice(0, 20).map((f) => f.userId)
@@ -73,7 +73,7 @@ Deno.serve(async (req) => {
     await Sentry.flush(2000);
     return json({ provisioned, failed: failures.length });
   } catch (error) {
-    console.error("[forgejo-account-reconciler] Error:", error);
+    console.error("[forgejo-reconciler] Error:", error);
     Sentry.captureException(error, scope);
     await Sentry.flush(2000);
     return json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);

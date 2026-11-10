@@ -1,10 +1,10 @@
--- Proof harness for 20261109130000_forgejo_account_reconciler.sql (#1092).
+-- Proof harness for 20261109130000_forgejo_reconciler.sql (#1092).
 --
 -- Needs the Vault secrets call_edge_function_internal reads (a local Supabase has them), and makes
--- its own fixtures. A kick shows up as a pg_net request to forgejo-account-reconciler, queued inside
+-- its own fixtures. A kick shows up as a pg_net request to forgejo-reconciler, queued inside
 -- this transaction. It all ends in ROLLBACK, so nothing is sent:
 --
---   psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f tests/manual/forgejo_account_reconciler.sql
+--   psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f tests/manual/forgejo_reconciler.sql
 --
 -- Scenarios:
 --   1. enrolling in a class without cloud-workspaces          -> no kick
@@ -22,7 +22,7 @@ create or replace function pg_temp.check(p_name text, p_ok boolean, p_detail tex
 language sql as $$ insert into t_result values (p_name, coalesce(p_ok, false), p_detail) $$;
 
 create or replace function pg_temp.kicks() returns bigint language sql as $$
-  select count(*) from net.http_request_queue where url like '%/functions/v1/forgejo-account-reconciler'
+  select count(*) from net.http_request_queue where url like '%/functions/v1/forgejo-reconciler'
 $$;
 
 create temp table fx(name text primary key, id uuid);
@@ -90,7 +90,7 @@ select pg_temp.check('5b and no kick is queued', pg_temp.kicks() = (select v fro
 
 -- 6
 select pg_temp.check('6 hourly schedule exists',
-  exists (select 1 from cron.job where jobname = 'forgejo-account-reconciler' and schedule = '41 * * * *'));
+  exists (select 1 from cron.job where jobname = 'forgejo-reconciler' and schedule = '41 * * * *'));
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;

@@ -771,11 +771,11 @@ verify_jwt = false
 import_map = "./functions/github-membership-reconciler/deno.json"
 entrypoint = "./functions/github-membership-reconciler/index.ts"
 
-[functions.forgejo-account-reconciler]
+[functions.forgejo-reconciler]
 enabled = true
 verify_jwt = false
-import_map = "./functions/forgejo-account-reconciler/deno.json"
-entrypoint = "./functions/forgejo-account-reconciler/index.ts"
+import_map = "./functions/forgejo-reconciler/deno.json"
+entrypoint = "./functions/forgejo-reconciler/index.ts"
 
 [functions.gradebook-column-inserted]
 enabled = true
