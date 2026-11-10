@@ -34,7 +34,11 @@ export async function reconcileForgejoAccounts(
       p_instance_url: config.url,
       p_stale_minutes: STALE_CLAIM_MINUTES
     });
-    if (claimError) throw claimError;
+    // One user's failed claim (deleted mid-pass, say) shouldn't stop the others.
+    if (claimError) {
+      result.failures.push({ userId: user.user_id, error: claimError });
+      continue;
+    }
     if (!claimed) continue;
 
     // On failure the claim stays; once it is stale the next pass retries and adopts anything created.
