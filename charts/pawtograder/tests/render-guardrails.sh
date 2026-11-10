@@ -2994,6 +2994,12 @@ apps_has "sso: Forgejo's Secret keeps the key/secret names the login source read
 apps_has "sso: Coder's client syncs from its path" yes "key: apps/t/coder-oidc" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
 apps_has "sso: Coder's Secret carries CODER_OIDC_CLIENT_SECRET" yes "secretKey: CODER_OIDC_CLIENT_SECRET" \
   "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+label="sso: client Secrets outlive their ExternalSecrets, the apps' passwords don't"
+if ! apps "${SSO_ES[@]}" "${SSO_ONLY[@]}" >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'creationPolicy: Orphan' "$OUTFILE")" -ne 2 ] || [ "$(grep -c 'creationPolicy: Owner' "$OUTFILE")" -ne 4 ]; then
+  echo "FAIL [$label]: want 2 Orphan (forgejo-oauth, coder-oidc) and 4 Owner"; FAILED=1
+else echo "ok   [$label]"; fi
 apps_has "sso: no Coder client ExternalSecret with coder.oidc off" no "name: pawtograder-coder-oidc" \
   "${SSO_ES[@]}" --set coder.oidc.enabled=false "${SSO_ONLY[@]}"
 apps_has "sso: no client ExternalSecrets without their paths" no "-oauth" \
