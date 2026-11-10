@@ -94,7 +94,7 @@ begin
       '41 * * * *',
       $$select public.invoke_forgejo_reconciler_background_task();$$
     );
-    raise notice 'Forgejo account reconciler cron scheduled hourly';
+    raise notice 'Forgejo reconciler cron scheduled hourly';
   end if;
 exception
   when insufficient_privilege then
