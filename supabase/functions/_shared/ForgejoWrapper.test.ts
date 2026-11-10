@@ -5,7 +5,13 @@
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
-import { ensureAccountForUser, forgejoConfig, type ForgejoConfig, usernameFromEmail } from "./ForgejoWrapper.ts";
+import {
+  downloadArchive,
+  ensureAccountForUser,
+  forgejoConfig,
+  type ForgejoConfig,
+  usernameFromEmail
+} from "./ForgejoWrapper.ts";
 
 const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "Basic eA==", authSourceId: 3 };
 const user = { userId: "7d1c7c9e-0000-4000-8000-000000000001", email: "Alex.Kim@northeastern.edu", name: "Alex Kim" };
@@ -137,4 +143,28 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
     await assertRejects(() => ensureAccountForUser(config, user), Error, "user search failed: 502");
     assertEquals(calls.length, 1);
   });
+});
+
+Deno.test("downloadArchive: fetches the commit's zip, and an error status fails", async () => {
+  const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+  await withForgejo([new Response(zip, { status: 200 })], async (calls) => {
+    assertEquals(await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c"), zip);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/archive/b275490c.zip");
+  });
+  await withForgejo([new Response("Not Found", { status: 404 })], async () => {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c"), Error, "404");
+  });
+});
+
+Deno.test("downloadArchive: gives up on a request Forgejo never answers", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+    })) as typeof fetch;
+  try {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "0000", 50), DOMException);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

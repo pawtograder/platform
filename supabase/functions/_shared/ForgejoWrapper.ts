@@ -1,4 +1,4 @@
-// Forgejo admin API calls for the accounts Pawtograder creates (#1092).
+// Forgejo admin API calls for the accounts Pawtograder creates (#1092) and for grading (#1110).
 //
 // Admin Basic auth, not an admin token: a token can't act on other users' behalf (Forgejo answers
 // 401 "auth method not allowed"), which repo provisioning (#1093) needs.
@@ -88,4 +88,23 @@ export async function ensureAccountForUser(
     throw new Error(`Forgejo user create failed: ${res.status} ${message.slice(0, 300)}`);
   }
   throw new Error(`No free Forgejo username for ${base}`);
+}
+
+/**
+ * The repo at `sha` as a zip with one top-level directory, the same shape as GitHub's zipball, for
+ * grading (#1110). Forgejo 15.0.9 held a request for an unknown commit open for minutes, hence the
+ * timeout.
+ */
+export async function downloadArchive(
+  config: ForgejoConfig,
+  repository: string,
+  sha: string,
+  timeoutMs = 60_000
+): Promise<Uint8Array> {
+  const res = await fetch(`${config.url}/api/v1/repos/${repository}/archive/${encodeURIComponent(sha)}.zip`, {
+    headers: { Authorization: config.authorization },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!res.ok) throw await failure(res, `archive of ${repository}@${sha}`);
+  return new Uint8Array(await res.arrayBuffer());
 }

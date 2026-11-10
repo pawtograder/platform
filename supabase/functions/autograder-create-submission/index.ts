@@ -22,6 +22,7 @@ import {
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
+import { downloadArchive, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
@@ -1534,15 +1535,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           };
         }
 
-        // Clone the repository
-        const repoToClone = getRepoToCloneConsideringE2E(repository);
-        const repo = await handleGitHubApiCall(
-          () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
-          org,
-          "cloneRepository",
-          adminSupabase,
-          scope
-        );
+        // Clone the repository. A Forgejo clone stays outside handleGitHubApiCall, so its failures never
+        // open the GitHub circuit for an org that happens to share the Forgejo org's name.
+        let repo: Buffer;
+        if (repoData.git_provider === "forgejo") {
+          const forgejo = forgejoConfig();
+          if (!forgejo) {
+            throw new UserVisibleError("Forgejo grading isn't configured on this deployment.", 503);
+          }
+          repo = Buffer.from(await downloadArchive(forgejo, repository, sha));
+        } else {
+          const repoToClone = getRepoToCloneConsideringE2E(repository);
+          repo = await handleGitHubApiCall(
+            () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
+            org,
+            "cloneRepository",
+            adminSupabase,
+            scope
+          );
+        }
 
         // Reject + clean up a submission that's too large to safely unzip in the
         // isolate (see MAX_SUBMISSION_* above). Mirrors the no-matching-files
@@ -1846,7 +1857,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const requestedGraderSha = isRegressionRerun ? (checkRun.requested_grader_sha ?? undefined) : undefined;
         const { download_link: grader_url, sha: grader_sha } = await handleGitHubApiCall(
           () => getRepoTarballURL(config.grader_repo!, requestedGraderSha),
-          org,
+          // The grader stays on GitHub for Forgejo assignments (D6), so its own org is the circuit key.
+          repoData.git_provider === "forgejo" ? config.grader_repo!.split("/")[0] : org,
           "getRepoTarballURL",
           adminSupabase,
           scope
