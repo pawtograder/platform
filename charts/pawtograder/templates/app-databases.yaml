@@ -30,7 +30,6 @@ data:
   {{- end }}
   {{- with .Values.coder.externalAuth.forgejo }}
   {{- if .enabled }}
-  {{- /* The browser goes to Forgejo's public URL; coderd exchanges and validates tokens over the Service. */}}
   {{- $public := include "pawtograder.forgejo.url" $ }}
   {{- $service := printf "http://%s.%s.svc:%v" (include "pawtograder.forgejo.http" $) $.Release.Namespace (include "pawtograder.forgejo.servicePort" $) }}
   CODER_EXTERNAL_AUTH_0_ID: {{ .id | quote }}
@@ -41,7 +40,7 @@ data:
   CODER_EXTERNAL_AUTH_0_VALIDATE_URL: "{{ $service }}/api/v1/user"
   {{- /* Matches the bare origin too: git asks for credentials with it alone. */}}
   CODER_EXTERNAL_AUTH_0_REGEX: {{ printf "^%s(/.*)?$" (regexQuoteMeta $public) | quote }}
-  {{- /* Coder's gitea default has a stray space in " write:repository". Forgejo narrows the token to these. */}}
+  {{- /* Coder's gitea default scopes contain a stray space (" write:repository"). */}}
   CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"
   {{- end }}
   {{- end }}

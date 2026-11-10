@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Registers the Forgejo OAuth2 app that Coder uses as its external auth provider, and stores its
-# client ID and secret in OpenBao for the chart's ExternalSecret (pawtograder-coder-external-auth).
-# See charts/pawtograder/README.md, "Cloning private repositories".
 set -euo pipefail
 
 usage() {
@@ -60,7 +57,7 @@ else
   echo "ERROR: neither 'bao' nor 'vault' found on PATH" >&2; exit 2
 fi
 for c in curl jq; do command -v "$c" >/dev/null || { echo "ERROR: '$c' is required" >&2; exit 2; }; done
-# Check the token before registering: failing after it would orphan the new Forgejo app.
+# Check the token before registering, or a later failure orphans the new Forgejo app.
 $CLI token lookup >/dev/null 2>&1 || {
   echo "ERROR: $CLI token lookup failed: set BAO_ADDR/BAO_TOKEN (or VAULT_*) and log in" >&2; exit 1; }
 
@@ -68,7 +65,6 @@ fj_path="$PREFIX/forgejo-$ENV_NAME"
 auth_path="$PREFIX/coder-external-auth-$ENV_NAME"
 callback="$coder_url/external-auth/$ID/callback"
 
-# Returns 1 when the path doesn't exist, and exits on any other read error.
 bao_get() {
   local out
   if out="$($CLI kv get -mount="$BAO_MOUNT" -format=json "$1" 2>&1)"; then
@@ -86,7 +82,7 @@ FJ_PASS="$(jq -r '.data.data.admin_password // empty' <<<"$fj_admin")"
 unset fj_admin
 [ -n "$FJ_USER" ] && [ -n "$FJ_PASS" ] || { echo "ERROR: ${BAO_MOUNT}/${fj_path} has no admin_username/admin_password" >&2; exit 1; }
 
-# Credentials go through a curl config on a pipe, never argv, so `ps` on a shared host can't read them.
+# Credentials go via a pipe, not argv, so `ps` can't read them.
 forgejo() {
   local path="$1"; shift
   curl -fsS -K <(printf 'user = "%s:%s"\n' "$FJ_USER" "$FJ_PASS") \
@@ -95,7 +91,6 @@ forgejo() {
 
 apps="$(forgejo "/user/applications/oauth2?limit=50")" || {
   echo "ERROR: could not list $FJ_USER's OAuth2 apps at $forgejo_url; check --forgejo-url and the admin password" >&2; exit 1; }
-# Apps a previous run registered for this Coder: same callback.
 old_ids="$(jq -r --arg cb "$callback" '.[] | select((.redirect_uris // []) | index($cb)) | .id' <<<"$apps")"
 
 stored_client=""
@@ -124,7 +119,7 @@ unset created
 
 CAS=()
 [ -n "$stored_client" ] || CAS=(-cas=0)
-# The secret reaches jq through its environment, not argv.
+# Secret via env, not argv, so `ps` can't read it.
 if ! CS="$CLIENT_SECRET" jq -n --arg id "$CLIENT_ID" '{client_id: $id, client_secret: $ENV.CS}' \
   | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$auth_path" - >/dev/null; then
   echo "ERROR: could not write ${BAO_MOUNT}/${auth_path}; delete Forgejo app $new_id by hand and rerun" >&2

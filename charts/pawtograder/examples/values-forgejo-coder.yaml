@@ -78,7 +78,7 @@ coder:
     enabled: true
     # Uncomment to create a Coder account, with workspace compute, on first sign-in for anyone who can sign in to Pawtograder.
     # allowSignups: true
-  # Register the Forgejo app first: scripts/setup-coder-forgejo-auth.sh.
+  # Run scripts/setup-coder-forgejo-auth.sh first; coderd exits at startup without the client ID.
   externalAuth:
     forgejo:
       enabled: true

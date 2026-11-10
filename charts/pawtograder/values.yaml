@@ -2898,14 +2898,11 @@ coder:
     signInText: Sign in with Pawtograder
     # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
     allowSignups: false
-  # Forgejo as Coder's external auth provider 0: each user links their Forgejo account in Coder once,
-  # and workspaces clone and push with that token. Needs forgejo.enabled and the Forgejo OAuth app
-  # that scripts/setup-coder-forgejo-auth.sh registers (Secret pawtograder-coder-external-auth).
+  # Run scripts/setup-coder-forgejo-auth.sh before enabling; coderd exits at startup without the client ID.
   externalAuth:
     forgejo:
       enabled: false
-      # Coder's provider ID: the callback is <coder>/external-auth/<id>/callback, and workspace templates
-      # ask for the token by it. Changing it unlinks every user and needs the OAuth app re-registered.
+      # Changing it unlinks every user and needs the OAuth app re-registered.
       id: forgejo
       displayName: Forgejo
   coder:
@@ -3031,8 +3028,6 @@ forgejoCoderSecrets:
     # scripts/setup-forgejo-runner-tokens.sh. Syncs forgejoRunner.dispatcher.tokenSecret and
     # forgejoRunner.actions.tokenSecret (key token). Empty: create those Secrets by hand.
     runnerPath: ""
-    # client_id and client_secret of Coder's Forgejo OAuth app; required with coder.externalAuth.forgejo.enabled.
-    # Its own path, so setup-openbao-forgejo-coder.sh --rotate doesn't overwrite it.
     coderExternalAuthPath: ""
     storeName: openbao
     storeKind: ClusterSecretStore
