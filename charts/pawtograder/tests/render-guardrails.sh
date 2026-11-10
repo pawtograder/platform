@@ -2980,6 +2980,49 @@ apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %
 
 echo
 
+echo "== SSO client Secrets from OpenBao =="
+
+SSO_ES=(--set forgejoCoderSecrets.externalSecret.enabled=true
+  --set forgejoCoderSecrets.externalSecret.forgejoPath=apps/t/forgejo
+  --set forgejoCoderSecrets.externalSecret.coderPath=apps/t/coder
+  --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo-oauth
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder-oidc)
+SSO_ONLY=(--show-only templates/forgejo-coder-externalsecrets.yaml)
+apps_has "sso: Forgejo's client syncs from its path" yes "key: apps/t/forgejo-oauth" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Forgejo's Secret keeps the key/secret names the login source reads" yes "secretKey: secret" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's client syncs from its path" yes "key: apps/t/coder-oidc" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's Secret carries CODER_OIDC_CLIENT_SECRET" yes "secretKey: CODER_OIDC_CLIENT_SECRET" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: no Coder client ExternalSecret with coder.oidc off" no "name: pawtograder-coder-oidc" \
+  "${SSO_ES[@]}" --set coder.oidc.enabled=false "${SSO_ONLY[@]}"
+apps_has "sso: no client ExternalSecrets without their paths" no "-oauth" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath= \
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath= "${SSO_ONLY[@]}"
+apps_refused "sso: a client path that holds Coder's passwords is refused" \
+  'coderOIDCPath is "apps/t/coder", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder
+apps_refused "sso: a client path that holds Forgejo's passwords is refused" \
+  'forgejoOAuthPath is "apps/t/forgejo", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo
+apps_refused "sso: the same path spelled with slashes is still refused" \
+  'coderOIDCPath is "/apps/t/coder/", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=/apps/t/coder/
+apps_refused "sso: one path for both clients is refused" "forgejoOAuthPath and coderOIDCPath must differ" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/forgejo-oauth
+label="sso: staging syncs both clients from OpenBao and turns on Coder's OIDC"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-oauth-staging" "$OUTFILE" \
+  || ! grep -qF "key: apps/pawtograder/coder-oidc-staging" "$OUTFILE" \
+  || ! grep -qF "CODER_OIDC_ISSUER_URL" "$OUTFILE" \
+  || ! grep -qF "GOTRUE_OAUTH_SERVER_ENABLED" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a client ExternalSecret, Coder's OIDC settings or GoTrue's OAuth server"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
 echo "== Coder template variables =="
 
 # The CLI parses each --variable as CSV, so a JSON value (quotes, commas) fails

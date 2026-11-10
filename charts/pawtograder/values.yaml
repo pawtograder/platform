@@ -3014,6 +3014,11 @@ forgejoCoderSecrets:
     enabled: false
     forgejoPath: ""
     coderPath: ""
+    # OpenBao paths for the "Sign in with Pawtograder" clients (client_id, client_secret), synced to
+    # pawtograder-forgejo-oauth and pawtograder-coder-oidc. scripts/setup-sso-clients.sh writes them.
+    # Keep them apart from forgejoPath/coderPath: the script's kv put replaces the whole secret.
+    forgejoOAuthPath: ""
+    coderOIDCPath: ""
     storeName: openbao
     storeKind: ClusterSecretStore
     refreshInterval: 1h
