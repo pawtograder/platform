@@ -1,6 +1,7 @@
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useRef, useState } from "react";
 import * as Sentry from "@sentry/nextjs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type UnsubscribeStatus = "loading" | "success" | "error";
 
@@ -114,7 +115,7 @@ export function useUnsubscribe({
         Sentry.captureException(error, {
           tags: { operation: `unsubscribe_${entityType}` }
         });
-        setErrorMessage("An unexpected error occurred. Please try again later.");
+        setErrorMessage(getUserFacingErrorMessage(error));
         setStatus("error");
       }
     };

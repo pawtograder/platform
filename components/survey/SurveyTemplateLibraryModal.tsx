@@ -33,6 +33,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type SurveyTemplate = {
   id: string;
@@ -246,11 +247,11 @@ export function SurveyTemplateLibraryModal({
       setIsEditModalOpen(false);
       setEditingTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch {
+    } catch (error) {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
-        description: "An unexpected error occurred.",
+        description: getUserFacingErrorMessage(error),
         type: "error"
       });
     }
@@ -295,11 +296,11 @@ export function SurveyTemplateLibraryModal({
       setIsDeleteConfirmOpen(false);
       setDeleteConfirmTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch {
+    } catch (error) {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
-        description: "An unexpected error occurred.",
+        description: getUserFacingErrorMessage(error),
         type: "error"
       });
     }
