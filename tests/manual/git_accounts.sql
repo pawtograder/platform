@@ -1,4 +1,4 @@
--- Proof harness for 20261109120000_git_accounts.sql (#1092).
+-- Proof harness for 20261109125000_git_accounts.sql (#1092).
 --
 -- Makes its own fixtures, so it runs on an unseeded database too. Run from the repo root against
 -- local Supabase; it all happens in one transaction that ends in ROLLBACK:
