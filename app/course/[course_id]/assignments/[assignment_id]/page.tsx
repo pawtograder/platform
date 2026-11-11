@@ -174,9 +174,12 @@ export default function AssignmentPage() {
   const autograder = autograderData.current;
 
   // Open in Coder (#1095): a student's Forgejo repository, in a course with Cloud Workspaces on.
-  // workspace-open checks the same things on the server; this only decides whether to offer it.
+  // workspace-open checks enrollment and the repository on the server; this only decides whether to
+  // offer it. Not while staff view as a student: the requests would carry the staff session and act
+  // on the staff member's own repository, not the student's.
   const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
   const showWorkspace =
+    !isReadOnly &&
     enrollment?.role === "student" &&
     assignment?.git_provider === "forgejo" &&
     cloudWorkspacesEnabled((course as CourseWithFeatures | undefined)?.features) &&
