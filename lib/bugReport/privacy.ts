@@ -2444,6 +2444,17 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  forgejo_group_repos_needed: {
+    "$[*].all_members_have_logins": "none",
+    "$[*].assignment_group_id": "none",
+    "$[*].assignment_id": "none",
+    "$[*].class_id": "none",
+    "$[*].logins": "handle",
+    "$[*].owner": "none",
+    // The repo name ends in the group's name, which students choose.
+    "$[*].name": "free_text",
+    "$[*].template_repo": "none"
+  },
   forgejo_repos_needed: {
     "$[*].assignment_id": "none",
     "$[*].class_id": "none",
