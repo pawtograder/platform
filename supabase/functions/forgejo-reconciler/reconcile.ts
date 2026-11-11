@@ -5,7 +5,8 @@ import {
   ensureOrg,
   ensureRepoFromTemplate,
   type ForgejoConfig,
-  grantWrite
+  grantWrite,
+  readFile
 } from "../_shared/ForgejoWrapper.ts";
 
 /** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
@@ -129,8 +130,52 @@ export async function reconcileForgejoRepos(
 }
 
 /** Accounts first, so students who just got one get their repos in the same pass. */
+export type HashReconcileResult = { set: number; failures: { assignmentId: number; error: unknown }[] };
+
+/**
+ * Grading rejects a grade.yml whose SHA-256 differs from autograder.workflow_sha. GitHub sets it from
+ * the handout (updateAutograderWorkflowHash); this does the same for Forgejo handouts (#1252). Only an
+ * unset hash is filled: one already set may be what students' repos were made with.
+ */
+export async function reconcileForgejoWorkflowHashes(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  read: typeof readFile = readFile
+): Promise<HashReconcileResult> {
+  const { data: assignments, error } = await supabase
+    .from("assignments")
+    .select("id, template_repo, autograder!inner(workflow_sha)")
+    .eq("git_provider", "forgejo")
+    .not("template_repo", "is", null)
+    .is("autograder.workflow_sha", null)
+    .limit(MAX_REPOS_PER_PASS);
+  if (error) throw error;
+
+  const result: HashReconcileResult = { set: 0, failures: [] };
+  for (const assignment of assignments ?? []) {
+    try {
+      const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
+      // A handout without grading has nothing to compare.
+      if (workflow === null) continue;
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workflow));
+      const workflowSha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const { error: saveError } = await supabase
+        .from("autograder")
+        .update({ workflow_sha: workflowSha })
+        .eq("id", assignment.id)
+        .is("workflow_sha", null);
+      if (saveError) throw saveError;
+      result.set++;
+    } catch (failure) {
+      result.failures.push({ assignmentId: assignment.id, error: failure });
+    }
+  }
+  return result;
+}
+
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
   const accounts = await reconcileForgejoAccounts(supabase, config);
   const repos = await reconcileForgejoRepos(supabase, config);
-  return { accounts, repos };
+  const hashes = await reconcileForgejoWorkflowHashes(supabase, config);
+  return { accounts, repos, hashes };
 }

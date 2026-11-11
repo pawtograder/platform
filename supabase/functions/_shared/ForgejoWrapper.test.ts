@@ -12,6 +12,7 @@ import {
   forgejoConfig,
   type ForgejoConfig,
   grantWrite,
+  readFile,
   usernameFromEmail
 } from "./ForgejoWrapper.ts";
 
@@ -231,5 +232,24 @@ Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo
   });
   await withForgejo([status(404)], async () => {
     await assertRejects(() => grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), Error, "404");
+  });
+});
+
+Deno.test("readFile: decodes the file's base64 content, and a missing file is null", async () => {
+  const text = "name: Grade\non: push\n";
+  // Forgejo, like GitHub, may wrap the base64.
+  const content = btoa(text).replace(/(.{8})/g, "$1\n");
+  await withForgejo([ok({ content })], async (calls) => {
+    assertEquals(await readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), text);
+    assertEquals(
+      calls[0].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-handout/contents/.github/workflows/grade.yml"
+    );
+  });
+  await withForgejo([status(404)], async () => {
+    assertEquals(await readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), null);
+  });
+  await withForgejo([status(500)], async () => {
+    await assertRejects(() => readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), Error, "500");
   });
 });
