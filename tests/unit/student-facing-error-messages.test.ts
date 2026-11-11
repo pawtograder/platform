@@ -50,21 +50,40 @@ describe("getUserFacingErrorMessage", () => {
     expect(getUserFacingErrorMessage(denied)).toContain("contact your instructor");
   });
 
-  it("sends graders to an instructor and instructors to Report this", () => {
+  it("sends graders to an instructor and instructors and admins to the Pawtograder team", () => {
     expect(getUserFacingErrorMessage(denied, { role: "grader" })).toContain("ask an instructor");
-    expect(getUserFacingErrorMessage(denied, { role: "instructor" })).toContain("Report this");
-    expect(getUserFacingErrorMessage(denied, { role: "instructor" })).not.toContain("contact your instructor");
+    for (const role of ["instructor", "admin"] as const) {
+      const message = getUserFacingErrorMessage(denied, { role });
+      expect(message).toContain("Pawtograder team");
+      expect(message).not.toContain("contact your instructor");
+      // The Report this button only exists on error toasts with a Sentry DSN, so don't point at it.
+      expect(message).not.toContain("Report this");
+    }
   });
 
-  it("treats a refused write from the data provider as a permission error", () => {
-    const refused = Object.assign(new Error("You don't have permission to update this assignments record"), {
-      statusCode: 403,
-      refusedWrite: true
+  describe("refused writes from the data provider", () => {
+    const refusedMessage =
+      "You don't have permission to update this assignments record (id 5), or it no longer exists. Nothing was changed.";
+    const refused = Object.assign(new Error(refusedMessage), { statusCode: 403, refusedWrite: true });
+
+    it("keep their own message, which allows for a deleted row", () => {
+      expect(getUserFacingErrorMessage(refused)).toBe(refusedMessage);
+      expect(getUserFacingErrorMessage(refused, { role: "grader" })).toBe(refusedMessage);
+      expect(getUserFacingErrorMessage(refused, { role: "instructor" })).toBe(refusedMessage);
     });
-    expect(getUserFacingErrorMessage(refused, { role: "grader" })).toContain("ask an instructor");
-    expect(getUserFacingErrorMessage(refused, { releasedReviewGraderBlocked: true })).toBe(
-      GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE
-    );
+
+    it("still get the released-review and self-review messages", () => {
+      expect(getUserFacingErrorMessage(refused, { releasedReviewGraderBlocked: true })).toBe(
+        GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE
+      );
+      expect(getUserFacingErrorMessage(refused, { isStudent: true, rubricReviewRound: "self-review" })).toContain(
+        "self-review due date has passed"
+      );
+    });
+
+    it("fall back to the permission message when they have no message", () => {
+      expect(getUserFacingErrorMessage({ refusedWrite: true }, { role: "grader" })).toContain("ask an instructor");
+    });
   });
 
   it("reads the message from a PostgREST plain-object error", () => {
@@ -75,11 +94,23 @@ describe("getUserFacingErrorMessage", () => {
 });
 
 describe("isExpectedUserError", () => {
-  it("is true for permission, session, conflict and raised errors", () => {
-    for (const code of ["42501", "PGRST301", "PGRST116", "23505", "23503", "23514", "P0001"]) {
+  it("is true for session, conflict, check and raised errors, and for refused writes", () => {
+    for (const code of ["PGRST301", "23505", "23514", "P0001"]) {
       expect(isExpectedUserError({ code, message: "x" })).toBe(true);
     }
     expect(isExpectedUserError({ refusedWrite: true })).toBe(true);
+  });
+
+  it("is false by default for permission, no-row and foreign-key errors", () => {
+    for (const code of ["42501", "PGRST116", "23503"]) {
+      expect(isExpectedUserError({ code, message: "x" })).toBe(false);
+    }
+  });
+
+  it("is true for codes the caller expects", () => {
+    expect(isExpectedUserError({ code: "42501", message: "x" }, { expected: ["42501"] })).toBe(true);
+    expect(isExpectedUserError({ code: "23503", message: "x" }, { expected: ["42501"] })).toBe(false);
+    expect(isExpectedUserError({ code: "P0001", message: "x" }, { expected: ["42501"] })).toBe(true);
   });
 
   it("is false for anything else", () => {
@@ -97,9 +128,21 @@ describe("reportUnexpectedError", () => {
     mockScope.setContext.mockClear();
   });
 
-  it("does not send permission errors to Sentry", () => {
-    expect(reportUnexpectedError({ code: "42501", message: "permission denied" })).toBeUndefined();
+  it("does not send expected errors or refused writes to Sentry", () => {
+    expect(reportUnexpectedError({ code: "23505", message: "duplicate key" })).toBeUndefined();
     expect(reportUnexpectedError({ refusedWrite: true, message: "refused" })).toBeUndefined();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("sends 42501 by default, such as a missing GRANT on a read", () => {
+    const denied = { code: "42501", message: "permission denied for table regrade_requests" };
+    expect(reportUnexpectedError(denied, { operation: "regrade_requests_fetch" })).toBe("event-id");
+    expect(mockScope.setTag).toHaveBeenCalledWith("error_code", "42501");
+  });
+
+  it("does not send 42501 when the caller expects it", () => {
+    const denied = { code: "42501", message: "permission denied" };
+    expect(reportUnexpectedError(denied, { operation: "save" }, { expected: ["42501"] })).toBeUndefined();
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
