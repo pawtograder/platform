@@ -12,6 +12,7 @@ import { useCallback, useMemo, useState } from "react";
 import { FaTrash } from "react-icons/fa";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
 
@@ -22,6 +23,7 @@ type PollsTableProps = {
 };
 
 export default function PollsTable({ courseId }: PollsTableProps) {
+  const errorRole = useStaffErrorRole();
   const router = useRouter();
   const polls = useLivePolls();
   const { livePolls } = useCourseController();
@@ -86,12 +88,12 @@ export default function PollsTable({ courseId }: PollsTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Unable to update poll",
-          description: getUserFacingErrorMessage(err, { role: "grader" }),
+          description: getUserFacingErrorMessage(err, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [livePolls]
+    [errorRole, livePolls]
   );
 
   const handleDelete = useCallback(
@@ -117,12 +119,12 @@ export default function PollsTable({ courseId }: PollsTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Unable to delete poll",
-          description: getUserFacingErrorMessage(err, { role: "grader" }),
+          description: getUserFacingErrorMessage(err, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [livePolls]
+    [errorRole, livePolls]
   );
 
   return (

@@ -26,6 +26,7 @@ import { useInvalidate, useList } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaPlay } from "react-icons/fa";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const PENDING_ACTIVATION_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -84,6 +85,7 @@ export function StaffCommitHistory({
 }: StaffCommitHistoryProps) {
   const { assignment } = useAssignmentController();
   const repoHost = useRepoWebHost(assignment.git_provider);
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   const invalidate = useInvalidate();
   const [githubCommits, setGithubCommits] = useState<Awaited<ReturnType<typeof repositoryListCommits>>["commits"]>([]);
@@ -245,7 +247,7 @@ export function StaffCommitHistory({
           } catch (error) {
             toaster.error({
               title: "Submission created but activation failed",
-              description: getUserFacingErrorMessage(error, { role: "grader" })
+              description: getUserFacingErrorMessage(error, { role: errorRole })
             });
           }
         })();
@@ -254,7 +256,7 @@ export function StaffCommitHistory({
     return () => {
       unsubscribe();
     };
-  }, [courseController, repositoryId, assignmentId, clearPending, doActivate]);
+  }, [errorRole, courseController, repositoryId, assignmentId, clearPending, doActivate]);
 
   const onActivateExisting = useCallback(
     async (sha: string, submissionId: number) => {
@@ -265,13 +267,13 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Error activating submission",
-          description: getUserFacingErrorMessage(error, { role: "grader" })
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setBusySha(null);
       }
     },
-    [doActivate]
+    [errorRole, doActivate]
   );
 
   const onCreateAndActivate = useCallback(
@@ -302,14 +304,14 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
-          description: getUserFacingErrorMessage(error, { role: "grader" })
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         await checkRunsQuery.refetch();
         setBusySha(null);
       }
     },
-    [checkRunsQuery, clearPending, courseId, repositoryFullName]
+    [errorRole, checkRunsQuery, clearPending, courseId, repositoryFullName]
   );
 
   return (

@@ -8,6 +8,7 @@ import { Box, Button, Dialog, HStack, Icon, Portal, Text, VStack } from "@chakra
 import { useState } from "react";
 import { FaTrash } from "react-icons/fa";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface DeleteAssignmentButtonProps {
   assignmentId: number;
@@ -15,6 +16,7 @@ interface DeleteAssignmentButtonProps {
 }
 
 export default function DeleteAssignmentButton({ assignmentId, courseId }: DeleteAssignmentButtonProps) {
+  const errorRole = useStaffErrorRole();
   const [isLoading, setIsLoading] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const revalidateServerCaches = useRevalidateServerCaches(courseId);
@@ -58,7 +60,7 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
       } else {
         toaster.create({
           title: "Delete Failed",
-          description: getUserFacingErrorMessage(error, { role: "grader" }),
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error",
           duration: 10000
         });

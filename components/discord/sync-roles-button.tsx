@@ -7,6 +7,7 @@ import { useState, useRef, useEffect } from "react";
 import { useIdentity } from "@/hooks/useIdentities";
 import { Tooltip } from "../ui/tooltip";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SyncState = "idle" | "syncing" | "success" | "error";
 
@@ -34,6 +35,7 @@ export default function SyncRolesButton({
   size = "sm",
   showLabel = true
 }: SyncRolesButtonProps) {
+  const errorRole = useStaffErrorRole();
   const { identities } = useIdentity();
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -98,7 +100,7 @@ export default function SyncRolesButton({
       setSyncState("error");
       setResult({
         synced_classes: 0,
-        error: getUserFacingErrorMessage(err, { role: "grader" })
+        error: getUserFacingErrorMessage(err, { role: errorRole })
       });
     }
   };

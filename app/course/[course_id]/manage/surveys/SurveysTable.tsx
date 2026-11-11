@@ -16,6 +16,7 @@ import { Badge, Box, Icon, Table, Text } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type FilterType = "all" | "closed" | "active" | "draft";
 
@@ -25,6 +26,7 @@ type SurveysTableProps = {
 };
 
 export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
+  const errorRole = useStaffErrorRole();
   const trackEvent = useTrackEvent();
   const controller = useCourseController();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
@@ -158,7 +160,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
             }
           }
         } catch (error) {
-          validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(error, { role: "grader" })}`;
+          validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(error, { role: errorRole })}`;
         }
 
         await controller.surveys.update(survey.id, {
@@ -196,12 +198,12 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         if (reportDuplicateNamesRefusal(error)) return;
         toaster.create({
           title: "Failed to Publish Survey",
-          description: getUserFacingErrorMessage(error, { role: "grader" }),
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [courseId, trackEvent, controller, revalidateServerCaches]
+    [errorRole, courseId, trackEvent, controller, revalidateServerCaches]
   );
 
   const handleClose = useCallback(
@@ -237,12 +239,12 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Failed to Close Survey",
-          description: getUserFacingErrorMessage(error, { role: "grader" }),
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [courseId, trackEvent, controller, revalidateServerCaches]
+    [errorRole, courseId, trackEvent, controller, revalidateServerCaches]
   );
 
   const handleDelete = useCallback(
@@ -307,12 +309,12 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Failed to Delete Survey",
-          description: getUserFacingErrorMessage(error, { role: "grader" }),
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [courseId, trackEvent, controller, revalidateServerCaches]
+    [errorRole, courseId, trackEvent, controller, revalidateServerCaches]
   );
 
   return (

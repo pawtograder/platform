@@ -24,6 +24,7 @@ import { FaBug, FaChevronDown, FaChevronRight, FaCopy, FaEnvelope, FaPlay, FaUse
 import { Select as ReactSelect } from "chakra-react-select";
 import type { CommonErrorGroup } from "./types";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface SelectOption {
   label: string;
@@ -49,6 +50,7 @@ export function RegradeSubmissionsDialog({
   onClose,
   isOpen
 }: RegradeSubmissionsDialogProps) {
+  const errorRole = useStaffErrorRole();
   const [commitOptions, setCommitOptions] = useState<SelectOption[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<SelectOption | null>(null);
   const [manualSha, setManualSha] = useState<string>("");
@@ -255,12 +257,13 @@ export function RegradeSubmissionsDialog({
     } catch (error) {
       toaster.error({
         title: "Error regrading",
-        description: getUserFacingErrorMessage(error, { role: "grader" })
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsRegrading(false);
     }
   }, [
+    errorRole,
     errorGroup.affected_submission_ids,
     courseId,
     manualSha,
