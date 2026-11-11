@@ -321,6 +321,28 @@ Internal service hostnames.
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.forgejo.hasPawtograderSource" -}}
+{{- if .Values.forgejo.enabled -}}
+{{- range .Values.forgejo.gitea.oauth -}}{{- if eq .name "pawtograder" -}}true{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Callback URLs that skip the consent screen; empty unless auth.oauthServer.autoApproveFirstParty. */}}
+{{- define "pawtograder.oauth.firstPartyRedirectURIs" -}}
+{{- $s := .Values.auth.oauthServer -}}
+{{- if and $s.enabled $s.autoApproveFirstParty -}}
+{{- $uris := list -}}
+{{- if include "pawtograder.forgejo.hasPawtograderSource" . -}}
+{{- $uris = append $uris (printf "%s/user/oauth2/pawtograder/callback" (include "pawtograder.forgejo.url" .)) -}}
+{{- end -}}
+{{- $coderHost := dig "coder" "ingress" "host" "" .Values.coder -}}
+{{- if and .Values.coder.enabled .Values.coder.oidc.enabled $coderHost -}}
+{{- $uris = append $uris (printf "https://%s/api/v2/users/oidc/callback" $coderHost) -}}
+{{- end -}}
+{{- join "," $uris -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.forgejo.servicePort" -}}
 {{- dig "service" "http" "port" 3000 .Values.forgejo -}}
 {{- end -}}

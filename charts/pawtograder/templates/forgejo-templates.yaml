@@ -1,0 +1,23 @@
+{{- if .Values.forgejo.enabled }}
+{{- $cmName := printf "%s-forgejo-templates" .Release.Name }}
+{{- $redirect := and .Values.forgejo.signInRedirect (include "pawtograder.forgejo.hasPawtograderSource" .) }}
+{{- if $redirect }}
+{{- $mounted := false }}
+{{- range .Values.forgejo.extraVolumes }}{{ if eq (dig "configMap" "name" "" .) $cmName }}{{ $mounted = true }}{{ end }}{{ end }}
+{{- if not (and $mounted (contains "/pawtograder-templates/header.tmpl" (toString .Values.forgejo.initPreScript))) }}
+{{- fail (printf "forgejo.signInRedirect needs the chart's forgejo.extraVolumes entry for ConfigMap %s, its extraInitVolumeMounts entry and its initPreScript; an overlay that sets one of them replaces the chart's" $cmName) }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forgejo
+{{- if $redirect }}
+data:
+  header.tmpl: |
+    {{- .Files.Get "files/forgejo/header.tmpl" | trim | nindent 4 }}
+{{- end }}
+{{- end }}

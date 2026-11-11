@@ -21,7 +21,9 @@ async function main() {
 
   const wanted = [
     { key: "FORGEJO", client_name: "Forgejo", redirect_uris: [`${forgejo}/user/oauth2/${sourceName}/callback`] },
-    { key: "CODER", client_name: "Coder", redirect_uris: [`${coder}/api/v2/users/oidc/callback`] }
+    { key: "CODER", client_name: "Coder", redirect_uris: [`${coder}/api/v2/users/oidc/callback`] },
+    // Coder's name on another callback: auto-approval must not follow the name.
+    { key: "THIRD", client_name: "Coder", redirect_uris: [need("THIRD_PARTY_REDIRECT_URI")] }
   ];
 
   const listRes = await fetch(`${auth}/admin/oauth/clients?per_page=1000`, { headers });

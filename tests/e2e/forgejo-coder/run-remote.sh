@@ -34,13 +34,21 @@ SOURCE_ID="$(kubectl -n "$NS" exec deploy/pawtograder-forgejo -c forgejo -- forg
   | awk '$2=="pawtograder" {print $1}')"
 [ -n "$SOURCE_ID" ] || { echo "no pawtograder login source in $NS Forgejo"; exit 1; }
 
+AUTO_APPROVE="$(kubectl -n "$NS" get deploy pawtograder-web \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="OAUTH_FIRST_PARTY_REDIRECT_URIS")].value}')"
+LOGIN_REDIRECT="$(kubectl -n "$NS" get configmap pawtograder-forgejo-templates --ignore-not-found \
+  -o jsonpath='{.data.header\.tmpl}')"
+
 jq -n --arg app "$APP" --arg fj "$FJ" --arg coder "$CODER" --arg iss "$API/auth/v1" --argjson sid "$SOURCE_ID" \
+  --argjson auto "$([ -n "$AUTO_APPROVE" ] && echo true || echo false)" \
+  --argjson lr "$([ -n "$LOGIN_REDIRECT" ] && echo true || echo false)" \
   --arg fjcid "$(secret pawtograder-forgejo-oauth key)" \
   --arg fju "$(secret pawtograder-forgejo-admin username)" --arg fjp "$(secret pawtograder-forgejo-admin password)" \
   --arg ccid "$(secret pawtograder-coder-oidc CODER_OIDC_CLIENT_ID)" \
   --arg ce "$(secret pawtograder-coder-admin email)" --arg cp "$(secret pawtograder-coder-admin password)" \
   '{pawtograderBaseUrl: $app, forgejoBaseUrl: $fj, coderBaseUrl: $coder, issuer: $iss,
     forgejo: {authSourceName: "pawtograder", authSourceId: $sid, clientId: $fjcid, admin: {username: $fju, password: $fjp}},
-    coder: {clientId: $ccid, admin: {email: $ce, password: $cp}}}' > "$OUT_JSON"
+    coder: {clientId: $ccid, admin: {email: $ce, password: $cp}},
+    autoApprove: $auto, forgejoLoginRedirect: $lr}' > "$OUT_JSON"
 
 npx playwright test --config playwright.forgejo-coder.config.ts "$@"

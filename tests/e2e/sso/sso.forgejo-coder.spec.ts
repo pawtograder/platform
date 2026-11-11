@@ -15,6 +15,9 @@ type SsoConfig = {
     admin: { username: string; password: string };
   };
   coder: { clientId: string; admin: { email: string; password: string } };
+  autoApprove?: boolean;
+  forgejoLoginRedirect?: boolean;
+  thirdParty?: { clientId: string; redirectUri: string };
 };
 
 const cfg: SsoConfig = JSON.parse(fs.readFileSync(path.join(__dirname, ".forgejo-coder-e2e.json"), "utf8"));
@@ -60,6 +63,13 @@ async function expectConsentFor(page: Page, clientName: string, user: TestingUse
   await expect(page.getByText(`Signed in as ${user.email}`)).toBeVisible();
 }
 
+// With auto-approval nothing is clicked, so reaching the app proves no consent screen stopped the flow.
+async function passConsent(page: Page, clientName: string, user: TestingUser) {
+  if (cfg.autoApprove) return;
+  await expectConsentFor(page, clientName, user);
+  await page.getByRole("button", { name: "Authorize" }).click();
+}
+
 async function signInToPawtograderForm(page: Page, user: TestingUser) {
   await page.waitForURL(`${cfg.pawtograderBaseUrl}/sign-in?**`);
   await page.getByLabel("Sign in email").fill(user.email);
@@ -69,6 +79,7 @@ async function signInToPawtograderForm(page: Page, user: TestingUser) {
 
 async function startForgejoSignIn(page: Page) {
   await page.goto(`${cfg.forgejoBaseUrl}/user/login`);
+  if (cfg.forgejoLoginRedirect) return;
   await page.locator(`a[href$="/user/oauth2/${cfg.forgejo.authSourceName}"]`).click();
 }
 
@@ -99,19 +110,17 @@ test.beforeAll(async () => {
   await make("instructor", "coderWarm");
   await make("student", "coderCold");
   await make("student", "coderDeny");
+  await make("student", "thirdParty");
 });
 
 test.describe("Forgejo", () => {
-  test("1. signed in to Pawtograder: consent, then a Forgejo account bound to the login source", async ({
-    browser
-  }) => {
+  test("1. signed in to Pawtograder: a Forgejo account bound to the login source", async ({ browser }) => {
     const user = users.forgejoWarm;
     const page = await newPage(browser);
     await loginAsUser(page, user);
 
     await startForgejoSignIn(page);
-    await expectConsentFor(page, "Forgejo", user);
-    await page.getByRole("button", { name: "Authorize" }).click();
+    await passConsent(page, "Forgejo", user);
 
     await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
     await expect(page.locator(".user-menu, [aria-label='Profile and settings…']").first()).toBeAttached();
@@ -122,14 +131,13 @@ test.describe("Forgejo", () => {
     expect(accounts[0].source_id).toBe(cfg.forgejo.authSourceId);
   });
 
-  test("2. cold start: sign in to Pawtograder mid-flow, then back to consent", async ({ browser }) => {
+  test("2. cold start: sign in to Pawtograder mid-flow, then on to Forgejo", async ({ browser }) => {
     const user = users.forgejoCold;
     const page = await newPage(browser);
 
     await startForgejoSignIn(page);
     await signInToPawtograderForm(page, user);
-    await expectConsentFor(page, "Forgejo", user);
-    await page.getByRole("button", { name: "Authorize" }).click();
+    await passConsent(page, "Forgejo", user);
 
     await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
     const accounts = await forgejoUsersFor(user);
@@ -138,6 +146,7 @@ test.describe("Forgejo", () => {
   });
 
   test("3. deny: back on Forgejo, no account created", async ({ browser }) => {
+    test.skip(!!cfg.autoApprove, "Forgejo is approved without a consent screen");
     const user = users.forgejoDeny;
     const page = await newPage(browser);
     await loginAsUser(page, user);
@@ -168,17 +177,26 @@ test.describe("Forgejo", () => {
     expect(after).toHaveLength(1);
     expect(after[0].id).toBe(before.id);
   });
+
+  test("4b. /user/login?password_login=1 keeps Forgejo's own sign-in page", async ({ browser }) => {
+    test.skip(!cfg.forgejoLoginRedirect, "this release's Forgejo login page doesn't redirect");
+    const page = await newPage(browser);
+    await page.goto(`${cfg.forgejoBaseUrl}/user/login?password_login=1`);
+    await page.waitForLoadState("load");
+    await page.waitForTimeout(1500);
+    await expect(page).toHaveURL(`${cfg.forgejoBaseUrl}/user/login?password_login=1`);
+    await expect(page.locator(`a[href$="/user/oauth2/${cfg.forgejo.authSourceName}"]`)).toBeVisible();
+  });
 });
 
 test.describe("Coder", () => {
-  test("5. signed in to Pawtograder: consent, then a Coder OIDC account", async ({ browser }) => {
+  test("5. signed in to Pawtograder: a Coder OIDC account", async ({ browser }) => {
     const user = users.coderWarm;
     const page = await newPage(browser);
     await loginAsUser(page, user);
 
     await startCoderSignIn(page);
-    await expectConsentFor(page, "Coder", user);
-    await page.getByRole("button", { name: "Authorize" }).click();
+    await passConsent(page, "Coder", user);
 
     await page.waitForURL(`${cfg.coderBaseUrl}/**`);
     await expect(page).not.toHaveURL(/\/login/);
@@ -196,8 +214,7 @@ test.describe("Coder", () => {
 
     await startCoderSignIn(page);
     await signInToPawtograderForm(page, user);
-    await expectConsentFor(page, "Coder", user);
-    await page.getByRole("button", { name: "Authorize" }).click();
+    await passConsent(page, "Coder", user);
 
     await page.waitForURL(`${cfg.coderBaseUrl}/**`);
     const [account] = await coderUsersWithEmail(user.email);
@@ -205,6 +222,7 @@ test.describe("Coder", () => {
   });
 
   test("6b. deny: back on Coder, no account created", async ({ browser }) => {
+    test.skip(!!cfg.autoApprove, "Coder is approved without a consent screen");
     const user = users.coderDeny;
     const page = await newPage(browser);
     await loginAsUser(page, user);
@@ -231,4 +249,32 @@ test("7. an unregistered redirect_uri is refused before any consent", async () =
   const res = await fetch(`${cfg.issuer}/oauth/authorize?${params}`, { redirect: "manual" });
   expect(res.status).toBe(400);
   expect(res.headers.get("location") ?? "").not.toContain("attacker.example");
+});
+
+test("8. another client still gets the consent screen, even named Coder; deny returns access_denied", async ({
+  browser
+}) => {
+  test.skip(!cfg.thirdParty, "needs the lane's third-party client");
+  const { clientId, redirectUri } = cfg.thirdParty!;
+  const user = users.thirdParty;
+  const page = await newPage(browser);
+  await loginAsUser(page, user);
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: "openid email profile",
+    state: "third-party",
+    code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    code_challenge_method: "S256"
+  });
+  await page.goto(`${cfg.issuer}/oauth/authorize?${params}`);
+  await expectConsentFor(page, "Coder", user);
+
+  const back = page.waitForRequest((r) => r.url().startsWith(redirectUri));
+  await page.getByRole("button", { name: "Deny" }).click();
+  const url = new URL((await back).url());
+  expect(url.searchParams.get("error")).toBe("access_denied");
+  expect(url.searchParams.get("code")).toBeNull();
 });
