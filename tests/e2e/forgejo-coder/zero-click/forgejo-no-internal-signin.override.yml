@@ -1,0 +1,4 @@
+services:
+  forgejo:
+    environment:
+      FORGEJO__service__ENABLE_INTERNAL_SIGNIN: "false"

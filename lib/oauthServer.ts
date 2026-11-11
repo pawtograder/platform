@@ -50,6 +50,15 @@ export function isAutoApproved(d: OAuthAuthorizationDetails | OAuthAutoApproved)
   return "redirect_url" in d && !("authorization_id" in d);
 }
 
+/** OAuth clients that are part of this deployment (Forgejo, Coder), from a comma-separated list of client ids. */
+export function isFirstPartyClient(clientId: string) {
+  const ids = (process.env.OAUTH_FIRST_PARTY_CLIENT_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.includes(clientId);
+}
+
 export function getAuthorizationDetails(accessToken: string, authorizationId: string) {
   return call<OAuthAuthorizationDetails | OAuthAutoApproved>(
     `/oauth/authorizations/${encodeURIComponent(authorizationId)}`,

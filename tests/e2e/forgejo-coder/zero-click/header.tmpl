@@ -1,0 +1,9 @@
+<script>
+  // Pawtograder is the only way in: skip the login page's one button. ?local=1 keeps the page.
+  if (location.pathname === "{{AppSubUrl}}/user/login" && !new URLSearchParams(location.search).has("local")) {
+    document.addEventListener("DOMContentLoaded", function () {
+      var links = document.querySelectorAll('a[href*="/user/oauth2/"]');
+      if (links.length === 1) location.replace(links[0].href);
+    });
+  }
+</script>

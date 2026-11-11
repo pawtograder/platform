@@ -89,6 +89,8 @@ FORGEJO_OIDC_CLIENT_SECRET="$(getc FORGEJO_OIDC_CLIENT_SECRET)"
 export CODER_OIDC_CLIENT_ID="$(getc CODER_OIDC_CLIENT_ID)"
 export CODER_OIDC_CLIENT_SECRET="$(getc CODER_OIDC_CLIENT_SECRET)"
 [ -n "$FORGEJO_OIDC_CLIENT_ID" ] && [ -n "$CODER_OIDC_CLIENT_ID" ] || { echo "ERROR: client registration failed"; echo "$CLIENTS"; exit 1; }
+# FIRST_PARTY=1 approves both apps without a consent screen.
+[ "${FIRST_PARTY:-}" = "1" ] && export OAUTH_FIRST_PARTY_CLIENT_IDS="$FORGEJO_OIDC_CLIENT_ID,$CODER_OIDC_CLIENT_ID"
 
 if [ "${SKIP_APPS:-}" != "1" ]; then
   log "Starting Forgejo and Coder"

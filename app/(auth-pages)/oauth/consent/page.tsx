@@ -2,7 +2,13 @@ import AuthBrandHeader from "@/components/branding/auth-brand-header";
 import { FormMessage } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { getBranding } from "@/lib/branding";
-import { getAuthorizationDetails, isAutoApproved, OAuthServerError } from "@/lib/oauthServer";
+import {
+  decideAuthorization,
+  getAuthorizationDetails,
+  isAutoApproved,
+  isFirstPartyClient,
+  OAuthServerError
+} from "@/lib/oauthServer";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Container, HStack, List, Stack, Text } from "@chakra-ui/react";
 import { redirect } from "next/navigation";
@@ -68,6 +74,12 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
 
   if (isAutoApproved(details)) {
     redirect(details.redirect_url);
+  }
+
+  // Our own apps (Forgejo, Coder) are approved without asking. Match on client id, not name: a name can be copied.
+  if (isFirstPartyClient(details.client.id)) {
+    const { redirect_url } = await decideAuthorization(session.access_token, details.authorization_id, "approve");
+    redirect(redirect_url);
   }
 
   const scopes = details.scope.split(/\s+/).filter(Boolean);
