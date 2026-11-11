@@ -14,6 +14,7 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   assertJobTokenMatchesRepository,
+  findActorUserId,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
@@ -931,29 +932,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         classId: number | null
       ): Promise<Database["public"]["Tables"]["user_roles"]["Row"] | undefined> => {
         if (classId == null || isPawtograderTriggered) return undefined;
-        // A Forgejo actor is a Forgejo login, which only the accounts Pawtograder created map back to a
-        // user. Pawtograder's own admin account has none, so its dispatches match nobody, like the bot.
-        const forgejoUrl = forgejoConfig()?.url;
-        if (decoded.provider === "forgejo" && !forgejoUrl) return undefined;
-        const { data: user, error: userError } =
-          decoded.provider === "forgejo"
-            ? await adminSupabase
-                .from("git_accounts")
-                .select("user_id")
-                .eq("provider", "forgejo")
-                .eq("instance_url", forgejoUrl!)
-                .eq("login", decoded.actor)
-                .maybeSingle()
-            : await adminSupabase.from("users").select("user_id").ilike("github_username", decoded.actor).maybeSingle();
-        if (userError) {
+        let userId: string | null;
+        try {
+          userId = await findActorUserId(adminSupabase, decoded, forgejoConfig()?.url);
+        } catch (userError) {
           Sentry.captureException(userError, scope);
-          throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
+          throw new UserVisibleError(`Failed to lookup user: ${(userError as { message?: string }).message}`);
         }
-        if (!user) return undefined;
+        if (!userId) return undefined;
         const { data: userRolesData, error: userRolesError } = await adminSupabase
           .from("user_roles")
           .select("*")
-          .eq("user_id", user.user_id)
+          .eq("user_id", userId)
           .eq("class_id", Number(classId))
           .maybeSingle();
         if (userRolesError) {

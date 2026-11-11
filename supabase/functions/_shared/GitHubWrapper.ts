@@ -1436,6 +1436,37 @@ export async function validateOIDCTokenOrAllowE2E(
  * `owner/name`, which can exist on both hosts, so the token's provider must match the row's
  * `git_provider`. Repositories without a row (grader, handout, E2E) are on GitHub.
  */
+/**
+ * The Pawtograder user behind a job's `actor`: a GitHub username, or for Forgejo a login that only the
+ * accounts Pawtograder created on `forgejoUrl` map back to a user (#1110). Pawtograder's own Forgejo
+ * admin has no such account, so its dispatches match nobody, as the GitHub bot does.
+ */
+export async function findActorUserId(
+  supabase: SupabaseClient<Database>,
+  token: { actor: string; provider: JobTokenProvider },
+  forgejoUrl: string | undefined
+): Promise<string | null> {
+  if (token.provider === "forgejo") {
+    if (!forgejoUrl) return null;
+    const { data, error } = await supabase
+      .from("git_accounts")
+      .select("user_id")
+      .eq("provider", "forgejo")
+      .eq("instance_url", forgejoUrl)
+      .eq("login", token.actor)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.user_id ?? null;
+  }
+  const { data, error } = await supabase
+    .from("users")
+    .select("user_id")
+    .ilike("github_username", token.actor)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.user_id ?? null;
+}
+
 export async function assertJobTokenMatchesRepository(
   supabase: SupabaseClient<Database>,
   token: { repository: string; provider: JobTokenProvider },
