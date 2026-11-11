@@ -6,33 +6,58 @@
 
 {{- $es := .Values.forgejoCoderSecrets.externalSecret }}
 {{- if $es.enabled }}
-{{- /* setup-sso-clients.sh's kv put replaces the whole secret, so a shared path wipes the apps' passwords. */}}
+{{- /* The setup scripts' kv put replaces the whole secret, so a shared path wipes another's keys. */}}
+{{- $clientKeys := list "forgejoOAuthPath" "coderOIDCPath" "coderExternalAuthPath" }}
 {{- $norm := dict }}
-{{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" "runnerPath" }}
+{{- range $key := concat (list "forgejoPath" "coderPath" "runnerPath") $clientKeys }}
 {{- $_ := set $norm $key (trimAll "/" (toString (index $es $key | default ""))) }}
 {{- end }}
 {{- $appPaths := compact (list $norm.forgejoPath $norm.coderPath) }}
-{{- range $key := list "forgejoOAuthPath" "coderOIDCPath" }}
+{{- $seen := dict }}
+{{- range $key := $clientKeys }}
 {{- $p := index $norm $key }}
 {{- if and $p (has $p $appPaths) }}
-{{- fail (printf "forgejoCoderSecrets.externalSecret.%s is %q, which also holds an app's passwords; give the SSO client its own path" $key (index $es $key)) }}
+{{- fail (printf "forgejoCoderSecrets.externalSecret.%s is %q, which also holds an app's passwords; give the OAuth client its own path" $key (index $es $key)) }}
 {{- end }}
+{{- if and $p (hasKey $seen $p) }}
+{{- fail (printf "forgejoCoderSecrets.externalSecret.%s and %s must differ; each OAuth client has its own path" (index $seen $p) $key) }}
+{{- end }}
+{{- if $p }}{{ $_ := set $seen $p $key }}{{ end }}
 {{- end }}
 {{- /* setup-forgejo-runner-tokens.sh's kv put replaces its whole path too. */}}
 {{- if $norm.runnerPath }}
-{{- range $key := list "forgejoPath" "coderPath" "forgejoOAuthPath" "coderOIDCPath" }}
+{{- range $key := concat (list "forgejoPath" "coderPath") $clientKeys }}
 {{- if eq $norm.runnerPath (index $norm $key) }}
 {{- fail (printf "forgejoCoderSecrets.externalSecret.runnerPath is %q, the same path as %s; give the runner tokens their own path" (index $es "runnerPath") $key) }}
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if and $norm.forgejoOAuthPath (eq $norm.forgejoOAuthPath $norm.coderOIDCPath) }}
-{{- fail "forgejoCoderSecrets.externalSecret.forgejoOAuthPath and coderOIDCPath must differ; each SSO client has its own path" }}
-{{- end }}
 {{- end }}
 
 {{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
 {{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
+{{- end }}
+{{- with .Values.coder.externalAuth.forgejo }}
+{{- if and .enabled $.Values.coder.enabled }}
+{{- if not $.Values.forgejo.enabled }}
+{{- fail "coder.externalAuth.forgejo.enabled needs forgejo.enabled=true: the provider points at this release's Forgejo" }}
+{{- end }}
+{{- if eq (dig "gitea" "config" "oauth2" "ENABLED" true $.Values.forgejo | toString) "false" }}
+{{- fail "coder.externalAuth.forgejo.enabled needs Forgejo's OAuth2 provider; remove forgejo.gitea.config.oauth2.ENABLED=false" }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" (toString .id)) }}
+{{- fail (printf "coder.externalAuth.forgejo.id must be lowercase letters, digits and single dashes (got %q); it's a path segment of Coder's callback URL" (toString .id)) }}
+{{- end }}
+{{- $tplID := dig "workspaces" "externalAuthId" "" $.Values.coderBootstrap | toString }}
+{{- if and $tplID (ne $tplID (toString .id)) }}
+{{- fail (printf "coderBootstrap.workspaces.externalAuthId=%s but coder.externalAuth.forgejo.id=%s; workspaces would ask Coder for a provider that doesn't exist" $tplID (toString .id)) }}
+{{- end }}
+{{- range $.Values.coder.coder.env }}
+{{- if hasPrefix "CODER_EXTERNAL_AUTH_0_" (toString .name) }}
+{{- fail (printf "coder.coder.env sets %s, but coder.externalAuth.forgejo is provider 0; move other providers to index 1 and up" .name) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if .Values.forgejo.enabled }}
 {{- /* Subchart values aren't templated, so the URL is spelled out per install; catch drift from the issuer. */}}
@@ -346,6 +371,7 @@
 {{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
 {{- $wantRefs := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
 {{- if .Values.coder.oidc.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
 {{- range $want := $wantRefs }}
 {{- if not (has $want $refs) }}
 {{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}

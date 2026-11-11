@@ -2898,6 +2898,13 @@ coder:
     signInText: Sign in with Pawtograder
     # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
     allowSignups: false
+  # Run scripts/setup-coder-forgejo-auth.sh before enabling; coderd exits at startup without the client ID.
+  externalAuth:
+    forgejo:
+      enabled: false
+      # Changing it unlinks every user and needs the OAuth app re-registered.
+      id: forgejo
+      displayName: Forgejo
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
@@ -2909,6 +2916,7 @@ coder:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
       - secretRef: { name: pawtograder-coder-oidc, optional: true }
+      - secretRef: { name: pawtograder-coder-external-auth, optional: true }
     # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
     initContainers:
       - name: first-owner
@@ -3020,6 +3028,7 @@ forgejoCoderSecrets:
     # scripts/setup-forgejo-runner-tokens.sh. Syncs forgejoRunner.dispatcher.tokenSecret and
     # forgejoRunner.actions.tokenSecret (key token). Empty: create those Secrets by hand.
     runnerPath: ""
+    coderExternalAuthPath: ""
     storeName: openbao
     storeKind: ClusterSecretStore
     refreshInterval: 1h
