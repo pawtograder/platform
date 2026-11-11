@@ -14,6 +14,7 @@ export const COURSE_FEATURES = {
   DISCORD_STUDENT_JOIN: "discord-student-join",
   GEMINI_API_KEY_SETUP: "gemini-api-key-setup",
   BUG_REPORT_RECORDING: "bug-report-recording",
+  EXAMS: "exams",
   // Off unless set, like the SQL side. Not manageable here yet; the toggle comes with #1091.
   CLOUD_WORKSPACES: "cloud-workspaces"
 } as const;
@@ -146,6 +147,19 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Allow redacted recordings in bug reports",
     ariaLabel: "Enable bug report recordings for this course"
+  },
+  {
+    name: COURSE_FEATURES.EXAMS,
+    title: "Paper exams",
+    description:
+      "Scanning, OCR and grading of paper exams. When off, the Exam (Scan & OCR) entry is hidden for graders and instructors, and the exam pages say the feature is not enabled. Assignments of type 'exam' are otherwise unaffected.",
+    // Off unless a course opts in. This flag exists because paper exams land as a single large
+    // feature; defaulting on would turn scanning, OCR and the Gemini calls behind it on for every
+    // course the moment it merges, which is not a change any of those courses asked for.
+    defaultWhenMissing: false,
+    navAffectsStaff: true,
+    switchLabel: "Enable paper exam scanning and grading",
+    ariaLabel: "Enable paper exams for this course"
   }
 ];
 
