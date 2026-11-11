@@ -5,20 +5,23 @@
  * Supabase client that answers each query from a script, so the errors have the same shapes
  * as in production (PostgREST errors, the provider's 404 and refused-write errors).
  */
-import { act, renderHook } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { Refine } from "@refinedev/core";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { toaster } from "@/components/ui/toaster";
 import { createDataProvider } from "@/lib/refineDataProvider";
+import { useCourseNotificationsQuery } from "@/hooks/useCourseNotificationsQuery";
 import { useNotifications } from "@/hooks/useNotifications";
 import type { Notification } from "@/utils/supabase/DatabaseTypes";
 
-type QueryResult = { data: unknown; error: unknown };
+type QueryResult = { data: unknown; error: unknown; count?: number };
 
 /** Results for the queries the provider will await, in order. */
 let mockQueryResults: QueryResult[] = [];
 
 function scriptedClient() {
   const builder: Record<string, unknown> = {};
-  for (const method of ["select", "delete", "match", "eq", "limit"]) {
+  for (const method of ["select", "delete", "match", "eq", "limit", "range", "order"]) {
     builder[method] = () => builder;
   }
   builder.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) => {
@@ -31,9 +34,16 @@ function scriptedClient() {
 
 const mockProvider = createDataProvider(scriptedClient());
 const mockInvalidate = jest.fn();
+/** The controller's generic-data store for notifications, keyed by id. */
+const mockStore = new Map<number, unknown>();
 const mockController = {
   courseId: 1,
-  handleGenericDataEvent: jest.fn(),
+  registerGenericDataType: jest.fn(),
+  setGeneric: jest.fn((_type: string, rows: { id: number }[]) => rows.forEach((row) => mockStore.set(row.id, row))),
+  handleGenericDataEvent: jest.fn((_type: string, event: { type: string; payload: { id: number } }) => {
+    if (event.type === "deleted") mockStore.delete(event.payload.id);
+    else mockStore.set(event.payload.id, event.payload);
+  }),
   listGenericData: () => ({ unsubscribe: () => {}, data: [] }),
   getValueWithSubscription: () => ({ unsubscribe: () => {}, data: undefined })
 };
@@ -68,6 +78,7 @@ async function dismiss() {
 
 beforeEach(() => {
   mockQueryResults = [];
+  mockStore.clear();
   mockController.handleGenericDataEvent.mockClear();
   mockInvalidate.mockClear();
   jest.mocked(toaster.error).mockClear();
@@ -132,5 +143,39 @@ describe("useNotifications dismiss", () => {
     expect(eventTypes()).toEqual(["deleted", "created"]);
     expect(jest.mocked(toaster.error).mock.calls[0][0]).toMatchObject({ title: "Failed to dismiss notification" });
     expect(mockInvalidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconciling an unconfirmed dismiss", () => {
+  const ROWS = { data: [{ id: 7, class_id: 1, user_id: "user-1", viewed_at: null }], count: 1, error: null };
+
+  it("brings the notification back when the refetch returns the same rows", async () => {
+    // Initial load, the failed delete, the failed check, then a refetch with identical rows.
+    mockQueryResults = [ROWS, NETWORK_ERROR, NETWORK_ERROR, ROWS];
+    const realUseInvalidate = jest.requireActual("@refinedev/core").useInvalidate;
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(Refine, { dataProvider: mockProvider, options: { disableTelemetry: true } }, children);
+
+    const { result } = renderHook(
+      () => {
+        // The real query and the real invalidate, so the refetch goes through React Query.
+        useCourseNotificationsQuery(
+          mockController as unknown as Parameters<typeof useCourseNotificationsQuery>[0],
+          "user-1",
+          false
+        );
+        mockInvalidate.mockImplementation(realUseInvalidate());
+        return useNotifications();
+      },
+      { wrapper }
+    );
+    await waitFor(() => expect(mockStore.has(7)).toBe(true));
+
+    await act(() => result.current.dismiss(notification));
+    expect(mockInvalidate).toHaveBeenCalledWith({ resource: "notifications", invalidates: ["list"] });
+
+    // The refetch returns the same rows, so React Query keeps the same `data` reference.
+    await waitFor(() => expect(mockQueryResults).toEqual([]));
+    await waitFor(() => expect(mockStore.has(7)).toBe(true));
   });
 });
