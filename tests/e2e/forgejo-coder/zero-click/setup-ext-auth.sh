@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# Usage: setup-ext-auth.sh <skip_consent:true|false>
-# Registers Forgejo's OAuth app for Coder and recreates Coder with the gitea-type provider (#1234's settings).
 set -euo pipefail
 ZC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERE="$(dirname "$ZC")"
-OVR="$ZC/.coder-ext-auth.override.yml" # holds the client secret; gitignored
+OVR="$ZC/.coder-ext-auth.override.yml"
 FJ=http://127.0.0.1:3100
 CODER=http://127.0.0.1:7080
 SKIP="${1:-true}"
 A=(-u forgejo-admin:forgejo-e2e-admin-pw -H 'Content-Type: application/json')
 
-# Fresh app each run, so the setting under test is the only variable.
 for id in $(curl -fsS "${A[@]}" "$FJ/api/v1/user/applications/oauth2" | jq -r '.[] | select(.name=="Coder") | .id'); do
   curl -fsS "${A[@]}" -X DELETE "$FJ/api/v1/user/applications/oauth2/$id"
 done

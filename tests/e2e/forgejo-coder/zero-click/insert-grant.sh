@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Usage: insert-grant.sh <forgejo user id>
-# Pre-approves Forgejo's "Coder" OAuth app for one user, as if they had clicked Authorize once.
 set -euo pipefail
 UID_="$1"
 docker run --rm --volumes-from pawtograder-sso-e2e-forgejo-1 --entrypoint sh alpine:3.20 -c "

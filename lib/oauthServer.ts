@@ -50,7 +50,6 @@ export function isAutoApproved(d: OAuthAuthorizationDetails | OAuthAutoApproved)
   return "redirect_url" in d && !("authorization_id" in d);
 }
 
-/** OAuth clients that are part of this deployment (Forgejo, Coder), from a comma-separated list of client ids. */
 export function isFirstPartyClient(clientId: string) {
   const ids = (process.env.OAUTH_FIRST_PARTY_CLIENT_IDS ?? "")
     .split(",")

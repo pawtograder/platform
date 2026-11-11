@@ -4,11 +4,6 @@ import fs from "fs";
 import path from "path";
 import { createClass, createUserInClass, loginAsUser, type TestingUser } from "../TestingUtils";
 
-// Probe: can Pawtograder link a student's Forgejo account in Coder with one redirect chain and no clicks?
-// Setup outside this file: Coder's CODER_EXTERNAL_AUTH_0_* point at this lane's Forgejo, consent auto-approves
-// first-party clients (OAUTH_FIRST_PARTY_CLIENT_IDS), and Forgejo's custom/header.tmpl follows its only SSO link.
-// GRANT_SCRIPT inserts a Forgejo oauth2_grant for the Coder app.
-
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, ".forgejo-coder-e2e.json"), "utf8")) as {
   pawtograderBaseUrl: string;
   forgejoBaseUrl: string;
@@ -17,13 +12,11 @@ const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, ".forgejo-coder-e2e.
 const PROVIDER = "forgejo";
 const FORGEJO_ADMIN = "Basic " + Buffer.from("forgejo-admin:forgejo-e2e-admin-pw").toString("base64");
 
-/** The single URL Pawtograder would send the browser to: sign in to Coder, then link Forgejo. */
 function linkUrl(returnTo: string) {
   const linkStart = `/external-auth/${PROVIDER}/callback?redirect=${encodeURIComponent(returnTo)}`;
   return `${cfg.coderBaseUrl}/api/v2/users/oidc/callback?redirect=${encodeURIComponent(linkStart)}`;
 }
 
-/** Record main-frame navigations until the URL stops changing. Never clicks. */
 async function settle(page: Page, start?: string) {
   const hops: string[] = [];
   const onNav = (f: Frame) => {
@@ -93,9 +86,8 @@ test("with a grant: one click in Pawtograder, the link happens in a popup, Pawto
   const user = users.grant;
   const context = await browser.newContext({ baseURL: cfg.pawtograderBaseUrl });
   const page = await context.newPage();
-  await loginAsUser(page, user); // only a Pawtograder session: never signed in to Coder or Forgejo
+  await loginAsUser(page, user);
 
-  // Stand-in for Pawtograder provisioning the Forgejo account and pre-approving Coder for it.
   const setup = await context.newPage();
   report(
     "forgejo sign-in (provisioning stand-in)",
@@ -104,7 +96,7 @@ test("with a grant: one click in Pawtograder, the link happens in a popup, Pawto
   await setup.close();
   report("grant", execFileSync(process.env.GRANT_SCRIPT!, [String(await forgejoUserId(user))]).toString());
 
-  // What #1095's "Link Forgejo" would do on click: open the popup synchronously, then point it at the chain.
+  // Open the popup synchronously, then navigate it: popup blockers reject a window.open after an await.
   await page.goto("/");
   const popupPromise = context.waitForEvent("page");
   await page.evaluate(() => {
@@ -117,7 +109,6 @@ test("with a grant: one click in Pawtograder, the link happens in a popup, Pawto
     (window as unknown as { __link: Window }).__link.location.href = u;
   }, linkUrl("/"));
 
-  // Pawtograder polls (here: Coder's API with the student's cookies; in the app, workspace-status/open).
   const t0 = Date.now();
   await expect.poll(() => linked(page), { timeout: 30_000, intervals: [500] }).toBe(true);
   const ms = Date.now() - t0;
@@ -126,7 +117,6 @@ test("with a grant: one click in Pawtograder, the link happens in a popup, Pawto
   await expect.poll(() => popup.isClosed()).toBe(true);
   report("popup", { hops, endedAt: where, linkedAfterMs: ms, closedByOpener: popup.isClosed() });
 
-  // No hop stopped on a screen that needs input.
   expect(hops.some((h) => h.startsWith(`${cfg.forgejoBaseUrl}/user/login`) && h === where)).toBe(false);
   expect(hops.some((h) => h.startsWith(`${cfg.forgejoBaseUrl}/login/oauth/authorize`))).toBe(false);
 });

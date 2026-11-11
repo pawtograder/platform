@@ -76,7 +76,6 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
     redirect(details.redirect_url);
   }
 
-  // Our own apps (Forgejo, Coder) are approved without asking. Match on client id, not name: a name can be copied.
   if (isFirstPartyClient(details.client.id)) {
     const { redirect_url } = await decideAuthorization(session.access_token, details.authorization_id, "approve");
     redirect(redirect_url);
