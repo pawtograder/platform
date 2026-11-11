@@ -4,6 +4,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import useModalManager from "@/hooks/useModalManager";
 import { useConnectionStatus, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { getQueueTypeColor } from "@/lib/utils";
@@ -40,7 +41,7 @@ export default function HelpQueueManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to delete help queue",
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     }
   };

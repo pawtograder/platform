@@ -2,6 +2,7 @@
 
 import HelpQueueManagement from "../../helpQueueManagement";
 import { Box, Button, Field, Heading, HStack, Input, Stack, Text, Textarea } from "@chakra-ui/react";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useCourseFeature } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -163,7 +164,7 @@ export default function QueuesSettingsPage() {
     } catch (error) {
       toaster.error({
         title: "Failed to update office hours description",
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     }
   };

@@ -3,6 +3,7 @@ import { Button, Tag as ChakraTag, Icon } from "@chakra-ui/react";
 import { useDelete } from "@refinedev/core";
 import { FaX } from "react-icons/fa6";
 import { toaster } from "./toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { Tooltip } from "./tooltip";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
@@ -24,8 +25,8 @@ export default function TagDisplay({ tag, showRemove }: { tag: TagType; showRemo
             <Button
               h={"1em"}
               onClick={() =>
-                removeTag({ id: tag.id, resource: "tags" }).catch((error: Error) => {
-                  toaster.error({ title: "Failed to remove tag", description: error.message });
+                removeTag({ id: tag.id, resource: "tags" }).catch((error: unknown) => {
+                  toaster.error({ title: "Failed to remove tag", description: getErrorMessage(error) });
                 })
               }
               variant="surface"
