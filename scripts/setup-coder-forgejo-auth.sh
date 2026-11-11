@@ -74,11 +74,12 @@ bao_get() {
   elif grep -q 'No value found' <<<"$out"; then
     return 1
   else
-    echo "ERROR: could not read ${BAO_MOUNT}/$1: $out" >&2; exit 1
+    echo "ERROR: could not read ${BAO_MOUNT}/$1: $out" >&2; return 2
   fi
 }
 
-fj_admin="$(bao_get "$fj_path")" || { echo "ERROR: no ${BAO_MOUNT}/${fj_path}; run setup-openbao-forgejo-coder.sh first" >&2; exit 1; }
+fj_admin="$(bao_get "$fj_path")" || {
+  [ $? -ne 1 ] || echo "ERROR: no ${BAO_MOUNT}/${fj_path}; run setup-openbao-forgejo-coder.sh first" >&2; exit 1; }
 FJ_USER="$(jq -r '.data.data.admin_username // empty' <<<"$fj_admin")"
 FJ_PASS="$(jq -r '.data.data.admin_password // empty' <<<"$fj_admin")"
 unset fj_admin
@@ -98,6 +99,8 @@ old_ids="$(jq -r --arg cb "$callback" '.[] | select((.redirect_uris // []) | ind
 stored_client=""
 if stored="$(bao_get "$auth_path")"; then
   stored_client="$(jq -r '.data.data.client_id // empty' <<<"$stored")"
+elif [ $? -ne 1 ]; then
+  exit 1
 fi
 unset stored
 if [ -n "$stored_client" ] && [ "$ROTATE" -ne 1 ]; then
