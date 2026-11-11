@@ -23,6 +23,7 @@ import { Badge, Box, Code, Flex, HStack, Icon, Skeleton, Table, Text } from "@ch
 import { useInvalidate, useList } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaPlay } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 const PENDING_ACTIVATION_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -240,7 +241,7 @@ export function StaffCommitHistory({
           } catch (error) {
             toaster.error({
               title: "Submission created but activation failed",
-              description: error instanceof Error ? error.message : "Unknown error"
+              description: getUserFacingErrorMessage(error)
             });
           }
         })();
@@ -260,7 +261,7 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Error activating submission",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error)
         });
       } finally {
         setBusySha(null);
@@ -297,7 +298,7 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error)
         });
       } finally {
         await checkRunsQuery.refetch();

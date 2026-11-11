@@ -16,6 +16,7 @@ import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type SurveyFormData = {
   title: string;
@@ -370,7 +371,7 @@ export default function EditSurveyPage() {
           try {
             JSON.parse(parsedJson);
           } catch (err) {
-            validationErrors = `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`;
+            validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(err, { role: "grader" })}`;
           }
 
           // Update the survey
@@ -509,7 +510,7 @@ export default function EditSurveyPage() {
           toaster.dismiss(loadingToast);
           toaster.error({
             title: "Error updating survey",
-            description: error instanceof Error ? error.message : "An unexpected error occurred"
+            description: getUserFacingErrorMessage(error, { role: "grader" })
           });
         }
       }

@@ -17,6 +17,7 @@ import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type SurveyFormData = {
   title: string;
@@ -293,7 +294,7 @@ export default function NewSurveyPage() {
           jsonToStore = validateJson ? JSON.stringify(parsedJson) : (values.json as string);
         } catch (err) {
           validationErrors = validateJson
-            ? `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`
+            ? `Invalid JSON configuration: ${getUserFacingErrorMessage(err, { role: "grader" })}`
             : null;
           jsonToStore = values.json as string; // keep raw for drafts
         }
@@ -537,7 +538,7 @@ export default function NewSurveyPage() {
         toaster.dismiss(loadingToast);
         toaster.error({
           title: "Error creating survey",
-          description: err instanceof Error ? err.message : "An unexpected error occurred"
+          description: getUserFacingErrorMessage(err, { role: "grader" })
         });
         throw err;
       }

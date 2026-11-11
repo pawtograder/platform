@@ -29,6 +29,7 @@ import { courseImportSis, invitationCreate, listGitHubOrgs } from "@/lib/edgeFun
 import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
 import type { GitHubOrg } from "@/supabase/functions/_shared/FunctionTypes";
 import { TermSelector } from "@/components/ui/term-selector";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Use shared types
 type CourseImportData = FunctionTypes.CourseImportResponse;
@@ -205,7 +206,7 @@ export default function CourseImportPage() {
             await new Promise((resolve) => setTimeout(resolve, 500));
           }
         } catch (error) {
-          allErrors.push(`Batch ${batchIndex + 1} error: ${error instanceof Error ? error.message : "Unknown error"}`);
+          allErrors.push(`Batch ${batchIndex + 1} error: ${getUserFacingErrorMessage(error, { role: "admin" })}`);
         }
 
         // Update progress
@@ -752,7 +753,7 @@ export default function CourseImportPage() {
       setExistingSections([]);
       setInvitationProgress(null);
     } catch (error) {
-      summary.errors.push(error instanceof Error ? error.message : "Unknown error occurred");
+      summary.errors.push(getUserFacingErrorMessage(error, { role: "admin" }));
       setImportSummary(summary);
 
       toaster.create({

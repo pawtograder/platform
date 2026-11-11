@@ -41,6 +41,7 @@ import {
 } from "./code-file-shared";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
   ssr: false,
@@ -378,7 +379,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         } catch (err) {
           toaster.error({
             title: "Error saving annotation",
-            description: err instanceof Error ? err.message : "Unknown error"
+            description: getUserFacingErrorMessage(err)
           });
         }
       },

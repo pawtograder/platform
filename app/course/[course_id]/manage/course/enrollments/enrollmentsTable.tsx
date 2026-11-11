@@ -69,6 +69,7 @@ import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
 import { selectionKey, setRowChecked } from "./rosterSelection";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -252,7 +253,7 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error Removing User",
-          description: `Failed to remove user: ${error instanceof Error ? error.message : "Unknown error"}`,
+          description: `Failed to remove user: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
           type: "error"
         });
         closeRemoveStudentModal();
@@ -304,7 +305,7 @@ export default function EnrollmentsTable() {
     } catch (error) {
       toaster.create({
         title: "Error fetching invitations",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     }
@@ -329,7 +330,7 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error cancelling invitation",
-          description: error instanceof Error ? error.message : "Unknown error",
+          description: getUserFacingErrorMessage(error, { role: "grader" }),
           type: "error"
         });
       }
@@ -812,7 +813,7 @@ export default function EnrollmentsTable() {
                   } catch (error) {
                     toaster.create({
                       title: "Failed to update SIS sync override",
-                      description: error instanceof Error ? error.message : "Unknown error",
+                      description: getUserFacingErrorMessage(error, { role: "grader" }),
                       type: "error"
                     });
                   }
@@ -1671,7 +1672,7 @@ export default function EnrollmentsTable() {
                       } catch (error) {
                         toaster.error({
                           title: "Error adding tag(s)",
-                          description: error instanceof Error ? error.message : "Unknown error"
+                          description: getUserFacingErrorMessage(error, { role: "grader" })
                         });
                       }
                     }}
@@ -1757,7 +1758,7 @@ export default function EnrollmentsTable() {
                         .catch((error: unknown) => {
                           toaster.error({
                             title: "Error removing tags",
-                            description: error instanceof Error ? error.message : "Unknown error"
+                            description: getUserFacingErrorMessage(error, { role: "grader" })
                           });
                         });
                     }}

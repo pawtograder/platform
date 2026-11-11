@@ -48,6 +48,7 @@ import {
   submissionModeUnavailableReason
 } from "@/lib/gitProviderOptions";
 import RepositoryHostPicker, { useSavedAssignment, useSelectedGitProvider } from "./repositoryHostPicker";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
@@ -1139,7 +1140,7 @@ export default function AssignmentForm({
         });
         toaster.error({
           title: "Error creating assignment: " + (error instanceof Error ? error.name : "Unknown"),
-          description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         setIsSubmitting(false);

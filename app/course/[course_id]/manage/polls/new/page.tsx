@@ -12,6 +12,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useState } from "react";
 import PollBuilderModal from "@/components/PollBuilderModal";
 import { PollPreviewModal } from "@/components/PollPreviewModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type PollFormValues = {
   question: string;
@@ -225,7 +226,7 @@ export default function NewPollPage() {
     } catch (error) {
       toaster.create({
         title: "Unable to save poll",
-        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {

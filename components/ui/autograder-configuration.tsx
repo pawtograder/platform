@@ -13,6 +13,7 @@ import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { useAssignmentController } from "@/hooks/useAssignment";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -191,7 +192,7 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
   } catch (error) {
     toaster.error({
       title: "Error calculating total points",
-      description: error instanceof Error ? error.message : "Unknown error"
+      description: getUserFacingErrorMessage(error)
     });
     return 0;
   }

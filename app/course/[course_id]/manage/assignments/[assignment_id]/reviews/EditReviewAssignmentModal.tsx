@@ -22,6 +22,7 @@ import { FaPlus } from "react-icons/fa";
 import { PopulatedReviewAssignment } from "./ReviewsTable";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
@@ -177,7 +178,7 @@ export default function EditReviewAssignmentModal({
     } catch (error) {
       toaster.error({
         title: "Error updating review assignment",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       onCloseAction();
