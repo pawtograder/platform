@@ -6,6 +6,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Box, Button, HStack, Icon, IconButton, Popover, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useState } from "react";
 import { BsCheck, BsX } from "react-icons/bs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type EligibilityData = {
   total_incomplete: number;
@@ -90,7 +91,7 @@ export default function FinalizeGradingButton({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: error instanceof Error ? error.message : "Unknown error occurred"
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       setIsFinalizing(false);

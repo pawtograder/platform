@@ -46,6 +46,7 @@ import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 const UTF8_BOM = "\uFEFF";
 
@@ -171,7 +172,7 @@ function CopyGroupsFromAssignmentDialog({
       Sentry.captureException(error);
       toaster.create({
         title: "Error copying groups",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {
@@ -388,7 +389,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       Sentry.captureException(e);
       toaster.create({
         title: "Error publishing changes",
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: getUserFacingErrorMessage(e, { role: "grader" }),
         type: "error"
       });
     } finally {
@@ -705,7 +706,7 @@ function TableByGroups({
       Sentry.captureException(e);
       toaster.create({
         title: "Error updating mentor",
-        description: e instanceof Error ? e.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(e, { role: "grader" }),
         type: "error"
       });
     } finally {

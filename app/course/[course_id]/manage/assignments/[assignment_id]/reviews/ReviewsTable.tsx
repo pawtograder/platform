@@ -26,6 +26,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -196,7 +197,7 @@ export default function ReviewsTable({
         }
         tableController.close();
       } catch (error: unknown) {
-        const description = error instanceof Error ? error.message : "Unknown error";
+        const description = getUserFacingErrorMessage(error, { role: "grader" });
         toaster.error({ title: "Error fetching data for export", description });
         return;
       }

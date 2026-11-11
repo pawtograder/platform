@@ -25,6 +25,7 @@ import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Supabase types
 type FlashcardDeckInsert = Database["public"]["Tables"]["flashcard_decks"]["Insert"];
@@ -232,7 +233,7 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
     } catch (error) {
       toaster.create({
         title: "Error",
-        description: `Failed to create flashcard deck: ${error instanceof Error ? error.message : "Unknown error"}`,
+        description: `Failed to create flashcard deck: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
         type: "error"
       });
     }

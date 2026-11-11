@@ -11,6 +11,7 @@ import { Survey } from "survey-react-ui";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
 import "survey-core/survey-core.min.css";
 import { PollResponseData } from "@/types/poll";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 interface PollQuestion {
   elements: Array<Record<string, unknown>>;
@@ -158,7 +159,7 @@ export default function PollRespondPage() {
           if (!hasAlreadySubmittedRef.current) {
             toaster.create({
               title: "Error submitting response",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+              description: getUserFacingErrorMessage(error),
               type: "error"
             });
           }

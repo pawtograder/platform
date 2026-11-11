@@ -6,6 +6,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useState, useRef, useEffect } from "react";
 import { useIdentity } from "@/hooks/useIdentities";
 import { Tooltip } from "../ui/tooltip";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type SyncState = "idle" | "syncing" | "success" | "error";
 
@@ -97,7 +98,7 @@ export default function SyncRolesButton({
       setSyncState("error");
       setResult({
         synced_classes: 0,
-        error: err instanceof Error ? err.message : "Unknown error"
+        error: getUserFacingErrorMessage(err)
       });
     }
   };

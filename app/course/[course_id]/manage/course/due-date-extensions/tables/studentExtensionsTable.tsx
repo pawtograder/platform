@@ -13,6 +13,7 @@ import { Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VS
 
 import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import AddExtensionModal, { AddExtensionDefaults } from "../modals/addExtensionModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * Table of student-wide extensions (applies to all assignments), with dialog to add/edit/delete.
@@ -44,7 +45,7 @@ export default function StudentExtensionsTable() {
       });
       editOpen.closeModal();
     } catch (err) {
-      toaster.error({ title: "Update failed", description: err instanceof Error ? err.message : "Unknown error" });
+      toaster.error({ title: "Update failed", description: getUserFacingErrorMessage(err, { role: "grader" }) });
     }
   };
 
@@ -64,7 +65,7 @@ export default function StudentExtensionsTable() {
         type: "info"
       });
     } catch (err) {
-      toaster.error({ title: "Delete failed", description: err instanceof Error ? err.message : "Unknown error" });
+      toaster.error({ title: "Delete failed", description: getUserFacingErrorMessage(err, { role: "grader" }) });
     }
   };
 

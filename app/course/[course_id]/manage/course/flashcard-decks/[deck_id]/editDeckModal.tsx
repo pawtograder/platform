@@ -21,6 +21,7 @@ import { configureMonacoYaml } from "monaco-yaml";
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -452,7 +453,7 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
     } catch (error) {
       toaster.create({
         title: "Error",
-        description: `Failed to update flashcard deck: ${error instanceof Error ? error.message : "Unknown error"}`,
+        description: `Failed to update flashcard deck: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
         type: "error"
       });
     }

@@ -116,6 +116,7 @@ import type { ValidationResult } from "@/lib/gradebookExpressionTester";
 import GradebookCell from "./gradebookCell";
 import { GradebookPopoverProvider, useGradebookPopover } from "./GradebookPopoverProvider";
 import ImportGradebookColumn from "./importGradebookColumn";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 const GRADE_COL_WIDTH = 120;
 
@@ -1743,7 +1744,7 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to move column",
-        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {
@@ -1774,7 +1775,7 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to move column",
-        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {
@@ -1825,7 +1826,7 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to release column",
-        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {
@@ -1850,7 +1851,7 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to unrelease column",
-        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {
@@ -2708,7 +2709,7 @@ export default function GradebookTable() {
     } catch (error) {
       toaster.create({
         title: "Auto-layout failed",
-        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {

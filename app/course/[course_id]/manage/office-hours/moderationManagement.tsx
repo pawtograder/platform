@@ -22,6 +22,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { BsBan, BsClock, BsExclamationTriangle, BsEye, BsPlus, BsShield, BsTrash } from "react-icons/bs";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type ModerationActionWithDetails = HelpRequestModeration & {
   student_profile?: UserProfile;
@@ -100,7 +101,7 @@ export default function ModerationManagement() {
         onError: (error) => {
           toaster.error({
             title: "Failed to delete moderation action",
-            description: error instanceof Error ? error.message : "An unexpected error occurred"
+            description: getUserFacingErrorMessage(error, { role: "grader" })
           });
         }
       }

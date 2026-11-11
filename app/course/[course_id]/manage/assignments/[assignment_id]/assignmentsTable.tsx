@@ -66,6 +66,7 @@ import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 import { describeBulkReleaseResult } from "@/lib/bulkReleaseMessage";
 import { groupBySubmissionId } from "@/lib/groupBySubmissionId";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * "Grade anyway" action for a student/group with no active submission. Creates
@@ -984,7 +985,7 @@ export default function AssignmentsTable({
       console.error("Error releasing grading reviews for selection:", error);
       toaster.error({
         title: "Error",
-        description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       setIsReleasingAll(false);
@@ -1100,8 +1101,7 @@ export default function AssignmentsTable({
                     console.error("Error unreleasing grading reviews for selection:", error);
                     toaster.error({
                       title: "Error",
-                      description:
-                        error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
+                      description: getUserFacingErrorMessage(error, { role: "grader" })
                     });
                   } finally {
                     setIsUnreleasingAll(false);
@@ -2096,7 +2096,7 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
         console.error("Error exporting grades:", error);
         toaster.error({
           title: "Error",
-          description: error instanceof Error ? error.message : "Unknown error occurred while exporting grades"
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         setIsExporting(null);

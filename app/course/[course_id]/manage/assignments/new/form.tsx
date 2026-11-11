@@ -41,6 +41,7 @@ import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useFeatureEnabled, useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
@@ -1097,7 +1098,7 @@ export default function AssignmentForm({
         });
         toaster.error({
           title: "Error creating assignment: " + (error instanceof Error ? error.name : "Unknown"),
-          description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         setIsSubmitting(false);

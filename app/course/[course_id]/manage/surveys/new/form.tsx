@@ -47,6 +47,7 @@ import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
 import { createClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type SurveyTemplateInsert = Database["public"]["Tables"]["survey_templates"]["Insert"];
 
@@ -193,7 +194,7 @@ export default function SurveyForm({
     } catch (error) {
       toaster.create({
         title: "JSON Validation Failed",
-        description: `Invalid JSON: ${error instanceof Error ? error.message : "Unknown error"}`,
+        description: `Invalid JSON: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
         type: "error"
       });
     }
