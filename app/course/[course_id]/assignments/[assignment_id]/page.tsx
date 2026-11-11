@@ -17,6 +17,7 @@ import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTot
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
+  CourseWithFeatures,
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
@@ -35,6 +36,8 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
+import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
+import { cloudWorkspacesEnabled, createWorkspaceClient } from "@/lib/workspaceStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -170,6 +173,15 @@ export default function AssignmentPage() {
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
 
+  // Open in Coder (#1095): a student's Forgejo repository, in a course with Cloud Workspaces on.
+  // workspace-open checks the same things on the server; this only decides whether to offer it.
+  const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
+  const showWorkspace =
+    enrollment?.role === "student" &&
+    assignment?.git_provider === "forgejo" &&
+    cloudWorkspacesEnabled((course as CourseWithFeatures | undefined)?.features) &&
+    (repositories ?? []).some((r) => r.git_provider === "forgejo");
+
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
@@ -275,6 +287,11 @@ export default function AssignmentPage() {
               }
             />
           </Box>
+          {showWorkspace && (
+            <Box m={4}>
+              <WorkspaceStatus assignmentId={Number(assignment_id)} client={workspaceClient} />
+            </Box>
+          )}
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}
             assignment={assignment}

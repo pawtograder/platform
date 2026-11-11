@@ -4,20 +4,25 @@ import { useWorkspaceStatus } from "@/hooks/useWorkspaceStatus";
 import { WORKSPACE_STEPS, WorkspaceClient, WorkspaceState, workspaceStepLabel } from "@/lib/workspaceStatus";
 import { Alert, Box, Button, Heading, HStack, Icon, Skeleton, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useRef } from "react";
-import { LuCheck, LuCircle, LuCodeXml, LuRotateCcw, LuX } from "react-icons/lu";
+import { LuCheck, LuCircle, LuCodeXml, LuLink, LuRotateCcw, LuX } from "react-icons/lu";
 
 type StepMark = "done" | "running" | "failed" | "pending";
 
-function stepMark(state: WorkspaceState, index: number): StepMark {
+type StepState = Extract<WorkspaceState, { status: "starting" | "ready" | "failed" }>;
+
+function showsSteps(state: WorkspaceState): state is StepState {
+  return state.status === "starting" || state.status === "ready" || state.status === "failed";
+}
+
+function stepMark(state: StepState, index: number): StepMark {
   if (state.status === "ready") return "done";
-  if (state.status === "not_started") return "pending";
   const current = WORKSPACE_STEPS.findIndex((s) => s.id === state.step);
   if (index < current) return "done";
   if (index > current) return "pending";
   return state.status === "failed" ? "failed" : "running";
 }
 
-function StepList({ state }: { state: WorkspaceState }) {
+function StepList({ state }: { state: StepState }) {
   return (
     // role="list" keeps list semantics in Safari/VoiceOver, which drops them for `list-style: none`.
     <VStack as="ol" role="list" align="stretch" gap={1} listStyleType="none" m={0} p={0}>
@@ -59,11 +64,17 @@ function statusText(state: WorkspaceState): string {
     case "not_started":
       return "Your workspace is not running.";
     case "starting":
-      return `Starting your workspace: ${workspaceStepLabel(state.step)}…`;
+      return state.restarting
+        ? "Restarting your workspace…"
+        : `Starting your workspace: ${workspaceStepLabel(state.step)}…`;
     case "ready":
       return "Your workspace is ready.";
     case "failed":
       return `Workspace not ready: ${workspaceStepLabel(state.step)} failed.`;
+    case "needs_linking":
+      return "Link your Forgejo account to open your workspace.";
+    case "account_conflict":
+      return "Your workspace can't be opened.";
   }
 }
 
@@ -127,16 +138,16 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
               data-testid="workspace-status"
             >
               {statusText(state)}
-              {state.status === "failed" && (
+              {"message" in state && (
                 // The reason is in the Alert below, which is not a live region, so it is repeated
-                // here for screen readers. Otherwise they hear which step failed but not why.
+                // here for screen readers. Otherwise they hear what went wrong but not why.
                 <Text as="span" srOnly>
                   {" "}
                   {state.message}
                 </Text>
               )}
             </Text>
-            {state.status !== "not_started" && <StepList state={state} />}
+            {showsSteps(state) && <StepList state={state} />}
             {state.status === "failed" && (
               <Alert.Root status="error">
                 <Alert.Indicator />
@@ -148,11 +159,31 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
                 </Alert.Content>
               </Alert.Root>
             )}
+            {state.status === "needs_linking" && (
+              <Alert.Root status="info">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>One-time step</Alert.Title>
+                  <Alert.Description>
+                    {state.message} Coder needs it to clone your repository and push your work.
+                  </Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+            )}
+            {state.status === "account_conflict" && (
+              <Alert.Root status="error">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>Ask your course staff</Alert.Title>
+                  <Alert.Description>{state.message}</Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+            )}
             <HStack>
               {state.status === "not_started" && (
                 <Button size="sm" colorPalette="blue" loading={pending} onClick={() => runAndKeepFocus(open)}>
                   <LuCodeXml />
-                  Open workspace
+                  Open in Coder
                 </Button>
               )}
               {state.status === "starting" && (
@@ -166,6 +197,21 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
                   <a href={state.url} target="_blank" rel="noopener noreferrer">
                     <LuCodeXml />
                     Open in VS Code
+                    <Text as="span" srOnly>
+                      {" "}
+                      (opens in a new tab)
+                    </Text>
+                  </a>
+                </Button>
+              )}
+              {state.status === "needs_linking" && (
+                // A link the student clicks, not a window opened after an await, so no popup
+                // blocker gets in the way. The card checks again when the student comes back to
+                // this tab.
+                <Button size="sm" colorPalette="blue" asChild>
+                  <a href={state.url} target="_blank" rel="noopener noreferrer">
+                    <LuLink />
+                    Link Forgejo account
                     <Text as="span" srOnly>
                       {" "}
                       (opens in a new tab)

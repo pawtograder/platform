@@ -3,86 +3,101 @@ import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
 import { POLL_MIN_MS } from "@/hooks/useWorkspaceStatus";
 import {
-  createSimulatedWorkspaceClient,
+  cloudWorkspacesEnabled,
+  createWorkspaceClient,
+  toWorkspaceState,
   WORKSPACE_STEPS,
   WorkspaceClient,
   WorkspaceState,
   workspaceStepLabel
 } from "@/lib/workspaceStatus";
+import type { WorkspaceOpenResponse } from "@/supabase/functions/_shared/FunctionTypes.js";
 
-describe("createSimulatedWorkspaceClient", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date("2026-10-29T12:00:00Z"));
-  });
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  it("is not started until opened", async () => {
-    const client = createSimulatedWorkspaceClient();
-    expect(await client.getStatus(1)).toEqual({ status: "not_started" });
-  });
-
-  it("walks every step in order, then is ready with the editor URL", async () => {
-    const client = createSimulatedWorkspaceClient({ stepMs: 1000, editorUrl: "https://editor.example" });
-    expect(await client.open(1)).toEqual({ status: "starting", step: "build" });
-    jest.advanceTimersByTime(1000);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "git_setup" });
-    jest.advanceTimersByTime(1000);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "clone" });
-    jest.advanceTimersByTime(1000);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "editor" });
-    jest.advanceTimersByTime(1000);
-    expect(await client.getStatus(1)).toEqual({ status: "ready", url: "https://editor.example" });
-    jest.advanceTimersByTime(60_000);
-    expect(await client.getStatus(1)).toEqual({ status: "ready", url: "https://editor.example" });
-  });
-
-  it.each(WORKSPACE_STEPS.map((s, i) => [s.id, i] as const))(
-    "stops at %s when told to fail there, and never becomes ready",
-    async (step, index) => {
-      const client = createSimulatedWorkspaceClient({ stepMs: 1000, failAt: step });
-      await client.open(1);
-      for (let i = 0; i < index; i++) {
-        expect(await client.getStatus(1)).toEqual({ status: "starting", step: WORKSPACE_STEPS[i].id });
-        jest.advanceTimersByTime(1000);
-      }
-      const failed = await client.getStatus(1);
-      expect(failed).toMatchObject({ status: "failed", step });
-      expect((failed as Extract<WorkspaceState, { status: "failed" }>).message.length).toBeGreaterThan(0);
-      jest.advanceTimersByTime(60_000);
-      expect(await client.getStatus(1)).toMatchObject({ status: "failed", step });
-    }
-  );
-
-  it("restarts from the first step when opened again (Retry)", async () => {
-    const client = createSimulatedWorkspaceClient({ stepMs: 1000, failAt: "clone" });
-    await client.open(1);
-    jest.advanceTimersByTime(5000);
-    expect(await client.getStatus(1)).toMatchObject({ status: "failed" });
-    expect(await client.open(1)).toEqual({ status: "starting", step: "build" });
+describe("toWorkspaceState", () => {
+  it.each([
+    [{ status: "not_started" }, { status: "not_started" }],
+    [
+      { status: "starting", step: "clone" },
+      { status: "starting", step: "clone" }
+    ],
+    [{ status: "starting" }, { status: "starting", step: "build" }],
+    [
+      { status: "restarting", step: "build" },
+      { status: "starting", step: "build", restarting: true }
+    ],
+    [
+      { status: "ready", redirect_url: "https://coder.example/vscode" },
+      { status: "ready", url: "https://coder.example/vscode" }
+    ],
+    [
+      { status: "failed", step: "clone", message: "Git Clone failed: repository not found" },
+      { status: "failed", step: "clone", message: "Git Clone failed: repository not found" }
+    ],
+    [
+      { status: "needs_linking", authenticate_url: "https://coder.example/external-auth/forgejo", message: "Link it." },
+      { status: "needs_linking", url: "https://coder.example/external-auth/forgejo", message: "Link it." }
+    ],
+    [
+      { status: "account_conflict", message: "Ask staff." },
+      { status: "account_conflict", message: "Ask staff." }
+    ]
+  ] as [WorkspaceOpenResponse, WorkspaceState][])("maps %j", (res, expected) => {
+    expect(toWorkspaceState(res)).toEqual(expected);
   });
 
-  it.each([-5, 0, Infinity, NaN])("falls back to the default step length for stepMs=%s", async (stepMs) => {
-    const client = createSimulatedWorkspaceClient({ stepMs });
-    expect(await client.open(1)).toEqual({ status: "starting", step: "build" });
-    jest.advanceTimersByTime(1500);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "git_setup" });
+  it("gives a failure with no message a generic reason", () => {
+    expect(toWorkspaceState({ status: "failed", step: "editor" })).toEqual({
+      status: "failed",
+      step: "editor",
+      message: "The workspace could not start."
+    });
   });
 
-  it("keeps each assignment's workspace separate", async () => {
-    const client = createSimulatedWorkspaceClient({ stepMs: 1000 });
-    await client.open(1);
-    jest.advanceTimersByTime(1000);
-    expect(await client.getStatus(1)).toEqual({ status: "starting", step: "git_setup" });
-    expect(await client.getStatus(2)).toEqual({ status: "not_started" });
+  it("refuses a ready reply with no editor link, and needs_linking with no link", () => {
+    expect(() => toWorkspaceState({ status: "ready" })).toThrow(/no editor link/);
+    expect(() => toWorkspaceState({ status: "needs_linking" })).toThrow(/no link/);
   });
 
   it("labels every step", () => {
     for (const step of WORKSPACE_STEPS) {
       expect(workspaceStepLabel(step.id)).toBe(step.label);
     }
+  });
+});
+
+describe("createWorkspaceClient", () => {
+  it("reads status from workspace-status and opens through workspace-open", async () => {
+    const invoke = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { status: "not_started" }, error: null })
+      .mockResolvedValueOnce({ data: { status: "starting", step: "build" }, error: null });
+    const client = createWorkspaceClient({ functions: { invoke } } as unknown as Parameters<
+      typeof createWorkspaceClient
+    >[0]);
+    expect(await client.getStatus(7)).toEqual({ status: "not_started" });
+    expect(await client.open(7)).toEqual({ status: "starting", step: "build" });
+    expect(invoke).toHaveBeenNthCalledWith(1, "workspace-status", { body: { assignment_id: 7 } });
+    expect(invoke).toHaveBeenNthCalledWith(2, "workspace-open", { body: { assignment_id: 7 } });
+  });
+});
+
+describe("cloudWorkspacesEnabled", () => {
+  it.each([
+    [[{ name: "cloud-workspaces", enabled: true }], true],
+    [[{ name: "cloud-workspaces", enabled: false }], false],
+    [[{ name: "cloud-workspaces", enabled: "true" }], false],
+    [
+      [
+        { name: "cloud-workspaces", enabled: false },
+        { name: "cloud-workspaces", enabled: true }
+      ],
+      false
+    ],
+    [[], false],
+    [null, false],
+    [{ name: "cloud-workspaces", enabled: true }, false]
+  ])("%j is %s", (features, expected) => {
+    expect(cloudWorkspacesEnabled(features)).toBe(expected);
   });
 });
 
@@ -128,22 +143,22 @@ describe("WorkspaceStatus", () => {
   it("offers to open a workspace that is not running, with no editor link", async () => {
     renderCard(stubClient({ initial: { status: "not_started" } }));
     expect(await screen.findByText("Your workspace is not running.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open workspace" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Open in Coder" })).toBeEnabled();
     expect(screen.queryByRole("link", { name: "Open in VS Code" })).not.toBeInTheDocument();
   });
 
   it("opens, polls while starting, and stops polling once ready", async () => {
     const client = stubClient({
       initial: { status: "not_started" },
-      opened: { status: "starting", step: "git_setup" },
+      opened: { status: "starting", step: "build" },
       polls: [
         { status: "starting", step: "clone" },
         { status: "ready", url: "https://editor.example" }
       ]
     });
     renderCard(client);
-    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
-    expect(await screen.findByText(/Starting your workspace: Sign in to the course git server/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Open in Coder" }));
+    expect(await screen.findByText(/Starting your workspace: Prepare the workspace/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Starting…" })).toBeDisabled();
     expect(client.open).toHaveBeenCalledWith(7);
 
@@ -216,12 +231,12 @@ describe("WorkspaceStatus", () => {
   it("marks steps done, failed and pending, and retries a failed workspace", async () => {
     const client = stubClient({
       initial: { status: "failed", step: "clone", message: "Clone broke." },
-      opened: { status: "starting", step: "git_setup" }
+      opened: { status: "starting", step: "build" }
     });
     const { container } = renderCard(client);
     expect(await screen.findByText("Workspace not ready: Clone your repository failed.")).toBeInTheDocument();
     expect(screen.getByText(/Try again, and if it keeps failing/)).toHaveTextContent("Clone broke.");
-    expect(container.querySelector('[data-step="git_setup"]')).toHaveAttribute("data-mark", "done");
+    expect(container.querySelector('[data-step="build"]')).toHaveAttribute("data-mark", "done");
     expect(container.querySelector('[data-step="clone"]')).toHaveAttribute("data-mark", "failed");
     expect(container.querySelector('[data-step="editor"]')).toHaveAttribute("data-mark", "pending");
     expect(screen.queryByRole("link", { name: "Open in VS Code" })).not.toBeInTheDocument();
@@ -236,7 +251,7 @@ describe("WorkspaceStatus", () => {
     const status = await screen.findByRole("status");
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveTextContent("Your workspace is not running.");
-    fireEvent.click(screen.getByRole("button", { name: "Open workspace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open in Coder" }));
     await screen.findByText(/Starting your workspace/);
     expect(screen.getByRole("status")).toBe(status);
     expect(status).toHaveTextContent("Starting your workspace: Prepare the workspace…");
@@ -255,7 +270,7 @@ describe("WorkspaceStatus", () => {
       opened: { status: "failed", step: "clone", message: "Clone broke." }
     });
     renderCard(client);
-    const openButton = await screen.findByRole("button", { name: "Open workspace" });
+    const openButton = await screen.findByRole("button", { name: "Open in Coder" });
     openButton.focus();
     fireEvent.click(openButton);
     await screen.findByRole("button", { name: "Retry" });
@@ -276,7 +291,7 @@ describe("WorkspaceStatus", () => {
       open: jest.fn(() => new Promise<WorkspaceState>((resolve) => (resolveOpen = resolve)))
     };
     renderCard(client);
-    const openButton = await screen.findByRole("button", { name: "Open workspace" });
+    const openButton = await screen.findByRole("button", { name: "Open in Coder" });
     fireEvent.click(openButton);
     fireEvent.click(openButton);
     expect(client.open).toHaveBeenCalledTimes(1);
@@ -352,7 +367,7 @@ describe("WorkspaceStatus", () => {
     const getStatus = jest.fn(async () => ({ status: "not_started" }) as WorkspaceState);
     const open = jest.fn(() => new Promise<WorkspaceState>((resolve) => (finishOpen = resolve)));
     renderCard({ getStatus, open });
-    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open in Coder" }));
 
     // The student switches back to the tab before Open has answered.
     await act(async () => {
@@ -402,8 +417,65 @@ describe("WorkspaceStatus", () => {
       })
     };
     renderCard(client);
-    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open in Coder" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach your workspace: network down");
-    expect(screen.getByRole("button", { name: "Open workspace" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Open in Coder" })).toBeEnabled();
+  });
+
+  it("says a broken workspace is restarting, and keeps polling", async () => {
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "starting", step: "build", restarting: true } as WorkspaceState)
+      .mockResolvedValue({ status: "starting", step: "clone" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    expect(await screen.findByRole("status")).toHaveTextContent("Restarting your workspace…");
+    await act(async () => {
+      jest.advanceTimersByTime(POLL_MIN_MS);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Starting your workspace: Clone your repository…");
+  });
+
+  it("sends a student who has to link Forgejo to Coder's link page in a new tab, with no editor link", async () => {
+    renderCard(
+      stubClient({
+        initial: {
+          status: "needs_linking",
+          url: "https://coder.example/external-auth/forgejo",
+          message: "Link your Forgejo account in Coder, then open the workspace again."
+        }
+      })
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Link your Forgejo account to open your workspace. Link your Forgejo account in Coder"
+    );
+    const link = screen.getByRole("link", { name: "Link Forgejo account (opens in a new tab)" });
+    expect(link).toHaveAttribute("href", "https://coder.example/external-auth/forgejo");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(screen.queryByRole("link", { name: /Open in VS Code/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("checks again when the student comes back from linking Forgejo", async () => {
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "needs_linking", url: "https://coder.example/x", message: "Link it." })
+      .mockResolvedValue({ status: "not_started" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    await screen.findByRole("link", { name: /Link Forgejo account/ });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByRole("button", { name: "Open in Coder" })).toBeEnabled();
+  });
+
+  it("tells a student with a Coder account conflict to ask staff, with nothing to click", async () => {
+    renderCard(stubClient({ initial: { status: "account_conflict", message: "Ask course staff to remove it." } }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Your workspace can't be opened. Ask course staff to remove it."
+    );
+    expect(screen.getByText("Ask your course staff")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });
