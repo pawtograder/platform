@@ -138,7 +138,7 @@ keys. Rendering those keys changes `checksum/config`, so the next routine
 upgrade would restart the primary after all. The 2026-09-23 `/dev/shm` incident
 ([incident-response.md](./incident-response.md#postgres-devshm-exhaustion-sqlstate-53100))
 is the worked example: #1021 shipped as a patch, was split, and its restarting
-half moved to 0.4.0.
+half moved to 0.4.1.
 
 ### Deploying a Postgres-restarting release in a window
 
@@ -173,7 +173,7 @@ VALUES=values/values-prod.yaml       # the file the routine deploy uses
 # for a local directory and renders whatever is checked out.
 CHART=oci://dev-harbor.khoury.northeastern.edu/pawtograder/charts/pawtograder
 DEPLOYED=$(helm list -n "$NS" -o json | jq -r '.[] | select(.name=="pawtograder") | .chart | sub("^pawtograder-"; "")')
-TARGET=0.4.0
+TARGET=0.4.1
 
 # 0. Before the window: confirm the TARGET chart knows the posture. Helm ignores
 #    values a chart doesn't define, so a chart without it would take

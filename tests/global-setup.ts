@@ -1,8 +1,9 @@
-import { test as base, Page } from "@playwright/test";
+import { test as playwrightTest, Page } from "@playwright/test";
 import { logMagicLink, supabase, TestingUser } from "@/tests/e2e/TestingUtils";
 import { writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { isTraceMode, traceFixtures } from "@/tests/e2e/bugReport/traceFixture";
 
 // On failure, dump DB state relevant to the failing test so CI artifacts
 // carry enough context to root-cause data-state flakes that don't reproduce
@@ -500,6 +501,10 @@ type E2EFixtures = {
 };
 
 // Extend the base test to include visual test setup
+// Under BUG_REPORT_TRACE=1 every spec that imports this `test` runs under the bug reporter's taint
+// trace (tests/e2e/bugReport/traceFixture.ts). Otherwise the trace fixtures are not registered at all.
+const base = isTraceMode() ? playwrightTest.extend(traceFixtures) : playwrightTest;
+
 export const test = base.extend<E2EFixtures>({
   logMagicLinksOnFailure: async ({}, use, testInfo) => {
     // eslint-disable-next-line react-hooks/rules-of-hooks

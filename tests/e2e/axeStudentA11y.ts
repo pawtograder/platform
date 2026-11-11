@@ -496,8 +496,17 @@ export async function assertLandmarkJump(
  * helper resizes for the check and restores the original size afterwards.
  * A viewport-disabled context (`viewport: null`) is rejected up front: there
  * would be no original size to restore.
+ *
+ * `options.root` measures a different content root than `<main>`. Use it for an
+ * open modal dialog, which hides `<main>` from the accessibility tree
+ * (e.g. `{ root: '[role="dialog"]' }`).
  */
-export async function assertReflowAt320(page: Page, contextLabel?: string): Promise<void> {
+export async function assertReflowAt320(
+  page: Page,
+  contextLabel?: string,
+  options: { root?: string } = {}
+): Promise<void> {
+  const rootSelector = options.root ?? 'main, [role="main"]';
   const prefix = contextLabel ? `[${contextLabel}] ` : "";
   const original = page.viewportSize();
   if (!original) {
@@ -521,7 +530,8 @@ export async function assertReflowAt320(page: Page, contextLabel?: string): Prom
       await page.waitForTimeout(250);
     }
 
-    await expect(page.getByRole("main").first(), `${prefix}main landmark visible at 320px`).toBeVisible({
+    const rootLocator = options.root ? page.locator(options.root).first() : page.getByRole("main").first();
+    await expect(rootLocator, `${prefix}${options.root ?? "main landmark"} visible at 320px`).toBeVisible({
       timeout: 15000
     });
 
@@ -541,9 +551,9 @@ export async function assertReflowAt320(page: Page, contextLabel?: string): Prom
 
     // The waitForFunction above is the sole transient-overflow filter; sample
     // the assertion metrics once after it settles (or times out).
-    const metrics = await page.evaluate(() => {
+    const metrics = await page.evaluate((rootSelector) => {
       const scroller = document.scrollingElement ?? document.documentElement;
-      const main = document.querySelector('main, [role="main"]') as HTMLElement | null;
+      const main = document.querySelector(rootSelector) as HTMLElement | null;
 
       // Detect a working vertical scroll pane (app-shell pattern). The shells
       // in this app live INSIDE <main id="main-content">, so scan descendants
@@ -576,7 +586,7 @@ export async function assertReflowAt320(page: Page, contextLabel?: string): Prom
         innerScrollable,
         contentOverflowsViewport
       };
-    });
+    }, rootSelector);
 
     // On persistent overflow, name the widest offending elements so the
     // failure is actionable without re-running locally.

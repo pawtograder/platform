@@ -1,3 +1,4 @@
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import PersonName from "@/components/ui/person-name";
 import { Assignment, AssignmentGroupWithMembersAndMentor } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
@@ -115,7 +116,7 @@ export default function BulkModifyGroup({
                   <>
                     <Field.Root>
                       <Field.Label>Group name</Field.Label>
-                      {groupToMod.name}
+                      <ReportBlock>{groupToMod.name}</ReportBlock>
                     </Field.Root>
                     <Field.Root>
                       <Field.Label>Current members ({groupToMod.assignment_groups_members.length})</Field.Label>

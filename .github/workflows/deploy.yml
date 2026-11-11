@@ -275,9 +275,10 @@ jobs:
           ENABLE_SIGNUPS=true
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
           E2E_ENABLE=true
-          # Explicit, because getExamVisionProvider now fails closed on an unset value: it used
-          # to default to 'fake', which meant a real deployment silently produced placeholder
-          # OCR that reported success. The exam e2e suites need the offline provider.
+          # getExamVisionProvider fails closed, so without this the exam worker throws before
+          # OCR'ing a page and every batch stalls at 'ocr'. Keep it on the default branch: under
+          # pull_request_target a PR runs the base branch's workflow, so a copy on a feature
+          # branch never takes effect. Real providers live in exam-vision-e2e.yml.
           EXAM_VISION_PROVIDER=fake
           # E2E_ENABLE only opens the edge functions' auth bypass. The GitHub
           # bypass is a separate flag: without it, isE2ERun still falls through
@@ -403,6 +404,18 @@ jobs:
       - name: Build Next.js (prod, port 3001)
         env:
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
+          # A DSN for a Sentry that isn't there: tests/e2e/bugReport/identity.spec.ts (G1) starts
+          # a stub ingest on this port and checks the envelopes the browser and server send.
+          # Outside that test nothing listens, so reports fail to send and are dropped. Must match
+          # STUB_SENTRY_DSN in tests/e2e/bugReport/stubSentry.ts.
+          NEXT_PUBLIC_SENTRY_DSN: http://e2epublickey@127.0.0.1:54399/1
+          # The bug reporter's PR tier (spec §7.1) runs here with every other spec. Its test hooks
+          # and harness pages exist only in a build made with E2E_ENABLE=true (next.config.ts
+          # inlines it as BUG_REPORT_E2E). .env.local already sets it; this makes the build not
+          # depend on Next loading that file before next.config.ts. ci-fast is what CI=true picks
+          # anyway; the nightly and release tiers build with `full` instead.
+          E2E_ENABLE: "true"
+          SENTRY_BUILD_PROFILE: ci-fast
         run: npm run build
 
       # This job does NOT write the .next/cache entry, and that is structural
@@ -547,6 +560,30 @@ jobs:
       # on .rpc() calls from user clients to functions authenticated cannot execute.
       - name: Check function grants
         run: npm run check:function-grants
+
+      # Foreign keys into repositories and submissions are NO ACTION, not CASCADE, so a delete
+      # path that misses a child table fails with 23503 instead of destroying graded work. Fails
+      # when a foreign key into either table is new or changed, when a registered SQL delete path
+      # does not clear a NO ACTION child table, or when anything else deletes those rows directly.
+      - name: Check delete paths
+        run: npm run check:delete-paths
+
+      # The course credential specs (tests/e2e/course-gemini-key-*.spec.ts) connect as postgres to
+      # compare stored Vault values and inject faults, and refuse any database that does not carry a
+      # disposable-database marker. Mark this job's fresh database and export its identity; only the
+      # marker's sha256 leaves this step.
+      - name: Mark the disposable database for privileged credential tests
+        run: |
+          marker="$(openssl rand -hex 32)"
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -v ON_ERROR_STOP=1 -X -q -U postgres -d postgres \
+            -v marker="$marker" <<'SQL'
+          SELECT vault.create_secret(:'marker', 'byok-disposable-db-marker', 'CI disposable database marker');
+          SQL
+          {
+            echo "BYOK_TEST_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+            echo "BYOK_TEST_DB_FINGERPRINT=$(printf '%s' "$marker" | sha256sum | cut -d' ' -f1)"
+            echo "BYOK_TEST_DB_EXPECTED_PORT=54322"
+          } >> "$GITHUB_ENV"
 
       - name: Serve Edge Functions
         run: |

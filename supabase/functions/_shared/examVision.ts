@@ -112,15 +112,35 @@ export class FakeExamVisionProvider implements ExamVisionProvider {
   ocrImage(page: PageImage): Promise<{ text: string; words: WordBox[] }> {
     const sis = page.name.match(/sis-([A-Za-z0-9]+)/)?.[1] ?? "unknown";
     const text = `OCR(${page.name}) sis-${sis}`;
-    // place one word box per token spread down the page so region math has something to bite on
+    // Tokens tiled across a grid, not just down one column.
+    //
+    // This read as "spread down the page", but `text` is only ever two tokens, so every page put
+    // its words at y 0.10 and 0.15 and nowhere else. wordsInRegion keeps a word when its centre is
+    // inside the region, so any answer region below roughly y 0.17 matched nothing and ocr_text
+    // came back "" -- including the one in exam-grading.spec.ts, which sits at y 0.3..0.5.
+    //
+    // The first fix tiled down the page only, and Adhiraj pointed out on review that every box was
+    // still x 0.1..0.4, so a region that misses x = 0.25 matched nothing even though the comment
+    // claimed "anywhere on the page". Hence a grid. Centres land every 0.2 across and every 0.05
+    // down, so any region at least 0.2 wide and 0.05 tall has a word in it, which is the bound a
+    // fake OCR backend owes the tests that depend on it.
     const tokens = text.split(/\s+/);
-    const words: WordBox[] = tokens.map((t, i) => ({
-      text: t,
-      x: 0.1,
-      y: 0.1 + ((i * 0.05) % 0.8),
-      width: 0.3,
-      height: 0.03
-    }));
+    const COL_CENTRES = [0.1, 0.3, 0.5, 0.7, 0.9];
+    const ROW_COUNT = 18; // y centres 0.065 .. 0.915, one row every 0.05
+    const BOX_W = 0.18;
+    const BOX_H = 0.03;
+    const words: WordBox[] = [];
+    for (let row = 0; row < ROW_COUNT; row++) {
+      for (let col = 0; col < COL_CENTRES.length; col++) {
+        words.push({
+          text: tokens[(row * COL_CENTRES.length + col) % tokens.length],
+          x: COL_CENTRES[col] - BOX_W / 2,
+          y: 0.05 + row * 0.05,
+          width: BOX_W,
+          height: BOX_H
+        });
+      }
+    }
     return Promise.resolve({ text, words });
   }
   extractTemplate(_pages: PageImage[]): Promise<ProposedTree> {
@@ -286,7 +306,9 @@ class GeminiVision {
           "the region where the student writes their name and the region for their student ID. Return strict " +
           'JSON: { "questions": [{ "client_id","parent_client_id","level","ordinal","label","prompt",' +
           '"answer_type","points" }], "regions": [{ "question_client_id"|null,"kind"(answer|name|student_id),' +
-          '"page_number","x","y","width","height" }] }.'
+          '"page_number","x","y","width","height" }] }. "answer_type" must be exactly one of "free_text", ' +
+          '"short_answer", "multiple_choice", "numeric" or "true_false"; use "free_text" for a section or ' +
+          "question that only groups sub-questions."
       },
       ...pages.map((p) => this.imagePart(p))
     ];

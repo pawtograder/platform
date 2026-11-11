@@ -18,13 +18,19 @@ export default defineConfig({
      out of the default/per-PR E2E run. The *.vision.spec.ts suites call the real
      Google Vision + Gemini APIs and run in exam-vision-e2e.yml via
      playwright.vision.config.ts. */
-  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/*.vision.spec.ts"],
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/sso/**", "**/*.forgejo-coder.spec.ts", "**/*.vision.spec.ts"],
   /* One-time gate before any worker spawns: probe PostgREST until its
      schema cache is loaded. Deployed previews don't admit traffic until
      this finishes, so test setup never races a partial cache. See
      tests/wait-for-schema-cache.ts for the why. Local `supabase start`
      paths short-circuit when SUPABASE_SERVICE_ROLE_KEY is unset. */
   globalSetup: "./tests/wait-for-schema-cache.ts",
+  /* Under BUG_REPORT_TRACE=1 (the bug reporter's taint trace), merge each worker's findings into
+     lib/bugReport/generated/ and print the check results. See tests/e2e/bugReport/traceFixture.ts. */
+  globalTeardown:
+    process.env.BUG_REPORT_TRACE === "1" || process.env.BUG_REPORT_TRACE === "true"
+      ? "./tests/e2e/bugReport/traceTeardown.ts"
+      : undefined,
   /* Run tests in files in parallel */
   fullyParallel: false,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

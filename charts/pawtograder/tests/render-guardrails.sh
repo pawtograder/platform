@@ -19,6 +19,7 @@
 set -uo pipefail
 
 CHART="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+"$CHART/scripts/build-deps.sh" --if-missing "$CHART" || { echo "FAIL could not fetch $CHART's subcharts" >&2; exit 1; }
 FAILED=0
 ERRFILE="$(mktemp)"
 OUTFILE="$(mktemp)"
@@ -312,6 +313,13 @@ assert_web_render_unchanged() {
     rm -rf "$tmp"
     return
   fi
+  # git archive leaves out the gitignored subcharts; fetch the base's own pins.
+  if ! "$CHART/scripts/build-deps.sh" "$base_chart"; then
+    echo "FAIL [$label]: could not fetch the chart's dependencies at $WEB_RENDER_BASE_REF"
+    FAILED=1
+    rm -rf "$tmp"
+    return
+  fi
 
   # Values files this chart is actually consumed with. Anything under examples/
   # is in scope; the real production overlay lives in the prod-charts repo and is
@@ -526,6 +534,62 @@ assert_renders "prometheus rules with ruleSelector label renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps
 assert_renders "prometheus rules allowUnselectedRules renders" \
   --set monitoring.enabled=true --set monitoring.prometheusRules.allowUnselectedRules=true
+
+echo "== walg retention CronJob =="
+WALG_ON=(--set postgres.walg.enabled=true --set postgres.walg.s3Prefix=s3://b/walg)
+assert_rendered_contains "walg-retention keeps 8 by default" \
+  templates/walg-retention.yaml "KEEP=8" "${WALG_ON[@]}"
+assert_rendered_contains "walg-retention keepBackups overrides" \
+  templates/walg-retention.yaml "KEEP=4" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=4
+# 0 is the dangerous value (`retain FULL 0` deletes every backup), and the one
+# sprig's `default` would have quietly swapped for the default.
+assert_refused "walg-retention keepBackups=0 is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=0
+assert_refused "walg-retention keepBackups non-integer is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=abc
+# `int` would truncate these to 4 and 1, and read "010" as octal 8.
+assert_refused "walg-retention keepBackups fraction is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set-json postgres.walg.retention.keepBackups=4.9
+assert_refused "walg-retention keepBackups boolean is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set-json postgres.walg.retention.keepBackups=true
+assert_refused "walg-retention keepBackups leading zero is refused" "must be an integer >= 1" \
+  "${WALG_ON[@]}" --set-string postgres.walg.retention.keepBackups=010
+assert_rendered_contains "walg-retention keepBackups 10 stays 10" \
+  templates/walg-retention.yaml "KEEP=10" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=10
+assert_rendered_contains "walg-retention orders by sentinel time" \
+  templates/walg-retention.yaml 'FULL "${KEEP}" --use-sentinel-time' "${WALG_ON[@]}"
+assert_rendered_contains "walg-retention inherits postgres tolerations" \
+  templates/walg-retention.yaml "key: dedicated-db" "${WALG_ON[@]}" \
+  --set 'postgres.tolerations[0].key=dedicated-db' --set 'postgres.tolerations[0].operator=Exists'
+assert_rendered_contains "walg-retention inherits global nodeSelector" \
+  templates/walg-retention.yaml "pool: s3" "${WALG_ON[@]}" --set global.nodeSelector.pool=s3
+# 0.4.1 moved the count out of the sidecar. The old key must be refused, not
+# ignored, or an overlay that still sets it looks like it controls retention.
+assert_refused "baseBackup.keepBackups is refused" "removed in chart 0.4.1" \
+  "${WALG_ON[@]}" --set postgres.walg.baseBackup.keepBackups=4
+# The CronJob is now the only prune; without it the bucket grows forever.
+assert_refused "walg retention disabled in production" "nothing prunes WAL-G" \
+  "${WALG_ON[@]}" --set postgres.walg.retention.enabled=false
+assert_renders "walg retention disabled allowed on dev" \
+  --set global.environment=dev "${WALG_ON[@]}" --set postgres.walg.retention.enabled=false
+if helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null \
+    | grep -q "wal-g delete"; then
+  echo "FAIL [base-backup sidecar no longer prunes]: postgres-statefulset still renders wal-g delete"
+  FAILED=1
+else
+  echo "ok   [base-backup sidecar no longer prunes]"
+fi
+# The point of the CronJob: changing retention must not touch the primary's pod
+# template, or the StatefulSet restarts Postgres.
+sts_a="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"
+sts_b="$(helm template t "$CHART" "${BASE[@]}" "${WALG_ON[@]}" --set postgres.walg.retention.keepBackups=3 \
+  --set postgres.walg.retention.schedule="5 * * * *" --show-only templates/postgres-statefulset.yaml 2>/dev/null)"
+if [ -n "$sts_a" ] && [ "$sts_a" = "$sts_b" ]; then
+  echo "ok   [walg-retention changes leave the postgres StatefulSet byte-identical]"
+else
+  echo "FAIL [walg-retention changes leave the postgres StatefulSet byte-identical]: it differs or did not render"
+  FAILED=1
+fi
 
 echo "== backup retention tiers (chart 0.3.28) =="
 BACKUP_ON=(--set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com
@@ -2650,6 +2714,423 @@ assert_refused "posture: active with ingress.extraHosts aliases is refused" \
 assert_refused "posture: a user-supplied posture marker annotation is refused" \
   "ingress.annotations must not set pawtograder.io/maintenance-active" \
   --set-string 'ingress.annotations.pawtograder\.io/maintenance-active=true'
+
+echo "== kong metrics listener =="
+KONG_MON=(--set monitoring.enabled=true --set monitoring.prometheusRules.labels.release=kps)
+assert_rendered_contains "kong: metricsListener=admin keeps the admin API for /metrics" \
+  templates/kong.yaml '"0.0.0.0:8001"' "${KONG_MON[@]}"
+assert_rendered_contains "kong: metricsListener=status serves /metrics from the status API" \
+  templates/kong.yaml '"0.0.0.0:8100"' "${KONG_MON[@]}" --set kong.metricsListener=status
+assert_rendered_lacks "kong: metricsListener=status turns the admin API off" \
+  templates/kong.yaml '"0.0.0.0:8001"' "${KONG_MON[@]}" --set kong.metricsListener=status
+assert_rendered_contains "kong: the ServiceMonitor follows the status port" \
+  templates/monitoring.yaml "port: status-metrics" "${KONG_MON[@]}" --set kong.metricsListener=status
+assert_refused "kong: an unknown metricsListener is refused" \
+  "kong.metricsListener must be admin or status" --set kong.metricsListener=bogus
+
+echo "== forgejo runner and coder: isolation and the job namespace =="
+# These components need the release named pawtograder.
+APPS=(-n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml")
+apps() { helm template pawtograder "$CHART" "${APPS[@]}" "$@" 2>"$ERRFILE"; }
+apps_refused() {
+  local label="$1" want="$2"; shift 2
+  if apps "$@" >/dev/null; then
+    echo "FAIL [$label]: render SUCCEEDED but the guard should have refused it"; FAILED=1
+  elif ! grep -qF "$want" "$ERRFILE"; then
+    echo "FAIL [$label]: refused, but message missing expected text: $want"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+apps_has() {
+  local label="$1" expect="$2" want="$3"; shift 3
+  if ! apps "$@" >"$OUTFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  elif grep -qF -- "$want" "$OUTFILE"; then
+    if [ "$expect" = yes ]; then echo "ok   [$label]"; else echo "FAIL [$label]: rendered, but contains: $want"; FAILED=1; fi
+  else
+    if [ "$expect" = no ]; then echo "ok   [$label]"; else echo "FAIL [$label]: rendered, but missing: $want"; FAILED=1; fi
+  fi
+}
+WS_NS=(--set coderBootstrap.workspaceNamespace=pawtograder-ws
+  --set coder.coder.serviceAccount.workspacePerms=false
+  --set 'coder.coder.serviceAccount.workspaceNamespaces[0].name=pawtograder-ws'
+  --set 'coder.coder.serviceAccount.workspaceNamespaces[0].workspacePerms=true')
+
+apps_has "apps: the shipped overlay renders" yes "kind: Deployment"
+apps_refused "apps: postgres-meta reachable from jobs is refused" \
+  "stops their pods reaching postgres-meta" --set meta.enabled=true
+apps_refused "apps: Studio reachable from jobs is refused" \
+  "stops their pods reaching Studio" --set studio.enabled=true
+apps_refused "apps: Kong's admin API reachable from jobs is refused" \
+  "stops their pods reaching Kong's admin API" --set monitoring.enabled=true --set kong.metricsListener=admin \
+  --set monitoring.allowMissingWorkflowMetrics=true
+apps_refused "apps: coder alone is refused too" \
+  "stops their pods reaching postgres-meta" --set meta.enabled=true --set forgejoRunner.enabled=false
+apps_has "apps: metrics from Kong's status API pass the guard" yes '"0.0.0.0:8100"' \
+  --set monitoring.enabled=true --set monitoring.allowMissingWorkflowMetrics=true
+apps_has "apps: meta and Studio are allowed with the Cilium deny" yes "kind: CiliumNetworkPolicy" \
+  --set meta.enabled=true --set studio.enabled=true --set networkPolicy.cilium.enabled=true
+apps_has "apps: meta and Studio are allowed when egress is asserted enforced" yes "name: pawtograder-forgejo-runner-jobs" \
+  --set meta.enabled=true --set networkPolicy.cniEnforcesEgress=true --set networkPolicy.enabled=true
+apps_refused "apps: cniEnforcesEgress without the job egress policy is refused" \
+  "renders no egress policy for job pods" \
+  --set networkPolicy.cniEnforcesEgress=true --set networkPolicy.enabled=true --set forgejoRunner.networkPolicy.enabled=false
+apps_refused "apps: cniEnforcesEgress without the workspace egress policy is refused" \
+  "renders no egress policy for Coder workspaces" --set networkPolicy.cniEnforcesEgress=true
+apps_has "apps: no Cilium policy unless asked" no "kind: CiliumNetworkPolicy"
+apps_has "apps: the Cilium deny for job pods goes in the job namespace" yes "namespace: pawtograder-actions" \
+  --set networkPolicy.cilium.enabled=true --show-only templates/forgejo-coder-cilium.yaml
+apps_has "apps: the Cilium deny for workspaces goes in the workspace namespace" yes "namespace: pawtograder-ws" \
+  --set networkPolicy.cilium.enabled=true "${WS_NS[@]}" --show-only templates/forgejo-coder-cilium.yaml
+apps_has "apps: the Cilium deny leaves only Forgejo's HTTP port open in the release" yes \
+  '{ port: "3001", endPort: 65535, protocol: TCP }' --set networkPolicy.cilium.enabled=true --show-only templates/forgejo-coder-cilium.yaml
+apps_refused "apps: the Cilium deny needs a matchLabels ingress controller selector" \
+  "needs networkPolicy.ingressControllerNamespaceSelector as matchLabels only" \
+  --set networkPolicy.cilium.enabled=true --set networkPolicy.ingressControllerNamespaceSelector.matchLabels=null \
+  --set 'networkPolicy.ingressControllerNamespaceSelector.matchExpressions[0].key=x' \
+  --set 'networkPolicy.ingressControllerNamespaceSelector.matchExpressions[0].operator=Exists'
+
+apps_refused "runner: no tokenSecret is refused" \
+  "forgejoRunner.dispatcher.tokenSecret must name a Secret" --set forgejoRunner.dispatcher.tokenSecret=
+apps_refused "runner: no jobNamespace is refused" \
+  "forgejoRunner.jobNamespace must name an existing namespace other than pawtograder" --set forgejoRunner.jobNamespace=
+apps_refused "runner: jobs in the release namespace are refused" \
+  "forgejoRunner.jobNamespace must name an existing namespace other than pawtograder" --set forgejoRunner.jobNamespace=pawtograder
+apps_refused "runner: jobs in the workspace namespace are refused" \
+  "keep them apart" "${WS_NS[@]}" --set forgejoRunner.jobNamespace=pawtograder-ws
+apps_refused "runner: a malformed org name is refused" \
+  "isn't a Forgejo organization name" --set 'forgejoRunner.dispatcher.orgs={cs3500,bad/org}'
+apps_has "runner: orgs reach the dispatcher" yes '{ name: ORGS, value: "cs3500,cs2500" }' \
+  --set 'forgejoRunner.dispatcher.orgs={cs3500,cs2500}' --show-only templates/forgejo-runner.yaml
+apps_has "runner: the dispatcher never mounts the Forgejo admin password" no "pawtograder-forgejo-admin" \
+  --show-only templates/forgejo-runner.yaml
+apps_has "runner: Forgejo admits job pods from the job namespace" yes \
+  "matchLabels: { kubernetes.io/metadata.name: pawtograder-actions }" \
+  --set networkPolicy.enabled=true --show-only templates/networkpolicy.yaml
+label="runner: the dispatcher's Role and RoleBinding exist only in the job namespace"
+if ! apps --show-only templates/forgejo-runner.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+else
+  rbac_ns="$(awk '/^---/ { k = "" } /^kind: Role(Binding)?$/ { k = $2 } k && /^  namespace:/ { print k, $2; k = "" }' "$OUTFILE" | sort | uniq | tr '\n' ' ')"
+  if [ "$rbac_ns" = "Role pawtograder-actions RoleBinding pawtograder-actions " ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: got $rbac_ns"; FAILED=1; fi
+fi
+
+echo
+
+echo "== forgejo runner: action mirrors and capacity against the job namespace quota =="
+SVC_URL='DEFAULT_ACTIONS_URL: "http://pawtograder-forgejo-http.pawtograder.svc:3000"'
+apps_has "mirrors: bare uses: names resolve against Forgejo's Service by default" yes "$SVC_URL" \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: Forgejo reads DEFAULT_ACTIONS_URL from the chart's ConfigMap" yes \
+  "name: pawtograder-forgejo-actions" --show-only charts/forgejo/templates/gitea/deployment.yaml
+apps_has "mirrors: the hook Job renders" yes "name: pawtograder-forgejo-action-mirrors" \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: the hook authenticates with its token, not the admin password" no "pawtograder-forgejo-admin" \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: with the runner off, bare names resolve against upstreamURL" yes 'DEFAULT_ACTIONS_URL: "https://github.com"' \
+  --set forgejoRunner.enabled=false --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: with the runner off, there's no hook" no "kind: Job" \
+  --set forgejoRunner.enabled=false --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: source=upstream resolves against upstreamURL" yes 'DEFAULT_ACTIONS_URL: "https://code.example.com"' \
+  --set forgejoRunner.actions.source=upstream --set forgejoRunner.actions.upstreamURL=https://code.example.com/ \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_has "mirrors: source=upstream renders no hook" no "kind: Job" \
+  --set forgejoRunner.actions.source=upstream --show-only templates/forgejo-actions-mirrors.yaml
+apps_refused "mirrors: an unknown source is refused" \
+  "forgejoRunner.actions.source must be mirrors or upstream" --set forgejoRunner.actions.source=cache
+apps_refused "mirrors: an upstreamURL that isn't a URL is refused" \
+  "must be an http(s) URL" --set forgejoRunner.actions.source=upstream --set forgejoRunner.actions.upstreamURL=github.com
+apps_refused "mirrors: setting DEFAULT_ACTIONS_URL in Forgejo's config is refused" \
+  "the chart sets it from forgejoRunner.actions" --set forgejo.gitea.config.actions.DEFAULT_ACTIONS_URL=https://github.com
+NO_ACTIONS_ENV="$(mktemp)"
+cat >"$NO_ACTIONS_ENV" <<'YAML'
+forgejo:
+  gitea:
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+YAML
+apps_refused "mirrors: an overlay that drops the DEFAULT_ACTIONS_URL env entry is refused" \
+  "must keep the chart's FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL entry" -f "$NO_ACTIONS_ENV"
+rm -f "$NO_ACTIONS_ENV"
+apps_refused "mirrors: no tokenSecret is refused" \
+  "needs forgejoRunner.actions.tokenSecret" --set forgejoRunner.actions.tokenSecret=
+apps_refused "mirrors: an empty list is refused" \
+  "leaves every bare uses: name unresolvable" --set forgejoRunner.actions.mirrors=null
+# --set on a list index replaces the whole list, so each case spells out its entries.
+M0=(--set 'forgejoRunner.actions.mirrors[0].repo=actions/checkout' --set 'forgejoRunner.actions.mirrors[0].ref=v4')
+apps_refused "mirrors: a repo without an owner is refused" \
+  "must be owner/name" --set 'forgejoRunner.actions.mirrors[0].repo=checkout' --set 'forgejoRunner.actions.mirrors[0].ref=v4'
+apps_refused "mirrors: the same repo twice is refused" "lists Actions/Checkout twice" "${M0[@]}" \
+  --set 'forgejoRunner.actions.mirrors[1].repo=Actions/Checkout' --set 'forgejoRunner.actions.mirrors[1].ref=v4'
+apps_refused "mirrors: a mirror without a ref is refused" \
+  "needs a ref" --set 'forgejoRunner.actions.mirrors[0].repo=actions/checkout'
+apps_refused "mirrors: an ssh upstream is refused" "give the upstream's http(s) clone URL" "${M0[@]}" \
+  --set 'forgejoRunner.actions.mirrors[0].url=git@github.com:actions/checkout'
+apps_has "mirrors: a url override reaches the hook" yes 'https://code.example.com/mirrors/checkout.git' "${M0[@]}" \
+  --set 'forgejoRunner.actions.mirrors[0].url=https://code.example.com/mirrors/checkout.git' \
+  --show-only templates/forgejo-actions-mirrors.yaml
+apps_refused "mirrors: a malformed interval is refused" \
+  "must be a duration such as 8h" --set forgejoRunner.actions.mirrorInterval=8hours
+
+apps_has "quota: capacity within the quota renders" yes "kind: Deployment" --set forgejoRunner.capacity=4 \
+  --set forgejoRunner.quota.pods=4 --set forgejoRunner.quota.requests\\.cpu=4 --set forgejoRunner.quota.limits\\.memory=16Gi
+apps_has "quota: milli-units add up exactly" yes "kind: Deployment" --set forgejoRunner.capacity=10 \
+  --set forgejoRunner.resources.requests.cpu=100m --set forgejoRunner.quota.requests\\.cpu=1
+apps_refused "quota: capacity over requests.cpu is refused, naming what fits" \
+  "forgejoRunner.capacity=4 doesn't fit forgejoRunner.quota.requests.cpu=3: 4 jobs × 1. At most 3 fit" \
+  --set forgejoRunner.capacity=4 --set forgejoRunner.quota.requests\\.cpu=3
+apps_refused "quota: capacity over limits.memory is refused" \
+  "doesn't fit forgejoRunner.quota.limits.memory=15Gi: 4 jobs × 4Gi. At most 3 fit" \
+  --set forgejoRunner.capacity=4 --set forgejoRunner.quota.limits\\.memory=15Gi
+apps_refused "quota: capacity over pods is refused" \
+  "is more job pods than forgejoRunner.quota.pods=1" --set forgejoRunner.quota.pods=1
+apps_refused "quota: a quota on a value job pods don't declare is refused" \
+  "forgejoRunner.resources.limits.ephemeral-storage is empty" \
+  --set forgejoRunner.resources.limits.ephemeral-storage=null --set forgejoRunner.quota.limits\\.ephemeral-storage=100Gi
+apps_refused "quota: an unknown key is refused" \
+  "forgejoRunner.quota.services isn't a key the chart checks" --set forgejoRunner.quota.services=3
+apps_refused "quota: an unreadable quantity is refused" \
+  "isn't a quantity the chart can read" --set forgejoRunner.quota.requests\\.cpu=four
+label="mirrors: nothing renders with Forgejo off"
+if ! helm template t "$CHART" "${BASE[@]}" >"$OUTFILE" 2>"$ERRFILE"; then echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif grep -qF "forgejo-actions" "$OUTFILE"; then echo "FAIL [$label]: rendered forgejo-actions objects"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
+echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
+
+APP_HBA_OWN_CODER=(
+  --set coder.database=own --set coder-db.enabled=true
+  --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
+  --set 'coder.coder.env[0].value=postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable'
+)
+APP_HBA_OWN_FORGEJO=(
+  --set forgejo.database=own --set forgejo-db.enabled=true
+  --set forgejo.gitea.config.database.HOST=pawtograder-forgejo-db:5432
+)
+assert_app_hba() {
+  local label="$1" apps="$2"; shift 2
+  local want="" got app cidr
+  if ! helm template pawtograder "$CHART" "$@" --show-only templates/postgres-config.yaml >"$OUTFILE" 2>"$ERRFILE"; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"
+    FAILED=1
+    return
+  fi
+  if [ -n "$apps" ]; then
+    for app in ${apps//,/ }; do
+      for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+        want+="host $app $app $cidr md5"$'\n'
+      done
+    done
+    want+="host all $apps 0.0.0.0/0 reject"$'\n'"host all $apps ::/0 reject"$'\n'
+  fi
+  got="$(awk '
+    /^  pg_hba\.conf: \|/ { on=1; next }
+    on && /^  [^ ]/       { exit }
+    on && /^    local /   { exit }
+    on && !/^    #/       { $1=$1; print }
+  ' "$OUTFILE")"
+  if ! grep -q '^    local   all             all  ' "$OUTFILE"; then
+    echo "FAIL [$label]: pg_hba.conf has no 'local all all' line to anchor the comparison"
+    FAILED=1
+  elif [ "$got" != "${want%$'\n'}" ]; then
+    echo "FAIL [$label]: lines ahead of 'local all all' are not the expected app lines"
+    echo "       want: $(printf '%s' "${want%$'\n'}" | tr '\n' '|')"
+    echo "       got:  $(printf '%s' "$got" | tr '\n' '|')"
+    FAILED=1
+  elif [ -z "$apps" ] && grep -q 'reject' "$OUTFILE"; then
+    echo "FAIL [$label]: no app is in shared mode, but pg_hba.conf has a reject line"
+    FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+assert_app_hba "app hba: default render has no app lines" ""
+assert_app_hba "app hba: production baseline has no app lines" "" "${BASE[@]}"
+assert_app_hba "app hba: Forgejo and Coder shared get own-database lines and a reject" \
+  "forgejo,coder" -f "$CHART/examples/values-forgejo-coder.yaml"
+assert_app_hba "app hba: only Forgejo shared names only forgejo" \
+  "forgejo" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_CODER[@]}"
+assert_app_hba "app hba: only Coder shared names only coder" \
+  "coder" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}"
+assert_app_hba "app hba: both apps on own servers render no app lines" \
+  "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_CODER[@]}" "${APP_HBA_OWN_FORGEJO[@]}"
+assert_app_hba "app hba: Coder shared but disabled renders no app lines" \
+  "" -f "$CHART/examples/values-forgejo-coder.yaml" "${APP_HBA_OWN_FORGEJO[@]}" \
+  --set coder.enabled=false --set coderBootstrap.enabled=false
+
+apps_has "app nologin: both apps shared, no NOLOGIN step" no "shared-nologin" \
+  --show-only templates/app-databases.yaml
+apps_has "app nologin: Forgejo on own gets a NOLOGIN step" yes "name: forgejo-shared-nologin" \
+  "${APP_HBA_OWN_FORGEJO[@]}" --show-only templates/app-databases.yaml
+apps_has "app nologin: Forgejo on own leaves Coder's login alone" no "coder-shared-nologin" \
+  "${APP_HBA_OWN_FORGEJO[@]}" --show-only templates/app-databases.yaml
+apps_has "app nologin: Coder turned off gets a NOLOGIN step" yes "name: coder-shared-nologin" \
+  --set coder.enabled=false --set coderBootstrap.enabled=false --show-only templates/app-databases.yaml
+apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %I NOLOGIN" \
+  "${APP_HBA_OWN_CODER[@]}" --show-only templates/app-databases.yaml
+
+echo
+
+echo "== SSO client Secrets from OpenBao =="
+
+SSO_ES=(--set forgejoCoderSecrets.externalSecret.enabled=true
+  --set forgejoCoderSecrets.externalSecret.forgejoPath=apps/t/forgejo
+  --set forgejoCoderSecrets.externalSecret.coderPath=apps/t/coder
+  --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo-oauth
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder-oidc)
+SSO_ONLY=(--show-only templates/forgejo-coder-externalsecrets.yaml)
+apps_has "sso: Forgejo's client syncs from its path" yes "key: apps/t/forgejo-oauth" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Forgejo's Secret keeps the key/secret names the login source reads" yes "secretKey: secret" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's client syncs from its path" yes "key: apps/t/coder-oidc" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's Secret carries CODER_OIDC_CLIENT_SECRET" yes "secretKey: CODER_OIDC_CLIENT_SECRET" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+label="sso: client Secrets outlive their ExternalSecrets, the apps' passwords don't"
+if ! apps "${SSO_ES[@]}" "${SSO_ONLY[@]}" >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'creationPolicy: Orphan' "$OUTFILE")" -ne 2 ] || [ "$(grep -c 'creationPolicy: Owner' "$OUTFILE")" -ne 4 ]; then
+  echo "FAIL [$label]: want 2 Orphan (forgejo-oauth, coder-oidc) and 4 Owner"; FAILED=1
+else echo "ok   [$label]"; fi
+apps_has "sso: no Coder client ExternalSecret with coder.oidc off" no "name: pawtograder-coder-oidc" \
+  "${SSO_ES[@]}" --set coder.oidc.enabled=false "${SSO_ONLY[@]}"
+apps_has "sso: no client ExternalSecrets without their paths" no "-oauth" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath= \
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath= "${SSO_ONLY[@]}"
+apps_refused "sso: a client path that holds Coder's passwords is refused" \
+  'coderOIDCPath is "apps/t/coder", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder
+apps_refused "sso: a client path that holds Forgejo's passwords is refused" \
+  'forgejoOAuthPath is "apps/t/forgejo", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo
+apps_refused "sso: the same path spelled with slashes is still refused" \
+  'coderOIDCPath is "/apps/t/coder/", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=/apps/t/coder/
+apps_refused "sso: one path for both clients is refused" "forgejoOAuthPath and coderOIDCPath must differ" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/forgejo-oauth
+label="sso: staging syncs both clients from OpenBao and turns on Coder's OIDC"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-oauth-staging" "$OUTFILE" \
+  || ! grep -qF "key: apps/pawtograder/coder-oidc-staging" "$OUTFILE" \
+  || ! grep -qF "CODER_OIDC_ISSUER_URL" "$OUTFILE" \
+  || ! grep -qF "GOTRUE_OAUTH_SERVER_ENABLED" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a client ExternalSecret, Coder's OIDC settings or GoTrue's OAuth server"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
+echo "== forgejo runner: token Secrets from OpenBao =="
+ES=templates/forgejo-coder-externalsecrets.yaml
+RUNNER_ES=("${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.runnerPath=apps/t/forgejo-runner)
+apps_has "runner ES: the dispatcher token Secret syncs from runnerPath" yes "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: it targets forgejoRunner.dispatcher.tokenSecret by its full name" yes "name: pawtograder-forgejo-runner-token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the mirror hook's token syncs too" yes "property: mirror_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the other Secrets keep their pawtograder-<name> names" yes "name: pawtograder-forgejo-oauth" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: without runnerPath the token Secrets stay hand-made" no "pawtograder-forgejo-runner-token" \
+  "${SSO_ES[@]}" --show-only "$ES"
+apps_has "runner ES: source=upstream syncs no mirror token" no "property: mirror_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.source=upstream --show-only "$ES"
+apps_has "runner ES: with the runner off, no token Secrets" no "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.enabled=false --show-only "$ES"
+apps_refused "runner ES: one Secret for both tokens is refused" "name the same Secret" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.tokenSecret=pawtograder-forgejo-runner-token
+for k in forgejoPath coderPath forgejoOAuthPath coderOIDCPath; do
+  p="$(printf '%s\n' "${SSO_ES[@]}" | sed -n "s|^forgejoCoderSecrets.externalSecret.$k=||p")"
+  apps_refused "runner ES: runnerPath equal to $k is refused" "the same path as $k" \
+    "${SSO_ES[@]}" --set "forgejoCoderSecrets.externalSecret.runnerPath=/$p/"
+done
+label="runner ES: staging adds the Forgejo login source and syncs both runner tokens"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  --set forgejoRunner.image.tag=staging-test >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-runner-staging" "$OUTFILE" \
+  || ! grep -qF "property: mirror_token" "$OUTFILE" \
+  || ! grep -qF -- "--name \"pawtograder\" --provider \"openidConnect\"" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a runner token ExternalSecret or the pawtograder login source"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
+echo "== Coder template variables =="
+
+# The CLI parses each --variable as CSV, so a JSON value (quotes, commas) fails
+# to parse ("bare \" in non-quoted-field") or splits. Variables must go through
+# --variables-file, with every value a JSON string literal that decodes to the
+# string Terraform expects; the JSON-typed ones must decode again to JSON.
+apps_has "variables: push uses no --variable flag" no "--variable " \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "variables: push reads the variables file" yes '--variables-file "$vars"' \
+  --show-only templates/coder-bootstrap.yaml
+label="variables: every value is a string, JSON ones decode"
+if ! apps "${WS_NS[@]}" --set-json 'coderBootstrap.workspaces.imagePullSecrets=[{"name":"a"},{"name":"b"}]' \
+  --show-only templates/coder-bootstrap.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif msg="$(python3 - "$OUTFILE" <<'PYCHECK'
+import json, re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r"<<'VARS'\n(.*?)\n\s*VARS\n", text, re.S)
+if not m:
+    sys.exit("no variables heredoc")
+vals = {}
+for line in m.group(1).splitlines():
+    k, _, v = line.strip().partition(": ")
+    vals[k] = json.loads(v)
+    if not isinstance(vals[k], str):
+        sys.exit(f"{k} is not a string")
+for k in ("node_selector", "tolerations", "image_pull_secrets", "node_affinity"):
+    json.loads(vals[k])
+if vals["namespace"] != "pawtograder-ws":
+    sys.exit("namespace is " + vals["namespace"])
+if json.loads(vals["image_pull_secrets"]) != [{"name": "a"}, {"name": "b"}]:
+    sys.exit("image_pull_secrets was split or mangled")
+PYCHECK
+)"; then
+  echo "ok   [$label]"
+else
+  echo "FAIL [$label]: $msg"; FAILED=1
+fi
+echo
+
+echo "== Coder template schedule =="
+
+apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
+  --set coderBootstrap.schedule.defaultTTL=1.5h --show-only templates/coder-bootstrap.yaml
+apps_has "schedule: Go's largest whole-hour duration renders" yes "--default-ttl '2562047h'" \
+  --set coderBootstrap.schedule.defaultTTL=2562047h --show-only templates/coder-bootstrap.yaml
+apps_refused "schedule: a duration past time.Duration is refused" \
+  "coderBootstrap.schedule.defaultTTL=\"999999999999h\" is longer than Coder accepts" \
+  --set coderBootstrap.schedule.defaultTTL=999999999999h
+apps_refused "schedule: a duration that adds up past time.Duration is refused" \
+  "coderBootstrap.schedule.activityBump=\"2562047h60m\" is longer than Coder accepts" \
+  --set coderBootstrap.schedule.activityBump=2562047h60m
+apps_refused "schedule: a dormancy under a minute is refused" \
+  "coderBootstrap.schedule.dormancyThreshold=\"30s\" must be 0 (off) or at least 1m" \
+  --set coderBootstrap.schedule.dormancyThreshold=30s
+apps_has "schedule: a one-minute dormancy renders" yes "--dormancy-threshold '1m'" \
+  --set coderBootstrap.schedule.dormancyThreshold=1m --show-only templates/coder-bootstrap.yaml
+apps_refused "schedule: a malformed duration is still refused" \
+  "must be a duration such as 2h" --set coderBootstrap.schedule.defaultTTL=1.h
+label="schedule: TTL and dormancy are separate edits"
+if ! apps --show-only templates/coder-bootstrap.yaml >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'templates edit' "$OUTFILE")" -ne 2 ] \
+  || grep -A2 -e "--default-ttl" "$OUTFILE" | grep -q -e "--dormancy"; then
+  echo "FAIL [$label]: expected two edits, with no dormancy flag in the TTL edit"; FAILED=1
+else echo "ok   [$label]"; fi
 
 echo
 

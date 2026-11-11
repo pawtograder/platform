@@ -1,0 +1,429 @@
+{
+  "_help_request_public_payload": {
+    "kind": {
+      "$": "none",
+      "$.data": {
+        "$table": "help_requests"
+      }
+    },
+    "calledFromBrowser": false,
+    "note": "Trigger helper building a broadcast payload {type, operation, table, row_id, data, timestamp}; data is to_jsonb(help_requests row), or {id} only when the request is private."
+  },
+  "_materialize_bare_check_regrade_comment": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "OUT record {o_submission_comment_id, o_submission_file_comment_id, o_submission_artifact_comment_id}, all bigint ids; internal helper for regrade resolution."
+  },
+  "_rubric_check_application_stats": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "{cohort_total, checks[] {rubric_check_id, applied_count, options[] {option_index, count}}}: aggregate counts only. The browser calls the wrapper get_rubric_check_application_stats, not this function."
+  },
+  "admin_trigger_sis_sync": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "Returns trigger_sis_sync(): json {success, message ('SIS sync triggered for class <id>' or for all classes), timestamp}."
+  },
+  "apply_late_token_extension": {
+    "kind": {
+      "$": "none",
+      "$.tokens_needed": "grade",
+      "$.tokens_remaining": "grade"
+    },
+    "calledFromBrowser": false,
+    "note": "{success} or {success:false, tokens_needed, tokens_remaining}; tokens_remaining is the student's late-token balance. No frontend callers found."
+  },
+  "bulk_assign_reviews": {
+    "kind": {
+      "$": "none",
+      "$.error": "free_text"
+    },
+    "uncertain": "$.error is SQLERRM from a WHEN OTHERS handler. The raised messages only interpolate ids, but other SQL errors pass through, so it is marked free_text to be safe.",
+    "calledFromBrowser": true,
+    "note": "{success, assignments_created, assignments_updated, assignments_retargeted, assignments_reopened, parts_created, submission_reviews_created, total_processed} or {success:false, error, error_code}."
+  },
+  "bulk_csv_import_enrollment": {
+    "kind": {
+      "$": "none",
+      "$.errors[*].identifier": "email",
+      "$.errors[*].error": "free_text"
+    },
+    "uncertain": "errors[*].identifier holds an email in email mode and a SIS user id (handle) in sis_id mode. It is classified as email; both are PII.",
+    "calledFromBrowser": true,
+    "note": "{enrolled_directly, invitations_created, reactivated, errors[] {identifier (email or sis_id), error (MESSAGE_TEXT or fixed domain message)}}."
+  },
+  "bulk_update_review_assignment_due_dates": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "{success, updated} count."
+  },
+  "class_team_member_usernames": {
+    "kind": "handle",
+    "calledFromBrowser": false,
+    "note": "text[] of GitHub usernames of confirmed staff or students in the class."
+  },
+  "cleanup_individual_repositories_for_assignment": {
+    "kind": {
+      "$": "none",
+      "$.summary.skipped_org_mismatch_details[*].repository": "handle"
+    },
+    "calledFromBrowser": true,
+    "note": "{message (fixed text with counts), summary {repositories_enqueued_for_archive, repositories_deleted, submissions_deleted, repositories_skipped_unparseable, skipped_org_mismatch, skipped_org_mismatch_details[] {repository (org/repo full name), org_name}}}."
+  },
+  "clear_all_incomplete_review_assignments": {
+    "kind": {
+      "$": "none",
+      "$.error": "free_text"
+    },
+    "uncertain": "$.error is SQLERRM from a WHEN OTHERS handler and is marked free_text to be safe. Its raised messages contain only ids.",
+    "calledFromBrowser": false,
+    "note": "{success, assignments_deleted, parts_deleted, message (counts)} or {success:false, error, error_code}. No frontend callers found."
+  },
+  "clear_incomplete_assignments_for_user": {
+    "kind": {
+      "$": "none",
+      "$.error": "free_text"
+    },
+    "uncertain": "$.error is SQLERRM from a WHEN OTHERS handler and is marked free_text to be safe.",
+    "calledFromBrowser": false,
+    "note": "{success, assignments_deleted, parts_deleted} or {success:false, error, error_code}. No frontend callers found."
+  },
+  "clear_unfinished_review_assignments": {
+    "kind": {
+      "$": "none",
+      "$.error": "free_text"
+    },
+    "uncertain": "$.error is SQLERRM from a WHEN OTHERS handler and is marked free_text to be safe. Its raised messages contain only ids.",
+    "calledFromBrowser": true,
+    "note": "{success, assignments_deleted, parts_deleted, message (counts)} or {success:false, error, error_code}."
+  },
+  "cli_import_submission_comments_batch": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "{dry_run, mode, summary {file_comments|artifact_comments|submission_comments {inserted, skipped, errors}, sync_deleted {...}}, errors_detail[] {kind, submission_id, file_name|artifact_name, reason (fixed codes)}}. Comment bodies are not echoed."
+  },
+  "copy_groups_from_assignment": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "{groups_processed, members_copied, memberships_removed, groups_deleted, groups_preserved} counts. Called via lib/edgeFunctions.ts wrapper."
+  },
+  "custom_access_token_hook": {
+    "kind": {
+      "$": "none",
+      "$.claims.email": "email",
+      "$.claims.phone": "handle",
+      "$.claims.user_metadata": "handle",
+      "$.claims.user_metadata.name": "name",
+      "$.claims.user_metadata.full_name": "name",
+      "$.claims.user_metadata.email": "email",
+      "$.claims.app_metadata": "handle"
+    },
+    "uncertain": "Auth hook that returns the incoming event unchanged; shape is the Supabase auth event (claims incl. email, user_metadata with GitHub login/avatar/name), not defined in SQL",
+    "calledFromBrowser": false,
+    "note": "Supabase auth hook; `return event` passthrough of {user_id, claims{...}, authentication_method}."
+  },
+  "delete_assignment_with_all_data": {
+    "kind": {
+      "$": "none",
+      "$.message": "free_text"
+    },
+    "uncertain": "message interpolates the assignment title (instructor-typed course config, not personal data); marked free_text to be safe",
+    "calledFromBrowser": false,
+    "note": "jsonb_build_object(success, message format('Assignment \"%s\" ...', title), assignment_id, class_id)."
+  },
+  "enqueue_autograder_reruns": {
+    "kind": {
+      "$": "none",
+      "$.skipped_submissions[*].repository": "handle",
+      "$.failed_submissions[*].error": "free_text"
+    },
+    "calledFromBrowser": true,
+    "note": "{enqueued_count, failed_count, skipped_count, total_requested, skipped_submissions[] {submission_id, repository, reason, queued_at}, failed_submissions[] {submission_id, error SQLERRM}}. Called via lib/edgeFunctions.ts."
+  },
+  "finalize_submission_early": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "json {success, error|message} with fixed strings only."
+  },
+  "fix_assignment_repo_permissions": {
+    "kind": {
+      "$": "none",
+      "$.results[*].repository": "handle",
+      "$.results[*].expected_usernames": "handle",
+      "$.results[*].error_message": "free_text"
+    },
+    "calledFromBrowser": true,
+    "note": "{message (counts only), summary{counts}, results[] {repository_id, repository, action, expected_usernames[] GitHub logins, error_message SQLERRM that echoes repo name}}."
+  },
+  "generate_anon_name": {
+    "kind": "name",
+    "calledFromBrowser": true,
+    "note": "text pseudonym 'adj-noun-1234'."
+  },
+  "get_all_class_metrics": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "array of {class_id, class_name, class_slug, workflow/user counts and averages}; service_role only."
+  },
+  "get_assessment_export_pepper": {
+    "kind": "free_text",
+    "uncertain": "Returns a vault secret (hashing pepper), not personal data; no 'secret' kind exists, so marked free_text so it is always redacted",
+    "calledFromBrowser": false,
+    "note": "text: decrypted vault secret 'assessment-export-pepper'."
+  },
+  "get_assignment_llm_metrics": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "array of {assignment_id, assignment_title, class_id, class_name, class_slug, llm/hint-feedback counts}; service_role only."
+  },
+  "get_common_test_errors_for_assignment": {
+    "kind": {
+      "$": "none",
+      "$.common_errors[*].normalized_output": "free_text",
+      "$.common_errors[*].sample_outputs": "free_text",
+      "$.common_errors[*].error_signature": "free_text"
+    },
+    "uncertain": "Test outputs come from running student code and can echo student-written strings, paths or names; marked free_text. avg_score is a cross-student aggregate, left none",
+    "calledFromBrowser": true,
+    "note": "{assignment_id, filter{test_name,test_part,min_occurrences}, common_errors[] {normalized_output, test_name, test_part, occurrence_count, affected_submission_ids, sample_outputs[], avg_score, is_failing, error_signature}, total_error_groups}."
+  },
+  "get_error_pin_matches_for_submission": {
+    "kind": {
+      "$": "none",
+      "$[*].thread_subject": "free_text"
+    },
+    "calledFromBrowser": true,
+    "note": "array of {error_pin_id, discussion_thread_id, grader_result_test_id, thread_subject (discussion subject)}."
+  },
+  "get_error_pins_for_error_pattern": {
+    "kind": {
+      "$": "none",
+      "$.matching_pins[*].thread_subject": "free_text"
+    },
+    "calledFromBrowser": true,
+    "note": "{matching_pins[] {error_pin_id, discussion_thread_id, enabled, rule_logic, thread_subject, match_count}}."
+  },
+  "get_gradebook_column_students_bulk": {
+    "kind": {
+      "$": "none",
+      "$[*].score": "grade",
+      "$[*].score_override": "grade",
+      "$[*].score_override_note": "free_text",
+      "$[*].incomplete_values": "grade"
+    },
+    "calledFromBrowser": false,
+    "note": "TABLE of gradebook_column_students columns (id, class_id, gradebook_column_id, flags, score, score_override, score_override_note, student_id, incomplete_values)."
+  },
+  "get_gradebook_records_for_all_students": {
+    "kind": {
+      "$": "none",
+      "$[*].entries[*].score": "grade",
+      "$[*].entries[*].score_override": "grade",
+      "$[*].entries[*].score_override_note": "free_text",
+      "$[*].entries[*].incomplete_values": "grade"
+    },
+    "calledFromBrowser": true,
+    "note": "array of {private_profile_id, entries[] {gcs_id, gc_id, is_private, score, score_override, is_missing, is_excused, is_droppable, released, score_override_note, is_recalculating, incomplete_values, updated_at}}."
+  },
+  "get_gradebook_records_for_all_students_array": {
+    "kind": {
+      "$": "none",
+      "$[*].entries": "grade"
+    },
+    "uncertain": "entries are positional text arrays mixing ids, flags, scores, and score_override_note (index 9, free_text); JSONPath cannot target an index, so the whole tuple is marked grade",
+    "calledFromBrowser": false,
+    "note": "array of {private_profile_id, entries[][] text tuples [id, gc_id, is_private, score, score_override, is_missing, is_excused, is_droppable, released, score_override_note, is_recalculating, incomplete_values]}."
+  },
+  "get_llm_tags_breakdown": {
+    "kind": "none",
+    "uncertain": "tags (jsonb) and account come from llm_inference_usage; assumed to be system tags and API account labels, not personal data",
+    "calledFromBrowser": false,
+    "note": "array of {class_id, class_name, class_slug, tags, provider, model, account, inference_count, input_tokens, output_tokens}; service_role only."
+  },
+  "get_rubric_check_application_stats": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "{cohort_total, checks[] {rubric_check_id, applied_count, options[] {option_index, count}}} via _rubric_check_application_stats."
+  },
+  "get_student_summary": {
+    "kind": {
+      "$": "none",
+      "$.help_requests[*].request": "free_text",
+      "$.help_messages[*].message": "free_text",
+      "$.discussion_posts[*].subject": "free_text",
+      "$.discussion_posts[*].body": "free_text",
+      "$.discussion_replies[*].subject": "free_text",
+      "$.discussion_replies[*].body": "free_text",
+      "$.assignments[*].autograder_score": "grade",
+      "$.assignments[*].total_score": "grade",
+      "$.grades_private[*].score": "grade",
+      "$.grades_private[*].score_override": "grade",
+      "$.grades_private[*].incomplete_values": "grade"
+    },
+    "calledFromBrowser": true,
+    "note": "{help_requests[] {id, created_at, help_queue, request, assignee, resolved_by, resolved_at, is_private, status}, help_messages[] {.., author, message, ..}, discussion_posts/replies[] {.., subject, body, ..}, assignments[] {assignment_id, title, release_date, effective_due_date, total_points, submission_*, autograder_score, total_score}, grades_private[] {gradebook_column_id, score, score_override, released, incomplete_values}}."
+  },
+  "get_submissions_to_full_marks": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "{assignment_id, per_test[] {test_name, test_part, students_with/without_full_marks, avg/median/max_submissions_to_full_marks, distribution{attempt: count}}, overall{counts, avg, median}}; cross-student aggregates only."
+  },
+  "get_survey_responses_for_submission": {
+    "kind": {
+      "$": "none",
+      "$[*].profile_name": "name",
+      "$[*].response": "free_text"
+    },
+    "calledFromBrowser": true,
+    "note": "TABLE(survey_id, survey_title, survey_json, survey_status, due_date, available_at, profile_id, profile_name, is_submitter, is_assigned, is_submitted, submitted_at, updated_at, response)."
+  },
+  "get_survey_responses_with_full_context": {
+    "kind": {
+      "$": "none",
+      "$[*].profile_name": "name",
+      "$[*].mentor_name": "name",
+      "$[*].profile_email": "email",
+      "$[*].mentor_email": "email",
+      "$[*].response": "free_text",
+      "$[*].group_name": "name"
+    },
+    "uncertain": "group_name may be a generated pseudonym (generate_anon_name) or student-typed text; marked name",
+    "calledFromBrowser": true,
+    "note": "TABLE(response_id, profile_id, profile_name, is_submitted, submitted_at, response, group_id, group_name, group_member_count, mentor_profile_id, mentor_name, profile_email, mentor_email, lab_section_*, class_section_*)."
+  },
+  "get_survey_responses_with_group_context": {
+    "kind": {
+      "$": "none",
+      "$[*].profile_name": "name",
+      "$[*].mentor_name": "name",
+      "$[*].response": "free_text",
+      "$[*].group_name": "name"
+    },
+    "uncertain": "group_name may be a generated pseudonym or student-typed text; marked name",
+    "calledFromBrowser": false,
+    "note": "TABLE(response_id, profile_id, profile_name, is_submitted, submitted_at, response, group_id, group_name, mentor_profile_id, mentor_name)."
+  },
+  "get_system_notification_stats": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "TABLE(total_notifications, active_notifications, notifications_by_severity{sev: count}, notifications_by_display{mode: count}, recent_campaigns[] {campaign_id, count, last_created})."
+  },
+  "get_test_statistics_for_assignment": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "{assignment_id, total_active_submissions, submissions_with_results, tests[] {name, part, max_score, counts, pass_rate, avg_score, median_score, score_distribution{bucket: count}}, overall_score_distribution{bucket: count}}; cross-student aggregates."
+  },
+  "github_team_slugify": {
+    "kind": "handle",
+    "uncertain": "Pure slug helper; output is only PII when the input is built from usernames (team names), marked handle to be safe",
+    "calledFromBrowser": false,
+    "note": "text: lower-cased, non-alphanumerics replaced by '-', trimmed."
+  },
+  "preview_error_pin_matches": {
+    "kind": {
+      "$": "none",
+      "$.recent_submissions[*].student_name": "name"
+    },
+    "calledFromBrowser": true,
+    "note": "jsonb {match_count, submission_ids[], recent_submissions[] {submission_id, student_name (profiles.name or 'Unknown'), created_at}}"
+  },
+  "process_calendar_announcements": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "jsonb {success, processed_count, messages_queued, change_/start_/end_announcements} counts only; cron job"
+  },
+  "promote_whatif_grader_result": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "{promoted, submission_id, grader_result_id}."
+  },
+  "publish_assignment_group_changes": {
+    "kind": {
+      "$": "none",
+      "$.errors[*].error": "free_text",
+      "$.errors[*].group_name": "free_text"
+    },
+    "uncertain": "errors[].group_name is a user-chosen group name (classified free_text); errors[].error is SQLERRM, which can echo the group name or other values",
+    "calledFromBrowser": true,
+    "note": "jsonb {groups_created, members_added, members_moved, groups_dissolved, syncs_enqueued, errors[] {profile_id|group_name|repository_id, error}}"
+  },
+  "queue_repository_syncs": {
+    "kind": {
+      "$": "none",
+      "$.errors[*].repository": "handle",
+      "$.errors[*].error": "free_text"
+    },
+    "calledFromBrowser": true,
+    "note": "jsonb {success, queued_count, skipped_count, skipped_in_flight_count, error_count, errors[] {repository_id, repository (org/repo full name), error (SQLERRM)}}"
+  },
+  "repo_ids_with_queued_create": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "text[] of repo_id values taken from queued create_repo pgmq messages (row ids as text)"
+  },
+  "reset_error_pin_matches": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "jsonb {success, deleted_count} or {success:false, error:'Error pin not found'} (fixed string)"
+  },
+  "resolve_effective_template_repo": {
+    "kind": "handle",
+    "uncertain": "returns a template repo 'owner/repo' (course/org template, normally not student-specific); classified handle because it is a GitHub repo full name",
+    "calledFromBrowser": false,
+    "note": "text: COALESCE(override, org default, GUC owner/repo, constant) template repository full name"
+  },
+  "sanitize_repo_name_component": {
+    "kind": "handle",
+    "uncertain": "pure helper; output is a sanitized fragment of a repo name (group name, slug, or possibly username)",
+    "calledFromBrowser": false,
+    "note": "text: input normalized to a GitHub-legal repo-name component"
+  },
+  "save_error_pin": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "jsonb {success, error_pin_id, matches_populated}"
+  },
+  "sis_sync_enrollment": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "jsonb {success, class_id, drop_missing, counts {invitations_*, enrollments_*}}; called only from server-only lib/lti/roster.ts and edge functions"
+  },
+  "submit_ai_help_feedback": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "json {success, feedback_id, message (fixed)} or {error (fixed strings)}"
+  },
+  "sync_calendar_events": {
+    "kind": {
+      "$": "none",
+      "$.errors[*]": "free_text"
+    },
+    "calledFromBrowser": false,
+    "note": "jsonb {success, added, updated, deleted, skipped, errors[] (format('Failed to ... event %s: %s', uid, SQLERRM)), error_count}"
+  },
+  "trigger_discord_role_sync_for_user": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "jsonb {synced_classes} or {error (fixed), synced_classes:0}"
+  },
+  "trigger_sis_sync": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "json {success, message ('SIS sync triggered for class <id>' / all classes), timestamp}"
+  },
+  "update_gradebook_column_students_batch_with_recalc": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "jsonb {updated_count, enqueued_count}; no browser call site found (hooks use the singular update_gradebook_column_student_with_recalc)"
+  },
+  "update_gradebook_rows_batch": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "jsonb {results[] {class_id, gradebook_id, student_id (uuid), is_private, message_ids, updated_count, version_matched, cleared, expected_version, current_version}, expanded_count, version_matched_count, updated_gcs_count, unique_students_count, cleared_state_count}"
+  },
+  "update_rubric_full": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "text summary built from fixed phrases and counts ('Saved rubric. 2 parts added...')"
+  }
+}

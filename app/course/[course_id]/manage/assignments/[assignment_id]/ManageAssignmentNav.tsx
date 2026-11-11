@@ -1,7 +1,10 @@
 "use client";
 
 import { useAssignmentController } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
+import { COURSE_FEATURES, courseFeatureEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
+import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "chakra-react-select";
@@ -38,6 +41,12 @@ type NavItem = {
   instructorsOnly?: boolean | "graderOrInstructor";
   types?: AssignmentType[];
   repoOnly?: boolean;
+  // Hides the entry unless this course feature is on. Read through
+  // courseFeatureEnabled, so a course with no entry falls back to the
+  // feature's own default rather than being treated as enabled.
+  feature?: CourseFeatureName;
+  // Shows the item from the capability tables instead of the app role (#1010).
+  capability?: string;
 };
 
 const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
@@ -46,7 +55,8 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     label: "Edit Assignment",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`,
     icon: FaEdit,
-    instructorsOnly: true
+    // Shown from the capability tables rather than the app role (#1010).
+    capability: "manage_assignments"
   },
   {
     label: "Configure Autograder",
@@ -79,7 +89,8 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/exam`,
     icon: FaFileAlt,
     instructorsOnly: "graderOrInstructor",
-    types: ["exam"]
+    types: ["exam"],
+    feature: COURSE_FEATURES.EXAMS
   },
   {
     label: "Repository Status",
@@ -154,9 +165,12 @@ export function ManageAssignmentNav({
   const { course_id, assignment_id } = useParams();
   const isInstructor = useIsInstructor();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const canManageAssignments = useCapability("manage_assignments");
   const pathname = usePathname();
   const router = useRouter();
   const { assignment } = useAssignmentController();
+  const course = useCourse() as CourseWithFeatures;
+  const courseFeatures = course?.features;
   // Repo-only tools (repository status, rerun autograder, test insights,
   // security audit) don't apply when there's no git repository.
   const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
@@ -166,11 +180,14 @@ export function ManageAssignmentNav({
       LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
         .filter((item) => !item.types || item.types.includes(assignmentType))
         .filter((item) => {
+          // A capability the filter doesn't know hides the item rather than showing it to everyone.
+          if (item.capability) return item.capability === "manage_assignments" && canManageAssignments;
           if (!item.instructorsOnly) return true;
           if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
           return isInstructor;
-        }),
-    [course_id, assignment_id, isGraderOrInstructor, isInstructor, assignmentType]
+        })
+        .filter((item) => !item.feature || courseFeatureEnabled(courseFeatures, item.feature)),
+    [course_id, assignment_id, isGraderOrInstructor, isInstructor, canManageAssignments, assignmentType, courseFeatures]
   );
   // Mobile <Select> can't show disabled options, so omit repo-only items there.
   const selectOptions = React.useMemo(
