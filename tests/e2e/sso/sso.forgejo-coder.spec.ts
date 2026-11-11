@@ -63,7 +63,6 @@ async function expectConsentFor(page: Page, clientName: string, user: TestingUse
   await expect(page.getByText(`Signed in as ${user.email}`)).toBeVisible();
 }
 
-// With auto-approval nothing is clicked, so reaching the app proves no consent screen stopped the flow.
 async function passConsent(page: Page, clientName: string, user: TestingUser) {
   if (cfg.autoApprove) return;
   await expectConsentFor(page, clientName, user);

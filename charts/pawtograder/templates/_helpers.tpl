@@ -327,7 +327,6 @@ Internal service hostnames.
 {{- end -}}
 {{- end -}}
 
-{{/* Callback URLs that skip the consent screen; empty unless auth.oauthServer.autoApproveFirstParty. */}}
 {{- define "pawtograder.oauth.firstPartyRedirectURIs" -}}
 {{- $s := .Values.auth.oauthServer -}}
 {{- if and $s.enabled $s.autoApproveFirstParty -}}

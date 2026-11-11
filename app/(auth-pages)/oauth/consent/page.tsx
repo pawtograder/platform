@@ -84,9 +84,7 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
         details.authorization_id,
         "approve"
       ));
-    } catch {
-      // Fall through to the consent screen, where the student can approve by hand.
-    }
+    } catch {}
     if (approvedUrl) redirect(approvedUrl);
   }
 

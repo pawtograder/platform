@@ -91,7 +91,6 @@ export CODER_OIDC_CLIENT_ID="$(getc CODER_OIDC_CLIENT_ID)"
 export CODER_OIDC_CLIENT_SECRET="$(getc CODER_OIDC_CLIENT_SECRET)"
 export THIRD_OIDC_CLIENT_ID="$(getc THIRD_OIDC_CLIENT_ID)"
 [ -n "$FORGEJO_OIDC_CLIENT_ID" ] && [ -n "$CODER_OIDC_CLIENT_ID" ] && [ -n "$THIRD_OIDC_CLIENT_ID" ] || { echo "ERROR: client registration failed"; echo "$CLIENTS"; exit 1; }
-# What the chart renders with auth.oauthServer.autoApproveFirstParty=true.
 export OAUTH_FIRST_PARTY_REDIRECT_URIS="$FORGEJO_BASE_URL/user/oauth2/$FORGEJO_AUTH_SOURCE_NAME/callback,$CODER_BASE_URL/api/v2/users/oidc/callback"
 
 if [ "${SKIP_APPS:-}" != "1" ]; then
@@ -124,7 +123,7 @@ else
   SOURCE_ID="$($FJ auth list | awk -v n="$FORGEJO_AUTH_SOURCE_NAME" '$2==n {print $1}')"
 fi
 echo "  login source id=$SOURCE_ID"
-# Same step as the chart's forgejo.initPreScript; Forgejo reads templates at startup.
+# Forgejo reads templates at startup.
 $COMPOSE exec -T forgejo sh -c 'mkdir -p "$GITEA_CUSTOM/templates/custom" && cp /pawtograder-templates/header.tmpl "$GITEA_CUSTOM/templates/custom/header.tmpl"'
 $COMPOSE restart forgejo >/dev/null
 wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
