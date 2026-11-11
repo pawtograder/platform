@@ -231,7 +231,7 @@ const STEPS: Step[] = [
               can escalate it again, and the student can&apos;t reopen it.
             </>,
             <>
-              Use it when more help won&apos;t fix the problem, like the wrong queue, a question for the instructor
+              Use it when more help won&apos;t fix the problem, such as the wrong queue, a question for the instructor
               outside office hours, or a student who already left.
             </>,
             <>You can also end a ticket you already resolved, during its check-in, to withdraw the check-in.</>,
@@ -350,7 +350,7 @@ export function EscalationTour() {
                 )}
               </Dialog.Title>
               <Dialog.CloseTrigger asChild>
-                <Button variant="ghost" size="sm" aria-label="Close">
+                <Button variant="ghost" size="sm" aria-label="Close tour">
                   <Icon as={BsX} />
                 </Button>
               </Dialog.CloseTrigger>
