@@ -873,8 +873,8 @@ function GroupDetails({
   );
 }
 
-// The repo's Forgejo host is the instance the viewer's own Forgejo account is on (#1092); RLS lets a
-// user read only their own git_accounts row.
+// The repo's Forgejo host is the instance of the newest Forgejo account the viewer can see (#1092):
+// their own for a student, and after a FORGEJO_URL change the newest is on the current instance.
 function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
   const { data } = useList<{ instance_url: string }>({
     resource: "git_accounts",
@@ -883,6 +883,7 @@ function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
       { field: "provider", operator: "eq", value: "forgejo" },
       { field: "login", operator: "nnull", value: null }
     ],
+    sorters: [{ field: "created_at", order: "desc" }],
     pagination: { pageSize: 1 }
   });
   const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
