@@ -321,6 +321,28 @@ Internal service hostnames.
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.forgejo.hasPawtograderSource" -}}
+{{- if .Values.forgejo.enabled -}}
+{{- range .Values.forgejo.gitea.oauth -}}{{- if eq .name "pawtograder" -}}true{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.oauth.firstPartyRedirectURIs" -}}
+{{- $s := .Values.auth.oauthServer -}}
+{{- if and $s.enabled $s.autoApproveFirstParty -}}
+{{- $uris := list -}}
+{{- if include "pawtograder.forgejo.hasPawtograderSource" . -}}
+{{- $uris = append $uris (printf "%s/user/oauth2/pawtograder/callback" (include "pawtograder.forgejo.url" .)) -}}
+{{- end -}}
+{{- $coderURL := "" -}}
+{{- range (dig "coder" "env" list .Values.coder) -}}{{- if eq .name "CODER_ACCESS_URL" -}}{{- $coderURL = .value | default "" | trimSuffix "/" -}}{{- end -}}{{- end -}}
+{{- if and .Values.coder.enabled .Values.coder.oidc.enabled $coderURL -}}
+{{- $uris = append $uris (printf "%s/api/v2/users/oidc/callback" $coderURL) -}}
+{{- end -}}
+{{- join "," $uris -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.forgejo.servicePort" -}}
 {{- dig "service" "http" "port" 3000 .Values.forgejo -}}
 {{- end -}}
