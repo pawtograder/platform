@@ -77,6 +77,15 @@ export function withMissingRowErrors(base: DataProvider): DataProvider {
 // importing this provider. Re-exported so existing imports keep working.
 export { isRefusedWriteError };
 
+/**
+ * True when `error` is the 404 this provider's `getOne` throws because the row
+ * is not visible to the current session: deleted, or hidden from it by RLS.
+ * Any other `getOne` failure (network, PostgREST error) returns false.
+ */
+export function isMissingRowError(error: unknown): error is Error & { statusCode: 404 } {
+  return error instanceof Error && (error as { statusCode?: unknown }).statusCode === 404;
+}
+
 type PostgrestResult = PromiseLike<{
   data: unknown[] | null;
   error: { message: string; code: string } | null;
