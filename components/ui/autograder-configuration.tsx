@@ -220,9 +220,14 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
+  // `isError` is true while the latest load of this list failed, including a failed refetch that
+  // kept the old rows. Save is off then: there is no unique constraint on (autograder_id,
+  // repository), so a Save computed from an out-of-date list can insert the same row twice (#1248).
   const {
     data: regressionTestRepos,
     isLoading: regressionTestReposLoading,
+    isError: regressionTestReposStale,
+    isFetching: regressionTestReposFetching,
     refetch: refetchRegressionTestRepos
   } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
@@ -292,7 +297,21 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     // We should really get rid of refine.dev!!
   }, [graderRepo, assignment, course_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // refetch() resolves even when the request fails (React Query keeps the old rows and sets isError),
+  // so check the result instead of awaiting it and assuming the list is current.
+  const reloadRegressionTestRepos = useCallback(async () => {
+    const result = await refetchRegressionTestRepos();
+    if (result.isError) {
+      toaster.error({
+        id: "regression-test-list-reload-error",
+        title: "Couldn't reload the regression test list",
+        description: getErrorMessage(result.error)
+      });
+    }
+  }, [refetchRegressionTestRepos]);
+
   const saveRegressionTests = useCallback(async () => {
+    if (regressionTestReposStale) return;
     setSaveLoading(true);
     const additions = selectedRepos.filter((r) => !regressionTestRepos?.data.some((rt) => rt.repository === r));
     const deletions = regressionTestRepos?.data
@@ -317,15 +336,16 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
         description: getErrorMessage(failures[0].reason, { role: errorRole })
       });
     }
-    await refetchRegressionTestRepos();
+    await reloadRegressionTestRepos();
     setSaveLoading(false);
   }, [
+    regressionTestReposStale,
     selectedRepos,
     regressionTestRepos,
     assignment_id,
     createRegressionTest,
     deleteRegressionTest,
-    refetchRegressionTestRepos,
+    reloadRegressionTestRepos,
     errorRole
   ]);
   const toggleRepo = useCallback(
@@ -431,8 +451,16 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
           ))}
         </Table.Body>
       </Table.Root>
+      {regressionTestReposStale && (
+        <Alert status="warning" title="The regression test list didn't load">
+          Save is off until it loads, so a save can&apos;t add the same repository twice.{" "}
+          <Button size="xs" variant="outline" loading={regressionTestReposFetching} onClick={reloadRegressionTestRepos}>
+            Reload list
+          </Button>
+        </Alert>
+      )}
       <Button
-        disabled={saveLoading}
+        disabled={saveLoading || regressionTestReposStale}
         colorPalette="green"
         variant="surface"
         loading={saveLoading}
