@@ -61,6 +61,7 @@ import { FaCheck } from "react-icons/fa6";
 import * as Sentry from "@sentry/nextjs";
 import * as YAML from "yaml";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
@@ -276,7 +277,7 @@ export default function RubricPage() {
         Sentry.captureException(error);
         toaster.error({
           title: "Error refreshing rubric data",
-          description: "An unexpected error occurred while refreshing the rubric data. Please try again later."
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
         return;
       }

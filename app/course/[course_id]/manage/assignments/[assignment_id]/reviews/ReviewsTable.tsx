@@ -388,8 +388,11 @@ export default function ReviewsTable({
       document.body.removeChild(link);
 
       toaster.success({ title: "CSV exported successfully" });
-    } catch {
-      toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
+    } catch (error) {
+      toaster.error({
+        title: "Error exporting CSV",
+        description: getUserFacingErrorMessage(error, { role: "grader" })
+      });
     } finally {
       setIsExporting(false);
     }
