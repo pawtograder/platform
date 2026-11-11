@@ -191,7 +191,7 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
   } catch (error) {
     toaster.error({
       title: "Error calculating total points",
-      description: getUserFacingErrorMessage(error)
+      description: getUserFacingErrorMessage(error, { role: "grader" })
     });
     return 0;
   }

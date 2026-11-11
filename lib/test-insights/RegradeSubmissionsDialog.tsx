@@ -255,7 +255,7 @@ export function RegradeSubmissionsDialog({
     } catch (error) {
       toaster.error({
         title: "Error regrading",
-        description: getUserFacingErrorMessage(error)
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       setIsRegrading(false);

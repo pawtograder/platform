@@ -98,7 +98,7 @@ export default function SyncRolesButton({
       setSyncState("error");
       setResult({
         synced_classes: 0,
-        error: getUserFacingErrorMessage(err)
+        error: getUserFacingErrorMessage(err, { role: "grader" })
       });
     }
   };

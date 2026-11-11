@@ -241,7 +241,7 @@ export function StaffCommitHistory({
           } catch (error) {
             toaster.error({
               title: "Submission created but activation failed",
-              description: getUserFacingErrorMessage(error)
+              description: getUserFacingErrorMessage(error, { role: "grader" })
             });
           }
         })();
@@ -261,7 +261,7 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Error activating submission",
-          description: getUserFacingErrorMessage(error)
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         setBusySha(null);
@@ -298,7 +298,7 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
-          description: getUserFacingErrorMessage(error)
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         await checkRunsQuery.refetch();

@@ -25,7 +25,7 @@ async function enterCourse(classId: number, router: ReturnType<typeof useRouter>
     router.push(`/course/${classId}/manage/assignments`);
     router.refresh();
   } catch (err) {
-    const description = getUserFacingErrorMessage(err);
+    const description = getUserFacingErrorMessage(err, { role: "admin" });
     toaster.error({ title: "Failed to enter course", description });
     onError();
   }

@@ -1097,7 +1097,7 @@ export default function AssignmentForm({
           description: "An error occurred while saving the assignment. Please try again."
         });
         toaster.error({
-          title: "Error creating assignment: " + (error instanceof Error ? error.name : "Unknown"),
+          title: "Error creating assignment",
           description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {

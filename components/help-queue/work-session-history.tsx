@@ -59,7 +59,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to delete session: ${getUserFacingErrorMessage(error)}`
+        description: `Failed to delete session: ${getUserFacingErrorMessage(error, { role: "grader" })}`
       });
     } finally {
       setDeletingSessionId(null);
