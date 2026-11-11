@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -154,23 +155,29 @@ export default function StudentKarmaManagement() {
           <Flex align="center" gap={3} mb={2}>
             <Icon as={BsPerson} />
             <Text fontWeight="semibold">{entry.student_profile?.name || "Unknown Student"}</Text>
-            <Badge colorPalette={getKarmaColor(entry.karma_score)} size="sm">
-              {entry.karma_score} - {getKarmaLabel(entry.karma_score)}
-            </Badge>
+            <ReportBlock>
+              <Badge colorPalette={getKarmaColor(entry.karma_score)} size="sm">
+                {entry.karma_score} - {getKarmaLabel(entry.karma_score)}
+              </Badge>
+            </ReportBlock>
           </Flex>
 
-          <HStack mb={3}>
-            {renderStars(entry.karma_score)}
-            <Text fontSize="sm" color="fg.subtle" ml={2}>
-              ({entry.karma_score} points)
-            </Text>
-          </HStack>
+          <ReportBlock>
+            <HStack mb={3}>
+              {renderStars(entry.karma_score)}
+              <Text fontSize="sm" color="fg.subtle" ml={2}>
+                ({entry.karma_score} points)
+              </Text>
+            </HStack>
+          </ReportBlock>
 
           {entry.internal_notes && (
             <Box mb={3} p={3} borderRadius="md">
-              <Text fontSize="sm" color="fg.subtle" fontStyle="italic">
-                &ldquo;{entry.internal_notes}&rdquo;
-              </Text>
+              <ReportBlock>
+                <Text fontSize="sm" color="fg.subtle" fontStyle="italic">
+                  &ldquo;{entry.internal_notes}&rdquo;
+                </Text>
+              </ReportBlock>
             </Box>
           )}
 

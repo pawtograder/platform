@@ -279,8 +279,9 @@ jobs:
           GIT_SHA: ${{ github.sha }}
           SEED_IMAGE: ${{ steps.nextcache.outputs.seed }}
           OAUTH_CLIENT_ID: ${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}
-          BUGSINK_DSN: ${{ secrets.STAGING_BUGSINK_DSN }}
-          BUGSINK_HOST: ${{ secrets.STAGING_BUGSINK_HOST }}
+          # STAGING_SENTRY_DSN replaces STAGING_BUGSINK_DSN (HU1). Until the secret is
+          # renamed the old one is used; drop the fallback with the app's own one.
+          SENTRY_DSN: ${{ secrets.STAGING_SENTRY_DSN || secrets.STAGING_BUGSINK_DSN }}
           POSTHOG_KEY: ${{ secrets.STAGING_POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.STAGING_POSTHOG_HOST }}
           POSTHOG_UI_HOST: ${{ secrets.STAGING_POSTHOG_UI_HOST }}
@@ -293,8 +294,7 @@ jobs:
             printf '%s\n' "NEXT_PUBLIC_SUPABASE_URL=$API_HOST"
             printf '%s\n' "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY"
             printf '%s\n' "NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=$OAUTH_CLIENT_ID"
-            printf '%s\n' "NEXT_PUBLIC_BUGSINK_DSN=$BUGSINK_DSN"
-            printf '%s\n' "NEXT_PUBLIC_BUGSINK_HOST=$BUGSINK_HOST"
+            printf '%s\n' "NEXT_PUBLIC_SENTRY_DSN=$SENTRY_DSN"
             printf '%s\n' "NEXT_PUBLIC_POSTHOG_KEY=$POSTHOG_KEY"
             printf '%s\n' "NEXT_PUBLIC_POSTHOG_HOST=$POSTHOG_HOST"
             printf '%s\n' "NEXT_PUBLIC_POSTHOG_UI_HOST=$POSTHOG_UI_HOST"
@@ -511,6 +511,76 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/backup:${{ needs.meta.outputs.version }}
           done
 
+  build-forgejo-runner:
+    needs: meta
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push forgejo-runner image
+        uses: docker/build-push-action@v6
+        with:
+          context: charts/pawtograder/images/forgejo-runner
+          push: true
+          platforms: linux/amd64
+          tags: ${{ format('{0}/{1}/forgejo-runner:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          cache-from: type=gha,scope=forgejo-runner
+          cache-to: type=gha,scope=forgejo-runner,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/forgejo-runner:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/forgejo-runner:${{ needs.meta.outputs.version }}
+          done
+
+  # The Coder workspace image (images/coder-workspace): the runner's toolchain plus
+  # code-server. coderBootstrap.workspaces.image defaults to this tag.
+  build-coder-workspace:
+    needs: meta
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push coder-workspace image
+        uses: docker/build-push-action@v6
+        with:
+          context: charts/pawtograder/images/coder-workspace
+          push: true
+          platforms: linux/amd64
+          tags: ${{ format('{0}/{1}/coder-workspace:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          cache-from: type=gha,scope=coder-workspace
+          cache-to: type=gha,scope=coder-workspace,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/coder-workspace:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/coder-workspace:${{ needs.meta.outputs.version }}
+          done
+
   publish-chart:
     # Note: build-web is intentionally not a dep — on v* tag pushes the web
     # image is not built here (URLs would have to be baked at tag time and
@@ -518,7 +588,7 @@ jobs:
     # by tag only, so it's fine to publish the chart without a same-tag
     # web image; consumers of the chart override web.image.tag to a
     # workflow_dispatch-built image keyed to their environment.
-    needs: [meta, build-edge-functions, build-migrations, build-backup]
+    needs: [meta, build-edge-functions, build-migrations, build-backup, build-coder-workspace]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -527,6 +597,9 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
 
       - name: Lint chart
         run: helm lint charts/pawtograder
@@ -568,7 +641,9 @@ jobs:
       # server rejecting anything, so the fix is on this side.
       HELM_QPS: "50"
       HELM_BURST_LIMIT: "300"
-    needs: [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup]
+    # Add build-forgejo-runner (and pin forgejoRunner.image.tag) once values-staging.yaml enables the runner.
+    needs:
+      [meta, build-web, build-edge-functions, build-migrations, build-maintenance, build-backup, build-coder-workspace]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     # MUST run on the self-hosted, in-network runner. The cluster API
     # (talos.ripley.cloud:6443) is a private 10.201.2.x address, unreachable
@@ -595,6 +670,9 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+
+      - name: Fetch chart dependencies
+        run: charts/pawtograder/scripts/build-deps.sh
 
       - name: Write kubeconfig
         env:
@@ -652,6 +730,7 @@ jobs:
             --set edgeFunctions.image.tag="$VERSION" \
             --set migrations.image.tag="$VERSION" \
             --set backup.image.tag="$VERSION" \
+            --set coderBootstrap.workspaces.image="ghcr.io/pawtograder/coder-workspace:$VERSION" \
             --set maintenance.enabled=true \
             --set maintenance.image.repository=ghcr.io/pawtograder/maintenance \
             --set maintenance.image.tag="$VERSION" \

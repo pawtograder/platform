@@ -233,8 +233,11 @@ async function processInvitation(
 
     if (invitationError) {
       const localScope = new Sentry.Scope();
+      // The inviter is the event's user. `role` is the caller's role on every other edge event,
+      // so the role being granted is `invitation_role` (as enrollments-add's `enrollment_role`).
+      localScope?.setUser({ id: invitedByUserId });
       localScope?.setTag("sis_user_id", invitation.sis_user_id);
-      localScope?.setTag("role", invitation.role);
+      localScope?.setTag("invitation_role", invitation.role);
       localScope?.setTag("class_id", courseId);
       localScope?.setTag("invited_by", invitedByUserId);
       localScope?.setTag("class_section_id", invitation.class_section_id);
@@ -270,8 +273,11 @@ async function processInvitation(
 
     if (fetchError) {
       const localScope = new Sentry.Scope();
+      // The inviter is the event's user. `role` is the caller's role on every other edge event,
+      // so the role being granted is `invitation_role` (as enrollments-add's `enrollment_role`).
+      localScope?.setUser({ id: invitedByUserId });
       localScope?.setTag("sis_user_id", invitation.sis_user_id);
-      localScope?.setTag("role", invitation.role);
+      localScope?.setTag("invitation_role", invitation.role);
       localScope?.setTag("class_id", courseId);
       localScope?.setTag("invited_by", invitedByUserId);
       localScope?.setTag("class_section_id", invitation.class_section_id);

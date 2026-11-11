@@ -92,6 +92,12 @@ public = false
 [storage.buckets.uploads]
 public = true
 
+[storage.buckets.exam-templates]
+public = false
+
+[storage.buckets.exam-scans]
+public = false
+
 # Uncomment to configure local storage buckets
 # [storage.buckets.images]
 # public = false
@@ -124,6 +130,11 @@ minimum_password_length = 6
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""
+
+[auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = false
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
@@ -736,6 +747,18 @@ verify_jwt = false
 import_map = "./functions/github-async-worker/deno.json"
 entrypoint = "./functions/github-async-worker/index.ts"
 
+[functions.exam-async-worker]
+enabled = true
+verify_jwt = false
+import_map = "./functions/exam-async-worker/deno.json"
+entrypoint = "./functions/exam-async-worker/index.ts"
+
+[functions.exam-extract-template]
+enabled = true
+verify_jwt = false
+import_map = "./functions/exam-extract-template/deno.json"
+entrypoint = "./functions/exam-extract-template/index.ts"
+
 [functions.github-repo-reconciler]
 enabled = true
 verify_jwt = false
@@ -812,7 +835,26 @@ enabled = true
 verify_jwt = false
 entrypoint = "./functions/cli/index.ts"
 
+# Called by pg_cron with the edge-function secret, not a user JWT (see the bug reporter migration).
+[functions.bug-report-retention-purge]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/bug-report-retention-purge/index.ts"
+
 [functions.index-submission]
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/index-submission/index.ts"
+
+# The functions check the caller's JWT themselves, like the other user-facing functions.
+[functions.workspace-open]
+enabled = true
+verify_jwt = false
+import_map = "./functions/workspace-open/deno.json"
+entrypoint = "./functions/workspace-open/index.ts"
+
+[functions.workspace-status]
+enabled = true
+verify_jwt = false
+import_map = "./functions/workspace-status/deno.json"
+entrypoint = "./functions/workspace-status/index.ts"

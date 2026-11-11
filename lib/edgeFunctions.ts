@@ -79,6 +79,15 @@ export async function liveMeetingEnd(params: FunctionTypes.LiveMeetingEndRequest
   return await invokeEdgeFunction<{ message: string }>(supabase, "live-meeting-end", { body: params });
 }
 
+export async function examExtractTemplate(
+  params: FunctionTypes.ExamExtractTemplateRequest,
+  supabase: SupabaseClient<Database>
+): Promise<FunctionTypes.ExamExtractTemplateResponse> {
+  return await invokeEdgeFunction<FunctionTypes.ExamExtractTemplateResponse>(supabase, "exam-extract-template", {
+    body: params
+  });
+}
+
 export async function repositoriesForClass(
   params: FunctionTypes.ListReposRequest,
   supabase: SupabaseClient<Database>
@@ -681,6 +690,19 @@ export async function repositoryListCommits(
     "repository-list-commits",
     { body: params }
   );
+}
+
+/**
+ * Open in Coder (#1095): creates the student's Coder user and workspace if they're missing, starts a
+ * stopped workspace, and returns its state. Send the browser to `redirect_url`.
+ */
+export async function workspaceOpen(params: FunctionTypes.WorkspaceOpenRequest, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.WorkspaceOpenResponse>(supabase, "workspace-open", { body: params });
+}
+
+/** The student's workspace state for the progress card, including the failing step. Changes nothing. */
+export async function workspaceStatus(params: FunctionTypes.WorkspaceOpenRequest, supabase: SupabaseClient<Database>) {
+  return await invokeEdgeFunction<FunctionTypes.WorkspaceOpenResponse>(supabase, "workspace-status", { body: params });
 }
 
 export async function rerunGrader(

@@ -151,6 +151,21 @@ Usage: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.p
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.placement" -}}
+{{- with (include "pawtograder.nodeSelector" .) }}
+nodeSelector:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with (include "pawtograder.tolerations" .) }}
+tolerations:
+{{- . | nindent 2 }}
+{{- end }}
+{{- with (include "pawtograder.affinity" .) }}
+affinity:
+{{- . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
 {{/*
 Public URLs.
 */}}
@@ -284,6 +299,88 @@ Internal service hostnames.
 {{- include "pawtograder.componentName" (dict "ctx" . "component" "maintenance") -}}
 {{- end -}}
 
+{{/* Must equal the subchart's ROOT_URL: Actions tokens carry it as their issuer. */}}
+{{- define "pawtograder.forgejo.url" -}}
+{{- $f := .Values.forgejo -}}
+{{- $server := $f.gitea.config.server | default dict -}}
+{{- $route := $f.httpRoute | default dict -}}
+{{- if $server.ROOT_URL -}}
+{{- trimSuffix "/" (tpl $server.ROOT_URL .) -}}
+{{- else -}}
+{{- $https := or (and $f.ingress.enabled (gt (len ($f.ingress.tls | default list)) 0)) (and $route.enabled $route.terminate) -}}
+{{- $proto := ternary "https" ($server.PROTOCOL | default "http") $https -}}
+{{- $domain := $server.DOMAIN -}}
+{{- if not $domain -}}
+{{- if and $route.enabled $route.hostnames -}}
+{{- $domain = index $route.hostnames 0 -}}
+{{- else -}}
+{{- $domain = (index $f.ingress.hosts 0).host -}}
+{{- end -}}
+{{- end -}}
+{{- printf "%s://%s" $proto (tpl $domain .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Coder's public URL, CODER_ACCESS_URL from coder.coder.env (forgejo-coder-validations requires it). */}}
+{{- define "pawtograder.coder.url" -}}
+{{- $url := "" -}}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_ACCESS_URL" }}{{ $url = .value | default "" }}{{ end }}{{ end -}}
+{{- trimSuffix "/" $url -}}
+{{- end -}}
+
+{{- define "pawtograder.forgejo.servicePort" -}}
+{{- dig "service" "http" "port" 3000 .Values.forgejo -}}
+{{- end -}}
+
+{{/* The subchart defaults HTTP_PORT to the Service port; NetworkPolicy matches the pod's. */}}
+{{- define "pawtograder.forgejo.containerPort" -}}
+{{- dig "gitea" "config" "server" "HTTP_PORT" (include "pawtograder.forgejo.servicePort" . | int) .Values.forgejo -}}
+{{- end -}}
+
+{{- define "pawtograder.forgejo.http" -}}
+{{- printf "%s-forgejo-http" .Release.Name -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.host" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- include "pawtograder.postgres.host" .ctx -}}
+{{- else -}}
+{{- printf "%s-%s-db" .ctx.Release.Name .app -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.port" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- .ctx.Values.postgres.service.port -}}
+{{- else -}}
+{{- dig "service" "port" 5432 (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.endpoint" -}}
+{{- printf "%s:%v" (include "pawtograder.appDatabase.host" .) (include "pawtograder.appDatabase.port" .) -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuser" -}}
+{{- ternary "supabase_admin" "postgres" (eq (index .ctx.Values .app).database "pawtograder") -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuserSecret" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+{{- .ctx.Values.secrets.names.postgres -}}
+{{- else -}}
+{{- dig "settings" "existingSecret" (printf "%s-%s-db-superuser" .ctx.Release.Name .app) (index .ctx.Values (printf "%s-db" .app)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.appDatabase.superuserSecretKey" -}}
+{{- if eq (index .ctx.Values .app).database "pawtograder" -}}
+POSTGRES_PASSWORD
+{{- else -}}
+{{- (((index .ctx.Values (printf "%s-db" .app)).settings | default dict).superuserPassword | default dict).secretKey | default "POSTGRES_PASSWORD" -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Maintenance posture (maintenance.active): the replica count a WRITER tier
 renders. 0 while the posture is on, the caller's own count otherwise.
@@ -353,17 +450,13 @@ credentials come from secrets.names.s3 (the same secret backup.yaml uses).
 {{- end -}}
 
 {{/*
-Full backups the walg-retention CronJob keeps: postgres.walg.retention.keepBackups,
-or baseBackup.keepBackups when that is unset. Refuses anything below 1, which
-`wal-g delete retain` would take as "delete every backup".
+Full backups the walg-retention CronJob keeps: postgres.walg.retention.keepBackups.
+Refuses anything below 1, which `wal-g delete retain` would take as "delete
+every backup". No `| default`: sprig treats 0 as empty, so an explicit 0 would
+quietly become the default instead of failing.
 */}}
 {{- define "pawtograder.walg.retentionKeep" -}}
-{{- /* Only nil/"" inherit. Not `| default`: sprig treats 0 as empty, so an
-     explicit 0 would quietly become baseBackup.keepBackups instead of failing. */ -}}
 {{- $raw := .Values.postgres.walg.retention.keepBackups -}}
-{{- if or (kindIs "invalid" $raw) (eq (toString $raw) "") -}}
-{{- $raw = .Values.postgres.walg.baseBackup.keepBackups | default 8 -}}
-{{- end -}}
 {{- /* Whole-number syntax before `int`, which would truncate 4.9 to 4, turn
      `true` into 1, and read "010" as octal 8, each then passing the >= 1
      check with a count nobody wrote. So no leading zero (which also rules out
@@ -552,4 +645,82 @@ on — production and the chart default already disagree.
 */}}
 {{- define "pawtograder.asyncWorker.runBudgetCeiling" -}}
 {{- max 120 (sub (div (.Values.edgeFunctions.worker.timeoutMs | int) 1000) 150) -}}
+{{- end -}}
+
+{{- define "pawtograder.cilium.portsExcept" -}}
+{{- $from := 1 }}
+{{- $sorted := list }}
+{{- range $p := . }}{{ $sorted = append $sorted (printf "%05d" (int $p)) }}{{ end }}
+{{- range $s := sortAlpha $sorted }}
+{{- $p := atoi (regexReplaceAll "^0+" $s "") }}
+{{- if lt $from $p }}
+- { port: {{ $from | quote }}, endPort: {{ sub $p 1 }}, protocol: TCP }
+{{- end }}
+{{- $from = add1 $p }}
+{{- end }}
+{{- if le $from 65535 }}
+- { port: {{ $from | quote }}, endPort: 65535, protocol: TCP }
+{{- end }}
+- { port: "1", endPort: 65535, protocol: UDP }
+{{- end -}}
+
+{{/*
+Convert a Kubernetes quantity (1Gi / 1.5Gi / 512Mi / 65536Ki / plain bytes) to
+a byte count.
+
+Used to keep a /dev/shm sizeLimit and the monitoring that watches it derived
+from ONE value: postgres.shm.sizeLimit sets the emptyDir, and the same number
+becomes limit_bytes in the postgres_exporter query and the denominator of
+PawtograderPostgresSharedMemoryHigh. Raising the volume therefore moves the
+alert threshold with it, instead of leaving a rule that still compares against
+the old ceiling.
+
+Fractions are supported deliberately. An earlier version rejected them, which
+turned a perfectly valid Kubernetes quantity into a LATENT render failure:
+monitoring.enabled defaults to false, so `sizeLimit: 1.5Gi` rendered fine and
+then broke the next upgrade that switched monitoring on, in a template the
+operator had not touched. Accepting what Kubernetes accepts removes the trap
+rather than relocating it. (Raised in review on #1021.)
+
+validations.yaml calls this for every enabled shm volume so a malformed value
+fails at render time regardless of whether monitoring is on.
+*/}}
+{{- define "pawtograder.quantityToBytes" -}}
+{{- $v := . | toString | trim -}}
+{{- $mult := 1 -}}
+{{- $n := $v -}}
+{{- if hasSuffix "Gi" $v -}}
+{{- $mult = 1073741824 -}}{{- $n = trimSuffix "Gi" $v -}}
+{{- else if hasSuffix "Mi" $v -}}
+{{- $mult = 1048576 -}}{{- $n = trimSuffix "Mi" $v -}}
+{{- else if hasSuffix "Ki" $v -}}
+{{- $mult = 1024 -}}{{- $n = trimSuffix "Ki" $v -}}
+{{- end -}}
+{{- /*
+  Exponent notation is accepted because Helm PRODUCES it. A bare number in a
+  values file -- `sizeLimit: 1073741824`, the plain-byte form this helper
+  advertises -- is parsed as a float and `toString` renders it
+  "1.073741824e+09". Rejecting that broke every render, not just the monitoring
+  path, once validations.yaml started calling this unconditionally.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $n) -}}
+{{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes, e.g. 1Gi, 1.5Gi, 512Mi)" $v) -}}
+{{- end -}}
+{{- $bytes := int64 (ceil (mulf (float64 $n) $mult)) -}}
+{{- /*
+  ceil, not truncate: Kubernetes rounds a positive fractional quantity UP to
+  the nearest byte (resource.Quantity.Value), so truncating would disagree with
+  the ceiling the kubelet actually enforces. Immaterial at realistic sizes --
+  1.1Gi differs by one byte -- but a sub-byte value like `0.1` truncates to
+  ZERO, and limit_bytes=0 makes the alert's used/limit division +Inf, which
+  fires instantly and permanently. The positivity check below closes the rest
+  of that class (an explicit 0, or a value small enough to round to nothing),
+  since every consumer of this helper divides by the result.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if le (int64 $bytes) (int64 0) -}}
+{{- fail (printf "pawtograder.quantityToBytes: %q resolves to %d bytes; a /dev/shm sizeLimit must be positive (the monitoring divides by it)" $v $bytes) -}}
+{{- end -}}
+{{- $bytes -}}
 {{- end -}}
