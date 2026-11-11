@@ -15,6 +15,7 @@ import type { Survey, SurveyWithCounts } from "@/types/survey";
 import { Badge, Box, Icon, Table, Text } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type FilterType = "all" | "closed" | "active" | "draft";
 
@@ -157,7 +158,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
             }
           }
         } catch (error) {
-          validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
+          validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(error, { role: "grader" })}`;
         }
 
         await controller.surveys.update(survey.id, {
@@ -195,7 +196,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         if (reportDuplicateNamesRefusal(error)) return;
         toaster.create({
           title: "Failed to Publish Survey",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          description: getUserFacingErrorMessage(error, { role: "grader" }),
           type: "error"
         });
       }
@@ -236,7 +237,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Failed to Close Survey",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          description: getUserFacingErrorMessage(error, { role: "grader" }),
           type: "error"
         });
       }
@@ -306,7 +307,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Failed to Delete Survey",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          description: getUserFacingErrorMessage(error, { role: "grader" }),
           type: "error"
         });
       }

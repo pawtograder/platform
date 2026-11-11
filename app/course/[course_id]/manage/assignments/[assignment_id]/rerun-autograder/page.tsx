@@ -39,6 +39,7 @@ import { Select as ReactSelect } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 interface SelectOption {
   label: string;
@@ -96,7 +97,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       } catch (error) {
         toaster.error({
           title: "Failed to promote",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         setPromotingResults((prev) => ({ ...prev, [graderResultId]: false }));
@@ -958,7 +959,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
               } catch (error) {
                 toaster.error({
                   title: "Error regrading",
-                  description: error instanceof Error ? error.message : "Unknown error"
+                  description: getUserFacingErrorMessage(error, { role: "grader" })
                 });
               } finally {
                 setRegrading(false);

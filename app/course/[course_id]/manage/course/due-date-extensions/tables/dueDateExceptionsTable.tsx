@@ -24,6 +24,7 @@ import { useMemo } from "react";
 import { FaGift, FaPlus, FaTrash } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
 import GiftTokenModal, { GiftTokenDefaults } from "../modals/giftTokenModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type DueDateExceptionRow = {
   exception: AssignmentDueDateException;
@@ -214,7 +215,7 @@ export default function DueDateExceptionsTable() {
               } catch (error) {
                 toaster.error({
                   title: "Delete failed",
-                  description: error instanceof Error ? error.message : "Unknown error"
+                  description: getUserFacingErrorMessage(error, { role: "grader" })
                 });
               }
             }}

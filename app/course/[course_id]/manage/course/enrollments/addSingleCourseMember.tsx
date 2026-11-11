@@ -9,6 +9,7 @@ import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import * as Sentry from "@sentry/nextjs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type FormData = {
   email: string;
@@ -49,7 +50,7 @@ export default function AddSingleCourseMember({ studentsOnly = false }: { studen
         Sentry.captureException(error);
         toaster.error({
           title: "Error adding course member",
-          description: error instanceof Error ? error.message : "An unexpected error occurred."
+          description: getUserFacingErrorMessage(error, { role: "grader" })
         });
       } finally {
         setIsSubmitting(false);

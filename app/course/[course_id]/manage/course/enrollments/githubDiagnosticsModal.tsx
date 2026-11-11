@@ -15,6 +15,7 @@ import * as Sentry from "@sentry/nextjs";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BsGithub } from "react-icons/bs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type GitHubDiagnosticsModalProps = {
   isOpen: boolean;
@@ -88,7 +89,7 @@ export default function GitHubDiagnosticsModal({
       Sentry.captureException(error);
       toaster.error({
         title: "Error diagnosing GitHub account",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       setIsLoading(false);
@@ -116,7 +117,7 @@ export default function GitHubDiagnosticsModal({
       Sentry.captureException(error);
       toaster.error({
         title: "Error syncing GitHub permissions",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       setIsSyncing(false);
@@ -136,7 +137,7 @@ export default function GitHubDiagnosticsModal({
       Sentry.captureException(error);
       toaster.error({
         title: "Error unlinking GitHub identity",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error, { role: "grader" })
       });
     } finally {
       setIsUnlinking(false);

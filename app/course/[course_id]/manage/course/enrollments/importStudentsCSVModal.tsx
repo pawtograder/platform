@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { FaFileImport } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 type AppRole = Database["public"]["Enums"]["app_role"];
 const allowedRoles: ReadonlyArray<AppRole> = ["instructor", "grader", "student"];
 
@@ -432,7 +433,7 @@ const ImportStudentsCSVModal = () => {
     } catch (error) {
       toaster.create({
         title: "Error During Import",
-        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     } finally {

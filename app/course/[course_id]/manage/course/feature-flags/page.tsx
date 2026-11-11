@@ -16,6 +16,7 @@ import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, Text, VStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 function buildFlagsFromRole(
   features: { name: string; enabled: boolean }[] | null | undefined
@@ -94,7 +95,7 @@ export default function CourseFeatureFlagsPage() {
       } catch (e) {
         toaster.error({
           title: "Could not update feature",
-          description: e instanceof Error ? e.message : "Unknown error"
+          description: getUserFacingErrorMessage(e, { role: "grader" })
         });
         setFlags(rollback);
       } finally {

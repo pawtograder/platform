@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaBug, FaChevronDown, FaChevronRight, FaCopy, FaEnvelope, FaPlay, FaUsers } from "react-icons/fa";
 import { Select as ReactSelect } from "chakra-react-select";
 import type { CommonErrorGroup } from "./types";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 interface SelectOption {
   label: string;
@@ -254,7 +255,7 @@ export function RegradeSubmissionsDialog({
     } catch (error) {
       toaster.error({
         title: "Error regrading",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error)
       });
     } finally {
       setIsRegrading(false);
