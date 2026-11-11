@@ -26,6 +26,7 @@ import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 // Supabase types
 type FlashcardDeckInsert = Database["public"]["Tables"]["flashcard_decks"]["Insert"];
@@ -107,6 +108,7 @@ function validateYamlCards(cards: YamlCard[]): void {
  * @param onSuccess - The function to call when the deck is created successfully
  */
 export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDeckModalProps) {
+  const errorRole = useStaffErrorRole();
   const params = useParams();
   const course_id = params.course_id as string;
   const { colorMode } = useColorMode();
@@ -233,7 +235,7 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
     } catch (error) {
       toaster.create({
         title: "Error",
-        description: `Failed to create flashcard deck: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
+        description: `Failed to create flashcard deck: ${getUserFacingErrorMessage(error, { role: errorRole })}`,
         type: "error"
       });
     }

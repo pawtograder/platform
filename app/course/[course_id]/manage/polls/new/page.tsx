@@ -13,6 +13,7 @@ import { useState } from "react";
 import PollBuilderModal from "@/components/PollBuilderModal";
 import { PollPreviewModal } from "@/components/PollPreviewModal";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type PollFormValues = {
   question: string;
@@ -28,6 +29,7 @@ const samplePollTemplate = `{
 }`;
 
 export default function NewPollPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const { public_profile_id } = useClassProfiles();
@@ -226,7 +228,7 @@ export default function NewPollPage() {
     } catch (error) {
       toaster.create({
         title: "Unable to save poll",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {

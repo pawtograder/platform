@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BsGithub } from "react-icons/bs";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type GitHubDiagnosticsModalProps = {
   isOpen: boolean;
@@ -74,6 +75,7 @@ export default function GitHubDiagnosticsModal({
   userRoleId,
   studentName
 }: GitHubDiagnosticsModalProps) {
+  const errorRole = useStaffErrorRole();
   const supabase = useMemo(() => createClient(), []);
   const [status, setStatus] = useState<GitHubLinkStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -89,12 +91,12 @@ export default function GitHubDiagnosticsModal({
       Sentry.captureException(error);
       toaster.error({
         title: "Error diagnosing GitHub account",
-        description: getUserFacingErrorMessage(error, { role: "grader" })
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsLoading(false);
     }
-  }, [courseId, supabase, userRoleId]);
+  }, [errorRole, courseId, supabase, userRoleId]);
 
   useEffect(() => {
     if (isOpen) {
@@ -117,12 +119,12 @@ export default function GitHubDiagnosticsModal({
       Sentry.captureException(error);
       toaster.error({
         title: "Error syncing GitHub permissions",
-        description: getUserFacingErrorMessage(error, { role: "grader" })
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsSyncing(false);
     }
-  }, [courseId, supabase, userRoleId]);
+  }, [errorRole, courseId, supabase, userRoleId]);
 
   const handleUnlink = useCallback(async () => {
     setIsUnlinking(true);
@@ -137,12 +139,12 @@ export default function GitHubDiagnosticsModal({
       Sentry.captureException(error);
       toaster.error({
         title: "Error unlinking GitHub identity",
-        description: getUserFacingErrorMessage(error, { role: "grader" })
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsUnlinking(false);
     }
-  }, [courseId, supabase, userRoleId]);
+  }, [errorRole, courseId, supabase, userRoleId]);
 
   const linkedUsername = status?.currentGithubUsername ?? status?.githubUsername ?? null;
   const isBusy = isLoading || isSyncing || isUnlinking;

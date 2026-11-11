@@ -49,6 +49,7 @@ import {
 } from "@/lib/gitProviderOptions";
 import RepositoryHostPicker, { useSavedAssignment, useSelectedGitProvider } from "./repositoryHostPicker";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
@@ -1031,6 +1032,7 @@ export default function AssignmentForm({
   form: UseFormReturnType<Assignment>;
   onSubmit: (values: FieldValues) => void;
 }) {
+  const errorRole = useStaffErrorRole();
   const {
     handleSubmit,
     register,
@@ -1140,13 +1142,13 @@ export default function AssignmentForm({
         });
         toaster.error({
           title: "Error creating assignment",
-          description: getUserFacingErrorMessage(error, { role: "grader" })
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setIsSubmitting(false);
       }
     },
-    [onSubmit, timezone]
+    [errorRole, onSubmit, timezone]
   );
 
   return (
