@@ -78,6 +78,57 @@ export type RepoOps = {
 
 // Failures go to Sentry, so they name the assignment and profile, not the repo: its name ends in a login
 // made from the student's email.
+type RepoOwner = {
+  assignment_id: number;
+  class_id: number;
+  profile_id: string | null;
+  assignment_group_id: number | null;
+};
+
+/**
+ * The row already recorded for this Forgejo repo, or null. A name that belongs to another assignment,
+ * student or group is refused before any Forgejo call, so that repo is never adopted or shared: two
+ * courses can share one `forgejo_org`.
+ */
+export async function existingRepositoryRow(
+  supabase: SupabaseClient<Database>,
+  repository: string,
+  owner: RepoOwner
+): Promise<number | null> {
+  const { data, error } = await supabase
+    .from("repositories")
+    .select("id, assignment_id, profile_id, assignment_group_id")
+    .eq("git_provider", "forgejo")
+    .eq("repository", repository)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  if (
+    data.assignment_id !== owner.assignment_id ||
+    data.profile_id !== owner.profile_id ||
+    data.assignment_group_id !== owner.assignment_group_id
+  ) {
+    throw new Error("The Forgejo repo name already belongs to another assignment, student or group");
+  }
+  return data.id;
+}
+
+export async function saveRepositoryRow(
+  supabase: SupabaseClient<Database>,
+  existingId: number | null,
+  owner: RepoOwner,
+  repository: string,
+  ready: boolean
+): Promise<void> {
+  const { error } =
+    existingId === null
+      ? await supabase
+          .from("repositories")
+          .insert({ ...owner, repository, git_provider: "forgejo", is_github_ready: ready })
+      : await supabase.from("repositories").update({ is_github_ready: ready }).eq("id", existingId);
+  if (error) throw error;
+}
+
 export type RepoReconcileResult = {
   created: number;
   failures: { assignmentId: number; profileId: string; error: unknown }[];
@@ -99,7 +150,14 @@ export async function reconcileForgejoRepos(
   const orgsReady = new Set<string>();
   for (const repo of needed ?? []) {
     const repository = `${repo.owner}/${repo.name}`;
+    const owner = {
+      assignment_id: repo.assignment_id,
+      class_id: repo.class_id,
+      profile_id: repo.profile_id,
+      assignment_group_id: null
+    };
     try {
+      const existingId = await existingRepositoryRow(supabase, repository, owner);
       if (!orgsReady.has(repo.owner)) {
         await ops.ensureOrg(config, repo.owner);
         orgsReady.add(repo.owner);
@@ -109,18 +167,7 @@ export async function reconcileForgejoRepos(
         throw new Error("Forgejo doesn't report write access for the student");
       }
       // Written only once the student can push, so a row never points at a repo they can't use.
-      const { error: saveError } = await supabase.from("repositories").upsert(
-        {
-          assignment_id: repo.assignment_id,
-          class_id: repo.class_id,
-          profile_id: repo.profile_id,
-          repository,
-          git_provider: "forgejo",
-          is_github_ready: true
-        },
-        { onConflict: "repository" }
-      );
-      if (saveError) throw saveError;
+      await saveRepositoryRow(supabase, existingId, owner, repository, true);
       result.created++;
     } catch (failure) {
       result.failures.push({ assignmentId: repo.assignment_id, profileId: repo.profile_id, error: failure });
@@ -207,6 +254,8 @@ export async function reconcileForgejoWorkflowHashes(
     .from("assignments")
     .select("id, template_repo, autograder!inner(workflow_sha)")
     .eq("git_provider", "forgejo")
+    // Without an autograder there is no hash to check, and those would hold their place every pass.
+    .eq("has_autograder", true)
     .not("template_repo", "is", null)
     .is("autograder.workflow_sha", null)
     .limit(MAX_REPOS_PER_PASS);
@@ -216,8 +265,8 @@ export async function reconcileForgejoWorkflowHashes(
   for (const assignment of assignments ?? []) {
     try {
       const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
-      // A handout without grading has nothing to compare.
-      if (workflow === null) continue;
+      // Every submission to this assignment would be rejected, so report it rather than skip it.
+      if (workflow === null) throw new Error("The handout has no .github/workflows/grade.yml");
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workflow));
       const workflowSha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
       const { error: saveError } = await supabase
