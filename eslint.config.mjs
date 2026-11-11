@@ -12,6 +12,12 @@ const FORBIDDEN_PALETTE_BG_WITH_WHITE =
   PALETTE_SHADE_RE +
   "/]):has(JSXAttribute[name.name='color'][value.value='white'])";
 
+// Bans `e instanceof Error ? e.message : "Unknown error"` and its "An unexpected error occurred"
+// variant. refine and supabase-js reject with plain PostgREST objects, so this pattern hides the
+// real reason (#983). Use getUserFacingErrorMessage from lib/studentFacingErrorMessages instead.
+const GENERIC_ERROR_FALLBACK =
+  "ConditionalExpression[test.operator='instanceof'][test.right.name='Error'][alternate.type='Literal'][alternate.value=/^(Unknown error|An unexpected error occurred)/]";
+
 const eslintConfig = [
   // design-sync inputs are tooling artifacts (esbuild-compiled, never imported by
   // the app, regenerated each sync, intentionally full of `any`/mock shims).
@@ -34,6 +40,11 @@ const eslintConfig = [
           selector: FORBIDDEN_PALETTE_BG_WITH_WHITE,
           message:
             'Don\'t pair a raw `bg="<palette>.500|600|…"` with `color="white"` — it bypasses the theme and typically fails WCAG 1.4.3 (e.g. green.600 + white = 3.29:1). Use `colorPalette="<hue>" variant="solid"` so the AA-bumped solid/contrast tokens apply.'
+        },
+        {
+          selector: GENERIC_ERROR_FALLBACK,
+          message:
+            'This hides PostgREST errors, which are plain objects, not Errors (#983). Use getUserFacingErrorMessage(error) from "@/lib/studentFacingErrorMessages".'
         }
       ]
     }
