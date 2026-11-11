@@ -146,5 +146,7 @@ select pg_temp.check('5d a GitHub assignment does not kick', pg_temp.kicks() = (
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;
+-- With ON_ERROR_STOP, a failed check makes `psql -f` exit nonzero.
+do $$ begin if exists (select 1 from t_result where not ok) then raise exception 'forgejo_repos checks failed'; end if; end $$;
 
 rollback;
