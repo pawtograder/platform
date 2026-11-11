@@ -94,5 +94,7 @@ select pg_temp.check('6 hourly schedule exists',
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;
+-- With ON_ERROR_STOP, a failed check makes `psql -f` exit nonzero.
+do $$ begin if exists (select 1 from t_result where not ok) then raise exception 'forgejo_reconciler checks failed'; end if; end $$;
 
 rollback;
