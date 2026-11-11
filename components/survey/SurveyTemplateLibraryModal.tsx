@@ -251,7 +251,7 @@ export function SurveyTemplateLibraryModal({
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
-        description: getUserFacingErrorMessage(error),
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     }
@@ -300,7 +300,7 @@ export function SurveyTemplateLibraryModal({
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
-        description: getUserFacingErrorMessage(error),
+        description: getUserFacingErrorMessage(error, { role: "grader" }),
         type: "error"
       });
     }
