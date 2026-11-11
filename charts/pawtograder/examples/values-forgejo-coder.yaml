@@ -3,6 +3,7 @@
 auth:
   oauthServer:
     enabled: true
+    autoApproveFirstParty: true
 
 # The render refuses job pods and workspaces alongside meta, Studio or Kong's admin API unless networkPolicy.cilium.enabled.
 meta:
