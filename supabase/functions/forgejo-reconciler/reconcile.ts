@@ -203,7 +203,14 @@ export async function reconcileForgejoGroupRepos(
   const orgsReady = new Set<string>();
   for (const group of needed ?? []) {
     const repository = `${group.owner}/${group.name}`;
+    const owner = {
+      assignment_id: group.assignment_id,
+      class_id: group.class_id,
+      profile_id: null,
+      assignment_group_id: group.assignment_group_id
+    };
     try {
+      const existingId = await existingRepositoryRow(supabase, repository, owner);
       if (!orgsReady.has(group.owner)) {
         await ops.ensureOrg(config, group.owner);
         orgsReady.add(group.owner);
@@ -214,18 +221,7 @@ export async function reconcileForgejoGroupRepos(
         if (!(await ops.grantWrite(config, repository, login))) allWrite = false;
       }
       if (!allWrite) throw new Error("Forgejo doesn't report write access for every group member");
-      const { error: saveError } = await supabase.from("repositories").upsert(
-        {
-          assignment_id: group.assignment_id,
-          class_id: group.class_id,
-          assignment_group_id: group.assignment_group_id,
-          repository,
-          git_provider: "forgejo",
-          is_github_ready: group.all_members_have_logins
-        },
-        { onConflict: "repository" }
-      );
-      if (saveError) throw saveError;
+      await saveRepositoryRow(supabase, existingId, owner, repository, group.all_members_have_logins);
       if (group.all_members_have_logins) result.created++;
     } catch (failure) {
       result.failures.push({

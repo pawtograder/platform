@@ -439,8 +439,14 @@ function fakeGroupSupabase(needed: NeededGroup[]) {
     },
     from(table: string) {
       assertEquals(table, "repositories");
+      const lookup = {
+        select: () => lookup,
+        eq: () => lookup,
+        maybeSingle: () => Promise.resolve({ data: null, error: null })
+      };
       return {
-        upsert(row: Record<string, unknown>) {
+        select: () => lookup,
+        insert(row: Record<string, unknown>) {
           upserts.push(row);
           return Promise.resolve({ error: null });
         }
@@ -468,6 +474,7 @@ Deno.test("group repos: one repo per group, every member a writer, recorded read
     {
       assignment_id: 9,
       class_id: 3,
+      profile_id: null,
       assignment_group_id: 5,
       repository: "cs4535/hw1-group-team-5",
       git_provider: "forgejo",
