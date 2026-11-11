@@ -9,8 +9,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import RegradeRequestsTable from "../RegradeRequestsTable";
 import { toaster } from "@/components/ui/toaster";
-import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
-import * as Sentry from "@sentry/nextjs";
+import { getStudentFacingErrorMessage, reportUnexpectedError } from "@/lib/studentFacingErrorMessages";
 
 export default function StudentRegradeRequestsPage() {
   const { course_id } = useParams();
@@ -57,14 +56,8 @@ export default function StudentRegradeRequestsPage() {
       } catch (error) {
         const errorMessage = getStudentFacingErrorMessage(error);
 
-        // Log to Sentry with context
-        Sentry.withScope((scope) => {
-          scope.setContext("regrade_requests_fetch", {
-            course_id: Number(course_id),
-            error: errorMessage
-          });
-          Sentry.captureException(error);
-        });
+        // Sentry gets unexpected failures only, tagged with their error code; permission errors are expected.
+        reportUnexpectedError(error, { operation: "regrade_requests_fetch", course_id: Number(course_id) });
 
         // Show user-friendly error message
         toaster.error({
