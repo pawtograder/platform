@@ -91,7 +91,6 @@ export CODER_OIDC_CLIENT_ID="$(getc CODER_OIDC_CLIENT_ID)"
 export CODER_OIDC_CLIENT_SECRET="$(getc CODER_OIDC_CLIENT_SECRET)"
 export THIRD_OIDC_CLIENT_ID="$(getc THIRD_OIDC_CLIENT_ID)"
 [ -n "$FORGEJO_OIDC_CLIENT_ID" ] && [ -n "$CODER_OIDC_CLIENT_ID" ] && [ -n "$THIRD_OIDC_CLIENT_ID" ] || { echo "ERROR: client registration failed"; echo "$CLIENTS"; exit 1; }
-# AUTO_APPROVE=0 runs the lane as a release with auth.oauthServer.autoApproveFirstParty off.
 # With SKIP_TOOL=1, start Next with the same OAUTH_FIRST_PARTY_REDIRECT_URIS yourself.
 export AUTO_APPROVE="${AUTO_APPROVE:-1}"
 if [ "$AUTO_APPROVE" = "1" ]; then
