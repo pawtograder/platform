@@ -1543,7 +1543,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           if (!forgejo) {
             throw new UserVisibleError("Forgejo grading isn't configured on this deployment.", 503);
           }
-          repo = Buffer.from(await downloadArchive(forgejo, repository, sha));
+          try {
+            repo = Buffer.from(await downloadArchive(forgejo, repository, sha));
+          } catch (e) {
+            // The student only sees the message; the status and reason go to Sentry.
+            Sentry.captureException(e, scope);
+            const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+            throw new UserVisibleError(
+              `${timedOut ? "Forgejo took too long to return the submission" : "Forgejo didn't return the submission"}. Try again. If it keeps failing, tell staff.`,
+              502
+            );
+          }
         } else {
           const repoToClone = getRepoToCloneConsideringE2E(repository);
           repo = await handleGitHubApiCall(
