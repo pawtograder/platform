@@ -671,10 +671,14 @@ Pre-create these alongside the ones under "Required Secrets" (or sync them with 
 | `pawtograder-coder-admin` | `email`, `username`, `password` | Coder's first owner |
 | `pawtograder-coder-db` | `PGPASSWORD` | Coder's database role |
 | `pawtograder-coder-db-superuser` | `POSTGRES_PASSWORD` | `coder-db` (`coder.database=own` only) |
-| `pawtograder-forgejo-oauth` | `key`, `secret` | "Sign in with Pawtograder" on Forgejo; written by `scripts/setup-sso-clients.sh` |
-| `pawtograder-coder-oidc` | `CODER_OIDC_CLIENT_ID`, `CODER_OIDC_CLIENT_SECRET` | "Sign in with Pawtograder" on Coder; written by `scripts/setup-sso-clients.sh` |
+| `pawtograder-forgejo-oauth` | `key`, `secret` | "Sign in with Pawtograder" on Forgejo; written by `scripts/setup-sso-clients.sh`, directly or through OpenBao |
+| `pawtograder-coder-oidc` | `CODER_OIDC_CLIENT_ID`, `CODER_OIDC_CLIENT_SECRET` | "Sign in with Pawtograder" on Coder; written by `scripts/setup-sso-clients.sh`, directly or through OpenBao |
 
 Keep database passwords alphanumeric; Coder's connection settings don't escape them. To rotate `pawtograder-forgejo-db` or `pawtograder-coder-db`: change the Secret, run `helm upgrade --wait --wait-for-jobs` (the `app-databases` Job sets the role's new password, and without both flags the upgrade returns before the Job finishes), then `kubectl rollout restart deployment/pawtograder-forgejo deployment/coder`. The apps read the password only at startup, and neither subchart restarts on a Secret change. Don't let Reloader restart them on the Secret alone: it would do so before the role's password changes.
+
+With External Secrets Operator, set `forgejoCoderSecrets.externalSecret.enabled` and point `forgejoPath` / `coderPath` at one OpenBao path per app; the chart then renders ExternalSecrets for the enabled apps' admin and database Secrets. It doesn't render the `*-superuser` Secrets, which only `database: own` uses. `scripts/setup-openbao-forgejo-coder.sh --env <env> --coder-email <email>` writes both paths with generated passwords. `examples/values-staging.yaml` runs this way. For the "Sign in with Pawtograder" clients, also set `forgejoOAuthPath` and `coderOIDCPath` (`client_id`, `client_secret`). The chart then renders `pawtograder-forgejo-oauth` and, with `coder.oidc.enabled`, `pawtograder-coder-oidc` from those paths, and `scripts/setup-sso-clients.sh` writes to them instead of writing the Secrets itself. Each needs its own path: the script's `kv put` replaces the whole secret, so the render fails when one matches `forgejoPath` or `coderPath`. These two ExternalSecrets use `creationPolicy: Orphan`, so removing a path or turning `externalSecret` off leaves the Secret in place, and Forgejo's init container still finds it. Delete the Secret by hand once nothing signs in with it. The runner's two tokens can only be minted once Forgejo is up, so they get a path of their own, `runnerPath`. While Forgejo is up, `scripts/setup-forgejo-runner-tokens.sh --env <env> --forgejo-url <url>` creates a site-admin bot (`forgejo-actions-bot`) and mints its `write:admin` dispatcher token and its `write:organization,write:repository` mirror token. It writes them to `apps/pawtograder/forgejo-runner-<env>` as `dispatcher_token` and `mirror_token`. With `runnerPath` set and the runner on, the chart syncs them into `forgejoRunner.dispatcher.tokenSecret` and `forgejoRunner.actions.tokenSecret` (key `token`). `runnerPath` can't match any of the other paths, `coderExternalAuthPath` included. Without it, create those Secrets by hand (see "Actions runner" and "Action mirrors").
+
+The runner image is built from `images/forgejo-runner` by `.github/workflows/release-images.yml` as `ghcr.io/pawtograder/forgejo-runner:<tag>`, with the same tags as the other images.
 
 ### Forgejo
 
@@ -779,12 +783,49 @@ Pawtograder can be the identity provider for Forgejo and Coder, through Supabase
 Clients are registered by an admin; dynamic registration stays off. To turn this on for a release:
 
 1. Deploy with `auth.oauthServer.enabled: true` and `coder.oidc.enabled: true`.
-2. Run `scripts/setup-sso-clients.sh --api-url <api url> --forgejo-url <forgejo url> --coder-url <coder url>`. It registers both clients, writes the two Secrets, restarts Forgejo and Coder, then revokes the release's old clients: those with this release's callback URL, or the client ID in its Secret. Clients that other releases registered on the same GoTrue are left alone. If a revoke fails, setup still finishes and the script exits non-zero. Leave out the URL of an app the release doesn't install. For an app whose URL you pass, the script fails before changing anything if that app's Deployment is missing, since the app would keep its old client. Re-running it replaces the clients: it revokes an app's old client only after that app has rolled out with the new one.
+2. Run `scripts/setup-sso-clients.sh --api-url <api url> --forgejo-url <forgejo url> --coder-url <coder url>`. It registers both clients, writes the two Secrets, restarts Forgejo and Coder, then revokes the release's old clients: those with this release's callback URL, or the client ID in its Secret. Clients that other releases registered on the same GoTrue are left alone. If a revoke fails, setup still finishes and the script exits non-zero. Leave out the URL of an app the release doesn't install. For an app whose URL you pass, the script fails before changing anything if that app's Deployment is missing, since the app would keep its old client. Re-running it replaces the clients: it revokes an app's old client only after that app has rolled out with the new one. When an ExternalSecret owns an app's Secret (`forgejoCoderSecrets.externalSecret.forgejoOAuthPath` / `coderOIDCPath`), the script writes the client to that ExternalSecret's OpenBao path (mount `BAO_MOUNT`, default `kv`) with `bao` or `vault`, forces a sync, and restarts the app only once the Secret holds the new client ID (`SYNC_TIMEOUT`, default 120 s). The clients are named `Forgejo` and `Coder`. Don't rename them or register them by hand: the access token hook finds Coder's client by that name and its callback.
 3. Deploy with `forgejo.gitea.oauth` set. Forgejo's init container needs `pawtograder-forgejo-oauth`, so it has to exist before this step.
 
 `DISABLE_REGISTRATION: true` doesn't block account creation through this login source: Forgejo gates OAuth auto-registration only on `ENABLE_AUTO_REGISTRATION`. GoTrue requires PKCE on every authorization request. Forgejo and Coder both send it, but a Forgejo login source added with `forgejo admin auth add-oauth` against a running server sends no PKCE on its first sign-in. The subchart's init container adds the source before Forgejo starts, so this chart avoids that.
 
 ID tokens carry `sub`, `email`, `email_verified` and `name`. Pawtograder users have no name in their auth metadata, so `name` is the email. The token has no `nickname` or `preferred_username`, so the example sets `oauth2_client.USERNAME: userid` and Forgejo names each account after the user's `sub`. `USERNAME: email` takes the part before `@`, so `alex@school-a.edu` and `alex@school-b.edu` both get `alex`; with `ACCOUNT_LINKING: disabled`, the second one's first sign-in fails with a 500. Course roles aren't in the token, so they can't map to Forgejo teams or Coder groups yet.
+
+#### Rotating the signing key
+
+GoTrue (v2.186.0) signs ID and access tokens with the one key in `JWT_PRIVATE_JWKS` whose `key_ops` include `sign`, puts its `kid` in the header, and publishes every asymmetric key in that list at `/auth/v1/.well-known/jwks.json` (`Cache-Control: max-age=600`). Keys are keyed by `kid`, so a new key needs a new `kid`; a repeated one silently replaces the old key. Neither app needs a restart for a rotation:
+
+- Coder verifies the ID token (and, with access-token claims on, the access token) only in its login callback, through go-oidc, which refetches JWKS when it sees an unknown `kid`. Signed-in sessions aren't re-verified.
+- Forgejo's `openidConnect` source decodes the ID token and checks `iss`, `aud` and `exp`, but not the signature, so it never reads JWKS. It trusts the token because it came from the token endpoint over TLS.
+
+Pawtograder's own services read the keys from the `pawtograder-jwt` Secret, not from JWKS: PostgREST (`JWT_PUBLIC_JWKS`), Storage, Realtime (`JWT_REALTIME_JWKS`), and the edge functions (`JWT_SIGNING_JWK`). Each reads them at startup, and the chart doesn't roll them when the Secret changes. To rotate:
+
+1. Add the new key to `JWT_PRIVATE_JWKS` with `key_ops: ["verify"]` and a new `kid`, and add its public half to `JWT_PUBLIC_JWKS` and `JWT_REALTIME_JWKS`. Restart auth, rest, storage and realtime.
+2. Wait at least 10 minutes, for caches of the JWKS response.
+3. Move `sign` to the new key, leave the old one as `["verify"]`, point `JWT_SIGNING_JWK` at the new key, and restart auth and the edge functions.
+4. Keep the old key for longer than the longest token lifetime (`GOTRUE_JWT_EXP`, 1h by default; ID tokens are fixed at 1h), so about 2h.
+5. Remove the old key from all three and restart the same services. A session still holding an old access token gets one 401 and recovers by refreshing.
+
+### Cloning private repositories
+
+Workspaces clone and push students' private Forgejo repositories with a token from Coder's external auth. With `coder.externalAuth.forgejo.enabled`, `pawtograder-coder-env` gets a `gitea`-type provider 0 (`CODER_EXTERNAL_AUTH_0_*`, ID `coder.externalAuth.forgejo.id`, default `forgejo`). Each user links their Forgejo account in Coder once, at `<coder url>/external-auth/forgejo`, and approves the app on Forgejo's consent page. Coder stores the token, refreshes it, and hands it to the workspace's git through its agent. It's a different thing from signing in to Coder with Pawtograder (`coder.oidc`): neither needs the other.
+
+| Setting | Value |
+| --- | --- |
+| Authorize URL | Forgejo's public URL (`ROOT_URL`) + `/login/oauth/authorize`, since the browser goes there |
+| Token and validate URLs | Forgejo's Service, so coderd doesn't go out through the ingress |
+| Regex | `^<Forgejo's public URL>(/.*)?$`, which also matches the bare origin that git asks for credentials with |
+| Scopes | `read:repository write:repository read:user`. Forgejo limits the token to these, so it has no issue, organization, package or admin scope. Coder's own `gitea` default has a stray space in `" write:repository"`, so the chart spells them out. |
+
+The client ID and secret come from `pawtograder-coder-external-auth` (`CODER_EXTERNAL_AUTH_0_CLIENT_ID`, `CODER_EXTERNAL_AUTH_0_CLIENT_SECRET`). With `forgejoCoderSecrets.externalSecret.enabled`, an ExternalSecret syncs it from `forgejoCoderSecrets.externalSecret.coderExternalAuthPath` (properties `client_id`, `client_secret`). Like the SSO clients' ExternalSecret, it uses `creationPolicy: Orphan`, so Coder keeps the client if the path is removed. The script's `kv put` replaces the whole secret, so the render refuses a path that is also `forgejoPath`, `coderPath`, `forgejoOAuthPath`, `coderOIDCPath` or `runnerPath`. The render fails with the provider on and `forgejo.enabled` off, with Forgejo's OAuth2 provider turned off, with an overlay's `coder.coder.envFrom` missing the Secret, or with `coder.coder.env` setting its own provider 0.
+
+coderd exits at startup when a provider has no client ID, so register the app before turning the provider on:
+
+1. Run `scripts/setup-coder-forgejo-auth.sh --env <env> --forgejo-url <forgejo url> --coder-url <coder url>`. It reads the Forgejo admin from `<prefix>/forgejo-<env>` in OpenBao, registers a confidential OAuth2 app named Coder under that admin with redirect URI `<coder url>/external-auth/forgejo/callback`, and writes its client to `<prefix>/coder-external-auth-<env>`. A rerun does nothing while Forgejo still has the stored client. The steps that use `kubectl` target `pawtograder-<env>`; pass `--namespace` when the release lives elsewhere, such as a preview's `pawtograder-preview-pr-<n>`.
+2. Deploy with `coder.externalAuth.forgejo.enabled: true` and `coderExternalAuthPath` set, then `kubectl rollout restart deploy/coder`. The Coder subchart doesn't roll its pod when `pawtograder-coder-env` changes.
+
+`--rotate` registers a new app, writes it to OpenBao, forces the ExternalSecret to sync, restarts Coder, and then deletes the old app. Deleting the app revokes every token it issued, so every user has to link Forgejo again.
+
+Coder refuses to create a workspace from a template that declares the provider (`data "coder_external_auth"`, not `optional`) until the workspace's owner has linked it. The API returns 403 with the validation `{"field": "external_auth", "detail": "forgejo"}`. That holds when an admin creates the workspace for the student too, so Pawtograder can't create a workspace for a student who hasn't linked their account.
 
 ### NetworkPolicy
 

@@ -82,21 +82,29 @@ spec:
               fi
               [ -n "$CODER_SESSION_TOKEN" ] || { echo "login as $ADMIN_EMAIL failed after a password reset; {{ .Release.Name }}-coder-admin's email and username must still be the first owner's (Coder can't change an email)" >&2; exit 1; }
               export CODER_URL="$url" CODER_SESSION_TOKEN CODER_CONFIG_DIR=/tmp/coder
+              # Variables go in a file, not one flag per variable: the CLI parses that flag as
+              # CSV, so JSON values (quotes, commas) fail to parse or get split. Each
+              # value is a JSON string literal, which is also a valid YAML scalar.
+              vars=/tmp/coder/variables.yaml
+              mkdir -p /tmp/coder
+              cat > "$vars" <<'VARS'
+              namespace: {{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace | toString | toJson }}
+              node_selector: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | toJson }}
+              tolerations: {{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | toJson }}
+              image: {{ .Values.coderBootstrap.workspaces.image | toString | toJson }}
+              arch: {{ .Values.coderBootstrap.workspaces.arch | default "amd64" | toString | toJson }}
+              image_pull_policy: {{ .Values.coderBootstrap.workspaces.imagePullPolicy | default "IfNotPresent" | toString | toJson }}
+              image_pull_secrets: {{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | toJson }}
+              home_storage_class: {{ .Values.coderBootstrap.workspaces.storageClass | default "" | toString | toJson }}
+              priority_class_name: {{ .Values.coderBootstrap.workspaces.priorityClassName | default .Values.global.priorityClassName | default "" | toString | toJson }}
+              ephemeral_storage_limit: {{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" | toString | toJson }}
+              node_affinity: {{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | toJson }}
+              code_server_version: {{ .Values.coderBootstrap.workspaces.codeServerVersion | default "" | toString | toJson }}
+              VARS
               for dir in /templates/*/; do
                 name="$(basename "$dir")"
                 /opt/coder templates push "$name" --directory "$dir" --yes \
-                  --variable namespace={{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace }} \
-                  --variable node_selector={{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | squote }} \
-                  --variable tolerations={{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | squote }} \
-                  --variable image={{ .Values.coderBootstrap.workspaces.image | squote }} \
-                  --variable arch={{ .Values.coderBootstrap.workspaces.arch | default "amd64" }} \
-                  --variable image_pull_policy={{ .Values.coderBootstrap.workspaces.imagePullPolicy | default "IfNotPresent" }} \
-                  --variable image_pull_secrets={{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | squote }} \
-                  --variable home_storage_class={{ .Values.coderBootstrap.workspaces.storageClass | default "" | squote }} \
-                  --variable priority_class_name={{ .Values.coderBootstrap.workspaces.priorityClassName | default .Values.global.priorityClassName | default "" | squote }} \
-                  --variable ephemeral_storage_limit={{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" }} \
-                  --variable node_affinity={{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | squote }} \
-                  --variable code_server_version={{ .Values.coderBootstrap.workspaces.codeServerVersion | default "" | squote }} \
+                  --variables-file "$vars" \
                   --message "chart {{ .Chart.Version }}"
                 # Separate edits: unlicensed, the CLI rejects non-zero dormancy before sending anything, and the TTL must still land.
                 {{- $s := .Values.coderBootstrap.schedule }}
