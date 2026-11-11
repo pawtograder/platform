@@ -3,12 +3,14 @@ set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: $0 --env <env> --forgejo-url <url> --coder-url <url> [--rotate] [--id <id>]
+Usage: $0 --env <env> --forgejo-url <url> --coder-url <url> [--namespace <ns>] [--rotate] [--id <id>]
           [--bao-mount <mount>] [--prefix <path>]
 
   --env <env>          preview|staging|prod.
   --forgejo-url <url>  Forgejo's public URL, e.g. https://git.staging.pawtograder.net.
   --coder-url <url>    Coder's access URL, e.g. https://coder.staging.pawtograder.net.
+  --namespace <ns>     Release namespace (default: pawtograder-<env>). Previews live in
+                       pawtograder-preview-pr-<n>, so pass it for --env preview.
   --rotate             Register a new app even though one is stored, switch Coder to it, then delete
                        the old one. Every user has to link Forgejo in Coder again.
   --id <id>            coder.externalAuth.forgejo.id (default: forgejo).
@@ -17,19 +19,18 @@ Usage: $0 --env <env> --forgejo-url <url> --coder-url <url> [--rotate] [--id <id
 
 Reads the Forgejo admin from <prefix>/forgejo-<env> and writes client_id and client_secret to
 <prefix>/coder-external-auth-<env>. When the release already has the ExternalSecret
-(env: NAMESPACE, default pawtograder; RELEASE, default pawtograder), it also syncs it and restarts
-Coder. Prints nothing secret.
+(env: RELEASE, default pawtograder), it also syncs it and restarts Coder. Prints nothing secret.
 EOF
 }
 
-ENV_NAME="" forgejo_url="" coder_url="" ROTATE=0 ID=forgejo BAO_MOUNT=kv PREFIX=apps/pawtograder
-NAMESPACE="${NAMESPACE:-pawtograder}"
+ENV_NAME="" forgejo_url="" coder_url="" NAMESPACE="" ROTATE=0 ID=forgejo BAO_MOUNT=kv PREFIX=apps/pawtograder
 RELEASE="${RELEASE:-pawtograder}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env)         ENV_NAME="${2:?--env requires a value}"; shift 2 ;;
     --forgejo-url) forgejo_url="${2:?--forgejo-url requires a value}"; forgejo_url="${forgejo_url%/}"; shift 2 ;;
     --coder-url)   coder_url="${2:?--coder-url requires a value}"; coder_url="${coder_url%/}"; shift 2 ;;
+    --namespace)   NAMESPACE="${2:?--namespace requires a value}"; shift 2 ;;
     --rotate)      ROTATE=1; shift ;;
     --id)          ID="${2:?--id requires a value}"; shift 2 ;;
     --bao-mount)   BAO_MOUNT="${2:?--bao-mount requires a value}"; shift 2 ;;
@@ -43,6 +44,7 @@ case "$ENV_NAME" in
   *) echo "ERROR: --env must be preview, staging or prod (got '${ENV_NAME}')" >&2; usage >&2; exit 2 ;;
 esac
 [ -n "$forgejo_url" ] && [ -n "$coder_url" ] || { usage >&2; exit 2; }
+NAMESPACE="${NAMESPACE:-pawtograder-$ENV_NAME}"
 [[ "$ID" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "ERROR: --id must be lowercase letters, digits and single dashes" >&2; exit 2; }
 
 CLI=""
@@ -151,7 +153,7 @@ if command -v kubectl >/dev/null 2>&1 && kubectl -n "$NAMESPACE" get externalsec
   [ -z "$failed" ] || exit 1
 else
   {
-    echo "No ExternalSecret $NAMESPACE/$es yet. Set these and deploy:"
+    echo "No ExternalSecret $NAMESPACE/$es yet (pass --namespace if the release lives elsewhere). Set these and deploy:"
     echo "  coder.externalAuth.forgejo.enabled: true"
     [ "$ID" = forgejo ] || echo "  coder.externalAuth.forgejo.id: $ID"
     echo "  forgejoCoderSecrets.externalSecret.coderExternalAuthPath: $auth_path"

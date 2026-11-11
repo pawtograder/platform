@@ -820,7 +820,7 @@ The client ID and secret come from `pawtograder-coder-external-auth` (`CODER_EXT
 
 coderd exits at startup when a provider has no client ID, so register the app before turning the provider on:
 
-1. Run `scripts/setup-coder-forgejo-auth.sh --env <env> --forgejo-url <forgejo url> --coder-url <coder url>`. It reads the Forgejo admin from `<prefix>/forgejo-<env>` in OpenBao, registers a confidential OAuth2 app named Coder under that admin with redirect URI `<coder url>/external-auth/forgejo/callback`, and writes its client to `<prefix>/coder-external-auth-<env>`. A rerun does nothing while Forgejo still has the stored client. Set `NAMESPACE` to the release's namespace (default `pawtograder`) for the steps that use `kubectl`.
+1. Run `scripts/setup-coder-forgejo-auth.sh --env <env> --forgejo-url <forgejo url> --coder-url <coder url>`. It reads the Forgejo admin from `<prefix>/forgejo-<env>` in OpenBao, registers a confidential OAuth2 app named Coder under that admin with redirect URI `<coder url>/external-auth/forgejo/callback`, and writes its client to `<prefix>/coder-external-auth-<env>`. A rerun does nothing while Forgejo still has the stored client. The steps that use `kubectl` target `pawtograder-<env>`; pass `--namespace` when the release lives elsewhere, such as a preview's `pawtograder-preview-pr-<n>`.
 2. Deploy with `coder.externalAuth.forgejo.enabled: true` and `coderExternalAuthPath` set, then `kubectl rollout restart deploy/coder`. The Coder subchart doesn't roll its pod when `pawtograder-coder-env` changes.
 
 `--rotate` registers a new app, writes it to OpenBao, forces the ExternalSecret to sync, restarts Coder, and then deletes the old app. Deleting the app revokes every token it issued, so every user has to link Forgejo again.
