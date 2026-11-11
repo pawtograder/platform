@@ -15,7 +15,8 @@ type SsoConfig = {
     admin: { username: string; password: string };
   };
   coder: { clientId: string; admin: { email: string; password: string } };
-  autoApprove?: boolean;
+  autoApproveForgejo?: boolean;
+  autoApproveCoder?: boolean;
   forgejoLoginRedirect?: boolean;
   thirdParty?: { clientId: string; redirectUri: string };
 };
@@ -63,8 +64,8 @@ async function expectConsentFor(page: Page, clientName: string, user: TestingUse
   await expect(page.getByText(`Signed in as ${user.email}`)).toBeVisible();
 }
 
-async function passConsent(page: Page, clientName: string, user: TestingUser) {
-  if (cfg.autoApprove) return;
+async function passConsent(page: Page, clientName: "Forgejo" | "Coder", user: TestingUser) {
+  if (clientName === "Forgejo" ? cfg.autoApproveForgejo : cfg.autoApproveCoder) return;
   await expectConsentFor(page, clientName, user);
   await page.getByRole("button", { name: "Authorize" }).click();
 }
@@ -88,6 +89,14 @@ async function startCoderSignIn(page: Page) {
     .getByRole("link", { name: "Sign in with Pawtograder" })
     .or(page.getByRole("button", { name: "Sign in with Pawtograder" }))
     .click();
+}
+
+// Resolving on Coder's own /login would let /users/me run before Coder sets its session cookie.
+async function waitForCoderSession(page: Page) {
+  const origin = new URL(cfg.coderBaseUrl).origin;
+  await page.waitForURL(
+    (u) => u.origin === origin && !u.pathname.startsWith("/login") && !u.pathname.startsWith("/api/")
+  );
 }
 
 async function newPage(browser: Browser) {
@@ -145,7 +154,7 @@ test.describe("Forgejo", () => {
   });
 
   test("3. deny: back on Forgejo, no account created", async ({ browser }) => {
-    test.skip(!!cfg.autoApprove, "Forgejo is approved without a consent screen");
+    test.skip(!!cfg.autoApproveForgejo, "Forgejo is approved without a consent screen");
     const user = users.forgejoDeny;
     const page = await newPage(browser);
     await loginAsUser(page, user);
@@ -154,8 +163,11 @@ test.describe("Forgejo", () => {
     await expectConsentFor(page, "Forgejo", user);
     await page.getByRole("button", { name: "Deny" }).click();
 
-    await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
-    await expect(page).not.toHaveURL(/\/oauth\/consent/);
+    await page.waitForURL(`${cfg.forgejoBaseUrl}/user/login**`);
+    await expect(page.locator("#flash-message")).toBeVisible();
+    // The login redirect must not send a denied user straight back to consent.
+    await page.waitForTimeout(2000);
+    await expect(page).toHaveURL(new RegExp(`^${cfg.forgejoBaseUrl}/user/login`));
     expect(await forgejoUsersFor(user)).toHaveLength(0);
   });
 
@@ -186,6 +198,18 @@ test.describe("Forgejo", () => {
     await expect(page).toHaveURL(`${cfg.forgejoBaseUrl}/user/login?password_login=1`);
     await expect(page.locator(`a[href$="/user/oauth2/${cfg.forgejo.authSourceName}"]`)).toBeVisible();
   });
+
+  test("4c. a wrong password on Forgejo's form shows the error instead of redirecting", async ({ browser }) => {
+    test.skip(!cfg.forgejoLoginRedirect, "this release's Forgejo login page doesn't redirect");
+    const page = await newPage(browser);
+    await page.goto(`${cfg.forgejoBaseUrl}/user/login?password_login=1`);
+    await page.locator("#user_name").fill(cfg.forgejo.admin.username);
+    await page.locator("#password").fill("not-the-password");
+    await page.locator("form.ui.form button.primary").click();
+    await expect(page.locator("#flash-message")).toBeVisible();
+    await page.waitForTimeout(2000);
+    await expect(page).toHaveURL(new RegExp(`^${cfg.forgejoBaseUrl}/user/login`));
+  });
 });
 
 test.describe("Coder", () => {
@@ -197,8 +221,7 @@ test.describe("Coder", () => {
     await startCoderSignIn(page);
     await passConsent(page, "Coder", user);
 
-    await page.waitForURL(`${cfg.coderBaseUrl}/**`);
-    await expect(page).not.toHaveURL(/\/login/);
+    await waitForCoderSession(page);
 
     const me = await page.request.get(`${cfg.coderBaseUrl}/api/v2/users/me`);
     expect(me.ok()).toBeTruthy();
@@ -215,13 +238,13 @@ test.describe("Coder", () => {
     await signInToPawtograderForm(page, user);
     await passConsent(page, "Coder", user);
 
-    await page.waitForURL(`${cfg.coderBaseUrl}/**`);
+    await waitForCoderSession(page);
     const [account] = await coderUsersWithEmail(user.email);
     expect(account?.login_type).toBe("oidc");
   });
 
   test("6b. deny: back on Coder, no account created", async ({ browser }) => {
-    test.skip(!!cfg.autoApprove, "Coder is approved without a consent screen");
+    test.skip(!!cfg.autoApproveCoder, "Coder is approved without a consent screen");
     const user = users.coderDeny;
     const page = await newPage(browser);
     await loginAsUser(page, user);

@@ -34,6 +34,9 @@
 {{- if and .Values.auth.oauthServer.autoApproveFirstParty (not .Values.auth.oauthServer.enabled) }}
 {{- fail "auth.oauthServer.autoApproveFirstParty needs auth.oauthServer.enabled=true" }}
 {{- end }}
+{{- if and .Values.auth.oauthServer.autoApproveFirstParty .Values.auth.oauthServer.allowDynamicRegistration }}
+{{- fail "auth.oauthServer.autoApproveFirstParty can't be on with allowDynamicRegistration: anyone could register a client on Forgejo's or Coder's callback and skip the consent page" }}
+{{- end }}
 {{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
 {{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
 {{- end }}

@@ -91,7 +91,14 @@ export CODER_OIDC_CLIENT_ID="$(getc CODER_OIDC_CLIENT_ID)"
 export CODER_OIDC_CLIENT_SECRET="$(getc CODER_OIDC_CLIENT_SECRET)"
 export THIRD_OIDC_CLIENT_ID="$(getc THIRD_OIDC_CLIENT_ID)"
 [ -n "$FORGEJO_OIDC_CLIENT_ID" ] && [ -n "$CODER_OIDC_CLIENT_ID" ] && [ -n "$THIRD_OIDC_CLIENT_ID" ] || { echo "ERROR: client registration failed"; echo "$CLIENTS"; exit 1; }
-export OAUTH_FIRST_PARTY_REDIRECT_URIS="$FORGEJO_BASE_URL/user/oauth2/$FORGEJO_AUTH_SOURCE_NAME/callback,$CODER_BASE_URL/api/v2/users/oidc/callback"
+# AUTO_APPROVE=0 runs the lane as a release with auth.oauthServer.autoApproveFirstParty off.
+# With SKIP_TOOL=1, start Next with the same OAUTH_FIRST_PARTY_REDIRECT_URIS yourself.
+export AUTO_APPROVE="${AUTO_APPROVE:-1}"
+if [ "$AUTO_APPROVE" = "1" ]; then
+  export OAUTH_FIRST_PARTY_REDIRECT_URIS="$FORGEJO_BASE_URL/user/oauth2/$FORGEJO_AUTH_SOURCE_NAME/callback,$CODER_BASE_URL/api/v2/users/oidc/callback"
+else
+  unset OAUTH_FIRST_PARTY_REDIRECT_URIS
+fi
 
 if [ "${SKIP_APPS:-}" != "1" ]; then
   log "Starting Forgejo and Coder"
@@ -174,7 +181,8 @@ const out = {
   forgejo: { authSourceName: e.FORGEJO_AUTH_SOURCE_NAME, authSourceId: Number(e.SOURCE_ID),
              clientId: e.FORGEJO_OIDC_CLIENT_ID, admin: { username: e.FORGEJO_ADMIN_USER, password: e.FORGEJO_ADMIN_PASSWORD } },
   coder: { clientId: e.CODER_OIDC_CLIENT_ID, admin: { email: e.CODER_ADMIN_EMAIL, password: e.CODER_ADMIN_PASSWORD } },
-  autoApprove: true,
+  autoApproveForgejo: e.AUTO_APPROVE === "1",
+  autoApproveCoder: e.AUTO_APPROVE === "1",
   forgejoLoginRedirect: true,
   thirdParty: { clientId: e.THIRD_OIDC_CLIENT_ID, redirectUri: e.THIRD_PARTY_REDIRECT_URI }
 };

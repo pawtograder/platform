@@ -11,6 +11,7 @@ import {
 } from "@/lib/oauthServer";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Container, HStack, List, Stack, Text } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
 import { redirect } from "next/navigation";
 import { decideOAuthConsentAction } from "./actions";
 
@@ -84,7 +85,12 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
         details.authorization_id,
         "approve"
       ));
-    } catch {}
+    } catch (e) {
+      Sentry.captureException(e, {
+        tags: { area: "oauth-consent" },
+        extra: { authorization_id: details.authorization_id, client_id: details.client.id }
+      });
+    }
     if (approvedUrl) redirect(approvedUrl);
   }
 

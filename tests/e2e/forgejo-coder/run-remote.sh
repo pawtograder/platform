@@ -40,7 +40,8 @@ LOGIN_REDIRECT="$(kubectl -n "$NS" get configmap pawtograder-forgejo-templates -
   -o jsonpath='{.data.header\.tmpl}')"
 
 jq -n --arg app "$APP" --arg fj "$FJ" --arg coder "$CODER" --arg iss "$API/auth/v1" --argjson sid "$SOURCE_ID" \
-  --argjson auto "$([ -n "$AUTO_APPROVE" ] && echo true || echo false)" \
+  --argjson afj "$(case ",$AUTO_APPROVE," in *",$FJ/user/oauth2/pawtograder/callback,"*) echo true ;; *) echo false ;; esac)" \
+  --argjson acd "$(case ",$AUTO_APPROVE," in *",$CODER/api/v2/users/oidc/callback,"*) echo true ;; *) echo false ;; esac)" \
   --argjson lr "$([ -n "$LOGIN_REDIRECT" ] && echo true || echo false)" \
   --arg fjcid "$(secret pawtograder-forgejo-oauth key)" \
   --arg fju "$(secret pawtograder-forgejo-admin username)" --arg fjp "$(secret pawtograder-forgejo-admin password)" \
@@ -49,6 +50,6 @@ jq -n --arg app "$APP" --arg fj "$FJ" --arg coder "$CODER" --arg iss "$API/auth/
   '{pawtograderBaseUrl: $app, forgejoBaseUrl: $fj, coderBaseUrl: $coder, issuer: $iss,
     forgejo: {authSourceName: "pawtograder", authSourceId: $sid, clientId: $fjcid, admin: {username: $fju, password: $fjp}},
     coder: {clientId: $ccid, admin: {email: $ce, password: $cp}},
-    autoApprove: $auto, forgejoLoginRedirect: $lr}' > "$OUT_JSON"
+    autoApproveForgejo: $afj, autoApproveCoder: $acd, forgejoLoginRedirect: $lr}' > "$OUT_JSON"
 
 npx playwright test --config playwright.forgejo-coder.config.ts "$@"

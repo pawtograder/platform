@@ -334,9 +334,10 @@ Internal service hostnames.
 {{- if include "pawtograder.forgejo.hasPawtograderSource" . -}}
 {{- $uris = append $uris (printf "%s/user/oauth2/pawtograder/callback" (include "pawtograder.forgejo.url" .)) -}}
 {{- end -}}
-{{- $coderHost := dig "coder" "ingress" "host" "" .Values.coder -}}
-{{- if and .Values.coder.enabled .Values.coder.oidc.enabled $coderHost -}}
-{{- $uris = append $uris (printf "https://%s/api/v2/users/oidc/callback" $coderHost) -}}
+{{- $coderURL := "" -}}
+{{- range (dig "coder" "env" list .Values.coder) -}}{{- if eq .name "CODER_ACCESS_URL" -}}{{- $coderURL = .value | default "" | trimSuffix "/" -}}{{- end -}}{{- end -}}
+{{- if and .Values.coder.enabled .Values.coder.oidc.enabled $coderURL -}}
+{{- $uris = append $uris (printf "%s/api/v2/users/oidc/callback" $coderURL) -}}
 {{- end -}}
 {{- join "," $uris -}}
 {{- end -}}
