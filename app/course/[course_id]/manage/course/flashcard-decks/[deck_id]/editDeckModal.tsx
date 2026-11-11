@@ -22,6 +22,7 @@ import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -207,6 +208,7 @@ cards: []`;
  * @returns The EditDeckModal component
  */
 export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: EditDeckModalProps) {
+  const errorRole = useStaffErrorRole();
   const params = useParams();
   const course_id = params.course_id as string;
   const { colorMode } = useColorMode();
@@ -453,7 +455,7 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
     } catch (error) {
       toaster.create({
         title: "Error",
-        description: `Failed to update flashcard deck: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
+        description: `Failed to update flashcard deck: ${getUserFacingErrorMessage(error, { role: errorRole })}`,
         type: "error"
       });
     }

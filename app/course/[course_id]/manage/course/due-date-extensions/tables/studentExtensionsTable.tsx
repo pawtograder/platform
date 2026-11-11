@@ -14,11 +14,13 @@ import { Checkbox, Dialog, Heading, HStack, Icon, Input, Portal, Table, Text, VS
 import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import AddExtensionModal, { AddExtensionDefaults } from "../modals/addExtensionModal";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Table of student-wide extensions (applies to all assignments), with dialog to add/edit/delete.
  */
 export default function StudentExtensionsTable() {
+  const errorRole = useStaffErrorRole();
   const extensions = useStudentDeadlineExtensions();
   const students = useAllStudentProfiles();
   const { studentDeadlineExtensions } = useCourseController();
@@ -45,7 +47,7 @@ export default function StudentExtensionsTable() {
       });
       editOpen.closeModal();
     } catch (err) {
-      toaster.error({ title: "Update failed", description: getUserFacingErrorMessage(err, { role: "grader" }) });
+      toaster.error({ title: "Update failed", description: getUserFacingErrorMessage(err, { role: errorRole }) });
     }
   };
 
@@ -65,7 +67,7 @@ export default function StudentExtensionsTable() {
         type: "info"
       });
     } catch (err) {
-      toaster.error({ title: "Delete failed", description: getUserFacingErrorMessage(err, { role: "grader" }) });
+      toaster.error({ title: "Delete failed", description: getUserFacingErrorMessage(err, { role: errorRole }) });
     }
   };
 

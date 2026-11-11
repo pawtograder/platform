@@ -66,6 +66,7 @@ import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -151,6 +152,7 @@ function discordStatusLabel(
  * including editing profile, editing role, and removing users from the course.
  */
 export default function EnrollmentsTable() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
   const supabase = createClient();
@@ -236,7 +238,7 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error Removing User",
-          description: `Failed to remove user: ${getUserFacingErrorMessage(error, { role: "grader" })}`,
+          description: `Failed to remove user: ${getUserFacingErrorMessage(error, { role: errorRole })}`,
           type: "error"
         });
         closeRemoveStudentModal();
@@ -244,7 +246,7 @@ export default function EnrollmentsTable() {
         setIsDeletingUserRole(false);
       }
     },
-    [disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
+    [errorRole, disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
 
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
@@ -292,11 +294,11 @@ export default function EnrollmentsTable() {
     } catch (error) {
       toaster.create({
         title: "Error fetching invitations",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     }
-  }, [course_id, supabase]);
+  }, [errorRole, course_id, supabase]);
 
   // Cancel invitation
   const cancelInvitation = useCallback(
@@ -317,12 +319,12 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error cancelling invitation",
-          description: getUserFacingErrorMessage(error, { role: "grader" }),
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [supabase, fetchInvitations]
+    [errorRole, supabase, fetchInvitations]
   );
 
   // Load invitations on mount
@@ -796,7 +798,7 @@ export default function EnrollmentsTable() {
                   } catch (error) {
                     toaster.create({
                       title: "Failed to update SIS sync override",
-                      description: getUserFacingErrorMessage(error, { role: "grader" }),
+                      description: getUserFacingErrorMessage(error, { role: errorRole }),
                       type: "error"
                     });
                   }
@@ -995,6 +997,7 @@ export default function EnrollmentsTable() {
       }
     ],
     [
+      errorRole,
       currentUser,
       course_id,
       openEditProfileModal,
@@ -1639,7 +1642,7 @@ export default function EnrollmentsTable() {
                       } catch (error) {
                         toaster.error({
                           title: "Error adding tag(s)",
-                          description: getUserFacingErrorMessage(error, { role: "grader" })
+                          description: getUserFacingErrorMessage(error, { role: errorRole })
                         });
                       }
                     }}
@@ -1725,7 +1728,7 @@ export default function EnrollmentsTable() {
                         .catch((error: unknown) => {
                           toaster.error({
                             title: "Error removing tags",
-                            description: getUserFacingErrorMessage(error, { role: "grader" })
+                            description: getUserFacingErrorMessage(error, { role: errorRole })
                           });
                         });
                     }}

@@ -47,6 +47,7 @@ import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const UTF8_BOM = "\uFEFF";
 
@@ -114,6 +115,7 @@ function CopyGroupsFromAssignmentDialog({
   course_id: number;
   sourceAssignments: Assignment[];
 }) {
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   const supabase = createClient();
   const [open, setOpen] = useState(false);
@@ -172,7 +174,7 @@ function CopyGroupsFromAssignmentDialog({
       Sentry.captureException(error);
       toaster.create({
         title: "Error copying groups",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
@@ -248,6 +250,7 @@ function CopyGroupsFromAssignmentDialog({
 }
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   // Every change here needs publish_groups (#1010); without it the page is read-only.
   const canEditGroups = useCapability("publish_groups");
@@ -389,7 +392,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       Sentry.captureException(e);
       toaster.create({
         title: "Error publishing changes",
-        description: getUserFacingErrorMessage(e, { role: "grader" }),
+        description: getUserFacingErrorMessage(e, { role: errorRole }),
         type: "error"
       });
     } finally {
@@ -690,6 +693,7 @@ function TableByGroups({
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   groupsData: AssignmentGroupWithMembersAndMentor[];
 }) {
+  const errorRole = useStaffErrorRole();
   const { modProfiles, movesToFulfill } = useGroupManagement();
   const graders = useGradersAndInstructors();
   // Without publish_groups the mentor is shown as text and Edit Group is hidden (#1010).
@@ -706,7 +710,7 @@ function TableByGroups({
       Sentry.captureException(e);
       toaster.create({
         title: "Error updating mentor",
-        description: getUserFacingErrorMessage(e, { role: "grader" }),
+        description: getUserFacingErrorMessage(e, { role: errorRole }),
         type: "error"
       });
     } finally {

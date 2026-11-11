@@ -117,6 +117,7 @@ import GradebookCell from "./gradebookCell";
 import { GradebookPopoverProvider, useGradebookPopover } from "./GradebookPopoverProvider";
 import ImportGradebookColumn from "./importGradebookColumn";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const GRADE_COL_WIDTH = 120;
 
@@ -1696,6 +1697,7 @@ function GradebookColumnHeader({
   columnModel: Column<UserProfile, unknown>;
   dragHandle?: React.ReactNode;
 }) {
+  const errorRole = useStaffErrorRole();
   const column = useGradebookColumn(column_id);
   const gradebookController = useGradebookController();
   const areAllDependenciesReleased = useAreAllDependenciesReleased(column_id);
@@ -1744,14 +1746,14 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to move column",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
       isMovingRef.current = false;
       setIsMovingLeft(false);
     }
-  }, [column_id, column, supabase, gradebookController]);
+  }, [errorRole, column_id, column, supabase, gradebookController]);
 
   const moveRight = useCallback(async () => {
     if (column.sort_order == null || isMovingRef.current) return;
@@ -1775,14 +1777,14 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to move column",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
       isMovingRef.current = false;
       setIsMovingRight(false);
     }
-  }, [column_id, column, supabase, gradebookController]);
+  }, [errorRole, column_id, column, supabase, gradebookController]);
 
   const releaseColumn = useCallback(async () => {
     if (column.instructor_only) {
@@ -1826,13 +1828,13 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to release column",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
       setIsReleasing(false);
     }
-  }, [column_id, column, supabase, gradebookController, allGrades]);
+  }, [errorRole, column_id, column, supabase, gradebookController, allGrades]);
 
   const unreleaseColumn = useCallback(async () => {
     setIsUnreleasing(true);
@@ -1851,13 +1853,13 @@ function GradebookColumnHeader({
     } catch (error) {
       toaster.create({
         title: "Failed to unrelease column",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
       setIsUnreleasing(false);
     }
-  }, [column_id, column, supabase, gradebookController]);
+  }, [errorRole, column_id, column, supabase, gradebookController]);
 
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
@@ -2442,6 +2444,7 @@ function StudentDetailDialog() {
   );
 }
 export default function GradebookTable() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const students = useAllStudentRoles();
   const courseController = useCourseController();
@@ -2709,13 +2712,13 @@ export default function GradebookTable() {
     } catch (error) {
       toaster.create({
         title: "Auto-layout failed",
-        description: getUserFacingErrorMessage(error, { role: "grader" }),
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
       setIsAutoLayouting(false);
     }
-  }, [gradebookController]);
+  }, [errorRole, gradebookController]);
 
   const downloadGradebookCsv = useCallback(() => {
     const csv = gradebookController.exportGradebook(courseController, {

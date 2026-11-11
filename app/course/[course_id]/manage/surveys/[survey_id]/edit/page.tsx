@@ -17,6 +17,7 @@ import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SurveyFormData = {
   title: string;
@@ -47,6 +48,7 @@ const getParam = (value: string | string[] | undefined, name: string): string =>
 };
 
 export default function EditSurveyPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id, survey_id } = useParams();
   const router = useRouter();
   // The surveys list this page returns to is server-rendered; see useRevalidateServerCaches.
@@ -371,7 +373,7 @@ export default function EditSurveyPage() {
           try {
             JSON.parse(parsedJson);
           } catch (err) {
-            validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(err, { role: "grader" })}`;
+            validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(err, { role: errorRole })}`;
           }
 
           // Update the survey
@@ -510,13 +512,13 @@ export default function EditSurveyPage() {
           toaster.dismiss(loadingToast);
           toaster.error({
             title: "Error updating survey",
-            description: getUserFacingErrorMessage(error, { role: "grader" })
+            description: getUserFacingErrorMessage(error, { role: errorRole })
           });
         }
       }
       await update();
     },
-    [course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches]
+    [errorRole, course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches]
   );
 
   if (isLoading) {

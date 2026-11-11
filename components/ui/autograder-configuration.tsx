@@ -12,7 +12,8 @@ import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supaba
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
-import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
+import { ErrorAudienceRole, getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -173,9 +174,10 @@ export function validatePawtograderConfig(config: unknown): { isValid: boolean; 
  * Safely calculates total points from a validated PawtograderConfig.
  *
  * @param config - The validated PawtograderConfig object
+ * @param errorRole - Who sees the error toast if calculation fails (from `useStaffErrorRole`)
  * @returns The total points, or 0 if calculation fails
  */
-function safelyCalculateTotalPoints(config: PawtograderConfig): number {
+function safelyCalculateTotalPoints(config: PawtograderConfig, errorRole: ErrorAudienceRole): number {
   try {
     return config.gradedParts.reduce(
       (acc, part) =>
@@ -191,13 +193,14 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
   } catch (error) {
     toaster.error({
       title: "Error calculating total points",
-      description: getUserFacingErrorMessage(error, { role: "grader" })
+      description: getUserFacingErrorMessage(error, { role: errorRole })
     });
     return 0;
   }
 }
 
 export default function AutograderConfiguration({ graderRepo }: { graderRepo: string }) {
+  const errorRole = useStaffErrorRole();
   const { assignment } = useAssignmentController();
   const [autograderConfig, setAutograderConfig] = useState<PawtograderConfig>();
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
@@ -246,7 +249,7 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
                 setAutograderConfig(parsedConfig);
                 setError(undefined);
                 // Calculate the total points for the autograder
-                const points = safelyCalculateTotalPoints(parsedConfig);
+                const points = safelyCalculateTotalPoints(parsedConfig, errorRole);
                 if (assignment && assignment.autograder_points !== points) {
                   await updateAssignment({
                     resource: "assignments",

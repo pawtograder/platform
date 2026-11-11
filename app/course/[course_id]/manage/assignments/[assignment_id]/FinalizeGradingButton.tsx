@@ -7,6 +7,7 @@ import { Box, Button, HStack, Icon, IconButton, Popover, Spinner, Text, VStack }
 import { useEffect, useState } from "react";
 import { BsCheck, BsX } from "react-icons/bs";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type EligibilityData = {
   total_incomplete: number;
@@ -33,6 +34,7 @@ export default function FinalizeGradingButton({
   disabled?: boolean;
   tooltip?: string;
 }) {
+  const errorRole = useStaffErrorRole();
   const [isOpen, setIsOpen] = useState(false);
   const [eligibilityData, setEligibilityData] = useState<EligibilityData | null>(null);
   const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
@@ -91,7 +93,7 @@ export default function FinalizeGradingButton({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: getUserFacingErrorMessage(error, { role: "grader" })
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsFinalizing(false);

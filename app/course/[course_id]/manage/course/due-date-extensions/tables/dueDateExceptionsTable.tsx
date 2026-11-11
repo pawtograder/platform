@@ -25,6 +25,7 @@ import { FaGift, FaPlus, FaTrash } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
 import GiftTokenModal, { GiftTokenDefaults } from "../modals/giftTokenModal";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type DueDateExceptionRow = {
   exception: AssignmentDueDateException;
@@ -45,6 +46,7 @@ const matchAll = () => true;
  * Renders all due date exceptions for the class in one virtualized table.
  */
 export default function DueDateExceptionsTable() {
+  const errorRole = useStaffErrorRole();
   const unsortedAssignments = useAssignments();
   const students = useAllStudentProfiles();
   const { assignmentDueDateExceptions, assignmentGroupsWithMembers } = useCourseController();
@@ -215,7 +217,7 @@ export default function DueDateExceptionsTable() {
               } catch (error) {
                 toaster.error({
                   title: "Delete failed",
-                  description: getUserFacingErrorMessage(error, { role: "grader" })
+                  description: getUserFacingErrorMessage(error, { role: errorRole })
                 });
               }
             }}
@@ -223,7 +225,7 @@ export default function DueDateExceptionsTable() {
         )
       }
     ],
-    [assignmentDueDateExceptions]
+    [errorRole, assignmentDueDateExceptions]
   );
 
   const table = useReactTable({
