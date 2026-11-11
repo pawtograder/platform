@@ -102,7 +102,7 @@ Components:
   `/dev/shm`. Without it, check the data volume (`df` on
   `/var/lib/postgresql/data`) first; the workaround below does nothing for a
   full PVC.
-- **Cause:** until chart 0.4.0 the primary runs on the container default 64Mi
+- **Cause:** until chart 0.4.1 the primary runs on the container default 64Mi
   `/dev/shm`. Parallel queries put their dynamic shared memory segments there.
 - **Check:**
   ```bash
@@ -113,7 +113,7 @@ Components:
   kubectl -n $NS logs -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=rest \
     --since=1h --tail=-1 --prefix --max-log-requests=10 | grep 'could not resize shared memory segment' | cut -d' ' -f1 | sort | uniq -c
   ```
-- **Permanent fix:** chart 0.4.0 (`postgres.shm.sizeLimit`, 1Gi) plus shm
+- **Permanent fix:** chart 0.4.1 (`postgres.shm.sizeLimit`, 1Gi) plus shm
   occupancy alerts. It restarts the primary, so it needs a
   [maintenance window](./planned-maintenance.md#chart-versions-and-postgres-restarts).
 - **Online workaround (no restart):** stop the planner from choosing parallel
@@ -154,7 +154,7 @@ Components:
   `helm upgrade` would restart the primary. That is the outage the workaround
   exists to avoid, and a production values file sits outside the CI gate's
   checks. Move them into `postgres.config` only as part of a planned
-  restart, such as the 0.4.0 window. After the 0.4.0 deploy, either keep them
+  restart, such as the 0.4.1 window. After the 0.4.1 deploy, either keep them
   on purpose or undo them:
   `ALTER SYSTEM RESET max_parallel_workers_per_gather; ALTER SYSTEM RESET max_parallel_maintenance_workers; SELECT pg_reload_conf();`
 

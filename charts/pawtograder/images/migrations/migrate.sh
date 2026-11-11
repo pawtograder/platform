@@ -216,6 +216,10 @@ if [ "${#drifted[@]}" -gt 0 ]; then
 -- and the dependent grants on them. Pawtograder migrations recreate
 -- everything from scratch in phase 3.
 DROP SCHEMA IF EXISTS public CASCADE;
+-- Private application schema (course-owned credential mappings). Its Vault
+-- secrets are wiped below with the rest of vault.secrets, so drop the stale
+-- mapping rows too; the migration recreates the schema on replay.
+DROP SCHEMA IF EXISTS course_secrets CASCADE;
 CREATE SCHEMA public;
 -- Restore the standard supabase role grants on public so the role chain
 -- (anon, authenticated, service_role, postgres) can still resolve names

@@ -385,11 +385,9 @@ test.describe("Assessment types (quiz + survey)", () => {
     // instructor hand-grades the free-text question by applying its rubric check (+5)
     const { data: ftCheck } = await supabase
       .from("rubric_checks")
-      .select("id, data")
+      .select("id, exam_question_id")
       .eq("rubric_id", assignment.grading_rubric_id as number);
-    const check = (ftCheck ?? []).find(
-      (c) => (c.data as { exam_question_id?: number } | null)?.exam_question_id === ftQ.id
-    )!;
+    const check = (ftCheck ?? []).find((c) => c.exam_question_id === ftQ.id)!;
     expect(check).toBeTruthy();
 
     await supabase.from("submission_comments").insert({
@@ -501,12 +499,13 @@ test.describe("Assessment types (quiz + survey)", () => {
     const afterFirst = await loadQuestions();
     const idsAfterFirst = new Set(afterFirst.map((q) => q.id));
     const rubricAfterFirst = await countRubric();
-    // sync scaffolds exactly +1 part (the L1) + 1 criteria (the L2) + 2 checks (the two L3 leaves)
+    // sync scaffolds exactly +1 part (the L1) + 1 criteria (the L2) + 1 check (the free-text
+    // leaf; the numeric leaf is auto-graded, so it gets no manual check)
     expect({
       parts: rubricAfterFirst.parts - rubricBefore.parts,
       criteria: rubricAfterFirst.criteria - rubricBefore.criteria,
       checks: rubricAfterFirst.checks - rubricBefore.checks
-    }).toEqual({ parts: 1, criteria: 1, checks: 2 });
+    }).toEqual({ parts: 1, criteria: 1, checks: 1 });
 
     // Re-load exactly as the client does: fresh client_ids, db id echoed back, parent remapped.
     // Tweak a label to prove the matched rubric row is UPDATEd (not duplicated).

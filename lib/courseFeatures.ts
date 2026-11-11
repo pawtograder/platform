@@ -11,7 +11,10 @@ export const COURSE_FEATURES = {
   POLLS: "polls",
   GRADEBOOK_WHAT_IF: "gradebook-what-if",
   SUGGESTED_DUE_DATE: "suggested-due-date",
-  DISCORD_STUDENT_JOIN: "discord-student-join"
+  DISCORD_STUDENT_JOIN: "discord-student-join",
+  GEMINI_API_KEY_SETUP: "gemini-api-key-setup",
+  BUG_REPORT_RECORDING: "bug-report-recording",
+  EXAMS: "exams"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -121,6 +124,40 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: false,
     switchLabel: "Let students join this course's Discord server",
     ariaLabel: "Enable student Discord invitations for this course"
+  },
+  {
+    name: COURSE_FEATURES.GEMINI_API_KEY_SETUP,
+    title: "Gemini API key setup",
+    description:
+      "When enabled, instructors can save or replace this course's Gemini API key under Course Settings → Gemini API Key. When disabled, a stored key is kept and instructors can still see whether one is stored and remove it, but cannot save a new one. Storing a key does not check it with Google and does not turn on AI grading.",
+    // Off unless a course opts in; the database applies the same default (gemini_key_setup_enabled).
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Allow instructors to save or replace the course Gemini API key",
+    ariaLabel: "Enable Gemini API key setup for this course"
+  },
+  {
+    name: COURSE_FEATURES.BUG_REPORT_RECORDING,
+    title: "Bug report recordings",
+    description:
+      "When on, students and staff can attach a redacted recording of their last few minutes on supported pages when they report a bug. Nothing is uploaded unless they submit a report.",
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Allow redacted recordings in bug reports",
+    ariaLabel: "Enable bug report recordings for this course"
+  },
+  {
+    name: COURSE_FEATURES.EXAMS,
+    title: "Paper exams",
+    description:
+      "Scanning, OCR and grading of paper exams. When off, the Exam (Scan & OCR) entry is hidden for graders and instructors, and the exam pages say the feature is not enabled. Assignments of type 'exam' are otherwise unaffected.",
+    // Off unless a course opts in. This flag exists because paper exams land as a single large
+    // feature; defaulting on would turn scanning, OCR and the Gemini calls behind it on for every
+    // course the moment it merges, which is not a change any of those courses asked for.
+    defaultWhenMissing: false,
+    navAffectsStaff: true,
+    switchLabel: "Enable paper exam scanning and grading",
+    ariaLabel: "Enable paper exams for this course"
   }
 ];
 

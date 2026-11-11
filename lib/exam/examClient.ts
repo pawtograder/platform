@@ -4,6 +4,7 @@
 
 import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeAnswerType } from "./answerTypes";
 import { generateExamPdf, type GeneratedQuestion } from "./pdfGenerate";
 import { rasterizePdf, type RasterPage } from "./pdfRasterize";
 
@@ -20,6 +21,55 @@ export type AssessmentQuestion = GeneratedQuestion & {
   correct_answer?: unknown;
   grading_tolerance?: number | null;
 };
+
+export type ExamRubricStatus = "built" | "existing" | "no-rubric" | "failed";
+
+/**
+ * What to show an instructor when exam_sync_rubric_from_questions fails. Two builds racing on an
+ * empty rubric make the second one hit a unique index (23505), and Postgres's text means nothing here.
+ */
+export function rubricBuildErrorMessage(error: { code?: string; message: string }): string {
+  return error.code === "23505" ? "Someone else built this rubric at the same time. Reload to see it." : error.message;
+}
+
+/**
+ * Save an exam's question tree and regions, and build the grading rubric from them if the rubric is
+ * still empty. A rubric that has anything in it is left alone: a rebuild resets generated checks,
+ * and building into a hand-written rubric could count the same answers twice.
+ * Throws if the save fails. A failed build doesn't undo the save, so it comes back as rubricError.
+ */
+export async function saveExamStructure(
+  supabase: SupabaseClient<Database>,
+  {
+    examId,
+    gradingRubricId,
+    questions,
+    regions
+  }: { examId: number; gradingRubricId: number | null; questions: Json; regions: Json }
+): Promise<{ rubric: ExamRubricStatus; rubricError: string | null }> {
+  const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
+    p_exam_id: examId,
+    p_questions: questions,
+    p_regions: regions
+  });
+  if (error) throw error;
+  if (!gradingRubricId) return { rubric: "no-rubric", rubricError: null };
+
+  const { count, error: countErr } = await supabase
+    .from("rubric_parts")
+    .select("id", { count: "exact", head: true })
+    .eq("rubric_id", gradingRubricId);
+  if (countErr) return { rubric: "failed", rubricError: countErr.message };
+  if (count) return { rubric: "existing", rubricError: null };
+
+  const { error: syncErr } = await supabase.rpc("exam_sync_rubric_from_questions", {
+    p_exam_id: examId,
+    p_rubric_id: gradingRubricId
+  });
+  return syncErr
+    ? { rubric: "failed", rubricError: rubricBuildErrorMessage(syncErr) }
+    : { rubric: "built", rubricError: null };
+}
 
 /**
  * Upload rasterized template pages to the exam-templates bucket and (re)create the
@@ -130,7 +180,7 @@ export async function generateAndUploadExamTemplate(
       ordinal: q.ordinal,
       label: q.label ?? null,
       prompt: q.prompt ?? null,
-      answer_type: q.answer_type ?? null,
+      answer_type: q.answer_type == null ? null : normalizeAnswerType(q.answer_type),
       choices: q.choices ?? null,
       points: q.points ?? null,
       correct_answer: (q.correct_answer ?? null) as Json,

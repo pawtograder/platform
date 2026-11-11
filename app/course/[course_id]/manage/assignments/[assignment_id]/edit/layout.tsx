@@ -1,9 +1,23 @@
+import { userHasClassCapability } from "@/lib/ssrUtils";
+import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 export const metadata = {
   title: "Edit Assignment"
 };
 
-export default function EditAssignmentLayout({ children }: { children: ReactNode }) {
+// Editing an assignment needs manage_assignments (#1010); without it, back to the assignment list.
+// manage/layout.tsx has already turned away non-staff and view-as.
+export default async function EditAssignmentLayout({
+  children,
+  params
+}: {
+  children: ReactNode;
+  params: Promise<{ course_id: string }>;
+}) {
+  const { course_id } = await params;
+  if (!(await userHasClassCapability(Number.parseInt(course_id, 10), "manage_assignments"))) {
+    redirect(`/course/${course_id}/manage/assignments`);
+  }
   return <>{children}</>;
 }

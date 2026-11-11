@@ -1,6 +1,8 @@
 "use client";
 
 import { examExtractTemplate } from "@/lib/edgeFunctions";
+import { EXAM_ANSWER_TYPES, normalizeAnswerType } from "@/lib/exam/answerTypes";
+import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -36,7 +38,7 @@ type EditorRegion = {
   page_number: number;
 } & NormRect;
 
-const ANSWER_TYPES = ["free_text", "multiple_choice", "numeric", "true_false", "short_answer"];
+const ANSWER_TYPES = EXAM_ANSWER_TYPES;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -284,9 +286,10 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
     setSaving(true);
     try {
       const supabase = createClient();
-      const { error } = await supabase.rpc("exam_upsert_questions_and_regions", {
-        p_exam_id: examId,
-        p_questions: questions.map((q) => ({
+      const { rubric, rubricError } = await saveExamStructure(supabase, {
+        examId,
+        gradingRubricId,
+        questions: questions.map((q) => ({
           id: q.id ?? null,
           client_id: q.client_id,
           parent_client_id: q.parent_client_id,
@@ -294,13 +297,13 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
           ordinal: q.ordinal,
           label: q.label,
           prompt: q.prompt,
-          answer_type: q.answer_type,
+          answer_type: normalizeAnswerType(q.answer_type),
           choices: q.choices,
           points: q.points,
           correct_answer: q.correct_answer,
           grading_tolerance: q.grading_tolerance
         })),
-        p_regions: regions.map((r) => ({
+        regions: regions.map((r) => ({
           question_client_id: r.question_client_id,
           kind: r.kind,
           page_number: r.page_number,
@@ -310,19 +313,29 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
           height: r.height
         }))
       });
-      if (error) throw error;
       // Re-read the persisted tree so state carries the database ids (and the snapshot is taken
       // from what was actually stored). setSavedSnapshot here too so the editor is not briefly
       // marked dirty between the save and the reload landing.
       setSavedSnapshot(snapshotOf(questions, regions));
       setReloadKey((k) => k + 1);
-      toaster.success({ title: "Saved exam structure" });
+      if (rubric === "failed") {
+        toaster.warning({ title: "Saved, but the rubric wasn't built", description: rubricError });
+      } else if (rubric === "built") {
+        toaster.success({ title: "Saved exam structure and built the rubric" });
+      } else if (rubric === "existing") {
+        toaster.success({
+          title: "Saved exam structure",
+          description: 'To apply question changes to the rubric, click "Build rubric from exam".'
+        });
+      } else {
+        toaster.success({ title: "Saved exam structure" });
+      }
     } catch (e) {
       toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });
     } finally {
       setSaving(false);
     }
-  }, [examId, questions, regions]);
+  }, [examId, gradingRubricId, questions, regions]);
 
   const autoExtract = useCallback(async () => {
     // Auto-extraction replaces the whole tree with proposed questions carrying id: null and no
@@ -360,7 +373,8 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
             level: q.level,
             ordinal: q.ordinal,
             label: q.label ?? "",
-            answer_type: q.answer_type ?? "free_text",
+            // Extraction can return types the database rejects, and parents hide the type selector.
+            answer_type: normalizeAnswerType(q.answer_type),
             points: q.points ?? 0,
             prompt: q.prompt ?? "",
             choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
@@ -407,7 +421,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       p_exam_id: examId,
       p_rubric_id: gradingRubricId
     });
-    if (error) toaster.error({ title: "Build rubric failed", description: error.message });
+    if (error) toaster.error({ title: "Build rubric failed", description: rubricBuildErrorMessage(error) });
     else toaster.success({ title: "Rubric built from exam structure" });
   }, [examId, gradingRubricId, dirty]);
 

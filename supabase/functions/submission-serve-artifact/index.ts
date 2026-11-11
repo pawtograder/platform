@@ -187,7 +187,12 @@ const handleAuthRequest = async (req: Request): Promise<Response> => {
   const requestUrl = new URL(req.url);
   const baseUrl = `https://${requestUrl.host}/functions/v1/submission-serve-artifact`;
   const artifactUrl = `${baseUrl}/${jwt}/`;
-  console.log("Artifact URL", artifactUrl);
+  // Not the URL: the JWT in its path is a bearer credential for this submission's artifacts.
+  console.log("Artifact URL issued", {
+    courseId,
+    submissionId: accessToken.submissionId,
+    artifactId: accessToken.artifactId
+  });
 
   return new Response(JSON.stringify({ url: artifactUrl }), {
     status: 200,

@@ -6,6 +6,7 @@ import { Box, Flex, HStack, Text } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { FaPlus } from "react-icons/fa";
 import { FiChevronRight } from "react-icons/fi";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export type DiscussionViewMode = "feed" | "browse";
 
@@ -86,9 +87,11 @@ export function DiscussionHeader({
                 </>
               )}
               <Box borderBottom="3px solid" borderColor="orange.600" pb={1}>
-                <Text fontSize="sm" fontWeight="semibold" color="fg" truncate maxW={{ base: "60vw", md: "40vw" }}>
-                  #{currentThread.number}: {currentThread.title}
-                </Text>
+                <ReportBlock>
+                  <Text fontSize="sm" fontWeight="semibold" color="fg" truncate maxW={{ base: "60vw", md: "40vw" }}>
+                    #{currentThread.number}: {currentThread.title}
+                  </Text>
+                </ReportBlock>
               </Box>
             </HStack>
           )}

@@ -131,6 +131,11 @@ minimum_password_length = 6
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""
 
+[auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = false
+
 [auth.email]
 # Allow/disallow new user signups via email to your project.
 enable_signup = true
@@ -829,6 +834,12 @@ entrypoint = "./functions/mcp-tokens/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/cli/index.ts"
+
+# Called by pg_cron with the edge-function secret, not a user JWT (see the bug reporter migration).
+[functions.bug-report-retention-purge]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/bug-report-retention-purge/index.ts"
 
 [functions.index-submission]
 enabled = true
