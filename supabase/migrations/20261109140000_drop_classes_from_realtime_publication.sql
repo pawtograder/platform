@@ -20,6 +20,7 @@ BEGIN
     FROM pg_publication_namespace pn
     JOIN pg_publication p ON p.oid = pn.pnpubid
     WHERE p.pubname = 'supabase_realtime'
+      AND pn.pnnspid = 'public'::regnamespace
   )
   INTO implicit_member;
 
