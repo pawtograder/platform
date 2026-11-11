@@ -46,21 +46,29 @@ export function getUserFacingErrorMessage(error: unknown, context?: StudentFacin
     return error.trim() || "Something went wrong. Please try again.";
   }
 
-  // A write RLS refused with 0 rows changed (lib/refineDataProvider.ts) is a permission error, so it
-  // gets the same 42501 handling, including the self-review and released-review messages below.
-  const code = isRefusedWrite(error) ? "42501" : getErrorCode(error);
+  const code = getErrorCode(error);
+  // A write that changed 0 rows (lib/refineDataProvider.ts). RLS may have refused it, so the
+  // self-review and released-review contexts still get their specific 42501 messages.
+  const refusedWrite = isRefusedWrite(error);
+  const permissionDenied = refusedWrite || code === "42501";
 
-  if (code === "42501" && context?.releasedReviewGraderBlocked) {
+  if (permissionDenied && context?.releasedReviewGraderBlocked) {
     return GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE;
   }
 
-  if (code === "42501" && context?.isStudent && context.rubricReviewRound === "self-review") {
+  if (permissionDenied && context?.isStudent && context.rubricReviewRound === "self-review") {
     return SELF_REVIEW_PAST_DUE_MESSAGE;
   }
 
   const message = getErrorProperty(error, "message");
   const details = getErrorProperty(error, "details");
   const hint = getErrorProperty(error, "hint");
+
+  // Otherwise keep the data provider's own message. A 0-row write can also mean the row was
+  // deleted, and that message says so. The plain 42501 wording only mentions permissions.
+  if (refusedWrite) {
+    return message?.trim() || permissionDeniedMessage(context?.role);
+  }
 
   if (code) {
     const mapped = mapPostgrestOrPostgresCode(code, message, details, hint, context?.role);
@@ -161,7 +169,7 @@ function permissionDeniedMessage(role: ErrorAudienceRole | undefined): string {
       return "You don't have permission to do that. If you need access, ask an instructor for this course.";
     case "instructor":
     case "admin":
-      return "You don't have permission to do that. If you think you should, use Report this so we can look into it.";
+      return "You don't have permission to do that. If you think you should, let the Pawtograder team know so we can look into it.";
     default:
       return "You don't have permission to do that. If you need access, contact your instructor.";
   }
@@ -176,27 +184,44 @@ function isRefusedWrite(error: unknown): boolean {
 }
 
 /**
- * Error codes that mean the user hit a rule, not that the app broke: permissions, an expired
- * session, a row that is gone, a conflict with existing data, or a check a database function
- * raised on purpose. The message already tells the user what to do, so Sentry doesn't need them.
+ * Error codes that are expected on any request: an expired session, a conflict with existing data,
+ * a check constraint, or a check a database function raised on purpose. The message already tells
+ * the user what to do, so Sentry doesn't need them.
+ *
+ * 42501, PGRST116 and 23503 are not here. On a read they usually mean our bug (a missing GRANT,
+ * `.single()` matching several rows, an ID for a row that is gone), so a caller that expects them,
+ * such as a save handler blocked by RLS, passes them in `expected`.
  */
-const EXPECTED_ERROR_CODES = new Set(["42501", "PGRST301", "PGRST116", "23505", "23503", "23514", "P0001"]);
+const DEFAULT_EXPECTED_ERROR_CODES: readonly string[] = ["PGRST301", "23505", "23514", "P0001"];
 
-/** True when `error` is one the user caused and the message explains, not an app bug. */
-export function isExpectedUserError(error: unknown): boolean {
+export type ExpectedErrorOptions = {
+  /** Extra error codes this caller expects, added to the default list. */
+  expected?: readonly string[];
+};
+
+/**
+ * True when `error` is one the user caused and the message explains, not an app bug. A write the
+ * data provider refused (0 rows changed) always counts.
+ */
+export function isExpectedUserError(error: unknown, options?: ExpectedErrorOptions): boolean {
   if (isRefusedWrite(error)) return true;
   const code = getErrorCode(error);
-  return code !== undefined && EXPECTED_ERROR_CODES.has(code);
+  if (code === undefined) return false;
+  return DEFAULT_EXPECTED_ERROR_CODES.includes(code) || (options?.expected?.includes(code) ?? false);
 }
 
 /**
- * Sends `error` to Sentry unless it is an expected user error (see `isExpectedUserError`).
- * Tags the event with the PostgREST/Postgres code (`error_code`, or `none`) so unexpected
- * database errors can be grouped and searched by code. Returns the Sentry event id, or
- * `undefined` when nothing was sent.
+ * Sends `error` to Sentry unless it is an expected user error (see `isExpectedUserError`; pass
+ * `options.expected` to expect more codes). Tags the event with the PostgREST/Postgres code
+ * (`error_code`, or `none`) so unexpected database errors can be grouped and searched by code.
+ * Returns the Sentry event id, or `undefined` when nothing was sent.
  */
-export function reportUnexpectedError(error: unknown, extra?: Record<string, unknown>): string | undefined {
-  if (isExpectedUserError(error)) return undefined;
+export function reportUnexpectedError(
+  error: unknown,
+  extra?: Record<string, unknown>,
+  options?: ExpectedErrorOptions
+): string | undefined {
+  if (isExpectedUserError(error, options)) return undefined;
   const code = getErrorCode(error);
   return Sentry.withScope((scope) => {
     scope.setTag("error_code", code ?? "none");
