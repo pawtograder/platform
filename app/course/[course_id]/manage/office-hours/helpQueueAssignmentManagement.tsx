@@ -4,6 +4,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import { useConnectionStatus, useHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpQueue, HelpQueueAssignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
@@ -81,7 +82,7 @@ export default function HelpQueueAssignmentManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to end assignment",
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     }
   };
@@ -93,7 +94,7 @@ export default function HelpQueueAssignmentManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to delete assignment",
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     }
   };

@@ -5,6 +5,7 @@ import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -49,6 +50,7 @@ export function useNotifications(resource?: string, id?: number) {
   const set_read = useCallback(
     async (notification: Notification, read: boolean) => {
       if (isReadOnly) return;
+      const previousViewedAt = notification.viewed_at;
       notification.viewed_at = read ? new Date().toISOString() : null;
       try {
         await update_notification({
@@ -58,8 +60,16 @@ export function useNotifications(resource?: string, id?: number) {
           }
         });
       } catch (error) {
+        // Put the old value back so the inbox doesn't show a read state the server refused.
+        notification.viewed_at = previousViewedAt;
         // eslint-disable-next-line no-console
         console.error("error setting notification read", error);
+        // Fixed id: mark_all_read and scroll-to-read can fail many at once; show one toast.
+        toaster.error({
+          id: "notification-set-read-error",
+          title: "Failed to update notification",
+          description: getErrorMessage(error)
+        });
       }
     },
     [update_notification, isReadOnly]
@@ -91,7 +101,7 @@ export function useNotifications(resource?: string, id?: number) {
         });
         toaster.error({
           title: "Failed to dismiss notification",
-          description: error instanceof Error ? error.message : String(error)
+          description: getErrorMessage(error)
         });
       }
     },

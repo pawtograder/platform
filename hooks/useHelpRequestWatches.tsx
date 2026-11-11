@@ -1,5 +1,6 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { HelpRequestWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -76,7 +77,7 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
       } catch (error) {
         toaster.error({
           title: status ? "Failed to watch help request" : "Failed to unwatch help request",
-          description: error instanceof Error ? error.message : String(error)
+          description: getErrorMessage(error)
         });
       }
     },

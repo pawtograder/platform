@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Type guard to check if a unit is a mutation test unit
@@ -215,7 +216,11 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
-  const { data: regressionTestRepos, isLoading: regressionTestReposLoading } = useList<AutograderRegressionTest>({
+  const {
+    data: regressionTestRepos,
+    isLoading: regressionTestReposLoading,
+    refetch: refetchRegressionTestRepos
+  } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
     meta: { select: "*" },
     pagination: { pageSize: 1000 },
@@ -289,32 +294,35 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     const deletions = regressionTestRepos?.data
       .filter((rt) => !selectedRepos.includes(rt.repository))
       .map((rt) => rt.id);
-    async function saveAdditions() {
-      return Promise.all(
-        additions.map(async (repo) => {
-          await createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } });
-        })
-      );
-    }
-    async function saveDeletions() {
-      if (deletions)
-        return Promise.all(
-          deletions.map(async (id) => {
-            await deleteRegressionTest({ resource: "autograder_regression_test", id: id });
-          })
-        );
-    }
-    try {
-      await Promise.all([saveAdditions(), saveDeletions()]);
-    } catch (error) {
+    // Wait for every write to settle before re-enabling Save. With Promise.all, the first failure
+    // re-enabled it while other inserts were still in flight, and a retry could insert the same
+    // regression-test row twice.
+    const results = await Promise.allSettled([
+      ...additions.map((repo) =>
+        createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } })
+      ),
+      ...(deletions ?? []).map((id) => deleteRegressionTest({ resource: "autograder_regression_test", id: id }))
+    ]);
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
       toaster.error({
-        title: "Failed to save regression tests",
-        description: error instanceof Error ? error.message : String(error)
+        title:
+          failures.length === 1
+            ? "Failed to save a regression test change"
+            : `Failed to save ${failures.length} regression test changes`,
+        description: getErrorMessage(failures[0].reason)
       });
-    } finally {
-      setSaveLoading(false);
     }
-  }, [selectedRepos, regressionTestRepos, assignment_id, createRegressionTest, deleteRegressionTest]);
+    await refetchRegressionTestRepos();
+    setSaveLoading(false);
+  }, [
+    selectedRepos,
+    regressionTestRepos,
+    assignment_id,
+    createRegressionTest,
+    deleteRegressionTest,
+    refetchRegressionTestRepos
+  ]);
   const toggleRepo = useCallback(
     (repo: string) => {
       setSelectedRepos((oldRepos) => {
