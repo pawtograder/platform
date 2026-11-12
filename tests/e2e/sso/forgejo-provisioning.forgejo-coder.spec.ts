@@ -74,23 +74,24 @@ test.beforeAll(async () => {
   if (flagError) throw flagError;
   student = await createUserInClass({ role: "student", class_id: klass.id, name: "Forgejo provisioning student" });
 
-  // The handout lives on Forgejo; setting it up there is #1237.
-  const staffOrg = `e2e-staff-${klass.id}`;
-  expect((await forgejo("POST", "/orgs", { username: staffOrg, visibility: "private" })).status).toBe(201);
+  // The handout lives on Forgejo, in the class's own org: the reconciler refuses a template from any other
+  // org, and accepts this one because the admin creating it here makes the admin its only owner.
+  const classOrg = klass.forgejo_org || klass.slug!;
+  expect((await forgejo("POST", "/orgs", { username: classOrg, visibility: "private" })).status).toBe(201);
   expect(
-    (await forgejo("POST", `/orgs/${staffOrg}/repos`, { name: "handout", auto_init: true, private: true })).status
+    (await forgejo("POST", `/orgs/${classOrg}/repos`, { name: "handout", auto_init: true, private: true })).status
   ).toBe(201);
   // The handout's grade.yml sets the assignment's workflow hash (#1256).
   const workflow = fs.readFileSync(path.join(__dirname, "../../../charts/pawtograder/examples/forgejo-grade.yml"));
   expect(
     (
-      await forgejo("POST", `/repos/${staffOrg}/handout/contents/.github/workflows/grade.yml`, {
+      await forgejo("POST", `/repos/${classOrg}/handout/contents/.github/workflows/grade.yml`, {
         content: workflow.toString("base64"),
         message: "Add grade.yml"
       })
     ).status
   ).toBe(201);
-  expect((await forgejo("PATCH", `/repos/${staffOrg}/handout`, { template: true })).ok).toBeTruthy();
+  expect((await forgejo("PATCH", `/repos/${classOrg}/handout`, { template: true })).ok).toBeTruthy();
 
   const { data: settings, error: settingsError } = await supabase
     .from("assignment_self_review_settings")
@@ -106,7 +107,7 @@ test.beforeAll(async () => {
     due_date: new Date(Date.now() + 7 * 86_400_000).toISOString(),
     release_date: new Date(Date.now() - 60_000).toISOString(),
     group_config: "individual",
-    template_repo: `${staffOrg}/handout`,
+    template_repo: `${classOrg}/handout`,
     git_provider: "forgejo",
     self_review_setting_id: settings.id
   });
