@@ -5,6 +5,7 @@ import {
   createClass,
   createUserInClass,
   insertAssignment,
+  insertPreBakedSubmission,
   loginAsUser,
   setCourseFeature,
   supabase
@@ -100,7 +101,7 @@ async function openExamEditor(page: Page, { emptyRubric }: { emptyRubric: boolea
       .not("exam_question_id", "is", null);
     return data ?? [];
   };
-  return { examChecks };
+  return { examChecks, course, assignment };
 }
 
 test.describe("Exam structure editor", () => {
@@ -122,5 +123,67 @@ test.describe("Exam structure editor", () => {
     await page.getByRole("button", { name: "Save structure" }).click();
     await expect(page.getByText(/To apply question changes to the rubric/)).toBeVisible();
     expect(await examChecks()).toHaveLength(0);
+  });
+});
+
+test.describe("Out-of-date rubric notice (#1190)", () => {
+  const notice = (page: Page) => page.getByRole("status").filter({ hasText: "doesn't match the saved questions" });
+
+  /**
+   * Saves, then waits for the editor to reload the saved questions. Typing before that reload lands gets
+   * overwritten by it, so an edit made right after a save can silently revert.
+   */
+  async function saveAndReload(page: Page) {
+    const reloaded = page.waitForResponse(
+      (r) => r.url().includes("/rest/v1/exam_question_regions") && r.request().method() === "GET"
+    );
+    await page.getByRole("button", { name: "Save structure" }).click();
+    await reloaded;
+  }
+
+  test("shows after a saved points change, and Build rubric from exam clears it", async ({ page }) => {
+    const { examChecks } = await openExamEditor(page, { emptyRubric: true });
+    await saveAndReload(page);
+    await expect(page.getByText("Saved exam structure and built the rubric")).toBeVisible();
+    await expect(notice(page)).toBeHidden();
+
+    // Item 1 is the first leaf, so its points box is the first number input.
+    await page.getByRole("spinbutton").first().fill("10");
+    await expect(page.getByRole("spinbutton").first()).toHaveValue("10");
+    await page.getByRole("button", { name: "Save structure" }).click();
+    await expect(notice(page)).toBeVisible();
+
+    await page.getByRole("button", { name: "Build rubric from exam" }).click();
+    await expect(page.getByText("Rubric built from exam structure")).toBeVisible();
+    await expect(notice(page)).toBeHidden();
+    const checks = await examChecks();
+    expect(checks.reduce((sum, c) => sum + Number(c.points), 0)).toBe(25);
+  });
+
+  test("goes away once the assignment has submissions", async ({ page }) => {
+    const { course, assignment } = await openExamEditor(page, { emptyRubric: true });
+    await saveAndReload(page);
+    await expect(page.getByText("Saved exam structure and built the rubric")).toBeVisible();
+    await page.getByRole("spinbutton").first().fill("10");
+    await expect(page.getByRole("spinbutton").first()).toHaveValue("10");
+    await page.getByRole("button", { name: "Save structure" }).click();
+    await expect(notice(page)).toBeVisible();
+
+    // Once a student submits, Build no longer refreshes points, so it couldn't clear the notice.
+    const student = await createUserInClass({ role: "student", class_id: course.id });
+    await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id
+    });
+    // The notice is decided after the page loads, so wait for that check's submissions count before
+    // asserting it's gone. Otherwise this passes just by looking too early.
+    const submissionsCounted = page.waitForResponse(
+      (r) => r.url().includes("/rest/v1/submissions") && r.request().method() === "HEAD"
+    );
+    await page.reload();
+    await expect(page.getByText("L3").first()).toBeVisible();
+    await submissionsCounted;
+    await expect(notice(page)).toBeHidden();
   });
 });
