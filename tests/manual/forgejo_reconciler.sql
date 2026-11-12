@@ -1,4 +1,4 @@
--- Proof harness for 20261109130000_forgejo_reconciler.sql (#1092).
+-- Proof harness for 20261112120100_forgejo_reconciler.sql (#1092).
 --
 -- Needs the Vault secrets call_edge_function_internal reads (a local Supabase has them), and makes
 -- its own fixtures. A kick shows up as a pg_net request to forgejo-reconciler, queued inside

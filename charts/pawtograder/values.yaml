@@ -755,6 +755,8 @@ auth:
     enabled: false
     authorizationPath: /oauth/consent
     allowDynamicRegistration: false
+    # true: no consent screen when this release's Forgejo or Coder signs in (matched on their callback URLs).
+    autoApproveFirstParty: false
 
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
@@ -2777,6 +2779,24 @@ forgejo:
     enabled: true
     className: nginx
     hosts: []
+  # true: /user/login goes straight to the Pawtograder login source. /user/login?password_login=1 keeps the password form.
+  signInRedirect: true
+  # Subchart values aren't templated: the ConfigMap name is <release>-forgejo-templates.
+  extraVolumes:
+    - name: pawtograder-templates
+      configMap: { name: pawtograder-forgejo-templates, optional: true }
+  # Copied, not mounted: a mount inside /data makes the runtime create /data/gitea as root on a fresh volume.
+  extraInitVolumeMounts:
+    - name: pawtograder-templates
+      mountPath: /pawtograder-templates
+      readOnly: true
+  initPreScript: |
+    mkdir -p /data/gitea/templates/custom
+    if [ -f /pawtograder-templates/header.tmpl ]; then
+      cp /pawtograder-templates/header.tmpl /data/gitea/templates/custom/header.tmpl
+    else
+      rm -f /data/gitea/templates/custom/header.tmpl
+    fi
   gitea:
     admin:
       existingSecret: pawtograder-forgejo-admin

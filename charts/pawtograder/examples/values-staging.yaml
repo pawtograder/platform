@@ -177,6 +177,7 @@ auth:
       enabled: true
   oauthServer:
     enabled: true
+    autoApproveFirstParty: true
   # Pawtograder's email templates. Their links go straight to the app's token_hash pages
   # (/auth/reset-password, /auth/confirm, /auth/accept-invitation, /auth/magic-link), which is
   # the flow those pages implement. GoTrue's built-in templates go through /verify and land on
