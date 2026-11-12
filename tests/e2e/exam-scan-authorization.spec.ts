@@ -244,6 +244,31 @@ async function courseRowIds(classId: number) {
   };
 }
 
+/**
+ * As `staff`, try to change a scanned exam's batch, exam or class. The database must refuse it and
+ * leave the row exactly as it was: finalize checks these columns and exam_create_submission then
+ * re-reads them, so a change landing in between would otherwise go unchecked.
+ */
+async function expectScopeChangeRefused(
+  staff: SupabaseClient<Database>,
+  scannedId: number,
+  change: { batch_id?: number; exam_id?: number; class_id?: number }
+) {
+  const scope = async () => {
+    const { data, error } = await supabase
+      .from("exam_scanned_submissions")
+      .select("class_id, exam_id, batch_id")
+      .eq("id", scannedId)
+      .single();
+    expect(error).toBeNull();
+    return data;
+  };
+  const before = await scope();
+  const { error } = await staff.from("exam_scanned_submissions").update(change).eq("id", scannedId).select("id");
+  expect(error?.message ?? "").toMatch(/cannot change after it is created/);
+  expect(await scope()).toEqual(before);
+}
+
 test.describe("Exam scan ownership (#1078)", () => {
   let a: CourseA;
   let b: CourseB;
@@ -401,27 +426,22 @@ test.describe("Exam scan ownership (#1078)", () => {
       .eq("id", pageId)
       .single();
     expect(page).toEqual({ class_id: a.classId, batch_id: batchId });
-    // The one link the database does not couple: a scanned submission's batch. The next test shows
-    // the worker refusing to read through it.
-    const { data: scanned } = await supabase
+    // A scanned exam's batch is not coupled to its class by a foreign key, but once the row exists
+    // it cannot be repointed. The next test covers the worker's own check for a row that names
+    // another batch.
+    const { data: scanned, error: insertScannedErr } = await supabase
       .from("exam_scanned_submissions")
       .insert({ class_id: a.classId, exam_id: a.examId, batch_id: batchId, exam_index: 99 })
       .select("id")
       .single();
-    const { data: retargeted, error: retargetErr } = await a.grader
-      .from("exam_scanned_submissions")
-      .update({ batch_id: b.batchId })
-      .eq("id", scanned!.id)
-      .select("batch_id")
-      .single();
-    expect(retargetErr).toBeNull();
-    expect(retargeted?.batch_id).toBe(b.batchId);
+    expect(insertScannedErr).toBeNull();
+    await expectScopeChangeRefused(a.grader, scanned!.id, { batch_id: b.batchId });
   });
 
-  test("retargeting a confirmed exam at course B's batch before finalize runs is rejected", async () => {
-    // exam_scanned_submissions.batch_id is staff-writable and not tied to the row's class, so a
-    // scope taken from it would let B's path validate. Finalize must judge ownership by the batch
-    // its message was enqueued for.
+  test("a confirmed exam cannot be retargeted at course B's batch, and finalize refuses a row from another batch", async () => {
+    // exam_scanned_submissions.batch_id is not tied to the row's class, so a scope taken from it
+    // would let B's path validate. The database refuses to change it once the row exists, and
+    // finalize still judges ownership by the batch its message was enqueued for.
     const { batchId, pageId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     const { data: scanned } = await a.grader
@@ -432,32 +452,41 @@ test.describe("Exam scan ownership (#1078)", () => {
       .select("id")
       .single();
     expect(scanned?.id).toBeTruthy();
-    // Fixture: the exact message enqueue_exam_finalize sends for this batch (which the grader may
-    // call), held back 5s so the grader's edits below land before a worker can read it instead of
-    // racing the RPC's immediate worker ping.
-    const { error: sendErr } = await supabase.schema("pgmq_public").rpc("send", {
-      queue_name: "exam_processing",
-      message: {
-        method: "finalize",
-        class_id: a.classId,
-        batch_id: batchId,
-        args: { scanned_submission_id: scanned!.id }
-      },
-      sleep_seconds: 5
-    });
-    expect(sendErr).toBeNull();
-    await supabase.from("exam_scan_batches").update({ status: "finalizing" }).eq("id", batchId);
-    // As the grader: point the scanned exam at course B's batch, and its page at B's object.
-    const { error: retargetErr } = await a.grader
+    await expectScopeChangeRefused(a.grader, scanned!.id, { batch_id: b.batchId });
+
+    // The worker's own check, for a row that names another batch from the start: row RLS still
+    // lets the course-A grader insert one pointing at B's batch, with this batch's page linked to
+    // it and swapped to B's object.
+    const { data: foreign, error: foreignErr } = await a.grader
       .from("exam_scanned_submissions")
-      .update({ batch_id: b.batchId })
-      .eq("id", scanned!.id);
-    expect(retargetErr).toBeNull();
-    const { error: swapErr } = await a.grader
+      .insert({
+        class_id: a.classId,
+        exam_id: a.examId,
+        batch_id: b.batchId,
+        exam_index: 1000 + Math.floor(Math.random() * 1_000_000),
+        matched_profile_id: a.student.private_profile_id,
+        match_status: "confirmed"
+      })
+      .select("id, batch_id")
+      .single();
+    expect(foreignErr).toBeNull();
+    expect(foreign?.batch_id).toBe(b.batchId);
+    const { data: relinked, error: relinkErr } = await a.grader
       .from("exam_scan_pages")
-      .update({ image_path: b.objectPath })
-      .eq("id", pageId);
-    expect(swapErr).toBeNull();
+      .update({ scanned_submission_id: foreign!.id, image_path: b.objectPath })
+      .eq("id", pageId)
+      .select("scanned_submission_id, image_path");
+    expect(relinkErr).toBeNull();
+    expect(relinked).toEqual([{ scanned_submission_id: foreign!.id, image_path: b.objectPath }]);
+    const before = await courseRowIds(a.classId);
+    // Fixture: a finalize message for this batch naming that row (enqueue_exam_finalize only queues
+    // a batch's own rows, so this is the worker's defence in depth, not an RPC path).
+    await sendExamMessage({
+      method: "finalize",
+      class_id: a.classId,
+      batch_id: batchId,
+      args: { scanned_submission_id: foreign!.id }
+    });
     await expect
       .poll(
         async () => {
@@ -475,13 +504,16 @@ test.describe("Exam scan ownership (#1078)", () => {
     expect(hashes.stored).not.toContain(b.objectSha);
     expect(hashes.graderCanFetch).not.toContain(b.objectSha);
     expect(hashes.studentCanFetch).not.toContain(b.objectSha);
-    expect((await batch(batchId)).status).toBe("error");
+    const state = await batch(batchId);
+    expect(state.status).toBe("error");
+    expect(state.error ?? "").toMatch(/is no longer in batch/);
+    expect(await courseRowIds(a.classId)).toEqual(before);
   });
 
-  test("moving a confirmed exam to another exam of the same course is rejected before finalize creates anything", async () => {
-    // The batch and the page path stay legitimate (exam X); only the scanned submission's exam_id
-    // is changed to exam Y. exam_create_submission takes the assignment from that exam_id, so
-    // accepting the row would file the student's scan under exam Y's assignment.
+  test("a confirmed exam cannot be moved to another exam of the same course, and finalize refuses a row whose exam is not its batch's", async () => {
+    // The batch and the page path stay legitimate (exam X); only the scanned submission names exam
+    // Y. exam_create_submission takes the assignment from that exam_id, so accepting the row would
+    // file the student's scan under exam Y's assignment.
     const { data: exams } = await supabase
       .from("exams")
       .select("id, assignment_id")
@@ -512,25 +544,42 @@ test.describe("Exam scan ownership (#1078)", () => {
     };
     const before = await destination();
 
-    const { batchId } = await graderCreatesBatch(a, {});
+    const { batchId, pageId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
-    // As the course-A grader: confirm, then move the scanned exam to exam Y. Both writes are accepted.
-    const { data: scanned, error: confirmErr } = await a.grader
+    // As the course-A grader: the processed exam cannot be moved to exam Y.
+    const { data: processed, error: processedErr } = await supabase
       .from("exam_scanned_submissions")
-      .update({ match_status: "confirmed" })
-      .eq("batch_id", batchId)
-      .eq("matched_profile_id", a.student.private_profile_id)
       .select("id")
+      .eq("batch_id", batchId)
       .single();
-    expect(confirmErr).toBeNull();
-    const { data: moved, error: moveErr } = await a.grader
+    expect(processedErr).toBeNull();
+    await expectScopeChangeRefused(a.grader, processed!.id, { exam_id: a.otherExamId });
+
+    // The worker's own check: row RLS still lets the grader insert a confirmed exam for this batch
+    // that names exam Y, and enqueue_exam_finalize queues it. This batch's page is linked to it, so
+    // without the check finalize would file the scan under exam Y's assignment. (The processed row
+    // stays unconfirmed, so the RPC's one-confirmed-exam-per-student guard does not fire.)
+    const { data: scanned, error: insertErr } = await a.grader
       .from("exam_scanned_submissions")
-      .update({ exam_id: a.otherExamId })
-      .eq("id", scanned!.id)
-      .select("exam_id, batch_id")
+      .insert({
+        class_id: a.classId,
+        exam_id: a.otherExamId,
+        batch_id: batchId,
+        exam_index: 99,
+        matched_profile_id: a.student.private_profile_id,
+        match_status: "confirmed"
+      })
+      .select("id, exam_id, batch_id")
       .single();
-    expect(moveErr).toBeNull();
-    expect(moved).toEqual({ exam_id: a.otherExamId, batch_id: batchId });
+    expect(insertErr).toBeNull();
+    expect(scanned).toMatchObject({ exam_id: a.otherExamId, batch_id: batchId });
+    const { data: linked, error: linkErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ scanned_submission_id: scanned!.id })
+      .eq("id", pageId)
+      .select("scanned_submission_id");
+    expect(linkErr).toBeNull();
+    expect(linked).toEqual([{ scanned_submission_id: scanned!.id }]);
     const { data: queued, error: finErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
     expect(queued).toBe(1);
@@ -560,7 +609,7 @@ test.describe("Exam scan ownership (#1078)", () => {
     expect(await destination()).toEqual(before);
     const state = await batch(batchId);
     expect(state.status).toBe("error");
-    expect(state.error ?? "").toMatch(/refusing to read its scans/);
+    expect(state.error ?? "").toMatch(/names exam \d+, but batch \d+ is exam \d+; refusing to read its scans/);
   });
 
   test("a legitimate upload is processed and matched", async () => {
@@ -1031,6 +1080,58 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
     expect(dlq?.[0].method).toBe("match");
     expect(dlq?.[0].error_message ?? "").toMatch(/has 1 of 2 scan pages/);
     expect(await scannedRowsFor(b!.id)).toBe(0);
+  });
+
+  test("a scan rejection that arrives after the batch completed leaves it completed", async () => {
+    const x = await graderCreatesBatch(a, {});
+    expect((await graderProcesses(a, x.batchId)).status).toBe("review");
+    const { data: confirmed, error: confirmErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", x.batchId)
+      .eq("matched_profile_id", a.student.private_profile_id)
+      .select("id")
+      .single();
+    expect(confirmErr).toBeNull();
+    // As the grader: point the confirmed exam's page at another batch's object, which finalize
+    // refuses to read.
+    const other = await graderCreatesBatch(a, {});
+    const { data: swapped, error: swapErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ image_path: other.ownPath })
+      .eq("id", x.pageId)
+      .select("image_path");
+    expect(swapErr).toBeNull();
+    expect(swapped).toEqual([{ image_path: other.ownPath }]);
+    // Fixture: the batch as a duplicate finalize worker finds it when it rejects late. Another
+    // worker already finished this exam and completed the batch, after this one read the row and
+    // before finalized_at was stamped.
+    const { data: set, error: setErr } = await supabase
+      .from("exam_scan_batches")
+      .update({ status: "completed", error: null })
+      .eq("id", x.batchId)
+      .select("status, error")
+      .single();
+    expect(setErr).toBeNull();
+    expect(set).toEqual({ status: "completed", error: null });
+    const before = await courseRowIds(a.classId);
+
+    await runQueuedThroughSentinel(a, {
+      method: "finalize",
+      class_id: a.classId,
+      batch_id: x.batchId,
+      args: { scanned_submission_id: confirmed!.id }
+    });
+    // The rejection still happened and was dead-lettered...
+    const { data: dlq } = await supabase
+      .from("exam_async_worker_dlq_messages")
+      .select("method, error_type")
+      .eq("class_id", a.classId)
+      .eq("envelope->>batch_id", String(x.batchId));
+    expect(dlq).toEqual([{ method: "finalize", error_type: "ScanPathRejectedError" }]);
+    // ...but it does not turn the completed batch into an error.
+    expect(await batch(x.batchId)).toEqual({ status: "completed", error: null });
+    expect(await courseRowIds(a.classId)).toEqual(before);
   });
 
   for (const terminal of ["error", "completed"] as const) {
