@@ -14,7 +14,9 @@ export const COURSE_FEATURES = {
   DISCORD_STUDENT_JOIN: "discord-student-join",
   GEMINI_API_KEY_SETUP: "gemini-api-key-setup",
   BUG_REPORT_RECORDING: "bug-report-recording",
-  EXAMS: "exams"
+  EXAMS: "exams",
+  // Off unless set, like the SQL side. Not manageable here yet; the toggle comes with #1091.
+  CLOUD_WORKSPACES: "cloud-workspaces"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];

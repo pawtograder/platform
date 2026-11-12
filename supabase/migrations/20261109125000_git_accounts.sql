@@ -85,7 +85,13 @@ AS $$
         AND ga.instance_url = p_instance_url
         AND (ga.remote_user_id IS NOT NULL OR ga.claimed_at > now() - make_interval(mins => p_stale_minutes))
     )
-  ORDER BY u.user_id
+  -- Never tried first, then least recently tried: users whose account keeps failing return every time
+  -- their claim goes stale, and ordering by id alone would let 50 of them crowd out everyone else.
+  ORDER BY (
+      SELECT ga.claimed_at FROM public.git_accounts ga
+      WHERE ga.user_id = u.user_id AND ga.provider = 'forgejo' AND ga.instance_url = p_instance_url
+    ) ASC NULLS FIRST,
+    u.user_id
   LIMIT p_limit;
 $$;
 
