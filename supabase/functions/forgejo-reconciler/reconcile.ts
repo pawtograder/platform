@@ -132,8 +132,9 @@ export async function saveRepositoryRow(
  * The handout has to live in the class's own org. The admin can read every course's repos, so a template_repo
  * naming another course's handout would otherwise be copied into this course's student repos.
  */
-export function assertTemplateInOrg(template: string, org: string): void {
-  if (template.split("/")[0]?.toLowerCase() !== org.toLowerCase()) {
+export function assertTemplateInOrg(template: string, org: string | null): void {
+  const owner = template.split("/")[0];
+  if (!owner || !org || owner.toLowerCase() !== org.toLowerCase()) {
     throw new Error("The template repo isn't in the class's Forgejo org");
   }
 }
