@@ -2,7 +2,7 @@
 {{- $files := .Files.Glob "files/coder-templates/**" }}
 {{- $tag := .Values.coder.coder.image.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion) }}
 {{- $pullSecrets := concat (.Values.global.imagePullSecrets | default list) (.Values.coder.coder.image.pullSecrets | default list) | uniq }}
-{{- $workspaceImage := .Values.coderBootstrap.workspaces.image | default (printf "ghcr.io/pawtograder/coder-workspace:%s" .Chart.AppVersion) }}
+{{- $workspaceImage := include "pawtograder.coderWorkspaceImage" . }}
 {{- $placement := dict "nodeSelector" (.Values.coderBootstrap.nodeSelector | default .Values.coder.coder.nodeSelector) "tolerations" (.Values.coderBootstrap.tolerations | default .Values.coder.coder.tolerations) "affinity" .Values.coderBootstrap.affinity }}
 apiVersion: v1
 kind: ConfigMap

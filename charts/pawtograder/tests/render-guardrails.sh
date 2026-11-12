@@ -3134,6 +3134,11 @@ apps_has "template: workspaces default to the chart's coder-workspace image" yes
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: a workspace image override is passed through" yes 'image: "registry.school.edu/ws:1"' \
   --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 --show-only templates/coder-bootstrap.yaml
+APPS_PROD=("${BASE[@]}" --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast)
+apps_has "template: production takes the default workspace image's appVersion tag" yes \
+  'image: "ghcr.io/pawtograder/coder-workspace:' "${APPS_PROD[@]}" --show-only templates/coder-bootstrap.yaml
+apps_refused "template: production refuses an untagged workspace image" \
+  "coderBootstrap.workspaces.image's tag=\"\"" "${APPS_PROD[@]}" --set coderBootstrap.workspaces.image=registry.school.edu/ws
 apps_has "template: repo_url is pinned to Forgejo's public URL" yes 'forgejo_url: "https://git.example.com"' \
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: the pin follows Forgejo's ROOT_URL" yes 'forgejo_url: "https://code.school.edu/git"' \
