@@ -50,7 +50,7 @@ async function runExamWorker(): Promise<void> {
 }
 
 /** An exam with identity and free-text answer regions, as the instructor UI would create it. */
-async function createExam(classId: number, name: string): Promise<number> {
+async function createExam(classId: number, name: string, numPages = 1): Promise<number> {
   const assignment = await insertAssignment({
     class_id: classId,
     name,
@@ -60,7 +60,7 @@ async function createExam(classId: number, name: string): Promise<number> {
   const { data: examId, error } = await supabase.rpc("exam_create", {
     p_assignment_id: assignment.id,
     p_source_type: "pdf",
-    p_num_pages: 1
+    p_num_pages: numPages
   });
   expect(error).toBeNull();
   const { error: structErr } = await supabase.rpc("exam_upsert_questions_and_regions", {
@@ -269,6 +269,48 @@ async function expectScopeChangeRefused(
   expect(await scope()).toEqual(before);
 }
 
+const MEMBERSHIP_GUARD = /only matching can change which exam a page belongs to/;
+type PageChange = {
+  batch_id?: number;
+  page_index?: number;
+  image_path?: string;
+  scanned_submission_id?: number | null;
+};
+
+async function pageState(pageId: number) {
+  const { data, error } = await supabase
+    .from("exam_scan_pages")
+    .select("batch_id, page_index, image_path, scanned_submission_id")
+    .eq("id", pageId)
+    .maybeSingle();
+  expect(error).toBeNull();
+  return data;
+}
+
+/**
+ * As `staff`, try to change a page matching has linked to an exam. The database must refuse it and
+ * leave the page exactly as it was: only matching decides which exam a page belongs to.
+ */
+async function expectLinkedPageChangeRefused(staff: SupabaseClient<Database>, pageId: number, change: PageChange) {
+  const before = await pageState(pageId);
+  expect(before?.scanned_submission_id ?? null).not.toBeNull();
+  const { error } = await staff.from("exam_scan_pages").update(change).eq("id", pageId).select("id");
+  expect(error?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+  expect(await pageState(pageId)).toEqual(before);
+}
+
+/**
+ * Fixture: change a linked page with the service role. Staff can no longer do this, so it builds a
+ * forged state (as an operator mistake or a future code path could) that the worker itself must
+ * still refuse to read.
+ */
+async function forgePage(pageId: number, change: PageChange) {
+  const { data, error } = await supabase.from("exam_scan_pages").update(change).eq("id", pageId).select("id");
+  expect(error).toBeNull();
+  expect(data).toHaveLength(1);
+  expect(await pageState(pageId)).toMatchObject(change);
+}
+
 test.describe("Exam scan ownership (#1078)", () => {
   let a: CourseA;
   let b: CourseB;
@@ -324,8 +366,10 @@ test.describe("Exam scan ownership (#1078)", () => {
   test("swapping in course B's scan after review is rejected by match before it reads identity", async () => {
     const { batchId, pageId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
-    const { error } = await a.grader.from("exam_scan_pages").update({ image_path: b.objectPath }).eq("id", pageId);
-    expect(error).toBeNull();
+    // The grader can no longer swap a linked page's image; the worker must still refuse the swapped
+    // state if it arises another way.
+    await expectLinkedPageChangeRefused(a.grader, pageId, { image_path: b.objectPath });
+    await forgePage(pageId, { image_path: b.objectPath });
     const { data: before } = await supabase
       .from("exam_scanned_submissions")
       .select("detected_name, detected_sis_id")
@@ -354,11 +398,8 @@ test.describe("Exam scan ownership (#1078)", () => {
       .eq("batch_id", batchId)
       .eq("matched_profile_id", a.student.private_profile_id);
     expect(confirmErr).toBeNull();
-    const { error: swapErr } = await a.grader
-      .from("exam_scan_pages")
-      .update({ image_path: b.objectPath })
-      .eq("id", pageId);
-    expect(swapErr).toBeNull();
+    await expectLinkedPageChangeRefused(a.grader, pageId, { image_path: b.objectPath });
+    await forgePage(pageId, { image_path: b.objectPath });
     const { data: queued, error: finErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
     expect(queued).toBe(1);
@@ -455,8 +496,8 @@ test.describe("Exam scan ownership (#1078)", () => {
     await expectScopeChangeRefused(a.grader, scanned!.id, { batch_id: b.batchId });
 
     // The worker's own check, for a row that names another batch from the start: row RLS still
-    // lets the course-A grader insert one pointing at B's batch, with this batch's page linked to
-    // it and swapped to B's object.
+    // lets the course-A grader insert one pointing at B's batch. The grader cannot relink this
+    // batch's page to it, so the service role builds that state, with the page swapped to B's object.
     const { data: foreign, error: foreignErr } = await a.grader
       .from("exam_scanned_submissions")
       .insert({
@@ -471,13 +512,11 @@ test.describe("Exam scan ownership (#1078)", () => {
       .single();
     expect(foreignErr).toBeNull();
     expect(foreign?.batch_id).toBe(b.batchId);
-    const { data: relinked, error: relinkErr } = await a.grader
-      .from("exam_scan_pages")
-      .update({ scanned_submission_id: foreign!.id, image_path: b.objectPath })
-      .eq("id", pageId)
-      .select("scanned_submission_id, image_path");
-    expect(relinkErr).toBeNull();
-    expect(relinked).toEqual([{ scanned_submission_id: foreign!.id, image_path: b.objectPath }]);
+    await expectLinkedPageChangeRefused(a.grader, pageId, {
+      scanned_submission_id: foreign!.id,
+      image_path: b.objectPath
+    });
+    await forgePage(pageId, { scanned_submission_id: foreign!.id, image_path: b.objectPath });
     const before = await courseRowIds(a.classId);
     // Fixture: a finalize message for this batch naming that row (enqueue_exam_finalize only queues
     // a batch's own rows, so this is the worker's defence in depth, not an RPC path).
@@ -556,9 +595,10 @@ test.describe("Exam scan ownership (#1078)", () => {
     await expectScopeChangeRefused(a.grader, processed!.id, { exam_id: a.otherExamId });
 
     // The worker's own check: row RLS still lets the grader insert a confirmed exam for this batch
-    // that names exam Y, and enqueue_exam_finalize queues it. This batch's page is linked to it, so
-    // without the check finalize would file the scan under exam Y's assignment. (The processed row
-    // stays unconfirmed, so the RPC's one-confirmed-exam-per-student guard does not fire.)
+    // that names exam Y, and enqueue_exam_finalize queues it. The grader cannot link this batch's
+    // page to it, so the service role does; without the check, finalize would then file the scan
+    // under exam Y's assignment. (The processed row stays unconfirmed, so the RPC's
+    // one-confirmed-exam-per-student guard does not fire.)
     const { data: scanned, error: insertErr } = await a.grader
       .from("exam_scanned_submissions")
       .insert({
@@ -573,13 +613,8 @@ test.describe("Exam scan ownership (#1078)", () => {
       .single();
     expect(insertErr).toBeNull();
     expect(scanned).toMatchObject({ exam_id: a.otherExamId, batch_id: batchId });
-    const { data: linked, error: linkErr } = await a.grader
-      .from("exam_scan_pages")
-      .update({ scanned_submission_id: scanned!.id })
-      .eq("id", pageId)
-      .select("scanned_submission_id");
-    expect(linkErr).toBeNull();
-    expect(linked).toEqual([{ scanned_submission_id: scanned!.id }]);
+    await expectLinkedPageChangeRefused(a.grader, pageId, { scanned_submission_id: scanned!.id });
+    await forgePage(pageId, { scanned_submission_id: scanned!.id });
     const { data: queued, error: finErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
     expect(queued).toBe(1);
@@ -777,14 +812,10 @@ test.describe("Exam scan ownership: legitimate finalization (#1078, needs #1075)
     expect(beforeRejection.files).toEqual([]);
     expect(beforeRejection.artifacts).toEqual([]);
 
-    // As the grader: swap course B's object into the confirmed exam's page, then finalize.
-    const { data: swapped, error: swapErr } = await a.grader
-      .from("exam_scan_pages")
-      .update({ image_path: b.objectPath })
-      .eq("id", pageId)
-      .select("image_path");
-    expect(swapErr).toBeNull();
-    expect(swapped).toEqual([{ image_path: b.objectPath }]);
+    // The grader cannot swap course B's object into the confirmed exam's page; the service role
+    // builds that state, and the grader finalizes.
+    await expectLinkedPageChangeRefused(a.grader, pageId, { image_path: b.objectPath });
+    await forgePage(pageId, { image_path: b.objectPath });
     const { data: queued, error: finErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
     expect(queued).toBe(1);
@@ -804,14 +835,9 @@ test.describe("Exam scan ownership: legitimate finalization (#1078, needs #1075)
     expect(await scannedRow()).toEqual(partialScanned);
     expect((await courseASubmissionFileHashes(a)).stored).not.toContain(b.objectSha);
 
-    // As the grader: put the page's own scan back, and finalize again.
-    const { data: restored, error: restoreErr } = await a.grader
-      .from("exam_scan_pages")
-      .update({ image_path: ownPath })
-      .eq("id", pageId)
-      .select("image_path");
-    expect(restoreErr).toBeNull();
-    expect(restored).toEqual([{ image_path: ownPath }]);
+    // Put the page's own scan back (an operator fix, since staff cannot change a linked page), and
+    // finalize again as the grader.
+    await forgePage(pageId, { image_path: ownPath });
     const { data: requeued, error: refinErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(refinErr).toBeNull();
     expect(requeued).toBe(1);
@@ -1093,16 +1119,11 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
       .select("id")
       .single();
     expect(confirmErr).toBeNull();
-    // As the grader: point the confirmed exam's page at another batch's object, which finalize
-    // refuses to read.
+    // Point the confirmed exam's page at another batch's object, which finalize refuses to read.
+    // The grader cannot; the service role builds the state.
     const other = await graderCreatesBatch(a, {});
-    const { data: swapped, error: swapErr } = await a.grader
-      .from("exam_scan_pages")
-      .update({ image_path: other.ownPath })
-      .eq("id", x.pageId)
-      .select("image_path");
-    expect(swapErr).toBeNull();
-    expect(swapped).toEqual([{ image_path: other.ownPath }]);
+    await expectLinkedPageChangeRefused(a.grader, x.pageId, { image_path: other.ownPath });
+    await forgePage(x.pageId, { image_path: other.ownPath });
     // Fixture: the batch as a duplicate finalize worker finds it when it rejects late. Another
     // worker already finished this exam and completed the batch, after this one read the row and
     // before finalized_at was stamped.
@@ -1183,4 +1204,290 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
       }
     });
   }
+});
+
+// Finalize builds a submission from the pages linked to its scanned exam. After matching, only
+// matching (the worker) may change which exam a page belongs to, or a linked page's position, image
+// or batch; otherwise a grader could finalize an exam missing a page, holding an extra one, or
+// holding another student's page.
+test.describe("Exam scan pages: only matching changes which exam a page belongs to", () => {
+  let a: CourseA;
+  let alice: { sis: number; name: string; profileId: string };
+  let bob: { sis: number; name: string; profileId: string };
+  let instructor: SupabaseClient<Database>;
+  test.beforeAll(async () => {
+    a = await arrangeCourseA();
+    alice = { sis: a.studentSis, name: "Alice Smith", profileId: a.student.private_profile_id };
+    const bobUser = await createUserInClass({ role: "student", class_id: a.classId, name: "Bob Jones" });
+    // studentSis always ends in 1, so this cannot collide with any course's first student.
+    const bobSis = a.studentSis + 1;
+    await setUserSisId(bobUser.user_id, bobSis);
+    bob = { sis: bobSis, name: "Bob Jones", profileId: bobUser.private_profile_id };
+    instructor = await createAuthenticatedClient(await createUserInClass({ role: "instructor", class_id: a.classId }));
+  });
+
+  /** As the grader: upload one page per owner (identity in the object name) into a new batch. */
+  async function graderUploads(examId: number, perExam: number, owners: { sis: number; name: string }[]) {
+    const { data: created, error } = await a.grader
+      .from("exam_scan_batches")
+      .insert({
+        class_id: a.classId,
+        exam_id: examId,
+        total_pages: owners.length,
+        pages_per_exam: perExam,
+        status: "uploaded"
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    const pages: { id: number; path: string; sha: string }[] = [];
+    for (let i = 0; i < owners.length; i++) {
+      const name = owners[i].name.replace(/ /g, "_");
+      const path = `classes/${a.classId}/exams/${examId}/batches/${created!.id}/sis-${owners[i].sis}__name-${name}__page-${i}.png`;
+      const bytes = Buffer.concat([PNG_1x1, Buffer.from(`page-${i}-${randomUUID()}`)]);
+      const up = await a.grader.storage.from("exam-scans").upload(path, bytes, { contentType: "image/png" });
+      expect(up.error).toBeNull();
+      const { data: page, error: pageErr } = await a.grader
+        .from("exam_scan_pages")
+        .insert({
+          class_id: a.classId,
+          exam_id: examId,
+          batch_id: created!.id,
+          page_index: i,
+          image_path: path,
+          width: 1000,
+          height: 1400
+        })
+        .select("id")
+        .single();
+      expect(pageErr).toBeNull();
+      pages.push({ id: page!.id, path, sha: sha256(bytes) });
+    }
+    return { batchId: created!.id, pages };
+  }
+
+  /** Process, then confirm every matched exam; returns the scanned exam id per student profile. */
+  async function processAndConfirm(batchId: number, expected: number) {
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    const { data: confirmed, error } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", batchId)
+      .not("matched_profile_id", "is", null)
+      .select("id, matched_profile_id");
+    expect(error).toBeNull();
+    expect(confirmed).toHaveLength(expected);
+    return new Map((confirmed ?? []).map((r) => [r.matched_profile_id as string, r.id]));
+  }
+
+  async function graderFinalizes(batchId: number) {
+    const { error } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+    expect(error).toBeNull();
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return (await batch(batchId)).status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("completed");
+  }
+
+  /** SHA-256 of each page file in the student's finalized submission, in page order. */
+  async function submittedPages(batchId: number, profileId: string) {
+    const { data: row, error } = await supabase
+      .from("exam_scanned_submissions")
+      .select("submission_id, finalized_at")
+      .eq("batch_id", batchId)
+      .eq("matched_profile_id", profileId)
+      .single();
+    expect(error).toBeNull();
+    expect(row?.finalized_at).not.toBeNull();
+    const { data: files } = await supabase
+      .from("submission_files")
+      .select("name, storage_key")
+      .eq("submission_id", row!.submission_id!)
+      .order("name");
+    const hashes: string[] = [];
+    for (const f of files ?? []) {
+      const { data } = await supabase.storage.from("submission-files").download(f.storage_key!);
+      hashes.push(sha256(new Uint8Array(await data!.arrayBuffer())));
+    }
+    return hashes;
+  }
+
+  test("a template page count changed after matching cannot be combined with an unlinked page to finalize an incomplete exam", async () => {
+    const examId = await createExam(a.classId, `Two pages ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(batchId, 1);
+    // As the instructor: replace the template with a one-page one. exam_create allows it until the
+    // assignment has submissions, so num_pages changes after matching.
+    const { data: exam } = await supabase.from("exams").select("assignment_id").eq("id", examId).single();
+    const { error: templateErr } = await instructor.rpc("exam_create", {
+      p_assignment_id: exam!.assignment_id,
+      p_source_type: "pdf",
+      p_num_pages: 1
+    });
+    expect(templateErr).toBeNull();
+    const { data: changed } = await supabase.from("exams").select("num_pages").eq("id", examId).single();
+    expect(changed?.num_pages).toBe(1);
+    // As the grader: try to unlink the exam's second page, then finalize.
+    const before = await pageState(pages[1].id);
+    const { error: unlinkErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ scanned_submission_id: null })
+      .eq("id", pages[1].id)
+      .select("id");
+    await graderFinalizes(batchId);
+    // The submission holds both matched pages, in order...
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+    // ...because the unlink was refused.
+    expect(unlinkErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+    expect(await pageState(pages[1].id)).toEqual(before);
+  });
+
+  test("two matched exams' pages cannot be swapped between them", async () => {
+    const examId = await createExam(a.classId, `Swap ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    const rows = await processAndConfirm(batchId, 2);
+    const { error: firstErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ scanned_submission_id: rows.get(bob.profileId)! })
+      .eq("id", pages[0].id)
+      .select("id");
+    const { error: secondErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ scanned_submission_id: rows.get(alice.profileId)! })
+      .eq("id", pages[1].id)
+      .select("id");
+    await graderFinalizes(batchId);
+    // Each student's submission holds their own page...
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha]);
+    expect(await submittedPages(batchId, bob.profileId)).toEqual([pages[1].sha]);
+    // ...because both relinks were refused.
+    expect(firstErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+    expect(secondErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+  });
+
+  test("a matched exam's page cannot be deleted", async () => {
+    const examId = await createExam(a.classId, `Delete ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(batchId, 1);
+    const { error: deleteErr } = await a.grader.from("exam_scan_pages").delete().eq("id", pages[1].id).select("id");
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+    expect(deleteErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+    expect(await pageState(pages[1].id)).not.toBeNull();
+  });
+
+  test("a page cannot be added to a matched exam", async () => {
+    const examId = await createExam(a.classId, `Extra ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    const rows = await processAndConfirm(batchId, 1);
+    const extraPath = `classes/${a.classId}/exams/${examId}/batches/${batchId}/extra-page.png`;
+    const up = await a.grader.storage
+      .from("exam-scans")
+      .upload(extraPath, Buffer.concat([PNG_1x1, Buffer.from(randomUUID())]), { contentType: "image/png" });
+    expect(up.error).toBeNull();
+    const { error: insertErr } = await a.grader
+      .from("exam_scan_pages")
+      .insert({
+        class_id: a.classId,
+        exam_id: examId,
+        batch_id: batchId,
+        page_index: 2,
+        image_path: extraPath,
+        width: 1000,
+        height: 1400,
+        scanned_submission_id: rows.get(alice.profileId)!
+      })
+      .select("id");
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+    expect(insertErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+  });
+
+  test("a matched exam's pages cannot be reordered", async () => {
+    const examId = await createExam(a.classId, `Reorder ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(batchId, 1);
+    // Swap the two pages' positions through a free index (page_index is unique per batch).
+    const errors: (string | null)[] = [];
+    for (const [id, index] of [
+      [pages[0].id, 99],
+      [pages[1].id, 0],
+      [pages[0].id, 1]
+    ]) {
+      const { error } = await a.grader.from("exam_scan_pages").update({ page_index: index }).eq("id", id).select("id");
+      errors.push(error?.message ?? null);
+    }
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+    expect(errors.every((e) => MEMBERSHIP_GUARD.test(e ?? ""))).toBe(true);
+  });
+
+  test("a matched page's image cannot be replaced with another page's", async () => {
+    const examId = await createExam(a.classId, `Image ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    await processAndConfirm(batchId, 2);
+    // Bob's object is in this same batch, so the path check alone would accept it.
+    const { error: swapErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ image_path: pages[1].path })
+      .eq("id", pages[0].id)
+      .select("id");
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha]);
+    expect(swapErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+  });
+
+  test("a matched page cannot be moved to another batch", async () => {
+    const examId = await createExam(a.classId, `Move ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(batchId, 1);
+    const elsewhere = await graderUploads(examId, 2, [alice, alice]);
+    await expectLinkedPageChangeRefused(a.grader, pages[1].id, { batch_id: elsewhere.batchId });
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+  });
+
+  test("reprocessing still relinks a matched exam's pages", async () => {
+    const examId = await createExam(a.classId, `Reprocess ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    const rows = await processAndConfirm(batchId, 1);
+    // Process again: matching runs as the worker and relinks every group, confirmed ones included.
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    for (const p of pages) {
+      expect((await pageState(p.id))?.scanned_submission_id).toBe(rows.get(alice.profileId));
+    }
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+  });
+
+  test("deleting a scanned exam or a batch still cascades to its linked pages", async () => {
+    const examId = await createExam(a.classId, `Cascade ${randomUUID()}`, 2);
+    // Deleting a scanned exam sets its pages' link to null (ON DELETE SET NULL).
+    const first = await graderUploads(examId, 2, [alice, alice]);
+    const rows = await processAndConfirm(first.batchId, 1);
+    const { data: deletedRow, error: rowErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .delete()
+      .eq("id", rows.get(alice.profileId)!)
+      .select("id");
+    expect(rowErr).toBeNull();
+    expect(deletedRow).toHaveLength(1);
+    for (const p of first.pages) expect((await pageState(p.id))?.scanned_submission_id).toBeNull();
+    // Deleting a batch removes its pages (ON DELETE CASCADE), linked ones included.
+    const second = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(second.batchId, 1);
+    const { data: deletedBatch, error: batchErr } = await a.grader
+      .from("exam_scan_batches")
+      .delete()
+      .eq("id", second.batchId)
+      .select("id");
+    expect(batchErr).toBeNull();
+    expect(deletedBatch).toHaveLength(1);
+    for (const p of second.pages) expect(await pageState(p.id)).toBeNull();
+  });
 });
