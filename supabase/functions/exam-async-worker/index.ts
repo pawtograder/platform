@@ -626,6 +626,25 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
     );
   }
 
+  // Load and check the pages before creating the submission, so a rejected page leaves no
+  // submission or grading review behind (#1078). Every read below uses this validated array;
+  // nothing re-queries image_path.
+  const { data: pages, error: pagesErr } = await admin
+    .from("exam_scan_pages")
+    .select("id, page_index, image_path, width, height, ocr_data")
+    .eq("scanned_submission_id", scanned.id)
+    .order("page_index", { ascending: true });
+  // Never coalesce this to []. A transient PostgREST failure would otherwise read as "this
+  // exam has no pages": the loop below skips every question region, the exam_v1 artifact is
+  // written empty, and finalized_at is stamped -- which permanently marks the submission
+  // finalized, so no retry ever rebuilds it. Throwing requeues the message instead.
+  if (pagesErr) throw new Error(`load scan pages for scanned submission ${scanned.id} failed: ${pagesErr.message}`);
+  if (!pages || pages.length === 0) {
+    throw new Error(`scanned submission ${scanned.id} has no scan pages; refusing to finalize an empty exam artifact`);
+  }
+  // Check every page's image path before copying or structuring from any of them (#1078).
+  for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
+
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
   // row already exists, so a retried finalize reuses the same submission.
@@ -640,23 +659,6 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   // a crash) re-runs them safely. pageBytes fetches each page image at most once.
   {
     const pageBytes = new Map<string, Promise<Uint8Array>>();
-    const { data: pages, error: pagesErr } = await admin
-      .from("exam_scan_pages")
-      .select("id, page_index, image_path, width, height, ocr_data")
-      .eq("scanned_submission_id", scanned.id)
-      .order("page_index", { ascending: true });
-    // Never coalesce this to []. A transient PostgREST failure would otherwise read as "this
-    // exam has no pages": the loop below skips every question region, the exam_v1 artifact is
-    // written empty, and finalized_at is stamped -- which permanently marks the submission
-    // finalized, so no retry ever rebuilds it. Throwing requeues the message instead.
-    if (pagesErr) throw new Error(`load scan pages for scanned submission ${scanned.id} failed: ${pagesErr.message}`);
-    if (!pages || pages.length === 0) {
-      throw new Error(
-        `scanned submission ${scanned.id} has no scan pages; refusing to finalize an empty exam artifact`
-      );
-    }
-    // Check every page's image path before copying or structuring from any of them (#1078).
-    for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
     const groupPages = pages;
 
     // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the

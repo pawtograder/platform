@@ -12,7 +12,11 @@
 
 export type ScanScope = { classId: number; examId: number; batchId: number };
 
-/** A scan image path that is malformed or belongs to another class, exam or batch. Not retryable. */
+/**
+ * A scan the worker refuses to read: its image path is malformed or belongs to another class, exam
+ * or batch, or (from finalize) its scanned submission no longer matches the batch it was queued
+ * for. Not retryable.
+ */
 export class ScanPathRejectedError extends Error {
   constructor(message: string) {
     super(message);
