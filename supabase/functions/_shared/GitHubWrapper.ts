@@ -1472,21 +1472,18 @@ export async function assertJobTokenMatchesRepository(
   token: { repository: string; provider: JobTokenProvider },
   scope?: Sentry.Scope
 ): Promise<void> {
-  const { data, error } = await supabase
-    .from("repositories")
-    .select("git_provider")
-    .eq("repository", token.repository)
-    .maybeSingle();
+  // A name is unique per provider (#1093), so it can have a row on each host.
+  const { data, error } = await supabase.from("repositories").select("git_provider").eq("repository", token.repository);
   if (error) {
     // Both callers mute UserVisibleError, so report the outage here.
     Sentry.captureException(error, scope);
     throw new UserVisibleError(`Failed to query repositories: ${error.message}`);
   }
-  const repositoryProvider = data?.git_provider ?? "github";
-  if (repositoryProvider !== token.provider) {
+  const providers = data?.length ? data.map((row) => row.git_provider) : ["github"];
+  if (!providers.includes(token.provider)) {
     throw new JobTokenRejectedError(
       "provider",
-      `OIDC token from ${token.provider} names a ${repositoryProvider} repository: ${token.repository}`
+      `OIDC token from ${token.provider} names a ${providers.join(" and ")} repository: ${token.repository}`
     );
   }
 }

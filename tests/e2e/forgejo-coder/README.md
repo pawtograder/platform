@@ -61,6 +61,13 @@ tests/e2e/forgejo-coder/run-remote.sh --namespace cs4535-workspaces \
 6. Coder, cold start and deny.
 7. GoTrue refuses an authorize request whose `redirect_uri` isn't registered.
 
+`tests/e2e/sso/forgejo-provisioning.forgejo-coder.spec.ts` (#1092, #1093) runs first:
+
+1. One `forgejo-reconciler` pass creates a student's Forgejo account and their repo for a released
+   Forgejo assignment, with write access. A second pass changes nothing. The lane has no edge
+   runtime, so the spec runs the pass with `deno` (`supabase/functions/forgejo-reconciler/run-pass.ts`).
+2. The student's first sign-in lands on that account and shows the repo.
+
 ## Things this lane found
 
 - **GoTrue requires PKCE on every authorize request**, with no setting to turn that off
@@ -90,5 +97,4 @@ apps' cookie names don't collide.
 ## Out of scope
 
 Coder workspaces (the chart's template needs Kubernetes), mapping course roles to Forgejo teams or
-Coder groups (`custom_access_token_hook` adds no role claims yet), binding the accounts that #1083
-pre-provisions, and single sign-out.
+Coder groups (`custom_access_token_hook` adds no role claims yet), and single sign-out.

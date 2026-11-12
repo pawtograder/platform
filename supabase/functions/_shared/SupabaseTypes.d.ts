@@ -13917,6 +13917,31 @@ export type Database = {
           user_id: string;
         }[];
       };
+      forgejo_group_repos_needed: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          all_members_have_logins: boolean;
+          assignment_group_id: number;
+          assignment_id: number;
+          class_id: number;
+          logins: string[];
+          name: string;
+          owner: string;
+          template_repo: string;
+        }[];
+      };
+      forgejo_repos_needed: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          assignment_id: number;
+          class_id: number;
+          login: string;
+          name: string;
+          owner: string;
+          profile_id: string;
+          template_repo: string;
+        }[];
+      };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
       get_assessment_export_pepper: { Args: never; Returns: string };

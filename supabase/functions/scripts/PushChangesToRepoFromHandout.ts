@@ -59,6 +59,7 @@ async function getRepositoryFromDB(
       .select(
         "id, repository, synced_handout_sha, synced_repo_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
       )
+      .eq("git_provider", "github")
       .eq("repository", repoIdOrFullName)
       .single();
     data = result.data;

@@ -615,6 +615,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
         .from("repositories")
         .select("id")
         .eq("repository", repository)
+        .eq("git_provider", decoded.provider)
         .maybeSingle();
       if (!repositoryRow) {
         throw new SecurityError(`Repository not found: ${repository}`);

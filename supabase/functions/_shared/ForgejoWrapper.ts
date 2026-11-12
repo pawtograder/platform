@@ -1,4 +1,4 @@
-// Forgejo admin API calls for the accounts Pawtograder creates (#1092) and for grading (#1110).
+// Forgejo admin API calls for the accounts (#1092) and repos (#1093) Pawtograder creates, and for grading (#1110).
 //
 // Admin Basic auth, not an admin token: a token can't act on other users' behalf (Forgejo answers
 // 401 "auth method not allowed"), which repo provisioning (#1093) needs.
@@ -118,10 +118,104 @@ export async function downloadArchive(
   sha: string,
   timeoutMs = 60_000
 ): Promise<Uint8Array> {
-  const res = await fetch(`${config.url}/api/v1/repos/${repository}/archive/${encodeURIComponent(sha)}.zip`, {
+  const res = await fetch(`${config.url}/api/v1/repos/${repoPath(repository)}/archive/${encodeURIComponent(sha)}.zip`, {
     headers: { Authorization: config.authorization },
     signal: AbortSignal.timeout(timeoutMs)
   });
   if (!res.ok) throw await failure(res, "archive download");
   return new Uint8Array(await res.arrayBuffer());
+}
+
+/**
+ * The repository's API path, for a plain owner/name only. The admin can call every endpoint, so a name with
+ * "..", "?" or another slash, as an instructor could type into template_repo, must never reach the URL.
+ */
+export function repoPath(repository: string): string {
+  const parts = repository.split("/");
+  if (parts.length !== 2 || parts.some((p) => !/^[A-Za-z0-9_.-]+$/.test(p) || /^\.+$/.test(p))) {
+    throw new Error("Not a Forgejo owner/name");
+  }
+  return parts.map(encodeURIComponent).join("/");
+}
+
+/**
+ * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
+ * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
+ * created there would belong to them.
+ */
+export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
+  const path = `/orgs/${encodeURIComponent(org)}`;
+  let found = await forgejo(config, "GET", path);
+  if (found.status === 404) {
+    const res = await forgejo(config, "POST", "/orgs", { username: org, visibility: "private" });
+    if (res.ok) return;
+    const message = await res.text();
+    if (res.status !== 422 || !/user already exists/i.test(message)) {
+      throw new Error(`Forgejo org create failed: ${res.status} ${reason(message)}`);
+    }
+    // Either another pass created the org since the lookup, or the name is a user's: /orgs doesn't find users.
+    found = await forgejo(config, "GET", path);
+    if (found.status === 404) throw new Error("The Forgejo org name is taken by a user");
+  }
+  if (!found.ok) throw await failure(found, "org lookup");
+  await found.body?.cancel();
+
+  const me = await forgejo(config, "GET", "/user");
+  if (!me.ok) throw await failure(me, "admin lookup");
+  const { login: admin } = (await me.json()) as { login: string };
+  const teams = await forgejo(config, "GET", `${path}/teams?limit=50`);
+  if (!teams.ok) throw await failure(teams, "org teams read");
+  const owners = new Set<string>();
+  for (const team of (await teams.json()) as { id: number; permission: string }[]) {
+    if (team.permission !== "owner") continue;
+    const members = await forgejo(config, "GET", `/teams/${team.id}/members?limit=50`);
+    if (!members.ok) throw await failure(members, "org owners read");
+    for (const m of (await members.json()) as { login: string }[]) owners.add(m.login.toLowerCase());
+  }
+  if (owners.size !== 1 || !owners.has(admin.toLowerCase())) {
+    throw new Error("The Forgejo org has an owner other than Pawtograder's admin");
+  }
+}
+
+/**
+ * Generates owner/name from the template, or adopts the repo if it already exists: a pass that died
+ * after creating it, or one running at the same time. The template must be marked as a template.
+ */
+export async function ensureRepoFromTemplate(
+  config: ForgejoConfig,
+  template: string,
+  owner: string,
+  name: string
+): Promise<void> {
+  const res = await forgejo(config, "POST", `/repos/${repoPath(template)}/generate`, {
+    owner,
+    name,
+    private: true,
+    git_content: true
+  });
+  if (res.ok || res.status === 409) return;
+  throw await failure(res, "repo generate from template");
+}
+
+/** A file's text on the default branch, or null when the repo has no such file. */
+export async function readFile(config: ForgejoConfig, repository: string, path: string): Promise<string | null> {
+  const file = path.split("/").map(encodeURIComponent).join("/");
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw await failure(res, "file read");
+  const { content } = (await res.json()) as { content: string };
+  return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+}
+
+/** Gives login write access, then reports whether Forgejo says they have it. */
+export async function grantWrite(config: ForgejoConfig, repository: string, login: string): Promise<boolean> {
+  const user = encodeURIComponent(login);
+  const put = await forgejo(config, "PUT", `/repos/${repoPath(repository)}/collaborators/${user}`, {
+    permission: "write"
+  });
+  if (!put.ok) throw await failure(put, "collaborator add");
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/collaborators/${user}/permission`);
+  if (!res.ok) throw await failure(res, "collaborator permission read");
+  const { permission } = (await res.json()) as { permission: string };
+  return permission === "write" || permission === "admin";
 }
