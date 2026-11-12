@@ -14615,6 +14615,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_forgejo_reconciler_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_github_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -14650,6 +14654,7 @@ export type Database = {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
+      kick_forgejo_reconciler: { Args: never; Returns: undefined };
       log_api_gateway_call: {
         Args: {
           p_class_id?: number;

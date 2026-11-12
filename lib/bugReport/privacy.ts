@@ -2779,6 +2779,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   invoke_email_batch_processor_background_task: "none",
   // DRAFT: new entry, review and remove this comment
   invoke_exam_async_worker_background_task: "none",
+  invoke_forgejo_reconciler_background_task: "none",
   invoke_github_async_worker_background_task: "none",
   invoke_github_membership_reconciler_background_task: "none",
   invoke_github_repo_reconciler_background_task: "none",
@@ -2788,6 +2789,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   is_in_class: "none",
   is_instructor_for_class: "none",
   is_instructor_for_student: "none",
+  kick_forgejo_reconciler: "none",
   log_api_gateway_call: "none",
   log_flashcard_interaction: "none",
   lti_consume_nonce: "none",
