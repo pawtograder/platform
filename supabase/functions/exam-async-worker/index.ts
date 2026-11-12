@@ -126,10 +126,15 @@ async function setBatchError(admin: Admin, batchId: number, message: string): Pr
   // Callers run this BEFORE deadLetter for that reason: if it were second, a failure would
   // redeliver a message that had already been dead-lettered, appending a duplicate DLQ message
   // and audit row on every attempt.
+  //
+  // Never over 'completed': every confirmed exam was finalized from validated pages, so an error
+  // arriving later (a duplicate finalize that read the row before it was stamped) describes stale
+  // work, not the batch. It still reaches the DLQ and Sentry.
   const { error: updErr } = await admin
     .from("exam_scan_batches")
     .update({ status: "error", error: message })
-    .eq("id", batchId);
+    .eq("id", batchId)
+    .neq("status", "completed");
   if (updErr) throw new Error(`mark batch ${batchId} errored failed: ${updErr.message}`);
 }
 
@@ -500,15 +505,23 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     // silently left the row with no pages attached, and finalize would then have nothing to
     // assemble -- it now refuses that case loudly, but failing here points at the actual cause
     // instead of surfacing three steps later.
-    const { error: linkErr } = await admin
+    // Only pages still in this batch: one moved away since the load above must not be linked here.
+    // A short count throws into the retry, whose page reload and count check then see the change;
+    // pages already linked are this group's own, and relinking them is idempotent.
+    const { data: linkedPages, error: linkErr } = await admin
       .from("exam_scan_pages")
       .update({ scanned_submission_id: scannedId })
+      .eq("batch_id", batch.id)
       .in(
         "id",
         groupPages.map((p) => p.id)
-      );
+      )
+      .select("id");
     if (linkErr) {
       throw new Error(`link pages to scanned submission ${scannedId} failed: ${linkErr.message}`);
+    }
+    if ((linkedPages?.length ?? 0) !== groupPages.length) {
+      throw new Error(`batch ${batch.id} lost pages while linking scanned submission ${scannedId}; re-run matching`);
     }
 
     // Preserve a human's confirmed/skipped decision across re-runs: leave the existing
