@@ -3068,7 +3068,7 @@ coderBootstrap:
     image: ""
     # "" uses the image's code-server.
     codeServerVersion: 4.143.1
-    # The CODER_EXTERNAL_AUTH_<n>_ID of the Forgejo provider; workspaces clone and push with its token.
+    # Workspaces clone and push with this Coder external auth provider's token. Must equal coder.externalAuth.forgejo.id.
     externalAuthId: forgejo
     arch: amd64
     priorityClassName: ""
