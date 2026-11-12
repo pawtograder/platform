@@ -299,7 +299,27 @@ test.describe("Exam scan ownership (#1078)", () => {
     expect(after).toEqual(before);
   });
 
-  test("swapping in course B's scan after confirmation is rejected before finalize copies it", async () => {
+  test("swapping in course B's scan after confirmation is rejected before finalize creates anything", async () => {
+    // What finalize would create for this student: a submission, and through
+    // submissions_after_insert_hook, its grading review.
+    const created = async () => ({
+      submissions:
+        (
+          await supabase
+            .from("submissions")
+            .select("id", { count: "exact", head: true })
+            .eq("class_id", a.classId)
+            .eq("profile_id", a.student.private_profile_id)
+        ).count ?? 0,
+      reviews:
+        (
+          await supabase
+            .from("submission_reviews")
+            .select("id", { count: "exact", head: true })
+            .eq("class_id", a.classId)
+        ).count ?? 0
+    });
+    const before = await created();
     const { batchId, pageId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     const { error: confirmErr } = await a.grader
@@ -338,6 +358,14 @@ test.describe("Exam scan ownership (#1078)", () => {
     const state = await batch(batchId);
     expect(state.status).toBe("error");
     expect(state.error ?? "").toMatch(/refusing to read it/);
+    const { data: row } = await supabase
+      .from("exam_scanned_submissions")
+      .select("submission_id, finalized_at")
+      .eq("batch_id", batchId)
+      .eq("matched_profile_id", a.student.private_profile_id)
+      .single();
+    expect(row).toEqual({ submission_id: null, finalized_at: null });
+    expect(await created()).toEqual(before);
   });
 
   test("the course-A grader cannot attach scan pages to, or queue work for, course B's batch", async () => {
