@@ -206,7 +206,7 @@ export type ForgejoCommit = {
 
 /** The commit `ref` names, which may be a short sha; the result's `sha` is the full one. */
 export async function getCommit(config: ForgejoConfig, repository: string, ref: string): Promise<ForgejoCommit> {
-  const res = await forgejo(config, "GET", `/repos/${repository}/git/commits/${encodeURIComponent(ref)}`);
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/git/commits/${encodeURIComponent(ref)}`);
   if (!res.ok) throw await failure(res, "commit lookup");
   return (await res.json()) as ForgejoCommit;
 }
@@ -217,13 +217,13 @@ export async function getCommit(config: ForgejoConfig, repository: string, ref: 
  */
 export async function startGrading(config: ForgejoConfig, repository: string, sha: string): Promise<void> {
   const tag = `pawtograder-submit/${sha}`;
-  const tagged = await forgejo(config, "POST", `/repos/${repository}/tags`, {
+  const tagged = await forgejo(config, "POST", `/repos/${repoPath(repository)}/tags`, {
     tag_name: tag,
     target: sha,
     message: "pawtograder submission"
   });
   if (!tagged.ok && tagged.status !== 409) throw await failure(tagged, "submission tag");
-  const res = await forgejo(config, "POST", `/repos/${repository}/actions/workflows/grade.yml/dispatches`, {
+  const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/actions/workflows/grade.yml/dispatches`, {
     ref: tag
   });
   if (!res.ok) throw await failure(res, "workflow dispatch");
