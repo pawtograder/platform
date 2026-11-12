@@ -323,9 +323,10 @@ class GeminiVision {
       throw err;
     }
     if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
-    // No body: an error page can reflect request material (see ProviderTransientError).
+    // No body in either error: an error page can reflect request material, and both messages reach
+    // the batch error, the DLQ and Sentry (see ProviderTransientError). A 4xx stays a plain Error.
     if (res.status >= 500) throw new ProviderTransientError("gemini", "server_error", res.status);
-    if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${body}`);
+    if (!res.ok) throw new Error(`Gemini failed: ${res.status}`);
     // Outside the catch: a body that is not JSON stays a SyntaxError, as before.
     const json = JSON.parse(body);
     return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";

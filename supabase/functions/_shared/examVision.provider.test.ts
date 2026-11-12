@@ -16,7 +16,7 @@ const DUMMY_KEY = "dummy-gemini-key-must-not-leak";
 const PAGE = { name: "page-1.png", bytes: new Uint8Array([137, 80, 78, 71]), width: 10, height: 10 };
 const REGION = { x: 0, y: 0, width: 1, height: 1 };
 
-type Mode = "503" | "503-echo" | "429" | "400" | "drop" | "truncated" | "malformed" | "ok";
+type Mode = "503" | "503-echo" | "429" | "400-echo" | "drop" | "truncated" | "malformed" | "ok";
 
 function geminiBody(text: string): string {
   return JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] });
@@ -57,7 +57,10 @@ function startStandIn() {
           );
         }
         if (state.mode === "429") await conn.write(respond(429, "Too Many Requests", '{"error":"quota"}'));
-        if (state.mode === "400") await conn.write(respond(400, "Bad Request", '{"error":"bad"}'));
+        if (state.mode === "400-echo") {
+          // A permanent error page can reflect request material just as a 5xx one can.
+          await conn.write(respond(400, "Bad Request", JSON.stringify({ error: "bad", echo: DUMMY_KEY })));
+        }
         if (state.mode === "malformed") await conn.write(respond(200, "OK", geminiBody("this is not json")));
         if (state.mode === "ok") await conn.write(respond(200, "OK", geminiBody('{"value": 42, "text": "42"}')));
         if (state.mode === "truncated") {
@@ -191,12 +194,16 @@ Deno.test("Gemini failures are classified by the real provider", async (t) => {
       assertNoKey(err);
     });
 
-    await t.step("other 4xx stays a plain Error (out of scope for #1077)", async () => {
-      standIn.state.mode = "400";
-      const err = await assertRejects(structure, Error);
-      assert(!(err instanceof ProviderTransientError) && !(err instanceof ProviderRateLimitError));
-      assertNoKey(err);
-    });
+    await t.step(
+      "other 4xx stays a plain Error, and a body echoing the credential is not carried into it",
+      async () => {
+        standIn.state.mode = "400-echo";
+        const err = await assertRejects(structure, Error);
+        assert(!(err instanceof ProviderTransientError) && !(err instanceof ProviderRateLimitError));
+        assertNoKey(err);
+        assert(err.message === "Gemini failed: 400", "error message is not the bounded diagnostic");
+      }
+    );
 
     await t.step("malformed model output -> raw OCR text fallback (unchanged)", async () => {
       standIn.state.mode = "malformed";
