@@ -32,6 +32,7 @@ import {
   getWorkspaceByName,
   postBuild
 } from "./CoderWrapper.ts";
+import { CLOUD_WORKSPACES_FEATURE, courseFeatureEffectiveEnabled } from "./courseFeatures.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 export const CODER_ORGANIZATION = "default";
@@ -90,6 +91,8 @@ export interface WorkspaceDb {
   getAssignment(assignmentId: number): Promise<{ id: number; class_id: number; git_provider: string } | null>;
   /** The caller's role in the class, if they have one. */
   getEnrollment(userId: string, classId: number): Promise<{ private_profile_id: string; disabled: boolean } | null>;
+  /** The class's `features` column, as stored. */
+  getCourseFeatures(classId: number): Promise<unknown>;
   getGroupId(assignmentId: number, profileId: string): Promise<number | null>;
   getRepository(repositoryId: number): Promise<RepositoryRow | null>;
   /** The group's repository when groupId is set, otherwise the profile's own. */
@@ -239,7 +242,10 @@ export function cloneUrl(forgejoUrl: string, repository: string): string {
   return `${forgejoUrl}/${m[1]}/${m[2]}.git`;
 }
 
-/** The repository the caller may open a workspace on, or a SecurityError. */
+/**
+ * The repository the caller may open a workspace on, or a SecurityError. A course without
+ * cloud-workspaces is refused: turning the flag off keeps its Forgejo repositories.
+ */
 export async function resolveRepository(
   db: WorkspaceDb,
   caller: Caller,
@@ -255,6 +261,10 @@ export async function resolveRepository(
   if (!assignment) throw new NotFoundError("Assignment not found");
   const enrollment = await db.getEnrollment(caller.userId, assignment.class_id);
   if (!enrollment || enrollment.disabled) throw new SecurityError("You are not enrolled in this course");
+  const features = await db.getCourseFeatures(assignment.class_id);
+  if (!courseFeatureEffectiveEnabled(features, CLOUD_WORKSPACES_FEATURE, false)) {
+    throw new UserVisibleError("Cloud workspaces are not enabled for this course", 403);
+  }
   if (assignment.git_provider !== "forgejo") {
     throw new IllegalArgumentError("This assignment's repositories are not on Forgejo");
   }
