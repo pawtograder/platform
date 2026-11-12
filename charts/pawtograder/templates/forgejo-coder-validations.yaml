@@ -171,7 +171,7 @@
 {{- if .Values.coder.enabled }}{{ $_ := set $tags "coder.coder.image.tag" (toString .Values.coder.coder.image.tag) }}{{ end }}
 {{- if .Values.forgejoRunner.enabled }}{{ $_ := set $tags "forgejoRunner.image.tag" (toString .Values.forgejoRunner.image.tag) }}{{ end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
-{{- $ws := .Values.coderBootstrap.workspaces.image }}
+{{- $ws := include "pawtograder.coderWorkspaceImage" . }}
 {{- $_ := set $tags "coderBootstrap.workspaces.image's tag" (ternary (last (splitList ":" $ws)) "" (contains ":" (last (splitList "/" $ws)))) }}
 {{- end }}
 {{- range $key, $tag := $tags }}
@@ -190,7 +190,7 @@
 {{- if (index $.Values "forgejo-db").enabled }}{{ $_ := set $refs "forgejo-db.image.registry" (printf "%s/" (index $.Values "forgejo-db").image.registry) }}{{ end }}
 {{- if (index $.Values "coder-db").enabled }}{{ $_ := set $refs "coder-db.image.registry" (printf "%s/" (index $.Values "coder-db").image.registry) }}{{ end }}
 {{- if $.Values.coder.enabled }}{{ $_ := set $refs "coder.coder.image.repo" $.Values.coder.coder.image.repo }}{{ end }}
-{{- if and $.Values.coder.enabled $.Values.coderBootstrap.enabled }}{{ $_ := set $refs "coderBootstrap.workspaces.image" $.Values.coderBootstrap.workspaces.image }}{{ end }}
+{{- if and $.Values.coder.enabled $.Values.coderBootstrap.enabled }}{{ $_ := set $refs "coderBootstrap.workspaces.image" (include "pawtograder.coderWorkspaceImage" $) }}{{ end }}
 {{- if $.Values.forgejoRunner.enabled }}{{ $_ := set $refs "forgejoRunner.image.repository" $.Values.forgejoRunner.image.repository }}{{ end }}
 {{- range $key, $ref := $refs }}
 {{- if not (hasPrefix (printf "%s/" $reg) $ref) }}
@@ -279,6 +279,10 @@
 {{- $csv := .Values.coderBootstrap.workspaces.codeServerVersion | default "" | toString }}
 {{- if not (regexMatch "^([0-9]+\\.[0-9]+\\.[0-9]+)?$" $csv) }}
 {{- fail (printf "coderBootstrap.workspaces.codeServerVersion=%q must be a code-server release such as 4.143.1 (no leading v), or empty to use the image's code-server" $csv) }}
+{{- end }}
+{{- $arch := .Values.coderBootstrap.workspaces.arch | default "amd64" | toString }}
+{{- if and (ne $arch "amd64") (not .Values.coderBootstrap.workspaces.image) }}
+{{- fail (printf "coderBootstrap.workspaces.arch=%s needs coderBootstrap.workspaces.image: release-images.yml builds ghcr.io/pawtograder/coder-workspace for linux/amd64 only, so set it to a build for %s" $arch $arch) }}
 {{- end }}
 {{- end }}
 

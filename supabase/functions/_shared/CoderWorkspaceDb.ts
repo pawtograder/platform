@@ -63,6 +63,10 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
         "Enrollment lookup"
       );
     },
+    async getCourseFeatures(classId) {
+      return check(await admin.from("classes").select("features").eq("id", classId).maybeSingle(), "Course lookup")
+        ?.features;
+    },
     async getGroupId(assignmentId, profileId) {
       const row = check(
         await admin

@@ -231,6 +231,9 @@ resource "coder_agent" "main" {
       fi
     fi
     [ -n "$CS" ] || { echo "the workspace image has no code-server and code_server_version is empty" >&2; exit 1; }
+    # VS Code's own askpass would replace the agent's GIT_ASKPASS, so Source Control pushes would prompt for a login.
+    S="$HOME/.local/share/code-server/Machine/settings.json"
+    [ -f "$S" ] || { mkdir -p "$(dirname "$S")" && echo '{"git.useIntegratedAskPass": false}' >"$S"; }
     "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
   EOT
 
