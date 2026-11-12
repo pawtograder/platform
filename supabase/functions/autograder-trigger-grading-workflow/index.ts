@@ -2,6 +2,13 @@ import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AutograderTriggerGradingWorkflowRequest, CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
+import {
+  forgejoConfig,
+  type ForgejoCommit,
+  getCommit as getForgejoCommit,
+  readFile as readForgejoFile,
+  startGrading as startForgejoGrading
+} from "../_shared/ForgejoWrapper.ts";
 import { GetCommitResponse, getCommit, repoHasFileAtRef } from "../_shared/GitHubWrapper.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
 import {
@@ -58,10 +65,10 @@ async function upsertManualCheckRun({
 }: {
   adminSupabase: SupabaseClient<Database>;
   repoData: Database["public"]["Tables"]["repositories"]["Row"];
-  commit: GetCommitResponse["data"];
+  commit: GetCommitResponse["data"] | ForgejoCommit;
   triggeredBy: string;
 }): Promise<RepositoryCheckRunRow> {
-  // `commit.sha` is the canonical full lowercase sha returned by the GitHub API.
+  // `commit.sha` is the canonical full lowercase sha returned by the host's API.
   // Always key DB lookups off it so short / mixed-case input from callers does
   // not produce duplicate rows or break race-recovery against the
   // (repository_id, sha) unique constraint.
@@ -170,14 +177,21 @@ export async function handleRequest(
   // Resolve any abbreviated / mixed-case sha to the canonical full lowercase
   // sha before touching the DB so SELECT/INSERT/race-recovery all key off the
   // same value as the (repository_id, sha) unique constraint.
-  const commit = await getCommit(repository, sha, scope);
+  // A Forgejo repo (#1257) takes the same three steps through Forgejo's API.
+  const forgejo = repoData.git_provider === "forgejo" ? forgejoConfig() : null;
+  if (repoData.git_provider === "forgejo" && !forgejo) {
+    throw new UserVisibleError("Forgejo grading isn't configured on this deployment.", 503);
+  }
+  const commit = forgejo ? await getForgejoCommit(forgejo, repository, sha) : await getCommit(repository, sha, scope);
   scope?.setTag("resolved_sha", commit.sha);
 
   // workflow_dispatch will 422 with an unhelpful "Workflow does not have
   // 'workflow_dispatch' trigger" message if the workflow file does not exist
   // at the target commit. Preflight so we can surface a user-friendly error
   // and avoid leaving the row half-updated.
-  const workflowExists = await repoHasFileAtRef(repository, GRADE_WORKFLOW_PATH, commit.sha, scope);
+  const workflowExists = forgejo
+    ? (await readForgejoFile(forgejo, repository, GRADE_WORKFLOW_PATH, commit.sha)) !== null
+    : await repoHasFileAtRef(repository, GRADE_WORKFLOW_PATH, commit.sha, scope);
   if (!workflowExists) {
     throw new UserVisibleError(
       `Commit ${commit.sha.slice(0, 7)} does not contain ${GRADE_WORKFLOW_PATH}; cannot trigger grading workflow.`
@@ -191,7 +205,11 @@ export async function handleRequest(
     triggeredBy: enrollment.private_profile_id
   });
 
-  await getGitProvider().startGrading(repository, commit.sha, scope);
+  if (forgejo) {
+    await startForgejoGrading(forgejo, repository, commit.sha);
+  } else {
+    await getGitProvider().startGrading(repository, commit.sha, scope);
+  }
 
   const triggeredAt = new Date().toISOString();
   const { data: latestCheckRun, error: latestCheckRunError } = await adminSupabase
