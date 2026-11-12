@@ -4,7 +4,7 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
-import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
+import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
   ensureAccountForUser,
   ensureOrg,
@@ -13,6 +13,7 @@ import {
   type ForgejoConfig,
   grantWrite,
   readFile,
+  repoPath,
   usernameFromEmail
 } from "./ForgejoWrapper.ts";
 
@@ -172,27 +173,74 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
 
 const status = (code: number, message = "") => new Response(JSON.stringify({ message }), { status: code });
 
-Deno.test("ensureOrg: leaves an existing org alone", async () => {
-  await withForgejo([ok({ username: "cs4535" })], async (calls) => {
+/** The lookups that prove an existing org is the admin's alone: who the admin is, the org's teams, the owners. */
+const ownedBy = (...logins: string[]) => [
+  ok({ login: "pawtograder-admin" }),
+  ok([
+    { id: 5, permission: "owner" },
+    { id: 6, permission: "write" }
+  ]),
+  ok(logins.map((login) => ({ login })))
+];
+
+Deno.test("ensureOrg: accepts an existing org whose only owner is the admin", async () => {
+  await withForgejo([ok({ username: "cs4535" }), ...ownedBy("Pawtograder-Admin")], async (calls) => {
     await ensureOrg(config, "cs4535");
     assertEquals(
       calls.map((c) => `${c.method} ${c.url}`),
-      ["GET https://git.example.edu/api/v1/orgs/cs4535"]
+      [
+        "GET https://git.example.edu/api/v1/orgs/cs4535",
+        "GET https://git.example.edu/api/v1/user",
+        "GET https://git.example.edu/api/v1/orgs/cs4535/teams?limit=50",
+        "GET https://git.example.edu/api/v1/teams/5/members?limit=50"
+      ]
     );
   });
 });
 
-Deno.test("ensureOrg: creates a missing org as private, and accepts losing a race to create it", async () => {
+Deno.test("ensureOrg: refuses an org that anyone else owns, alone or with the admin", async () => {
+  for (const owners of [["alex.kim"], ["pawtograder-admin", "alex.kim"]]) {
+    await withForgejo([ok({ username: "cs4535" }), ...ownedBy(...owners)], async () => {
+      await assertRejects(() => ensureOrg(config, "cs4535"), Error, "owner other than Pawtograder's admin");
+    });
+  }
+});
+
+Deno.test("ensureOrg: creates a missing org as private", async () => {
   await withForgejo([status(404), ok({}, 201)], async (calls) => {
     await ensureOrg(config, "cs4535");
     assertEquals(calls[1].body, { username: "cs4535", visibility: "private" });
   });
-  await withForgejo([status(404), unprocessable("user already exists [name: cs4535]")], async () => {
-    await ensureOrg(config, "cs4535");
-  });
   await withForgejo([status(404), status(403, "forbidden")], async () => {
     await assertRejects(() => ensureOrg(config, "cs4535"), Error, "403");
   });
+});
+
+Deno.test("ensureOrg: after losing a race to create it, still checks who owns the org", async () => {
+  await withForgejo(
+    [
+      status(404),
+      unprocessable("user already exists [name: cs4535]"),
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin")
+    ],
+    async () => {
+      await ensureOrg(config, "cs4535");
+    }
+  );
+});
+
+Deno.test("ensureOrg: refuses a name that is a user, which /orgs reports as missing", async () => {
+  await withForgejo([status(404), unprocessable("user already exists [name: cs4535]"), status(404)], async () => {
+    await assertRejects(() => ensureOrg(config, "cs4535"), Error, "taken by a user");
+  });
+});
+
+Deno.test("repoPath: only a plain owner/name gets into a URL", () => {
+  assertEquals(repoPath("cs4535/hw1-alex.kim"), "cs4535/hw1-alex.kim");
+  for (const bad of ["cs4535", "a/b/c", "../users", "cs4535/..", "a?x/b", "a/b#c", "a/b%2F", "", "/b", "a/"]) {
+    assertThrows(() => repoPath(bad), Error, "Not a Forgejo owner/name", bad);
+  }
 });
 
 Deno.test(
@@ -216,6 +264,17 @@ Deno.test(
   }
 );
 
+Deno.test("ensureRepoFromTemplate: a template that isn't owner/name never reaches Forgejo", async () => {
+  await withForgejo([], async (calls) => {
+    await assertRejects(
+      () => ensureRepoFromTemplate(config, "../admin/users?x=", "cs4535", "hw1-alex.kim"),
+      Error,
+      "Not a Forgejo owner/name"
+    );
+    assertEquals(calls, []);
+  });
+});
+
 Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo reports back", async () => {
   await withForgejo([new Response(null, { status: 204 }), ok({ permission: "write" })], async (calls) => {
     assertEquals(await grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), true);
@@ -232,6 +291,17 @@ Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo
   });
   await withForgejo([status(404)], async () => {
     await assertRejects(() => grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), Error, "404");
+  });
+});
+
+Deno.test("readFile: a repository that isn't owner/name never reaches Forgejo", async () => {
+  await withForgejo([], async (calls) => {
+    await assertRejects(
+      () => readFile(config, "../admin", ".github/workflows/grade.yml"),
+      Error,
+      "Not a Forgejo owner/name"
+    );
+    assertEquals(calls, []);
   });
 });
 

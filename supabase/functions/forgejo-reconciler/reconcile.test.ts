@@ -166,7 +166,7 @@ const neededRepo = (login: string, owner = "cs4535"): NeededRepo => ({
   login,
   owner,
   name: `hw1-${login}`,
-  template_repo: "cs4535/hw1-handout"
+  template_repo: `${owner}/hw1-handout`
 });
 
 function fakeRepoSupabase(
@@ -291,7 +291,8 @@ Deno.test("repos: a repo the student can't write to is not recorded, and the pas
   );
 });
 
-function fakeHashSupabase(assignments: { id: number; template_repo: string }[]) {
+function fakeHashSupabase(rows: { id: number; template_repo: string }[]) {
+  const assignments = rows.map((r) => ({ ...r, classes: { slug: "cs4535", forgejo_org: null } }));
   const filters: [string, unknown][] = [];
   const updates: { values: Record<string, unknown>; filters: [string, unknown][] }[] = [];
   const listQuery = {
@@ -352,6 +353,18 @@ Deno.test("hashes: an unset workflow hash becomes the SHA-256 of the handout's g
   ]);
 });
 
+Deno.test("hashes: a handout outside the class's org is refused without reading it", async () => {
+  const { client, updates } = fakeHashSupabase([{ id: 4, template_repo: "othercourse/hw1-handout" }]);
+  const result = await reconcileForgejoWorkflowHashes(client, config, () => {
+    throw new Error("read should not be called");
+  });
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The template repo isn't in the class's Forgejo org"]
+  );
+  assertEquals(updates, []);
+});
+
 Deno.test(
   "hashes: an autograded handout without grade.yml is reported, and one failure doesn't stop the rest",
   async () => {
@@ -381,6 +394,22 @@ Deno.test(
     );
   }
 );
+
+Deno.test("repos: a template outside the class's org is refused before any Forgejo call", async () => {
+  const { client, writes } = fakeRepoSupabase([
+    { ...neededRepo("a"), template_repo: "othercourse/hw1-handout" },
+    { ...neededRepo("b"), template_repo: "../admin/users" }
+  ]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(result.created, 0);
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The template repo isn't in the class's Forgejo org", "The template repo isn't in the class's Forgejo org"]
+  );
+  assertEquals(calls, []);
+  assertEquals(writes, []);
+});
 
 Deno.test("repos: a row that already exists for this student is updated, not inserted again", async () => {
   const { client, writes } = fakeRepoSupabase([neededRepo("a")], {
