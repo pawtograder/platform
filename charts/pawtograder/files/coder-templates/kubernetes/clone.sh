@@ -20,9 +20,11 @@ normalize() {
 [ -n "$URL" ] || fail "the workspace's repo_url is empty; recreate it with the repository's clone URL."
 
 if [ -e "$DIR" ] || [ -L "$DIR" ]; then
+  # mv would put the clone inside a linked directory, and VS Code would open the wrong folder.
+  [ ! -L "$DIR" ] || fail "$DIR is a symbolic link. Nothing was changed; move it aside and restart the workspace."
   origin="$(git -C "$DIR" config --get remote.origin.url 2>/dev/null)"
   if [ -d "$DIR" ] && [ -z "$(ls -A "$DIR")" ]; then
-    rmdir "$DIR"
+    rmdir "$DIR" || fail "couldn't remove the empty directory $DIR"
   elif ! top="$(cd "$DIR" 2>/dev/null && pwd -P)" || [ "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" != "$top" ]; then
     fail "$DIR exists but isn't a git checkout. Nothing was changed; move it aside and restart the workspace."
   elif [ "$(normalize "$origin")" != "$(normalize "$URL")" ]; then
