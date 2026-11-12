@@ -6,9 +6,10 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 
 let rows: { user_id: string; login: string }[] = [];
 let failNext = false;
+let hangNext = false;
 const queries = jest.fn();
 
-// Each query resolves with the current `rows`, or with an error when `failNext` is set.
+// Each query resolves with the current `rows`, with an error when `failNext` is set, or never when `hangNext` is.
 function query() {
   const chain = {
     select: () => chain,
@@ -17,6 +18,10 @@ function query() {
     order: () => chain,
     range: () => {
       queries();
+      if (hangNext) {
+        hangNext = false;
+        return new Promise(() => {});
+      }
       if (failNext) {
         failNext = false;
         return Promise.resolve({ data: null, error: { message: "boom" } });
@@ -34,6 +39,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   rows = [{ user_id: "u1", login: "alex.kim" }];
   failNext = false;
+  hangNext = false;
   queries.mockClear();
 });
 afterEach(() => jest.useRealTimers());
@@ -77,4 +83,15 @@ test("a first load that fails is reported", async () => {
   const { result } = renderHook(() => useForgejoLogins(true));
   await waitFor(() => expect(result.current.error).toBe("boom"));
   expect(result.current.loading).toBe(false);
+});
+
+test("a first lookup that a refresh overtakes still ends the loading state", async () => {
+  hangNext = true;
+  const { result } = renderHook(() => useForgejoLogins(true));
+  expect(result.current.loading).toBe(true);
+  act(() => {
+    jest.advanceTimersByTime(30_000);
+  });
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.byUserId.get("u1")).toBe("alex.kim");
 });
