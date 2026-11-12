@@ -1,7 +1,7 @@
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const PAGE_SIZE = 1000;
 /** Accounts are created a few seconds after enrollment, so an open roster checks again on this interval. */
@@ -25,6 +25,9 @@ export function useForgejoLogins(enabled: boolean): ForgejoLogins {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  // Until a lookup finishes, every attempt is the first load: a slow first lookup that a refresh
+  // cancels must not leave the roster on "Loading…".
+  const loaded = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -39,11 +42,11 @@ export function useForgejoLogins(enabled: boolean): ForgejoLogins {
       setByUserId(new Map());
       setError(null);
       setLoading(false);
-      setRefresh(0);
+      loaded.current = false;
       return;
     }
     let cancelled = false;
-    const firstLoad = refresh === 0;
+    const firstLoad = !loaded.current;
     if (firstLoad) setLoading(true);
     (async () => {
       const client = createClient();
@@ -66,12 +69,14 @@ export function useForgejoLogins(enabled: boolean): ForgejoLogins {
     })()
       .then((logins) => {
         if (cancelled) return;
+        loaded.current = true;
         setError(null);
         // A new Map only when something changed: the roster rebuilds its rows when this changes.
         setByUserId((previous) => (sameLogins(previous, logins) ? previous : logins));
       })
       .catch((queryError: { message?: string }) => {
         if (cancelled || !firstLoad) return;
+        loaded.current = true;
         setError(queryError?.message ?? "Failed to load Forgejo usernames");
       })
       .finally(() => {
