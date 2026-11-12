@@ -1,7 +1,7 @@
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const PAGE_SIZE = 1000;
 /** Accounts are created a few seconds after enrollment, so an open roster checks again on this interval. */
@@ -39,7 +39,8 @@ export function useForgejoLogins(enabled: boolean): ForgejoLogins {
 
   useEffect(() => {
     if (!enabled) {
-      setByUserId(new Map());
+      // The same empty map, so a roster without the feature doesn't rebuild its rows on mount.
+      setByUserId((previous) => (previous.size === 0 ? previous : new Map()));
       setError(null);
       setLoading(false);
       loaded.current = false;
@@ -87,7 +88,8 @@ export function useForgejoLogins(enabled: boolean): ForgejoLogins {
     };
   }, [enabled, refresh]);
 
-  return { byUserId, loading, error };
+  // One object until something changes: the roster lists it as a dependency of its columns and rows.
+  return useMemo(() => ({ byUserId, loading, error }), [byUserId, loading, error]);
 }
 
 function sameLogins(a: Map<string, string>, b: Map<string, string>): boolean {
