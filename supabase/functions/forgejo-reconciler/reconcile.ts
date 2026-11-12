@@ -222,6 +222,7 @@ export async function reconcileForgejoGroupRepos(
       assignment_group_id: group.assignment_group_id
     };
     try {
+      assertTemplateInOrg(group.template_repo, group.owner);
       const existingId = await existingRepositoryRow(supabase, repository, owner);
       if (!orgsReady.has(group.owner)) {
         await ops.ensureOrg(config, group.owner);

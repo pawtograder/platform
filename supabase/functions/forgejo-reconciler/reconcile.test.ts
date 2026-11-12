@@ -512,6 +512,18 @@ Deno.test("group repos: one repo per group, every member a writer, recorded read
   ]);
 });
 
+Deno.test("group repos: a template outside the class's org is refused before any Forgejo call", async () => {
+  const { client } = fakeGroupSupabase([{ ...neededGroup(1, ["a", "b"]), template_repo: "othercourse/hw1-handout" }]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result.created, 0);
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The template repo isn't in the class's Forgejo org"]
+  );
+  assertEquals(calls, []);
+});
+
 Deno.test("group repos: a member without an account yet leaves the repo not ready", async () => {
   const { client, upserts } = fakeGroupSupabase([neededGroup(5, ["a"], false)]);
   const result = await reconcileForgejoGroupRepos(client, config, stubOps().ops);
