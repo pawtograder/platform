@@ -11,7 +11,7 @@
 --   2. claiming: the first claim wins, an immediate second claim loses, and a claim in flight hides
 --      the user from forgejo_accounts_needed
 --   3. a finished account is never needed or claimed again
---   4. a claim older than the stale window is needed again and can be taken over
+--   4. a claim older than the stale window is needed again and can be taken over, after anyone never tried
 --   5. reads: a user sees their own row, staff of the user's class see it, anyone else sees nothing;
 --      nobody can write from the browser
 --   6. only service_role can call the two functions
@@ -34,9 +34,11 @@ end $$;
 
 create temp table fx(name text primary key, id uuid);
 grant select on fx to authenticated;
+-- newcomer's id sorts after everyone's, so 4e only passes when ordering puts never-tried users first.
 insert into fx values
   ('student', gen_random_uuid()), ('grader', gen_random_uuid()), ('other_student', gen_random_uuid()),
-  ('disabled_student', gen_random_uuid()), ('malformed_student', gen_random_uuid());
+  ('disabled_student', gen_random_uuid()), ('malformed_student', gen_random_uuid()),
+  ('newcomer', ('ffffffff' || substr(gen_random_uuid()::text, 9))::uuid);
 insert into auth.users (id, email, aud, role)
 select id, name || '-' || left(id::text, 8) || '@git-accounts.test', 'authenticated', 'authenticated' from fx;
 
@@ -66,6 +68,7 @@ end $$;
 
 select pg_temp.enroll('student', 'CW flagged', 'student');
 select pg_temp.enroll('grader', 'CW flagged', 'grader');
+select pg_temp.enroll('newcomer', 'CW flagged', 'student');
 select pg_temp.enroll('other_student', 'CW unflagged', 'student');
 select pg_temp.enroll('disabled_student', 'CW flagged', 'student', true);
 select pg_temp.enroll('malformed_student', 'CW malformed', 'student');
@@ -116,6 +119,14 @@ select pg_temp.check('4b a stale claim can be taken over', pg_temp.claim('grader
 select pg_temp.check('4c taking over refreshes claimed_at',
   (select claimed_at > now() - interval '1 minute' from public.git_accounts where user_id = (select id from fx where name = 'grader')));
 select pg_temp.check('4d still one row', (select count(*) = 1 from public.git_accounts where user_id = (select id from fx where name = 'grader')));
+update public.git_accounts set claimed_at = now() - interval '30 minutes'
+where user_id = (select id from fx where name = 'grader');
+select pg_temp.check('4e a user never tried is listed before one whose claim went stale',
+  (select min(n.ord) filter (where n.user_id = (select id from fx where name = 'newcomer'))
+        < min(n.ord) filter (where n.user_id = (select id from fx where name = 'grader'))
+   from public.forgejo_accounts_needed(:inst, 10, 1000) with ordinality as n(user_id, email, name, ord)));
+update public.git_accounts set claimed_at = now()
+where user_id = (select id from fx where name = 'grader');
 
 -- 5
 select pg_temp.as_user((select id from fx where name = 'student'));
