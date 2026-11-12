@@ -194,9 +194,16 @@ export default function RegionEditor({
       return;
     }
     const supabase = createClient();
+    // A save or Build starts a new check while an older one may still be in flight. Only the
+    // latest may set the notice, or a stale result can hide a newer warning.
+    let cancelled = false;
     async function check(rubricId: number) {
-      const [questionsRes, checksRes, submissionsRes] = await Promise.all([
-        supabase.from("exam_questions").select("id, parent_id, points").eq("exam_id", examId),
+      const [examRes, questionsRes, checksRes, submissionsRes] = await Promise.all([
+        supabase.from("exams").select("delivery_mode").eq("id", examId).single(),
+        supabase
+          .from("exam_questions")
+          .select("id, parent_id, points, answer_type, correct_answer")
+          .eq("exam_id", examId),
         supabase
           .from("rubric_checks")
           .select("exam_question_id, points")
@@ -204,24 +211,30 @@ export default function RegionEditor({
           .not("exam_question_id", "is", null),
         supabase.from("submissions").select("id", { count: "exact", head: true }).eq("assignment_id", assignmentId)
       ]);
-      const error = questionsRes.error ?? checksRes.error ?? submissionsRes.error;
+      const error = examRes.error ?? questionsRes.error ?? checksRes.error ?? submissionsRes.error;
       if (error) throw error;
+      if (cancelled) return;
       setRubricOutOfDate(
         !submissionsRes.count &&
           examRubricOutOfDate(
             questionsRes.data ?? [],
             (checksRes.data ?? []).flatMap((c) =>
               c.exam_question_id === null ? [] : [{ exam_question_id: c.exam_question_id, points: c.points }]
-            )
+            ),
+            examRes.data?.delivery_mode === "in_app"
           )
       );
     }
     check(gradingRubricId).catch((e) => {
+      if (cancelled) return;
       // The notice is a hint, so a failed check hides it rather than blocking the editor.
       setRubricOutOfDate(false);
       // eslint-disable-next-line no-console
       console.error("Failed to check whether the exam rubric is up to date", e);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [examId, assignmentId, gradingRubricId, reloadKey, rubricBuilds]);
 
   const currentSnapshot = useMemo(() => snapshotOf(questions, regions), [questions, regions]);
