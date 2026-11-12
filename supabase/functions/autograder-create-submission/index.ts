@@ -14,6 +14,7 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   assertJobTokenMatchesRepository,
+  findActorUserId,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
@@ -926,25 +927,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           );
         }
       }
-      // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
+      // Helper to fetch user roles by the actor's username and class ID (works with or without check run)
       const fetchUserRolesForActor = async (
         classId: number | null
       ): Promise<Database["public"]["Tables"]["user_roles"]["Row"] | undefined> => {
         if (classId == null || isPawtograderTriggered) return undefined;
-        const { data: user, error: userError } = await adminSupabase
-          .from("users")
-          .select("user_id")
-          .ilike("github_username", decoded.actor)
-          .maybeSingle();
-        if (userError) {
+        let userId: string | null;
+        try {
+          userId = await findActorUserId(adminSupabase, decoded, forgejoConfig()?.url);
+        } catch (userError) {
           Sentry.captureException(userError, scope);
-          throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
+          throw new UserVisibleError(`Failed to lookup user: ${(userError as { message?: string }).message}`);
         }
-        if (!user) return undefined;
+        if (!userId) return undefined;
         const { data: userRolesData, error: userRolesError } = await adminSupabase
           .from("user_roles")
           .select("*")
-          .eq("user_id", user.user_id)
+          .eq("user_id", userId)
           .eq("class_id", Number(classId))
           .maybeSingle();
         if (userRolesError) {
