@@ -172,7 +172,7 @@ async function loadScanScope(admin: Admin, batchId: number): Promise<ScanScope> 
 // ---------------------------------------------------------------------------
 // process_page: OCR one scan page
 // ---------------------------------------------------------------------------
-async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
+async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: page, error } = await admin
     .from("exam_scan_pages")
@@ -180,11 +180,15 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
     .eq("id", args.scan_page_id)
     .single();
   if (error || !page) throw new Error(`scan page ${args.scan_page_id} not found`);
+  // The message was enqueued for batchId, and that batch is what the enqueue RPC authorized. Staff
+  // can move a page to another batch of the course afterwards; this job is then obsolete, so it
+  // reads nothing and does not error either batch (the page's new batch has its own processing).
+  if (page.batch_id !== batchId) return;
   // Idempotent: already OCR'd. Keyed on ocr_data (as the match step's completeness check is),
   // not ocr_text, which is "" for a blank page and would re-send it to the provider every time.
   if (page.ocr_data !== null) return;
 
-  assertScanPathInScope(page.image_path, await loadScanScope(admin, page.batch_id), `scan page ${page.id}`);
+  assertScanPathInScope(page.image_path, await loadScanScope(admin, batchId), `scan page ${page.id}`);
   const bytes = await downloadImage(admin, "exam-scans", page.image_path);
   const img: PageImage = {
     name: page.image_path,
@@ -193,10 +197,13 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
     height: page.height ?? 0
   };
   const result = await provider.ocrImage(img);
+  // Only while the page is still in this batch: if staff moved it during the OCR call, the result
+  // belongs to no queued work and is dropped (a zero-row update is not an error).
   const { error: updErr } = await admin
     .from("exam_scan_pages")
     .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
-    .eq("id", args.scan_page_id);
+    .eq("id", args.scan_page_id)
+    .eq("batch_id", batchId);
   // Throw on write failure so the message is requeued, not archived (would lose the OCR).
   if (updErr) throw new Error(`persist OCR for scan page ${args.scan_page_id} failed: ${updErr.message}`);
 }
@@ -287,15 +294,26 @@ async function matchProfile(
   return { profile_id: null, confidence: 0 };
 }
 
+// The batch states a match job may run from and move out of: the ones before review. A match
+// message that finds its batch anywhere else is stale -- a duplicate that outlived its visibility
+// window, or one still waiting on OCR after the batch errored -- and must not overwrite 'error' or
+// 'completed' (or move a reviewed or finalizing batch backwards). This cannot tell an old attempt's
+// message from a new one once enqueue_exam_process_batch has reset the batch to 'ocr'; that would
+// need an attempt id on the message.
+const MATCHABLE_STATUSES = ["uploaded", "ocr", "matching"];
+
 async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): Promise<void> {
   const classId = env.class_id;
   const provider = getExamVisionProvider();
   const { data: batch, error } = await admin
     .from("exam_scan_batches")
-    .select("id, class_id, exam_id, pages_per_exam")
+    .select("id, class_id, exam_id, pages_per_exam, total_pages, status")
     .eq("id", args.batch_id)
     .single();
   if (error || !batch) throw new Error(`batch ${args.batch_id} not found`);
+  // Before the OCR wait below, so a stale job cannot sit out the wait and then replace an existing
+  // batch error with its own.
+  if (!MATCHABLE_STATUSES.includes(batch.status)) return;
 
   // Join the OCR fan-out before doing anything else. enqueue_exam_process_batch sends one
   // process_page message per page plus this single match message, with no ordering guarantee
@@ -323,11 +341,15 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     return;
   }
 
-  const { error: matchingErr } = await admin
+  // Conditional, so a batch that errored or completed since the check above stays as it is.
+  const { data: nowMatching, error: matchingErr } = await admin
     .from("exam_scan_batches")
     .update({ status: "matching" })
-    .eq("id", batch.id);
+    .eq("id", batch.id)
+    .in("status", MATCHABLE_STATUSES)
+    .select("id");
   if (matchingErr) throw new Error(`set batch ${batch.id} to matching failed: ${matchingErr.message}`);
+  if (!nowMatching || nowMatching.length === 0) return;
 
   const perExam = Math.max(1, batch.pages_per_exam);
   const { data: pages, error: pagesErr } = await admin
@@ -340,11 +362,22 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // `error` batches -- so one transient database failure stranded the batch in an empty review
   // state with no way back. Throw so the queue retry path runs instead.
   if (pagesErr) throw new Error(`load scan pages for batch ${batch.id} failed: ${pagesErr.message}`);
+  // enqueue_exam_process_batch checked that every declared page persisted, but staff can delete or
+  // move pages after that. Grouping a short batch would still produce whole exams whenever the
+  // remaining pages divide evenly, just with the wrong pages in them, so require the full count on
+  // the pages actually being grouped. The divisibility check below is a separate requirement.
+  if ((pages?.length ?? 0) !== batch.total_pages) {
+    throw new Error(
+      `batch ${batch.id} has ${pages?.length ?? 0} of ${batch.total_pages} scan pages; ` +
+        `re-upload the scan before processing`
+    );
+  }
   if (!pages || pages.length === 0) {
     const { error: emptyReviewErr } = await admin
       .from("exam_scan_batches")
       .update({ status: "review" })
-      .eq("id", batch.id);
+      .eq("id", batch.id)
+      .in("status", MATCHABLE_STATUSES);
     if (emptyReviewErr) throw new Error(`set empty batch ${batch.id} to review failed: ${emptyReviewErr.message}`);
     return;
   }
@@ -530,12 +563,13 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // Conditional transition. A large match job can outlast the 120s visibility window, so a
   // duplicate worker may still be running this after staff have finalized the batch -- an
   // unconditional write would then stamp 'review' over 'completed' or 'error', hiding the
-  // terminal result. Only advance from the states that precede review.
+  // terminal result. Only advance from the states that precede review; 'error' is not one of them,
+  // since staff recover an errored batch through enqueue_exam_process_batch, which resets it to 'ocr'.
   const { error: reviewErr } = await admin
     .from("exam_scan_batches")
     .update({ status: "review" })
     .eq("id", batch.id)
-    .in("status", ["uploaded", "ocr", "matching", "error"]);
+    .in("status", MATCHABLE_STATUSES);
   if (reviewErr) throw new Error(`set batch ${batch.id} to review failed: ${reviewErr.message}`);
 }
 
@@ -809,7 +843,7 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   try {
     // env.args is narrowed by env.method (discriminated ExamAsyncEnvelope) — no casts needed.
     if (env.method === "process_page") {
-      await processPage(admin, env.args);
+      await processPage(admin, env.batch_id, env.args);
     } else if (env.method === "match") {
       await doMatch(admin, env, env.args);
     } else if (env.method === "finalize") {
