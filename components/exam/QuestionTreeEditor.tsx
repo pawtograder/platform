@@ -6,6 +6,7 @@
 
 import { Box, Button, HStack, Input, NativeSelect, Text, Textarea, VStack } from "@chakra-ui/react";
 import { useCallback, useMemo } from "react";
+import { preorder } from "@/lib/exam/questionTree";
 
 export const ANSWER_TYPES = ["free_text", "short_answer", "multiple_choice", "numeric", "true_false"] as const;
 export const OBJECTIVE_TYPES = ["multiple_choice", "numeric", "true_false"];
@@ -48,25 +49,6 @@ export function newQuestion(level: 1 | 2 | 3, parent: string | null, ordinal: nu
     correct_answer: null,
     grading_tolerance: null
   };
-}
-
-/** Pre-order traversal so children render directly under their parent. */
-function preorder(questions: BuilderQuestion[]): BuilderQuestion[] {
-  const childrenOf = new Map<string | null, BuilderQuestion[]>();
-  for (const q of questions) {
-    const key = q.parent_client_id ?? null;
-    (childrenOf.get(key) ?? childrenOf.set(key, []).get(key)!).push(q);
-  }
-  for (const arr of childrenOf.values()) arr.sort((a, b) => a.ordinal - b.ordinal);
-  const out: BuilderQuestion[] = [];
-  const visit = (parent: string | null) => {
-    for (const q of childrenOf.get(parent) ?? []) {
-      out.push(q);
-      visit(q.client_id);
-    }
-  };
-  visit(null);
-  return out;
 }
 
 export default function QuestionTreeEditor({

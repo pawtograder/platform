@@ -3,6 +3,7 @@
 import { examExtractTemplate } from "@/lib/edgeFunctions";
 import { EXAM_ANSWER_TYPES, normalizeAnswerType } from "@/lib/exam/answerTypes";
 import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
+import { preorder } from "@/lib/exam/questionTree";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -173,6 +174,8 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   }, [examId, reloadKey]);
 
   const currentSnapshot = useMemo(() => snapshotOf(questions, regions), [questions, regions]);
+  // Render order only: each question under its parent (#1264). `questions` keeps the load order.
+  const orderedQuestions = useMemo(() => preorder(questions), [questions]);
   const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
 
   const addQuestion = useCallback((level: 1 | 2 | 3, parent: string | null) => {
@@ -449,7 +452,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
             + Part (level 1)
           </Button>
           <VStack align="stretch" gap={1}>
-            {questions.map((q) => (
+            {orderedQuestions.map((q) => (
               <HStack key={q.client_id} pl={(q.level - 1) * 4} gap={1}>
                 <Text fontSize="xs" color="fg.muted">
                   L{q.level}
