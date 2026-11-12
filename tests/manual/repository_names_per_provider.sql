@@ -1,4 +1,4 @@
--- Proof harness for 20261110130000_repository_names_per_provider.sql (#1093, merged scope of #1096).
+-- Proof harness for 20261112120300_repository_names_per_provider.sql (#1093, merged scope of #1096).
 --
 -- Makes its own fixtures and ends in ROLLBACK:
 --

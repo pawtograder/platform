@@ -16,8 +16,8 @@ import { reconcileForgejo } from "./reconcile.ts";
  * Creates a Forgejo account for everyone enrolled in a cloud-workspaces class (#1092), then a repo
  * for each student in each released Forgejo assignment (#1093), so both exist before the student
  * first signs in. Invoked hourly via pg_cron, and kicked when someone joins such a class, a class
- * turns the flag on (20261109130000_forgejo_reconciler.sql) or a Forgejo assignment is released
- * (20261110120000_forgejo_repos.sql).
+ * turns the flag on (20261112120100_forgejo_reconciler.sql) or a Forgejo assignment is released
+ * (20261112120200_forgejo_repos.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {

@@ -1,4 +1,4 @@
--- Proof harness for 20261110120000_forgejo_repos.sql (#1093).
+-- Proof harness for 20261112120200_forgejo_repos.sql (#1093).
 --
 -- Makes its own fixtures and ends in ROLLBACK. Kicks show up as pg_net requests to forgejo-reconciler,
 -- queued inside this transaction, so nothing is sent:
