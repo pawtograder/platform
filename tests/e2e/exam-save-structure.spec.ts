@@ -1,6 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
-import { createClass, createUserInClass, insertAssignment, loginAsUser, supabase } from "./TestingUtils";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import {
+  createClass,
+  createUserInClass,
+  insertAssignment,
+  loginAsUser,
+  setCourseFeature,
+  supabase
+} from "./TestingUtils";
 
 // A 1x1 transparent PNG, enough for the template page to load.
 const PNG_1x1 = Buffer.from(
@@ -11,6 +19,10 @@ const PNG_1x1 = Buffer.from(
 /** A 20-point exam whose structure is saved, and the instructor on its template page. */
 async function openExamEditor(page: Page, { emptyRubric }: { emptyRubric: boolean }) {
   const course = await createClass({ name: "Exam save structure E2E" });
+  // Paper exams are off unless a course opts in (#1196), and a new class has no `features`
+  // entries at all, so without this the template route renders the "not enabled" notice
+  // instead of the editor. Opting in here is what an instructor does before using the feature.
+  await setCourseFeature(course.id, COURSE_FEATURES.EXAMS, true);
   const instructor = await createUserInClass({ role: "instructor", class_id: course.id });
   const assignment = await insertAssignment({
     class_id: course.id,

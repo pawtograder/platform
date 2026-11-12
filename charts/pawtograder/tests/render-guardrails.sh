@@ -2980,6 +2980,106 @@ apps_has "app nologin: the step targets this chart's Postgres" yes "ALTER ROLE %
 
 echo
 
+echo "== SSO client Secrets from OpenBao =="
+
+SSO_ES=(--set forgejoCoderSecrets.externalSecret.enabled=true
+  --set forgejoCoderSecrets.externalSecret.forgejoPath=apps/t/forgejo
+  --set forgejoCoderSecrets.externalSecret.coderPath=apps/t/coder
+  --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo-oauth
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder-oidc
+  --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=apps/t/coder-external-auth)
+SSO_ONLY=(--show-only templates/forgejo-coder-externalsecrets.yaml)
+apps_has "sso: Forgejo's client syncs from its path" yes "key: apps/t/forgejo-oauth" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Forgejo's Secret keeps the key/secret names the login source reads" yes "secretKey: secret" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's client syncs from its path" yes "key: apps/t/coder-oidc" "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+apps_has "sso: Coder's Secret carries CODER_OIDC_CLIENT_SECRET" yes "secretKey: CODER_OIDC_CLIENT_SECRET" \
+  "${SSO_ES[@]}" "${SSO_ONLY[@]}"
+label="sso: client Secrets outlive their ExternalSecrets, the apps' passwords don't"
+if ! apps "${SSO_ES[@]}" "${SSO_ONLY[@]}" >"$OUTFILE"; then
+  echo "FAIL [$label]: render was REFUSED"; FAILED=1
+elif [ "$(grep -c 'creationPolicy: Orphan' "$OUTFILE")" -ne 3 ] || [ "$(grep -c 'creationPolicy: Owner' "$OUTFILE")" -ne 4 ]; then
+  echo "FAIL [$label]: want 3 Orphan (forgejo-oauth, coder-oidc, coder-external-auth) and 4 Owner"; FAILED=1
+else echo "ok   [$label]"; fi
+apps_has "sso: no Coder client ExternalSecret with coder.oidc off" no "name: pawtograder-coder-oidc" \
+  "${SSO_ES[@]}" --set coder.oidc.enabled=false "${SSO_ONLY[@]}"
+apps_has "sso: no client ExternalSecrets without their paths" no "-oauth" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath= \
+  --set forgejoCoderSecrets.externalSecret.coderOIDCPath= "${SSO_ONLY[@]}"
+apps_refused "sso: a client path that holds Coder's passwords is refused" \
+  'coderOIDCPath is "apps/t/coder", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/coder
+apps_refused "sso: a client path that holds Forgejo's passwords is refused" \
+  'forgejoOAuthPath is "apps/t/forgejo", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.forgejoOAuthPath=apps/t/forgejo
+apps_refused "sso: the same path spelled with slashes is still refused" \
+  'coderOIDCPath is "/apps/t/coder/", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=/apps/t/coder/
+apps_refused "sso: one path for both clients is refused" "forgejoOAuthPath and coderOIDCPath must differ" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderOIDCPath=apps/t/forgejo-oauth
+apps_refused "external auth: a client path that holds Coder's passwords is refused" \
+  'coderExternalAuthPath is "apps/t/coder", which also holds an app'"'"'s passwords' \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=apps/t/coder
+apps_refused "external auth: sharing Coder's OIDC client path is refused" \
+  "coderOIDCPath and coderExternalAuthPath must differ" \
+  "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=/apps/t/coder-oidc/
+label="external auth: staging syncs Coder's Forgejo client from its own OpenBao path"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/coder-external-auth-staging" "$OUTFILE" \
+  || ! grep -qF 'CODER_EXTERNAL_AUTH_0_AUTH_URL: "https://git.staging.pawtograder.net/login/oauth/authorize"' "$OUTFILE"; then
+  echo "FAIL [$label]: missing the ExternalSecret path or the provider's authorize URL"; FAILED=1
+else echo "ok   [$label]"; fi
+label="sso: staging syncs both clients from OpenBao and turns on Coder's OIDC"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-oauth-staging" "$OUTFILE" \
+  || ! grep -qF "key: apps/pawtograder/coder-oidc-staging" "$OUTFILE" \
+  || ! grep -qF "CODER_OIDC_ISSUER_URL" "$OUTFILE" \
+  || ! grep -qF "GOTRUE_OAUTH_SERVER_ENABLED" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a client ExternalSecret, Coder's OIDC settings or GoTrue's OAuth server"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
+echo "== forgejo runner: token Secrets from OpenBao =="
+ES=templates/forgejo-coder-externalsecrets.yaml
+RUNNER_ES=("${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.runnerPath=apps/t/forgejo-runner)
+apps_has "runner ES: the dispatcher token Secret syncs from runnerPath" yes "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: it targets forgejoRunner.dispatcher.tokenSecret by its full name" yes "name: pawtograder-forgejo-runner-token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the mirror hook's token syncs too" yes "property: mirror_token" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: the other Secrets keep their pawtograder-<name> names" yes "name: pawtograder-forgejo-oauth" \
+  "${RUNNER_ES[@]}" --show-only "$ES"
+apps_has "runner ES: without runnerPath the token Secrets stay hand-made" no "pawtograder-forgejo-runner-token" \
+  "${SSO_ES[@]}" --show-only "$ES"
+apps_has "runner ES: source=upstream syncs no mirror token" no "property: mirror_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.source=upstream --show-only "$ES"
+apps_has "runner ES: with the runner off, no token Secrets" no "property: dispatcher_token" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.enabled=false --show-only "$ES"
+apps_refused "runner ES: one Secret for both tokens is refused" "name the same Secret" \
+  "${RUNNER_ES[@]}" --set forgejoRunner.actions.tokenSecret=pawtograder-forgejo-runner-token
+for k in forgejoPath coderPath forgejoOAuthPath coderOIDCPath coderExternalAuthPath; do
+  p="$(printf '%s\n' "${SSO_ES[@]}" | sed -n "s|^forgejoCoderSecrets.externalSecret.$k=||p")"
+  apps_refused "runner ES: runnerPath equal to $k is refused" "the same path as $k" \
+    "${SSO_ES[@]}" --set "forgejoCoderSecrets.externalSecret.runnerPath=/$p/"
+done
+label="runner ES: staging adds the Forgejo login source and syncs both runner tokens"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  --set forgejoRunner.image.tag=staging-test >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF "key: apps/pawtograder/forgejo-runner-staging" "$OUTFILE" \
+  || ! grep -qF "property: mirror_token" "$OUTFILE" \
+  || ! grep -qF -- "--name \"pawtograder\" --provider \"openidConnect\"" "$OUTFILE"; then
+  echo "FAIL [$label]: missing a runner token ExternalSecret or the pawtograder login source"; FAILED=1
+else echo "ok   [$label]"; fi
+
+echo
+
 echo "== Coder template variables =="
 
 # The CLI parses each --variable as CSV, so a JSON value (quotes, commas) fails
@@ -3036,7 +3136,8 @@ apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'
 apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
-  --set coderBootstrap.workspaces.externalAuthId=git-school --show-only templates/coder-bootstrap.yaml
+  --set coderBootstrap.workspaces.externalAuthId=git-school --set coder.externalAuth.forgejo.id=git-school \
+  --show-only templates/coder-bootstrap.yaml
 apps_has "template: workspaces default to the chart's coder-workspace image" yes \
   "image: \"ghcr.io/pawtograder/coder-workspace:$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART/Chart.yaml")\"" \
   --show-only templates/coder-bootstrap.yaml
@@ -3075,6 +3176,59 @@ elif [ "$(grep -c 'templates edit' "$OUTFILE")" -ne 2 ] \
 else echo "ok   [$label]"; fi
 
 echo
+
+echo "== Coder external auth: Forgejo =="
+EA=(--set coder.externalAuth.forgejo.enabled=true)
+EA_ES=(--set forgejoCoderSecrets.externalSecret.enabled=true
+  --set forgejoCoderSecrets.externalSecret.forgejoPath=apps/pawtograder/forgejo-test
+  --set forgejoCoderSecrets.externalSecret.coderPath=apps/pawtograder/coder-test)
+apps_has "external auth: off renders no provider" no "CODER_EXTERNAL_AUTH_0" \
+  --set coder.externalAuth.forgejo.enabled=false --show-only templates/app-databases.yaml
+apps_has "external auth: off renders no ExternalSecret for it" no "pawtograder-coder-external-auth" \
+  --set coder.externalAuth.forgejo.enabled=false "${EA_ES[@]}" --show-only templates/forgejo-coder-externalsecrets.yaml
+apps_has "external auth: a gitea provider" yes 'CODER_EXTERNAL_AUTH_0_TYPE: "gitea"' "${EA[@]}" \
+  --show-only templates/app-databases.yaml
+apps_has "external auth: the browser authorizes on Forgejo's public URL" yes \
+  'CODER_EXTERNAL_AUTH_0_AUTH_URL: "https://git.example.com/login/oauth/authorize"' "${EA[@]}" \
+  --show-only templates/app-databases.yaml
+apps_has "external auth: coderd exchanges tokens over the Service" yes \
+  'CODER_EXTERNAL_AUTH_0_TOKEN_URL: "http://pawtograder-forgejo-http.pawtograder.svc:3000/login/oauth/access_token"' \
+  "${EA[@]}" --show-only templates/app-databases.yaml
+apps_has "external auth: the regex matches the bare origin" yes \
+  'CODER_EXTERNAL_AUTH_0_REGEX: "^https://git\\.example\\.com(/.*)?$"' "${EA[@]}" \
+  --show-only templates/app-databases.yaml
+apps_has "external auth: scopes are spelled out, without Coder's stray space" yes \
+  'CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"' "${EA[@]}" \
+  --show-only templates/app-databases.yaml
+apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: "git-school"' "${EA[@]}" \
+  --set coder.externalAuth.forgejo.id=git-school --set coderBootstrap.workspaces.externalAuthId=git-school \
+  --show-only templates/app-databases.yaml
+apps_has "external auth: the ExternalSecret maps OpenBao's client to Coder's env" yes \
+  "secretKey: CODER_EXTERNAL_AUTH_0_CLIENT_SECRET" "${EA[@]}" "${EA_ES[@]}" \
+  --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=apps/pawtograder/coder-external-auth-test \
+  --show-only templates/forgejo-coder-externalsecrets.yaml
+apps_refused "external auth: with the ExternalSecret, the OpenBao path is required" \
+  "coderExternalAuthPath is required with coder.externalAuth.forgejo.enabled" "${EA[@]}" "${EA_ES[@]}"
+apps_refused "external auth: without Forgejo is refused" \
+  "coder.externalAuth.forgejo.enabled needs forgejo.enabled=true" "${EA[@]}" --set forgejo.enabled=false \
+  --set forgejoRunner.enabled=false
+apps_has "external auth: ignored with Coder off" no "CODER_EXTERNAL_AUTH_0" "${EA[@]}" --set coder.enabled=false \
+  --show-only templates/app-databases.yaml
+apps_refused "external auth: with Forgejo's OAuth2 provider off is refused" \
+  "needs Forgejo's OAuth2 provider" "${EA[@]}" --set forgejo.gitea.config.oauth2.ENABLED=false
+apps_refused "external auth: an id that isn't a path segment is refused" \
+  "coder.externalAuth.forgejo.id must be lowercase letters" "${EA[@]}" --set coder.externalAuth.forgejo.id=Forgejo/x
+apps_refused "external auth: a template asking for another provider is refused" \
+  "workspaces would ask Coder for a provider that doesn't exist" "${EA[@]}" \
+  --set coderBootstrap.workspaces.externalAuthId=gitea
+apps_refused "external auth: an overlay dropping the Secret from envFrom is refused" \
+  "coder.coder.envFrom is missing pawtograder-coder-external-auth" "${EA[@]}" \
+  --set 'coder.coder.envFrom[0].configMapRef.name=pawtograder-coder-env' \
+  --set 'coder.coder.envFrom[1].secretRef.name=pawtograder-coder-db' \
+  --set 'coder.coder.envFrom[2].secretRef.name=pawtograder-coder-oidc'
+apps_refused "external auth: another provider 0 in coder.coder.env is refused" \
+  "coder.coder.env sets CODER_EXTERNAL_AUTH_0_ID" "${EA[@]}" \
+  --set 'coder.coder.env[3].name=CODER_EXTERNAL_AUTH_0_ID' --set 'coder.coder.env[3].value=github'
 
 echo
 

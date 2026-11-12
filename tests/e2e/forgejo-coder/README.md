@@ -50,20 +50,27 @@ tests/e2e/forgejo-coder/run-remote.sh --namespace cs4535-workspaces \
 
 ## Journeys
 
-`tests/e2e/sso/sso.forgejo-coder.spec.ts`, run in order:
+`tests/e2e/sso/sso.forgejo-coder.spec.ts`, run in order. The lane runs as the chart does with
+`auth.oauthServer.autoApproveFirstParty` and `forgejo.signInRedirect` on: `run-e2e.sh` sets
+`OAUTH_FIRST_PARTY_REDIRECT_URIS` to both apps' callbacks and mounts `files/forgejo/header.tmpl` into
+Forgejo. Nothing clicks Authorize for Forgejo or Coder, so reaching the app shows no consent page
+stopped the flow. `run-remote.sh` reads both settings from the release and runs the journeys that fit.
 
-1. Forgejo, already signed in to Pawtograder. The user approves on the consent page and Forgejo
+1. Forgejo, already signed in to Pawtograder. `/user/login` goes straight to Pawtograder and Forgejo
    creates an account bound to the `pawtograder` login source.
-2. Forgejo, cold start. With no Pawtograder session, consent sends the user to sign in and back.
-3. Forgejo, deny. No account is created.
-4. Forgejo, repeat sign-in. GoTrue remembers the consent and the user gets the same account.
+2. Forgejo, cold start. With no Pawtograder session, the user signs in and goes on to Forgejo.
+3. Forgejo, deny. No account is created. Runs only without auto-approval.
+4. Forgejo, repeat sign-in. The user gets the same account.
+   4b. `/user/login?password_login=1` keeps Forgejo's own sign-in page.
 5. Coder, already signed in. The test first creates the user's Coder account the way
    `workspace-open` does (#1222): an `oidc` user whose email is `<user id>@coder.pawtograder.invalid`.
    The sign-in lands on that account and binds it to the user's id.
-6. Coder: cold start, deny (the account stays unbound), and a new Pawtograder account that took
-   another user's old email. That user's Coder account still has the real email, and the new account
-   doesn't get it: Coder refuses the sign-in.
+6. Coder: cold start; deny, which leaves the account unbound and runs only without auto-approval;
+   and a new Pawtograder account that took another user's old email. That user's Coder account still
+   has the real email, and the new account doesn't get it: Coder refuses the sign-in.
 7. GoTrue refuses an authorize request whose `redirect_uri` isn't registered.
+8. A third client named `Coder` with its own callback still gets the consent page, and Deny sends
+   `error=access_denied` back to it.
 
 The lane's Coder uses the chart's OIDC settings (`charts/pawtograder/templates/app-databases.yaml`):
 sign-ups off, and the email read from the access token's `coder_email` claim

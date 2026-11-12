@@ -17,6 +17,8 @@ services:
     image: ghcr.io/pawtograder/mirror/forgejo/forgejo:15.0.9-rootless
     network_mode: service:loopback
     depends_on: [loopback]
+    volumes:
+      - ../../../charts/pawtograder/files/forgejo/header.tmpl:/pawtograder-templates/header.tmpl:ro
     environment:
       FORGEJO__database__DB_TYPE: sqlite3
       FORGEJO__security__INSTALL_LOCK: "true"

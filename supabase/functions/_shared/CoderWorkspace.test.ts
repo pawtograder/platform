@@ -24,6 +24,7 @@ import {
   coderEmail,
   coderUsername,
   type Deps,
+  linkUrl,
   OPEN_BUDGET_MS,
   openWorkspace,
   type RepositoryRow,
@@ -487,7 +488,12 @@ Deno.test(
     const { coder, db, deps } = setup();
     const first = await openWorkspace(deps, ALEX, { assignment_id: 41 });
     assertEquals(first.status, "needs_linking");
-    assertEquals(first.authenticate_url, `${CODER_URL}/external-auth/forgejo`);
+    // Coder's sign-in first, then its Forgejo link, so a student with no Coder session ends up linked.
+    assertEquals(
+      first.authenticate_url,
+      `${CODER_URL}/api/v2/users/oidc/callback?redirect=%2Fexternal-auth%2Fforgejo%2Fcallback`
+    );
+    assertEquals(first.redirect_url, first.authenticate_url);
     assertEquals(coder.posts(/^\/users$/).length, 1);
     const created = coder.findUser("alex-kim-1a2b3c4d5e6f")!;
     assertEquals(created.email, coderEmail(ALEX.userId), "never the real, transferable email");
@@ -594,13 +600,73 @@ Deno.test("unlinked Forgejo: needs_linking with the student's own link state, an
   coder.findUser("alex-kim-1a2b3c4d5e6f")!.subject = ALEX.userId; // signed in, not linked
   const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
   assertEquals(res.status, "needs_linking");
-  assertEquals(res.redirect_url, `${CODER_URL}/external-auth/forgejo`);
+  assertEquals(
+    res.redirect_url,
+    `${CODER_URL}/api/v2/users/oidc/callback?redirect=%2Fexternal-auth%2Fforgejo%2Fcallback`
+  );
   const lookups = coder.calls.filter((c) => c.path.startsWith("/templateversions/"));
   assert(lookups.length > 0);
   const userId = coder.findUser("alex-kim-1a2b3c4d5e6f")!.id;
   for (const c of lookups) assertEquals(c.path, `/templateversions/ver-1/external-auth?user_id=${userId}`);
   assertEquals(coder.posts(/\/workspaces$/).length, 0);
   assertEquals(db.rows.length, 0);
+});
+
+Deno.test("linkUrl: Coder's OIDC sign-in, redirecting to the provider's link callback by path", () => {
+  const url = new URL(linkUrl(CODER_URL, "forgejo"));
+  assertEquals(url.origin + url.pathname, `${CODER_URL}/api/v2/users/oidc/callback`);
+  assertEquals([...url.searchParams], [["redirect", "/external-auth/forgejo/callback"]]);
+  assertEquals(
+    new URL(linkUrl(CODER_URL, "git-school")).searchParams.get("redirect"),
+    "/external-auth/git-school/callback"
+  );
+});
+
+Deno.test("needs_linking links the provider Coder says is missing, not Coder's link page", async () => {
+  const { coder, deps } = setup();
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.findUser("alex-kim-1a2b3c4d5e6f")!.subject = ALEX.userId;
+  const base = coder.fetch;
+  deps.coder = {
+    ...deps.coder,
+    fetch: async (input, init) => {
+      const res = await base(input, init);
+      if (!new URL(String(input)).pathname.endsWith("/external-auth")) return res;
+      const list = (await res.json()) as { id: string; authenticate_url: string }[];
+      const renamed = list.map((e) => ({
+        ...e,
+        id: "git-school",
+        authenticate_url: `${CODER_URL}/external-auth/git-school`
+      }));
+      return new Response(JSON.stringify(renamed), { status: 200, headers: { "content-type": "application/json" } });
+    }
+  };
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "needs_linking");
+  assertEquals(new URL(res.redirect_url!).searchParams.get("redirect"), "/external-auth/git-school/callback");
+});
+
+Deno.test("a link removed between the check and the create: needs_linking with the same sign-in link", async () => {
+  const { coder, db, deps } = setup();
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  signInAndLink(coder, ALEX);
+  const u = coder.findUser("alex-kim-1a2b3c4d5e6f")!;
+  const base = coder.fetch;
+  deps.coder = {
+    ...deps.coder,
+    fetch: (input, init) => {
+      if (init?.method === "POST" && new URL(String(input)).pathname.endsWith("/workspaces")) {
+        coder.forgejoLinked.delete(u.id);
+      }
+      return base(input, init);
+    }
+  };
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "needs_linking");
+  assertEquals(res.authenticate_url, linkUrl(CODER_URL, "forgejo"));
+  assertEquals(res.redirect_url, res.authenticate_url);
+  assertEquals(coder.workspaces.length, 0);
+  assertEquals(db.rows[0].coder_workspace_id ?? null, null);
 });
 
 Deno.test("a Coder user bound to another Pawtograder login is refused before any workspace", async () => {

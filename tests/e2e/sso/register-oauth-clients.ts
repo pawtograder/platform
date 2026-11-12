@@ -21,7 +21,9 @@ async function main() {
 
   const wanted = [
     { key: "FORGEJO", client_name: "Forgejo", redirect_uris: [`${forgejo}/user/oauth2/${sourceName}/callback`] },
-    { key: "CODER", client_name: "Coder", redirect_uris: [`${coder}/api/v2/users/oidc/callback`] }
+    { key: "CODER", client_name: "Coder", redirect_uris: [`${coder}/api/v2/users/oidc/callback`] },
+    // Coder's name on another callback: auto-approval must not follow the name.
+    { key: "THIRD", client_name: "Coder", redirect_uris: [need("THIRD_PARTY_REDIRECT_URI")] }
   ];
 
   const listRes = await fetch(`${auth}/admin/oauth/clients?per_page=1000`, { headers });
@@ -30,7 +32,9 @@ async function main() {
   const existing = Array.isArray(listed) ? listed : (listed.clients ?? []);
 
   for (const w of wanted) {
-    for (const old of existing.filter((c) => c.client_name === w.client_name)) {
+    const isOld = (c: OAuthClient) =>
+      c.client_name === w.client_name && w.redirect_uris.every((r) => c.redirect_uris?.includes(r));
+    for (const old of existing.filter(isOld)) {
       const del = await fetch(`${auth}/admin/oauth/clients/${old.client_id}`, { method: "DELETE", headers });
       if (!del.ok && del.status !== 404) throw new Error(`delete ${old.client_id}: ${del.status}`);
     }
