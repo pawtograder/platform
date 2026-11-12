@@ -10,7 +10,7 @@
 // claim, which the access token hook sets to the same address for the token's subject (migration
 // 20261109150000, chart CODER_OIDC_EMAIL_FIELD). Every later login is matched by subject. Before a
 // workspace is created or started we still read the bound subject back and require it to be the
-// caller's, and a user who hasn't signed in to Coder yet gets the link page, which signs them in.
+// caller's, and a user who hasn't signed in to Coder yet gets linkUrl, which signs them in first.
 
 import type { WorkspaceOpenRequest, WorkspaceOpenResponse, WorkspaceStep } from "./FunctionTypes.d.ts";
 import {
@@ -212,6 +212,18 @@ export function coderUsername(email: string, userId: string): string {
  */
 export function workspaceName(repositoryId: number): string {
   return `repo-${repositoryId}`;
+}
+
+/**
+ * Where to send a student who has to link their Forgejo account: Coder's OIDC sign-in, which returns
+ * to the provider's link callback. Coder's own authenticate_url (`/external-auth/<id>`) is a page with
+ * a button that needs a Coder session first. The callback with no code sends the student straight on
+ * to Forgejo's authorize page. Coder keeps only the path of `redirect` (coderd/httpmw/oauth2.go,
+ * v2.37.3), so the trip ends on Coder, not back on Pawtograder.
+ */
+export function linkUrl(coderUrl: string, providerId: string): string {
+  const redirect = `/external-auth/${encodeURIComponent(providerId)}/callback`;
+  return `${coderUrl}/api/v2/users/oidc/callback?${new URLSearchParams({ redirect })}`;
 }
 
 /** The owner and repository names the template's repo_url validation accepts (#1221). */
@@ -664,7 +676,7 @@ export async function openWorkspace(
     throw e;
   }
 
-  // Coder binds the subject on the student's first sign-in, which the link page asks for.
+  // Coder binds the subject on the student's first sign-in, which the link URL starts with.
   const template = await getTemplate(coder, CODER_ORGANIZATION, CODER_TEMPLATE);
   const subject = await getBoundOidcSubject(coder, user.id);
   if (subject !== null && subject !== caller.userId) {
@@ -680,7 +692,7 @@ export async function openWorkspace(
     (e) => !e.optional && !e.authenticated
   );
   if (subject === null || missing) {
-    const authenticate_url = missing?.authenticate_url ?? `${coder.url}/external-auth/forgejo`;
+    const authenticate_url = linkUrl(coder.url, missing?.id ?? "forgejo");
     return {
       status: "needs_linking",
       message: `Link your ${missing?.display_name ?? "Forgejo"} account in Coder, then open the workspace again.`,
@@ -734,7 +746,7 @@ export async function openWorkspace(
       const ext = (await getExternalAuth(coder, template.active_version_id, user.id)).find(
         (e) => !e.optional && !e.authenticated
       );
-      const authenticate_url = ext?.authenticate_url ?? `${coder.url}/external-auth/forgejo`;
+      const authenticate_url = linkUrl(coder.url, ext?.id ?? "forgejo");
       return { status: "needs_linking", authenticate_url, redirect_url: authenticate_url, coder_user_id: user.id };
     } else if (created.error) {
       // A concurrent call created it first. Coder answers 409 when its name check sees that
