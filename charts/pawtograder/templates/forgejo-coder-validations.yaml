@@ -290,6 +290,10 @@
 {{- if not (regexMatch "^([0-9]+\\.[0-9]+\\.[0-9]+)?$" $csv) }}
 {{- fail (printf "coderBootstrap.workspaces.codeServerVersion=%q must be a code-server release such as 4.143.1 (no leading v), or empty to use the image's code-server" $csv) }}
 {{- end }}
+{{- $arch := .Values.coderBootstrap.workspaces.arch | default "amd64" | toString }}
+{{- if and (ne $arch "amd64") (not .Values.coderBootstrap.workspaces.image) }}
+{{- fail (printf "coderBootstrap.workspaces.arch=%s needs coderBootstrap.workspaces.image: release-images.yml builds ghcr.io/pawtograder/coder-workspace for linux/amd64 only, so set it to a build for %s" $arch $arch) }}
+{{- end }}
 {{- end }}
 
 {{- if .Values.forgejo.enabled }}
