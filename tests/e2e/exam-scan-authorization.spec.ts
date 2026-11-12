@@ -225,6 +225,25 @@ async function courseASubmissionFileHashes(a: CourseA) {
   return { count: (files ?? []).length, stored, graderCanFetch, studentCanFetch };
 }
 
+/**
+ * The ids of every row finalize can create in a course: submissions, the grading reviews
+ * submissions_after_insert_hook creates with them, page files and exam artifacts. Compared before
+ * and after, so a rejected finalize is shown to add no row, not merely to keep the totals.
+ */
+async function courseRowIds(classId: number) {
+  const ids = async (table: "submissions" | "submission_reviews" | "submission_files" | "submission_artifacts") => {
+    const { data, error } = await supabase.from(table).select("id").eq("class_id", classId).order("id");
+    expect(error).toBeNull();
+    return (data ?? []).map((r) => r.id);
+  };
+  return {
+    submissions: await ids("submissions"),
+    reviews: await ids("submission_reviews"),
+    files: await ids("submission_files"),
+    artifacts: await ids("submission_artifacts")
+  };
+}
+
 test.describe("Exam scan ownership (#1078)", () => {
   let a: CourseA;
   let b: CourseB;
@@ -300,36 +319,8 @@ test.describe("Exam scan ownership (#1078)", () => {
   });
 
   test("swapping in course B's scan after confirmation is rejected before finalize creates anything", async () => {
-    // What finalize would create for this student: a submission, through
-    // submissions_after_insert_hook its grading review, and its page files and exam artifact.
-    const created = async () => ({
-      submissions:
-        (
-          await supabase
-            .from("submissions")
-            .select("id", { count: "exact", head: true })
-            .eq("class_id", a.classId)
-            .eq("profile_id", a.student.private_profile_id)
-        ).count ?? 0,
-      reviews:
-        (
-          await supabase
-            .from("submission_reviews")
-            .select("id", { count: "exact", head: true })
-            .eq("class_id", a.classId)
-        ).count ?? 0,
-      files:
-        (await supabase.from("submission_files").select("id", { count: "exact", head: true }).eq("class_id", a.classId))
-          .count ?? 0,
-      artifacts:
-        (
-          await supabase
-            .from("submission_artifacts")
-            .select("id", { count: "exact", head: true })
-            .eq("class_id", a.classId)
-        ).count ?? 0
-    });
-    const before = await created();
+    // Every submission, grading review, file and artifact in course A, by id.
+    const before = await courseRowIds(a.classId);
     const { batchId, pageId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     const { error: confirmErr } = await a.grader
@@ -375,7 +366,7 @@ test.describe("Exam scan ownership (#1078)", () => {
       .eq("matched_profile_id", a.student.private_profile_id)
       .single();
     expect(row).toEqual({ submission_id: null, finalized_at: null });
-    expect(await created()).toEqual(before);
+    expect(await courseRowIds(a.classId)).toEqual(before);
   });
 
   test("the course-A grader cannot attach scan pages to, or queue work for, course B's batch", async () => {
@@ -683,6 +674,118 @@ test.describe("Exam scan ownership: legitimate finalization (#1078, needs #1075)
     expect(hashes.count).toBe(1);
     expect(hashes.stored).toEqual([ownSha]);
     expect(await countFor("submission_artifacts")).toBe(1);
+  });
+
+  test("a partial submission survives a rejected finalize, and is resumed once the scan is fixed", async () => {
+    test.setTimeout(180_000);
+    const a = await arrangeCourseA();
+    const b = await arrangeCourseB();
+    const { batchId, pageId, ownPath, ownSha } = await graderCreatesBatch(a, {});
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    const { data: confirmed, error: confirmErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", batchId)
+      .eq("matched_profile_id", a.student.private_profile_id)
+      .select("id")
+      .single();
+    expect(confirmErr).toBeNull();
+    // Fixture: what an earlier finalize attempt leaves when it stops after exam_create_submission.
+    const { data: subId, error: createErr } = await supabase.rpc("exam_create_submission", {
+      p_scanned_submission_id: confirmed!.id
+    });
+    expect(createErr).toBeNull();
+    expect(typeof subId).toBe("number");
+    const submissionRow = async () => {
+      const { data, error } = await supabase
+        .from("submissions")
+        .select("*")
+        .eq("id", subId as number)
+        .single();
+      expect(error).toBeNull();
+      return data;
+    };
+    const scannedRow = async () => {
+      const { data, error } = await supabase
+        .from("exam_scanned_submissions")
+        .select("submission_id, finalized_at, match_status, matched_profile_id")
+        .eq("id", confirmed!.id)
+        .single();
+      expect(error).toBeNull();
+      return data;
+    };
+    const partialSubmission = await submissionRow();
+    const partialScanned = await scannedRow();
+    expect(partialScanned).toEqual({
+      submission_id: subId,
+      finalized_at: null,
+      match_status: "confirmed",
+      matched_profile_id: a.student.private_profile_id
+    });
+    const beforeRejection = await courseRowIds(a.classId);
+    expect(beforeRejection.submissions).toEqual([subId]);
+    expect(beforeRejection.reviews.length).toBeGreaterThan(0); // created by the insert hook
+    expect(beforeRejection.files).toEqual([]);
+    expect(beforeRejection.artifacts).toEqual([]);
+
+    // As the grader: swap course B's object into the confirmed exam's page, then finalize.
+    const { data: swapped, error: swapErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ image_path: b.objectPath })
+      .eq("id", pageId)
+      .select("image_path");
+    expect(swapErr).toBeNull();
+    expect(swapped).toEqual([{ image_path: b.objectPath }]);
+    const { data: queued, error: finErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+    expect(finErr).toBeNull();
+    expect(queued).toBe(1);
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return (await batch(batchId)).status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("error");
+    expect((await batch(batchId)).error ?? "").toMatch(/refusing to read it/);
+    // Nothing added, and the partial submission and its scanned exam are exactly as they were.
+    expect(await courseRowIds(a.classId)).toEqual(beforeRejection);
+    expect(await submissionRow()).toEqual(partialSubmission);
+    expect(await scannedRow()).toEqual(partialScanned);
+    expect((await courseASubmissionFileHashes(a)).stored).not.toContain(b.objectSha);
+
+    // As the grader: put the page's own scan back, and finalize again.
+    const { data: restored, error: restoreErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ image_path: ownPath })
+      .eq("id", pageId)
+      .select("image_path");
+    expect(restoreErr).toBeNull();
+    expect(restored).toEqual([{ image_path: ownPath }]);
+    const { data: requeued, error: refinErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+    expect(refinErr).toBeNull();
+    expect(requeued).toBe(1);
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return (await batch(batchId)).status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("completed");
+    const after = await courseRowIds(a.classId);
+    expect(after.submissions).toEqual([subId]);
+    expect(after.reviews).toEqual(beforeRejection.reviews);
+    expect(after.files).toHaveLength(1);
+    expect(after.artifacts).toHaveLength(1);
+    const done = await scannedRow();
+    expect(done?.submission_id).toBe(subId);
+    expect(done?.finalized_at).not.toBeNull();
+    const hashes = await courseASubmissionFileHashes(a);
+    expect(hashes.stored).toEqual([ownSha]);
+    expect(hashes.studentCanFetch).toEqual([ownSha]);
   });
 });
 
