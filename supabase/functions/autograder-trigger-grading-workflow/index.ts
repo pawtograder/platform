@@ -157,8 +157,8 @@ export async function handleRequest(
   const { data: repoData, error: repoError } = await supabase
     .from("repositories")
     .select("*")
-    // Grading is triggered through GitHub Actions.
-    .eq("git_provider", "github")
+    // Either host: a Forgejo repo reruns through Forgejo's API below. A class with the same owner/name on both
+    // hosts gets two rows, and maybeSingle's error refuses the rerun rather than picking one.
     .eq("repository", repository)
     .eq("class_id", class_id)
     .maybeSingle();
