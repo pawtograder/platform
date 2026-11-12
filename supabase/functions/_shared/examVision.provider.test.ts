@@ -16,7 +16,7 @@ const DUMMY_KEY = "dummy-gemini-key-must-not-leak";
 const PAGE = { name: "page-1.png", bytes: new Uint8Array([137, 80, 78, 71]), width: 10, height: 10 };
 const REGION = { x: 0, y: 0, width: 1, height: 1 };
 
-type Mode = "503" | "503-echo" | "429" | "400-echo" | "drop" | "truncated" | "malformed" | "ok";
+type Mode = "503" | "503-echo" | "429" | "400-echo" | "redirect" | "drop" | "truncated" | "malformed" | "ok";
 
 function geminiBody(text: string): string {
   return JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] });
@@ -25,7 +25,7 @@ function geminiBody(text: string): string {
 /** A one-connection-at-a-time HTTP stand-in that can also drop the connection without replying. */
 function startStandIn() {
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const state = { mode: "ok" as Mode, requestHeads: [] as string[] };
+  const state = { mode: "ok" as Mode, requestHeads: [] as string[], redirectTo: "" };
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const respond = (status: number, reason: string, body: string) =>
@@ -60,6 +60,13 @@ function startStandIn() {
         if (state.mode === "400-echo") {
           // A permanent error page can reflect request material just as a 5xx one can.
           await conn.write(respond(400, "Bad Request", JSON.stringify({ error: "bad", echo: DUMMY_KEY })));
+        }
+        if (state.mode === "redirect") {
+          await conn.write(
+            encoder.encode(
+              `HTTP/1.1 307 Temporary Redirect\r\nLocation: ${state.redirectTo}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`
+            )
+          );
         }
         if (state.mode === "malformed") await conn.write(respond(200, "OK", geminiBody("this is not json")));
         if (state.mode === "ok") await conn.write(respond(200, "OK", geminiBody('{"value": 42, "text": "42"}')));
@@ -205,6 +212,31 @@ Deno.test("Gemini failures are classified by the real provider", async (t) => {
       }
     );
 
+    await t.step("a redirect is not followed, so the key is not resent to where it points", async () => {
+      // A second local server stands in for wherever an allowed endpoint might redirect to.
+      const target = startStandIn();
+      try {
+        standIn.state.redirectTo = `${target.url}/v1beta/models/elsewhere:generateContent`;
+        standIn.state.mode = "redirect";
+        let err: unknown = null;
+        try {
+          await structure();
+        } catch (e) {
+          err = e;
+        }
+        const reached = target.state.requestHeads;
+        const keyResent = reached.some((head) => head.includes(DUMMY_KEY));
+        assert(
+          reached.length === 0,
+          `the redirect was followed: the target received ${reached.length} request(s), key resent: ${keyResent}`
+        );
+        assertInstanceOf(err, ProviderTransientError);
+        assertDiagnostic(err, "network");
+      } finally {
+        await target.close();
+      }
+    });
+
     await t.step("malformed model output -> raw OCR text fallback (unchanged)", async () => {
       standIn.state.mode = "malformed";
       assertEquals(await structure(), { value: "42", text: "42" });
@@ -236,4 +268,114 @@ Deno.test("ProviderTransientError is an Error with its own name", () => {
   assertInstanceOf(err, Error);
   assertEquals(err.name, "ProviderTransientError");
   assertEquals(err.message, "gemini request failed: category=server_error status=502");
+});
+
+Deno.test("EXAM_GEMINI_BASE_URL can only name a local test server", async (t) => {
+  const names = [
+    "EXAM_VISION_PROVIDER",
+    "GOOGLE_API_KEY",
+    "EXAM_GEMINI_BASE_URL",
+    "EXAM_GEMINI_RPM",
+    "EXAM_GEMINI_MODEL"
+  ] as const;
+  const saved = names.map((name) => [name, Deno.env.get(name)] as const);
+  const realFetch = globalThis.fetch;
+  const sent: Request[] = [];
+  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(input instanceof Request ? input : new Request(input, init));
+    return Promise.resolve(new Response(geminiBody('{"value": 42, "text": "42"}'), { status: 200 }));
+  };
+  Deno.env.set("EXAM_VISION_PROVIDER", "gemini");
+  Deno.env.set("GOOGLE_API_KEY", DUMMY_KEY);
+  Deno.env.set("EXAM_GEMINI_RPM", "0");
+  Deno.env.set("EXAM_GEMINI_MODEL", "test-model");
+  // getExamVisionProvider caches its provider per module instance, so each case loads a fresh one.
+  let instance = 0;
+  const providerFor = async (baseUrl: string | undefined) => {
+    if (baseUrl === undefined) Deno.env.delete("EXAM_GEMINI_BASE_URL");
+    else Deno.env.set("EXAM_GEMINI_BASE_URL", baseUrl);
+    const mod: typeof import("./examVision.ts") = await import(`./examVision.ts?base-url-case=${++instance}`);
+    return () => mod.getExamVisionProvider();
+  };
+  const REJECTED = "EXAM_GEMINI_BASE_URL may only point at a local test server";
+  const GOOGLE = "https://generativelanguage.googleapis.com";
+
+  try {
+    // [configured value, origin the request must go to]
+    const allowed: [string | undefined, string][] = [
+      [undefined, GOOGLE],
+      ["", GOOGLE],
+      ["   ", GOOGLE],
+      ["http://127.0.0.1:58080", "http://127.0.0.1:58080"],
+      ["http://localhost:58080/", "http://localhost:58080"],
+      ["http://host.docker.internal:58080", "http://host.docker.internal:58080"],
+      ["http://[::1]:58080", "http://[::1]:58080"],
+      ["HTTPS://LOCALHOST:8443", "https://localhost:8443"],
+      // Spellings the URL parser normalizes to an allowed host. Accepted, and the request goes to
+      // that normalized host, because it is built from the parsed origin rather than the string.
+      ["http://\uFF4C\uFF4F\uFF43\uFF41\uFF4C\uFF48\uFF4F\uFF53\uFF54:58080", "http://localhost:58080"],
+      ["http://%6c%6f%63%61%6c%68%6f%73%74:58080", "http://localhost:58080"],
+      ["http://0x7f.1:58080", "http://127.0.0.1:58080"],
+      ["http://2130706433:58080", "http://127.0.0.1:58080"],
+      ["http://local\thost:58080", "http://localhost:58080"],
+      ["http://local\nhost:58080", "http://localhost:58080"]
+    ];
+    for (const [value, origin] of allowed) {
+      await t.step(`${JSON.stringify(value)} -> requests ${origin}`, async () => {
+        sent.length = 0;
+        const provider = (await providerFor(value))();
+        await provider.structureAnswer("numeric", PAGE, REGION, "42");
+        assertEquals(sent.length, 1);
+        const url = new URL(sent[0].url);
+        assertEquals(url.origin, origin);
+        assertEquals(url.pathname, "/v1beta/models/test-model:generateContent");
+        assertEquals(sent[0].redirect, "error");
+        assert(sent[0].headers.get("x-goog-api-key") === DUMMY_KEY, "request does not carry the key header");
+      });
+    }
+
+    const rejected = [
+      "https://attacker.example",
+      "http://localhost.attacker.example:58080",
+      "http://localhost@attacker.example",
+      "http://127.0.0.1.nip.io:58080",
+      "http://169.254.169.254",
+      "ftp://localhost:58080",
+      "file:///etc/hosts",
+      "localhost:58080",
+      "not a url",
+      "http://localhost:58080/proxy",
+      "http://localhost:58080/?x=1",
+      "http://localhost:58080/#x",
+      "http://user:pw@localhost:58080",
+      // Bypass attempts: each parses to a host or shape outside the allowlist.
+      "http://localhost:58080\\@attacker.example",
+      "http://attacker.example#@localhost",
+      "http://attacker.example?@localhost",
+      "http://localhost.:58080",
+      "http://[::ffff:127.0.0.1]:58080"
+    ];
+    for (const value of rejected) {
+      await t.step(`${JSON.stringify(value)} is rejected before any request`, async () => {
+        sent.length = 0;
+        const get = await providerFor(value);
+        let err: unknown = null;
+        try {
+          await get().structureAnswer("numeric", PAGE, REGION, "42");
+        } catch (e) {
+          err = e;
+        }
+        assertEquals(sent.length, 0, "a request was sent");
+        assertInstanceOf(err, Error);
+        assert(err.message.startsWith(REJECTED), "not the base-URL rejection");
+        assert(!err.message.includes(value) && !err.message.includes(DUMMY_KEY), "message echoes the value");
+      });
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [name, value] of saved) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  }
 });

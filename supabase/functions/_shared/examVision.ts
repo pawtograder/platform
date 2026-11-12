@@ -299,7 +299,10 @@ class GeminiVision {
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
       }),
       // Bound the call so a stalled connection can't hang the worker indefinitely.
-      signal: AbortSignal.timeout(60000)
+      signal: AbortSignal.timeout(60000),
+      // fetch would otherwise follow a redirect and resend x-goog-api-key to wherever it points.
+      // A redirect rejects as a TypeError, classified below like any other failed request.
+      redirect: "error"
     });
     let res: Response;
     let body: string;
@@ -465,13 +468,43 @@ function buildExamVisionProvider(): ExamVisionProvider {
   const model = Deno.env.get("EXAM_GEMINI_MODEL") ?? "gemini-3.8-flash";
   const ocrRpm = parseInt(Deno.env.get("EXAM_OCR_RPM") ?? "60", 10);
   const geminiRpm = parseInt(Deno.env.get("EXAM_GEMINI_RPM") ?? "60", 10);
-  // Override only to point Gemini at a local fault-injecting stand-in (tests/e2e/exam-provider-faults.spec.ts).
-  // An empty value (e.g. `EXAM_GEMINI_BASE_URL=` in an env file) means unset, not a relative URL.
-  const geminiBaseUrl = (
-    Deno.env.get("EXAM_GEMINI_BASE_URL")?.trim() || "https://generativelanguage.googleapis.com"
-  ).replace(/\/+$/, "");
   return new CompositeExamVisionProvider(
     new GoogleVisionOcr(ocrKey, ocrRpm),
-    new GeminiVision(geminiKey, model, geminiRpm, geminiBaseUrl)
+    new GeminiVision(geminiKey, model, geminiRpm, geminiBaseUrl(Deno.env.get("EXAM_GEMINI_BASE_URL")))
   );
+}
+
+// Hosts EXAM_GEMINI_BASE_URL may name. The override exists only to point the real adapter at a
+// local fault-injecting stand-in (tests/e2e/exam-provider-faults.spec.ts), and every request
+// carries GOOGLE_API_KEY, so it must not be configurable to any other destination.
+// host.docker.internal is here because the edge runtime runs in a container, where loopback is
+// the container itself, not the machine running the stand-in. This bounds what the variable can
+// name; where these names resolve is still up to the host's resolver and Docker configuration.
+const GEMINI_TEST_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "host.docker.internal"]);
+
+function geminiBaseUrl(raw: string | undefined): string {
+  // An empty value (e.g. `EXAM_GEMINI_BASE_URL=` in an env file) means unset, not a relative URL.
+  const value = raw?.trim();
+  if (!value) return "https://generativelanguage.googleapis.com";
+  let url: URL | null = null;
+  try {
+    url = new URL(value);
+  } catch {
+    // Reported below with every other rejection.
+  }
+  // Checked on the parsed URL, not the string, and the request is built from url.origin, so the
+  // host checked is the host requested. A bare origin only: a path, query, fragment or userinfo
+  // has no use here. The value is not echoed, since this message reaches the batch error.
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !GEMINI_TEST_HOSTS.has(url.hostname) ||
+    url.href !== `${url.origin}/`
+  ) {
+    throw new Error(
+      "EXAM_GEMINI_BASE_URL may only point at a local test server: an http(s) origin on localhost, " +
+        "127.0.0.1, [::1] or host.docker.internal, with no path. Leave it unset to use Gemini."
+    );
+  }
+  return url.origin;
 }
