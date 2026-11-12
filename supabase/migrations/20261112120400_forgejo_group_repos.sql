@@ -56,7 +56,7 @@ $$;
 REVOKE ALL ON FUNCTION public.forgejo_group_repos_needed(text, integer) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.forgejo_group_repos_needed(text, integer) TO service_role;
 
--- From 20261110120000_forgejo_repos.sql, now also listing 'both' students who are in no group.
+-- From 20261112120200_forgejo_repos.sql, now also listing 'both' students who are in no group.
 CREATE OR REPLACE FUNCTION public.forgejo_repos_needed(p_instance_url text, p_limit integer)
 RETURNS TABLE (
   assignment_id bigint,
