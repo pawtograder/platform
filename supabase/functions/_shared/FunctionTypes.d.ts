@@ -389,7 +389,10 @@ export type WorkspaceOpenResponse = {
   message?: string;
   /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */
   redirect_url?: string;
-  /** needs_linking: Coder's page that links the student's Forgejo account. */
+  /**
+   * needs_linking: Coder's OIDC sign-in, which goes on to link the student's Forgejo account, so a
+   * student with no Coder session ends up linked too.
+   */
   authenticate_url?: string;
   coder_user_id?: string;
   workspace_id?: string;
