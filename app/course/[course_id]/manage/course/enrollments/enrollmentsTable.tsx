@@ -68,6 +68,7 @@ import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
+import { selectionKey, setRowChecked } from "./rosterSelection";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -265,11 +266,7 @@ export default function EnrollmentsTable() {
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
 
   const handleSingleCheckboxChange = useCallback((row: EnrollmentTableRow, checked: boolean) => {
-    if (checked === true) {
-      checkedBoxesRef.current.add(row);
-    } else {
-      checkedBoxesRef.current.delete(row);
-    }
+    setRowChecked(checkedBoxesRef.current, row, checked);
     setCheckedBoxes(new Set(checkedBoxesRef.current));
   }, []);
 
@@ -357,14 +354,8 @@ export default function EnrollmentsTable() {
         id: "checkbox",
         header: "",
         cell: ({ row }) => {
-          const isChecked =
-            Array.from(checkedBoxesRef.current).find((box) => {
-              if (row.original.type === "invitation") {
-                return box.type === "invitation" && box.id === row.original.id;
-              } else {
-                return box.type === "enrollment" && box.private_profile_id === row.original.private_profile_id;
-              }
-            }) !== undefined;
+          const key = selectionKey(row.original);
+          const isChecked = Array.from(checkedBoxesRef.current).some((box) => selectionKey(box) === key);
 
           return (
             <Checkbox.Root
@@ -1343,7 +1334,7 @@ export default function EnrollmentsTable() {
                                       getRowModel()
                                         .rows.map((row) => row.original)
                                         .forEach((row) => {
-                                          checkedBoxesRef.current.add(row);
+                                          setRowChecked(checkedBoxesRef.current, row, true);
                                         });
                                       setCheckedBoxes(new Set(checkedBoxesRef.current));
                                     } else {
@@ -1634,7 +1625,7 @@ export default function EnrollmentsTable() {
               getRowModel()
                 .rows.map((row) => row.original)
                 .forEach((row) => {
-                  checkedBoxesRef.current.add(row);
+                  setRowChecked(checkedBoxesRef.current, row, true);
                 });
               setCheckedBoxes(new Set(checkedBoxesRef.current));
             }}
