@@ -3127,7 +3127,8 @@ apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'
 apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
-  --set coderBootstrap.workspaces.externalAuthId=git-school --show-only templates/coder-bootstrap.yaml
+  --set coderBootstrap.workspaces.externalAuthId=git-school --set coder.externalAuth.forgejo.id=git-school \
+  --show-only templates/coder-bootstrap.yaml
 apps_has "template: workspaces default to the chart's coder-workspace image" yes \
   "image: \"ghcr.io/pawtograder/coder-workspace:$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART/Chart.yaml")\"" \
   --show-only templates/coder-bootstrap.yaml
@@ -3191,7 +3192,8 @@ apps_has "external auth: scopes are spelled out, without Coder's stray space" ye
   'CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"' "${EA[@]}" \
   --show-only templates/app-databases.yaml
 apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: "git-school"' "${EA[@]}" \
-  --set coder.externalAuth.forgejo.id=git-school --show-only templates/app-databases.yaml
+  --set coder.externalAuth.forgejo.id=git-school --set coderBootstrap.workspaces.externalAuthId=git-school \
+  --show-only templates/app-databases.yaml
 apps_has "external auth: the ExternalSecret maps OpenBao's client to Coder's env" yes \
   "secretKey: CODER_EXTERNAL_AUTH_0_CLIENT_SECRET" "${EA[@]}" "${EA_ES[@]}" \
   --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=apps/pawtograder/coder-external-auth-test \
