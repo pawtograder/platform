@@ -180,7 +180,8 @@ export async function ensureRepoFromTemplate(
 
 /** A file's text on the default branch, or null when the repo has no such file. */
 export async function readFile(config: ForgejoConfig, repository: string, path: string): Promise<string | null> {
-  const res = await forgejo(config, "GET", `/repos/${repository}/contents/${path}`);
+  const file = path.split("/").map(encodeURIComponent).join("/");
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}`);
   if (res.status === 404) return null;
   if (!res.ok) throw await failure(res, "file read");
   const { content } = (await res.json()) as { content: string };

@@ -203,7 +203,7 @@ export async function reconcileForgejoWorkflowHashes(
 ): Promise<HashReconcileResult> {
   const { data: assignments, error } = await supabase
     .from("assignments")
-    .select("id, template_repo, autograder!inner(workflow_sha)")
+    .select("id, template_repo, classes!inner(slug, forgejo_org), autograder!inner(workflow_sha)")
     .eq("git_provider", "forgejo")
     // Without an autograder there is no hash to check, and those would hold their place every pass.
     .eq("has_autograder", true)
@@ -215,6 +215,7 @@ export async function reconcileForgejoWorkflowHashes(
   const result: HashReconcileResult = { set: 0, failures: [] };
   for (const assignment of assignments ?? []) {
     try {
+      assertTemplateInOrg(assignment.template_repo!, assignment.classes.forgejo_org || assignment.classes.slug);
       const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
       // Every submission to this assignment would be rejected, so report it rather than skip it.
       if (workflow === null) throw new Error("The handout has no .github/workflows/grade.yml");

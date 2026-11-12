@@ -294,6 +294,17 @@ Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo
   });
 });
 
+Deno.test("readFile: a repository that isn't owner/name never reaches Forgejo", async () => {
+  await withForgejo([], async (calls) => {
+    await assertRejects(
+      () => readFile(config, "../admin", ".github/workflows/grade.yml"),
+      Error,
+      "Not a Forgejo owner/name"
+    );
+    assertEquals(calls, []);
+  });
+});
+
 Deno.test("readFile: decodes the file's base64 content, and a missing file is null", async () => {
   const text = "name: Grade\non: push\n";
   // Forgejo, like GitHub, may wrap the base64.
