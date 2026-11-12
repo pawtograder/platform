@@ -95,3 +95,11 @@ test("a first lookup that a refresh overtakes still ends the loading state", asy
   await waitFor(() => expect(result.current.loading).toBe(false));
   expect(result.current.byUserId.get("u1")).toBe("alex.kim");
 });
+
+test("with the feature off, nothing is queried and the result keeps its identity across renders", () => {
+  const { result, rerender } = renderHook(() => useForgejoLogins(false));
+  const first = result.current;
+  rerender();
+  expect(result.current).toBe(first);
+  expect(queries).not.toHaveBeenCalled();
+});
