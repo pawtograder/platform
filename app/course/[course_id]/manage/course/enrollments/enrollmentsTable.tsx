@@ -1071,9 +1071,19 @@ export default function EnrollmentsTable() {
     // definitions, so when the membership RPC resolves (or refresh() replaces the map) the Discord
     // Status filter kept selecting rows with the previous map: a student could render "In server"
     // while still listed under a "Cannot invite" filter until some unrelated table state changed.
-    // Returning a new array identity is what invalidates that model.
+    // Returning a new array identity is what invalidates that model. The Forgejo lookup is here for
+    // the same reason: rows cache the Forgejo Username accessor, so a lookup that resolves after the
+    // first render would otherwise leave "Loading…" on them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userRolesData, invitations, discordStateByUser, discordStatusUnknown]);
+  }, [
+    userRolesData,
+    invitations,
+    discordStateByUser,
+    discordStatusUnknown,
+    forgejoLogins.byUserId,
+    forgejoLogins.loading,
+    forgejoLogins.error
+  ]);
 
   // Create local table using react-table
   const table = useReactTable({

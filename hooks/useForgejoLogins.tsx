@@ -4,6 +4,8 @@ import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
 
 const PAGE_SIZE = 1000;
+/** Accounts are created a few seconds after enrollment, so an open roster checks again on this interval. */
+const REFRESH_MS = 30_000;
 
 export type ForgejoLogins = {
   /** Forgejo login by Pawtograder user id. A user missing here has no account yet (#1092). */
@@ -14,22 +16,35 @@ export type ForgejoLogins = {
 
 /**
  * Forgejo usernames for the roster. RLS limits staff to people in their own classes, so one query
- * covers the class without filtering by it here.
+ * covers the class without filtering by it here. While the tab is visible it looks again every
+ * REFRESH_MS, so an account created after the roster opened shows up without a reload. Only the first
+ * load shows as loading or failed; a refresh that fails keeps the last list.
  */
 export function useForgejoLogins(enabled: boolean): ForgejoLogins {
   const [byUserId, setByUserId] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") setRefresh((n) => n + 1);
+    }, REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) {
       setByUserId(new Map());
       setError(null);
       setLoading(false);
+      setRefresh(0);
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    const firstLoad = refresh === 0;
+    if (firstLoad) setLoading(true);
     (async () => {
       const client = createClient();
       const logins = new Map<string, string>();
@@ -52,19 +67,26 @@ export function useForgejoLogins(enabled: boolean): ForgejoLogins {
       .then((logins) => {
         if (cancelled) return;
         setError(null);
-        setByUserId(logins);
+        // A new Map only when something changed: the roster rebuilds its rows when this changes.
+        setByUserId((previous) => (sameLogins(previous, logins) ? previous : logins));
       })
       .catch((queryError: { message?: string }) => {
-        if (cancelled) return;
+        if (cancelled || !firstLoad) return;
         setError(queryError?.message ?? "Failed to load Forgejo usernames");
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && firstLoad) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [enabled, refresh]);
 
   return { byUserId, loading, error };
+}
+
+function sameLogins(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [userId, login] of a) if (b.get(userId) !== login) return false;
+  return true;
 }
