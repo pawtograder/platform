@@ -165,7 +165,7 @@ const neededRepo = (login: string, owner = "cs4535"): NeededRepo => ({
   login,
   owner,
   name: `hw1-${login}`,
-  template_repo: "cs4535/hw1-handout"
+  template_repo: `${owner}/hw1-handout`
 });
 
 function fakeRepoSupabase(
@@ -380,6 +380,22 @@ Deno.test(
     );
   }
 );
+
+Deno.test("repos: a template outside the class's org is refused before any Forgejo call", async () => {
+  const { client, writes } = fakeRepoSupabase([
+    { ...neededRepo("a"), template_repo: "othercourse/hw1-handout" },
+    { ...neededRepo("b"), template_repo: "../admin/users" }
+  ]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(result.created, 0);
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The template repo isn't in the class's Forgejo org", "The template repo isn't in the class's Forgejo org"]
+  );
+  assertEquals(calls, []);
+  assertEquals(writes, []);
+});
 
 Deno.test("repos: a row that already exists for this student is updated, not inserted again", async () => {
   const { client, writes } = fakeRepoSupabase([neededRepo("a")], {
