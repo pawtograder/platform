@@ -33,7 +33,7 @@ async function forgejoAccountsFor(user: TestingUser): Promise<{ id: number; logi
 }
 
 // The lane runs Supabase without the edge runtime, so the pass runs under Deno directly.
-function runPass(): { accounts: number; repos: number; hashes: number; failures: string[] } {
+function runPass(): { accounts: number; repos: number; groupRepos: number; hashes: number; failures: string[] } {
   const out = execFileSync(
     "deno",
     [
@@ -144,7 +144,7 @@ test("a pass creates the student's account and repo, and a second pass changes n
   expect(((await permission.json()) as { permission: string }).permission).toBe("write");
 
   const second = runPass();
-  expect(second).toEqual({ accounts: 0, repos: 0, hashes: 0, failures: [] });
+  expect(second).toEqual({ accounts: 0, repos: 0, groupRepos: 0, hashes: 0, failures: [] });
 });
 
 test("the student's first sign-in lands on that account, which can see the repo", async ({ browser }) => {

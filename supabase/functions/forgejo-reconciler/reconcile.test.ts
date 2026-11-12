@@ -10,6 +10,7 @@ import {
   MAX_ACCOUNTS_PER_PASS,
   MAX_REPOS_PER_PASS,
   reconcileForgejoAccounts,
+  reconcileForgejoGroupRepos,
   reconcileForgejoRepos,
   reconcileForgejoWorkflowHashes,
   type RepoOps,
@@ -433,4 +434,114 @@ Deno.test("repos: a name another course's student already owns is refused before
   );
   assertEquals(calls, []);
   assertEquals(writes, []);
+});
+
+type NeededGroup = {
+  assignment_id: number;
+  class_id: number;
+  assignment_group_id: number;
+  owner: string;
+  name: string;
+  template_repo: string;
+  logins: string[];
+  all_members_have_logins: boolean;
+};
+
+const neededGroup = (id: number, logins: string[], complete = true): NeededGroup => ({
+  assignment_id: 9,
+  class_id: 3,
+  assignment_group_id: id,
+  owner: "cs4535",
+  name: `hw1-group-team-${id}`,
+  template_repo: "cs4535/hw1-handout",
+  logins,
+  all_members_have_logins: complete
+});
+
+function fakeGroupSupabase(needed: NeededGroup[]) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const upserts: Record<string, unknown>[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      return Promise.resolve({ data: needed, error: null });
+    },
+    from(table: string) {
+      assertEquals(table, "repositories");
+      const lookup = {
+        select: () => lookup,
+        eq: () => lookup,
+        maybeSingle: () => Promise.resolve({ data: null, error: null })
+      };
+      return {
+        select: () => lookup,
+        insert(row: Record<string, unknown>) {
+          upserts.push(row);
+          return Promise.resolve({ error: null });
+        }
+      };
+    }
+  };
+  return { client: client as unknown as Parameters<typeof reconcileForgejoGroupRepos>[0], rpcCalls, upserts };
+}
+
+Deno.test("group repos: one repo per group, every member a writer, recorded ready", async () => {
+  const { client, rpcCalls, upserts } = fakeGroupSupabase([neededGroup(5, ["a", "b"])]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(rpcCalls, [
+    { name: "forgejo_group_repos_needed", args: { p_instance_url: config.url, p_limit: MAX_REPOS_PER_PASS } }
+  ]);
+  assertEquals(result, { created: 1, failures: [] });
+  assertEquals(calls, [
+    "org cs4535",
+    "repo cs4535/hw1-group-team-5 from cs4535/hw1-handout",
+    "write a on cs4535/hw1-group-team-5",
+    "write b on cs4535/hw1-group-team-5"
+  ]);
+  assertEquals(upserts, [
+    {
+      assignment_id: 9,
+      class_id: 3,
+      profile_id: null,
+      assignment_group_id: 5,
+      repository: "cs4535/hw1-group-team-5",
+      git_provider: "forgejo",
+      is_github_ready: true
+    }
+  ]);
+});
+
+Deno.test("group repos: a template outside the class's org is refused before any Forgejo call", async () => {
+  const { client } = fakeGroupSupabase([{ ...neededGroup(1, ["a", "b"]), template_repo: "othercourse/hw1-handout" }]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result.created, 0);
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The template repo isn't in the class's Forgejo org"]
+  );
+  assertEquals(calls, []);
+});
+
+Deno.test("group repos: a member without an account yet leaves the repo not ready", async () => {
+  const { client, upserts } = fakeGroupSupabase([neededGroup(5, ["a"], false)]);
+  const result = await reconcileForgejoGroupRepos(client, config, stubOps().ops);
+  assertEquals(result, { created: 0, failures: [] });
+  assertEquals(upserts[0].is_github_ready, false);
+});
+
+Deno.test("group repos: a member Forgejo won't make a writer fails that group only", async () => {
+  const { client, upserts } = fakeGroupSupabase([neededGroup(5, ["a", "b"]), neededGroup(6, ["c"])]);
+  const { ops } = stubOps({ grantWrite: (_cfg, _repository, login) => Promise.resolve(login !== "b") });
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result.created, 1);
+  assertEquals(
+    result.failures.map((f) => [f.assignmentGroupId, (f.error as Error).message]),
+    [[5, "Forgejo doesn't report write access for every group member"]]
+  );
+  assertEquals(
+    upserts.map((u) => u.assignment_group_id),
+    [6]
+  );
 });

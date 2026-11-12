@@ -189,6 +189,64 @@ export async function reconcileForgejoRepos(
 }
 
 /** Accounts first, so students who just got one get their repos in the same pass. */
+export type GroupRepoReconcileResult = {
+  created: number;
+  failures: { assignmentId: number; assignmentGroupId: number; error: unknown }[];
+};
+
+/**
+ * One repo per group for released Forgejo group assignments (#1236), with every member a writer. The
+ * repo is recorded as ready only once every member has a Forgejo login and Forgejo reports write
+ * access for each, so a member still waiting for an account keeps the group in the next pass.
+ */
+export async function reconcileForgejoGroupRepos(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  ops: RepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite }
+): Promise<GroupRepoReconcileResult> {
+  // function-grants: service-role
+  const { data: needed, error } = await supabase.rpc("forgejo_group_repos_needed", {
+    p_instance_url: config.url,
+    p_limit: MAX_REPOS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: GroupRepoReconcileResult = { created: 0, failures: [] };
+  const orgsReady = new Set<string>();
+  for (const group of needed ?? []) {
+    const repository = `${group.owner}/${group.name}`;
+    const owner = {
+      assignment_id: group.assignment_id,
+      class_id: group.class_id,
+      profile_id: null,
+      assignment_group_id: group.assignment_group_id
+    };
+    try {
+      assertTemplateInOrg(group.template_repo, group.owner);
+      const existingId = await existingRepositoryRow(supabase, repository, owner);
+      if (!orgsReady.has(group.owner)) {
+        await ops.ensureOrg(config, group.owner);
+        orgsReady.add(group.owner);
+      }
+      await ops.ensureRepoFromTemplate(config, group.template_repo, group.owner, group.name);
+      let allWrite = true;
+      for (const login of group.logins) {
+        if (!(await ops.grantWrite(config, repository, login))) allWrite = false;
+      }
+      if (!allWrite) throw new Error("Forgejo doesn't report write access for every group member");
+      await saveRepositoryRow(supabase, existingId, owner, repository, group.all_members_have_logins);
+      if (group.all_members_have_logins) result.created++;
+    } catch (failure) {
+      result.failures.push({
+        assignmentId: group.assignment_id,
+        assignmentGroupId: group.assignment_group_id,
+        error: failure
+      });
+    }
+  }
+  return result;
+}
+
 export type HashReconcileResult = { set: number; failures: { assignmentId: number; error: unknown }[] };
 
 /**
@@ -238,6 +296,7 @@ export async function reconcileForgejoWorkflowHashes(
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
   const accounts = await reconcileForgejoAccounts(supabase, config);
   const repos = await reconcileForgejoRepos(supabase, config);
+  const groupRepos = await reconcileForgejoGroupRepos(supabase, config);
   const hashes = await reconcileForgejoWorkflowHashes(supabase, config);
-  return { accounts, repos, hashes };
+  return { accounts, repos, groupRepos, hashes };
 }

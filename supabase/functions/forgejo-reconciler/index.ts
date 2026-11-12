@@ -61,10 +61,11 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos, hashes } = await reconcileForgejo(supabase, config);
+    const { accounts, repos, groupRepos, hashes } = await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
+        `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
         `workflow hashes ${hashes.set} (failed ${hashes.failures.length})`
     );
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
@@ -86,6 +87,17 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(repos.failures[0].error, repoScope);
     }
+    if (groupRepos.failures.length > 0) {
+      const groupScope = scope.clone();
+      groupScope.setFingerprint(["forgejo-reconciler", "group-repo-failed"]);
+      groupScope.setContext("failures", {
+        count: groupRepos.failures.length,
+        groups: groupRepos.failures
+          .slice(0, 20)
+          .map((f) => ({ assignment_id: f.assignmentId, assignment_group_id: f.assignmentGroupId }))
+      });
+      Sentry.captureException(groupRepos.failures[0].error, groupScope);
+    }
     if (hashes.failures.length > 0) {
       const hashScope = scope.clone();
       hashScope.setFingerprint(["forgejo-reconciler", "workflow-hash-failed"]);
@@ -101,6 +113,8 @@ Deno.serve(async (req) => {
       failed: accounts.failures.length,
       repos_created: repos.created,
       repos_failed: repos.failures.length,
+      group_repos_created: groupRepos.created,
+      group_repos_failed: groupRepos.failures.length,
       workflow_hashes_set: hashes.set,
       workflow_hashes_failed: hashes.failures.length
     });
