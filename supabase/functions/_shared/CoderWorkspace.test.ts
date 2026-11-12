@@ -12,7 +12,8 @@
  * budget in real time when a Coder or database call hangs, no claim taken without time to use it,
  * a stale claim taken over, readiness only with a connected agent, the editor
  * URL, a group change, which repository a caller may open, the repo_url shape the template accepts,
- * and a Coder user that predates the Coder email (an account conflict until staff delete it).
+ * a Coder user that predates the Coder email (an account conflict until staff delete it), and a
+ * course without cloud-workspaces.
  *
  * Run from supabase/functions:
  *   deno test --no-check --allow-read --allow-env _shared/CoderWorkspace.test.ts
@@ -329,6 +330,8 @@ class FakeDb implements WorkspaceDb {
     { user_id: ALEX.userId, class_id: 7, private_profile_id: "prof-alex", disabled: false },
     { user_id: JORDAN.userId, class_id: 7, private_profile_id: "prof-jordan", disabled: false }
   ];
+  /** classes.features by class id. */
+  features: Record<number, unknown> = { 7: [{ name: "cloud-workspaces", enabled: true }] };
   groups: { assignment_id: number; profile_id: string; group_id: number }[] = [];
   repos: RepositoryRow[] = [
     repo(501, "prof-alex", null, "cs3500/hw1-alex"),
@@ -344,6 +347,9 @@ class FakeDb implements WorkspaceDb {
   }
   async getEnrollment(userId: string, classId: number) {
     return this.enrollments.find((e) => e.user_id === userId && e.class_id === classId) ?? null;
+  }
+  async getCourseFeatures(classId: number) {
+    return this.features[classId] ?? null;
   }
   async getGroupId(assignmentId: number, profileId: string) {
     return this.groups.find((g) => g.assignment_id === assignmentId && g.profile_id === profileId)?.group_id ?? null;
@@ -990,6 +996,31 @@ Deno.test("authorization: only the caller's own or group repository, on Forgejo,
   assertEquals(new Set(coder.workspaces.map((w) => w.owner_id)).size, 2, "each member gets their own workspace");
 });
 
+Deno.test("workspace-open refuses a course without cloud-workspaces, and creates nothing", async () => {
+  const { coder, db, deps } = setup();
+  for (const features of [
+    null,
+    [],
+    [{ name: "cloud-workspaces", enabled: false }],
+    [{ name: "cloud-workspaces", enabled: "true" }],
+    [
+      { name: "cloud-workspaces", enabled: false },
+      { name: "cloud-workspaces", enabled: true }
+    ]
+  ]) {
+    db.features[7] = features;
+    const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
+    assertEquals([err.status, err.details], [403, "Cloud workspaces are not enabled for this course"]);
+  }
+  assertEquals(coder.calls.length, 0, "Coder is never called");
+  assertEquals(db.accounts.length + db.rows.length, 0);
+  // Not enrolled still reads as not enrolled.
+  await assertRejects(
+    () => openWorkspace(deps, { ...JORDAN, userId: "00000000-0000-4000-8000-0000000000ee" }, { assignment_id: 41 }),
+    SecurityError
+  );
+});
+
 Deno.test("workspace-status creates nothing", async () => {
   const { coder, db, deps } = setup();
   assertEquals(await workspaceStatus(deps, ALEX, { assignment_id: 41 }), { status: "not_started" });
@@ -1197,6 +1228,28 @@ Deno.test("a stop that finishes as the budget runs out: open leaves the start to
   assert(clock.t - t0 <= 20_000, `open took ${clock.t - t0} ms`);
 
   coder.latencyMs = 0;
+  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals(buildPosts(coder), ["stop", "start"]);
+});
+
+Deno.test("a course that turns cloud-workspaces off: a status read doesn't finish the restart", async () => {
+  const { coder, db, deps } = await failedWorkspace();
+  coder.latencyMs = 1_000;
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.latencyMs = 0;
+  coder.workspaces[0].latest_build.status = "stopped";
+  assertEquals(db.rows[0].restart_phase, "stopping", "a status read would post the start");
+
+  db.features[7] = [{ name: "cloud-workspaces", enabled: false }];
+  const calls = coder.calls.length;
+  const err = await assertRejects(() => workspaceStatus(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
+  assertEquals(err.status, 403);
+  await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
+  assertEquals(coder.calls.length, calls, "Coder is never called");
+  assertEquals(buildPosts(coder), ["stop"]);
+  assertEquals(db.rows[0].restart_phase, "stopping");
+
+  db.features[7] = [{ name: "cloud-workspaces", enabled: true }];
   assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
   assertEquals(buildPosts(coder), ["stop", "start"]);
 });
