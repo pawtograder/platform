@@ -129,6 +129,17 @@ export async function saveRepositoryRow(
   if (error) throw error;
 }
 
+/**
+ * The handout has to live in the class's own org. The admin can read every course's repos, so a template_repo
+ * naming another course's handout would otherwise be copied into this course's student repos.
+ */
+export function assertTemplateInOrg(template: string, org: string | null): void {
+  const owner = template.split("/")[0];
+  if (!owner || !org || owner.toLowerCase() !== org.toLowerCase()) {
+    throw new Error("The template repo isn't in the class's Forgejo org");
+  }
+}
+
 export type RepoReconcileResult = {
   created: number;
   failures: { assignmentId: number; profileId: string; error: unknown }[];
@@ -157,6 +168,7 @@ export async function reconcileForgejoRepos(
       assignment_group_id: null
     };
     try {
+      assertTemplateInOrg(repo.template_repo, repo.owner);
       const existingId = await existingRepositoryRow(supabase, repository, owner);
       if (!orgsReady.has(repo.owner)) {
         await ops.ensureOrg(config, repo.owner);
@@ -191,7 +203,7 @@ export async function reconcileForgejoWorkflowHashes(
 ): Promise<HashReconcileResult> {
   const { data: assignments, error } = await supabase
     .from("assignments")
-    .select("id, template_repo, autograder!inner(workflow_sha)")
+    .select("id, template_repo, classes!inner(slug, forgejo_org), autograder!inner(workflow_sha)")
     .eq("git_provider", "forgejo")
     // Without an autograder there is no hash to check, and those would hold their place every pass.
     .eq("has_autograder", true)
@@ -203,6 +215,7 @@ export async function reconcileForgejoWorkflowHashes(
   const result: HashReconcileResult = { set: 0, failures: [] };
   for (const assignment of assignments ?? []) {
     try {
+      assertTemplateInOrg(assignment.template_repo!, assignment.classes.forgejo_org || assignment.classes.slug);
       const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
       // Every submission to this assignment would be rejected, so report it rather than skip it.
       if (workflow === null) throw new Error("The handout has no .github/workflows/grade.yml");
