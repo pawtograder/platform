@@ -178,6 +178,16 @@ export async function ensureRepoFromTemplate(
   throw await failure(res, "repo generate from template");
 }
 
+/** A file's text on the default branch, or null when the repo has no such file. */
+export async function readFile(config: ForgejoConfig, repository: string, path: string): Promise<string | null> {
+  const file = path.split("/").map(encodeURIComponent).join("/");
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw await failure(res, "file read");
+  const { content } = (await res.json()) as { content: string };
+  return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+}
+
 /** Gives login write access, then reports whether Forgejo says they have it. */
 export async function grantWrite(config: ForgejoConfig, repository: string, login: string): Promise<boolean> {
   const user = encodeURIComponent(login);

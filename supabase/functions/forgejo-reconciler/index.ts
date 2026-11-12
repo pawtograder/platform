@@ -61,10 +61,11 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos } = await reconcileForgejo(supabase, config);
+    const { accounts, repos, hashes } = await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
-        `repos ${repos.created} (failed ${repos.failures.length})`
+        `repos ${repos.created} (failed ${repos.failures.length}), ` +
+        `workflow hashes ${hashes.set} (failed ${hashes.failures.length})`
     );
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
     if (accounts.failures.length > 0) {
@@ -85,12 +86,23 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(repos.failures[0].error, repoScope);
     }
+    if (hashes.failures.length > 0) {
+      const hashScope = scope.clone();
+      hashScope.setFingerprint(["forgejo-reconciler", "workflow-hash-failed"]);
+      hashScope.setContext("failures", {
+        count: hashes.failures.length,
+        assignment_ids: hashes.failures.slice(0, 20).map((f) => f.assignmentId)
+      });
+      Sentry.captureException(hashes.failures[0].error, hashScope);
+    }
     await Sentry.flush(2000);
     return json({
       provisioned: accounts.provisioned,
       failed: accounts.failures.length,
       repos_created: repos.created,
-      repos_failed: repos.failures.length
+      repos_failed: repos.failures.length,
+      workflow_hashes_set: hashes.set,
+      workflow_hashes_failed: hashes.failures.length
     });
   } catch (error) {
     console.error("[forgejo-reconciler] Error:", error);

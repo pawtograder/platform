@@ -11,6 +11,7 @@ import {
   MAX_REPOS_PER_PASS,
   reconcileForgejoAccounts,
   reconcileForgejoRepos,
+  reconcileForgejoWorkflowHashes,
   type RepoOps,
   STALE_CLAIM_MINUTES
 } from "./reconcile.ts";
@@ -288,6 +289,110 @@ Deno.test("repos: a repo the student can't write to is not recorded, and the pas
     ["cs4535/hw1-b"]
   );
 });
+
+function fakeHashSupabase(rows: { id: number; template_repo: string }[]) {
+  const assignments = rows.map((r) => ({ ...r, classes: { slug: "cs4535", forgejo_org: null } }));
+  const filters: [string, unknown][] = [];
+  const updates: { values: Record<string, unknown>; filters: [string, unknown][] }[] = [];
+  const listQuery = {
+    select: () => listQuery,
+    eq: (column: string, value: unknown) => (filters.push([`eq ${column}`, value]), listQuery),
+    not: (column: string, op: string, value: unknown) => (filters.push([`not ${column} ${op}`, value]), listQuery),
+    is: (column: string, value: unknown) => (filters.push([`is ${column}`, value]), listQuery),
+    limit: () => Promise.resolve({ data: assignments, error: null })
+  };
+  const client = {
+    from(table: string) {
+      if (table === "assignments") return listQuery;
+      assertEquals(table, "autograder");
+      return {
+        update(values: Record<string, unknown>) {
+          const entry = { values, filters: [] as [string, unknown][] };
+          updates.push(entry);
+          const chain = {
+            eq: (column: string, value: unknown) => (entry.filters.push([`eq ${column}`, value]), chain),
+            is: (column: string, value: unknown) => (entry.filters.push([`is ${column}`, value]), chain),
+            then: (done: (r: { error: null }) => void) => done({ error: null })
+          };
+          return chain;
+        }
+      };
+    }
+  };
+  return {
+    client: client as unknown as Parameters<typeof reconcileForgejoWorkflowHashes>[0],
+    filters,
+    updates
+  };
+}
+
+Deno.test("hashes: an unset workflow hash becomes the SHA-256 of the handout's grade.yml", async () => {
+  const { client, filters, updates } = fakeHashSupabase([{ id: 9, template_repo: "cs4535/hw1-handout" }]);
+  const result = await reconcileForgejoWorkflowHashes(client, config, (_cfg, repository, path) => {
+    assertEquals([repository, path], ["cs4535/hw1-handout", ".github/workflows/grade.yml"]);
+    return Promise.resolve("abc");
+  });
+  assertEquals(result, { set: 1, failures: [] });
+  // Only Forgejo assignments with a handout and no hash yet.
+  assertEquals(filters, [
+    ["eq git_provider", "forgejo"],
+    ["eq has_autograder", true],
+    ["not template_repo is", null],
+    ["is autograder.workflow_sha", null]
+  ]);
+  // sha256("abc"), and only if still unset when written.
+  assertEquals(updates, [
+    {
+      values: { workflow_sha: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
+      filters: [
+        ["eq id", 9],
+        ["is workflow_sha", null]
+      ]
+    }
+  ]);
+});
+
+Deno.test("hashes: a handout outside the class's org is refused without reading it", async () => {
+  const { client, updates } = fakeHashSupabase([{ id: 4, template_repo: "othercourse/hw1-handout" }]);
+  const result = await reconcileForgejoWorkflowHashes(client, config, () => {
+    throw new Error("read should not be called");
+  });
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The template repo isn't in the class's Forgejo org"]
+  );
+  assertEquals(updates, []);
+});
+
+Deno.test(
+  "hashes: an autograded handout without grade.yml is reported, and one failure doesn't stop the rest",
+  async () => {
+    const { client, updates } = fakeHashSupabase([
+      { id: 1, template_repo: "cs4535/no-grading" },
+      { id: 2, template_repo: "cs4535/broken" },
+      { id: 3, template_repo: "cs4535/hw3-handout" }
+    ]);
+    const result = await reconcileForgejoWorkflowHashes(client, config, (_cfg, repository) =>
+      repository === "cs4535/no-grading"
+        ? Promise.resolve(null)
+        : repository === "cs4535/broken"
+          ? Promise.reject(new Error("Forgejo file read failed: 500 unrecognized response"))
+          : Promise.resolve("abc")
+    );
+    assertEquals(result.set, 1);
+    assertEquals(
+      result.failures.map((f) => [f.assignmentId, (f.error as Error).message]),
+      [
+        [1, "The handout has no .github/workflows/grade.yml"],
+        [2, "Forgejo file read failed: 500 unrecognized response"]
+      ]
+    );
+    assertEquals(
+      updates.map((u) => u.filters[0]),
+      [["eq id", 3]]
+    );
+  }
+);
 
 Deno.test("repos: a template outside the class's org is refused before any Forgejo call", async () => {
   const { client, writes } = fakeRepoSupabase([

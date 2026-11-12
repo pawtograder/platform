@@ -33,7 +33,7 @@ async function forgejoAccountsFor(user: TestingUser): Promise<{ id: number; logi
 }
 
 // The lane runs Supabase without the edge runtime, so the pass runs under Deno directly.
-function runPass(): { accounts: number; repos: number; failures: string[] } {
+function runPass(): { accounts: number; repos: number; hashes: number; failures: string[] } {
   const out = execFileSync(
     "deno",
     [
@@ -81,6 +81,16 @@ test.beforeAll(async () => {
   expect(
     (await forgejo("POST", `/orgs/${classOrg}/repos`, { name: "handout", auto_init: true, private: true })).status
   ).toBe(201);
+  // The handout's grade.yml sets the assignment's workflow hash (#1256).
+  const workflow = fs.readFileSync(path.join(__dirname, "../../../charts/pawtograder/examples/forgejo-grade.yml"));
+  expect(
+    (
+      await forgejo("POST", `/repos/${classOrg}/handout/contents/.github/workflows/grade.yml`, {
+        content: workflow.toString("base64"),
+        message: "Add grade.yml"
+      })
+    ).status
+  ).toBe(201);
   expect((await forgejo("PATCH", `/repos/${classOrg}/handout`, { template: true })).ok).toBeTruthy();
 
   const { data: settings, error: settingsError } = await supabase
@@ -107,6 +117,14 @@ test.beforeAll(async () => {
 test("a pass creates the student's account and repo, and a second pass changes nothing", async () => {
   const first = runPass();
   expect(first.failures).toEqual([]);
+  const { data: autograder } = await supabase
+    .from("autograder")
+    .select("workflow_sha, assignments!inner(slug)")
+    .eq("assignments.slug", assignmentSlug)
+    .single();
+  expect(autograder?.workflow_sha, "the pass should set the hash from the handout's grade.yml").toMatch(
+    /^[0-9a-f]{64}$/
+  );
 
   const [account] = await forgejoAccountsFor(student);
   expect(account, "the pass should have created the student's Forgejo account").toBeTruthy();
@@ -126,7 +144,7 @@ test("a pass creates the student's account and repo, and a second pass changes n
   expect(((await permission.json()) as { permission: string }).permission).toBe("write");
 
   const second = runPass();
-  expect(second).toEqual({ accounts: 0, repos: 0, failures: [] });
+  expect(second).toEqual({ accounts: 0, repos: 0, hashes: 0, failures: [] });
 });
 
 test("the student's first sign-in lands on that account, which can see the repo", async ({ browser }) => {
