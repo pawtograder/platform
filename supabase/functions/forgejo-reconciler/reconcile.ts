@@ -128,6 +128,16 @@ export async function saveRepositoryRow(
   if (error) throw error;
 }
 
+/**
+ * The handout has to live in the class's own org. The admin can read every course's repos, so a template_repo
+ * naming another course's handout would otherwise be copied into this course's student repos.
+ */
+export function assertTemplateInOrg(template: string, org: string): void {
+  if (template.split("/")[0]?.toLowerCase() !== org.toLowerCase()) {
+    throw new Error("The template repo isn't in the class's Forgejo org");
+  }
+}
+
 export type RepoReconcileResult = {
   created: number;
   failures: { assignmentId: number; profileId: string; error: unknown }[];
@@ -156,6 +166,7 @@ export async function reconcileForgejoRepos(
       assignment_group_id: null
     };
     try {
+      assertTemplateInOrg(repo.template_repo, repo.owner);
       const existingId = await existingRepositoryRow(supabase, repository, owner);
       if (!orgsReady.has(repo.owner)) {
         await ops.ensureOrg(config, repo.owner);
