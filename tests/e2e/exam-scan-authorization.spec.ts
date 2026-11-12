@@ -300,8 +300,8 @@ test.describe("Exam scan ownership (#1078)", () => {
   });
 
   test("swapping in course B's scan after confirmation is rejected before finalize creates anything", async () => {
-    // What finalize would create for this student: a submission, and through
-    // submissions_after_insert_hook, its grading review.
+    // What finalize would create for this student: a submission, through
+    // submissions_after_insert_hook its grading review, and its page files and exam artifact.
     const created = async () => ({
       submissions:
         (
@@ -315,6 +315,16 @@ test.describe("Exam scan ownership (#1078)", () => {
         (
           await supabase
             .from("submission_reviews")
+            .select("id", { count: "exact", head: true })
+            .eq("class_id", a.classId)
+        ).count ?? 0,
+      files:
+        (await supabase.from("submission_files").select("id", { count: "exact", head: true }).eq("class_id", a.classId))
+          .count ?? 0,
+      artifacts:
+        (
+          await supabase
+            .from("submission_artifacts")
             .select("id", { count: "exact", head: true })
             .eq("class_id", a.classId)
         ).count ?? 0
@@ -607,4 +617,366 @@ test.describe("Exam scan ownership: legitimate finalization (#1078, needs #1075)
     expect(hashes.graderCanFetch).toEqual([ownSha]);
     expect(hashes.studentCanFetch).toEqual([ownSha]);
   });
+
+  test("a finalize that stopped after creating the submission is resumed with that same submission", async () => {
+    test.setTimeout(120_000);
+    const a = await arrangeCourseA();
+    const { batchId, ownSha } = await graderCreatesBatch(a, {});
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    const { data: confirmed, error: confirmErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", batchId)
+      .eq("matched_profile_id", a.student.private_profile_id)
+      .select("id")
+      .single();
+    expect(confirmErr).toBeNull();
+    // Fixture: the state an earlier finalize attempt leaves when it stops right after
+    // exam_create_submission (a crash, or a failure later in that attempt).
+    const { data: subId, error: createErr } = await supabase.rpc("exam_create_submission", {
+      p_scanned_submission_id: confirmed!.id
+    });
+    expect(createErr).toBeNull();
+    expect(typeof subId).toBe("number");
+    const countFor = async (table: "submission_files" | "submission_artifacts") =>
+      (
+        await supabase
+          .from(table)
+          .select("id", { count: "exact", head: true })
+          .eq("submission_id", subId as number)
+      ).count ?? 0;
+    const { data: partial } = await supabase
+      .from("exam_scanned_submissions")
+      .select("submission_id, finalized_at")
+      .eq("id", confirmed!.id)
+      .single();
+    expect(partial).toEqual({ submission_id: subId, finalized_at: null });
+    expect(await countFor("submission_files")).toBe(0);
+    expect(await countFor("submission_artifacts")).toBe(0);
+
+    const { data: queued, error } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+    expect(error).toBeNull();
+    expect(queued).toBe(1);
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return (await batch(batchId)).status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("completed");
+    const { data: subs } = await supabase
+      .from("submissions")
+      .select("id")
+      .eq("class_id", a.classId)
+      .eq("profile_id", a.student.private_profile_id);
+    expect(subs).toEqual([{ id: subId }]);
+    const { data: done } = await supabase
+      .from("exam_scanned_submissions")
+      .select("submission_id, finalized_at")
+      .eq("id", confirmed!.id)
+      .single();
+    expect(done?.submission_id).toBe(subId);
+    expect(done?.finalized_at).not.toBeNull();
+    const hashes = await courseASubmissionFileHashes(a);
+    expect(hashes.count).toBe(1);
+    expect(hashes.stored).toEqual([ownSha]);
+    expect(await countFor("submission_artifacts")).toBe(1);
+  });
+});
+
+/** Send one exam_processing message, shaped as enqueue_exam_* sends it, and return its pgmq id. */
+async function sendExamMessage(message: Record<string, unknown>): Promise<number> {
+  const { data, error } = await supabase.schema("pgmq_public").rpc("send", {
+    queue_name: "exam_processing",
+    message: message as never,
+    sleep_seconds: 0
+  });
+  expect(error).toBeNull();
+  const id = Array.isArray(data) ? data[0] : data;
+  expect(typeof id).toBe("number");
+  return id as number;
+}
+
+/**
+ * Drive the worker until the sentinel page has been OCR'd. Callers send the sentinel's process_page
+ * message right after the message under test, so it has the higher msg_id and becomes visible no
+ * earlier. The worker claims visible messages lowest id first and handles each read in order, so
+ * once the sentinel is done the message under test has been claimed too; two more kicks give an
+ * invocation that claimed it separately time to finish. A job that correctly does nothing leaves
+ * nothing to observe, so this ordering is the evidence that it ran.
+ */
+async function drainThrough(sentinelPageId: number): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await runExamWorker();
+        const { data } = await supabase.from("exam_scan_pages").select("ocr_data").eq("id", sentinelPageId).single();
+        return data?.ocr_data != null;
+      },
+      { timeout: 60_000, intervals: [1000, 2000, 3000] }
+    )
+    .toBe(true);
+  for (let i = 0; i < 2; i++) {
+    await runExamWorker();
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+/** Send `target`, then a sentinel process_page for a fresh page of course A, and drain through it. */
+async function runQueuedThroughSentinel(a: CourseA, target: Record<string, unknown>): Promise<void> {
+  const sentinel = await graderCreatesBatch(a, {});
+  const targetMsgId = await sendExamMessage(target);
+  const sentinelMsgId = await sendExamMessage({
+    method: "process_page",
+    class_id: a.classId,
+    batch_id: sentinel.batchId,
+    args: { scan_page_id: sentinel.pageId }
+  });
+  test.info().annotations.push({
+    type: "exam-queue",
+    description: JSON.stringify({ targetMsgId, sentinelMsgId, target })
+  });
+  await drainThrough(sentinel.pageId);
+}
+
+const SEEDED_OCR = { ocr_text: "read earlier", ocr_data: { words: [] } };
+
+/** As the service role: record OCR for every page of a batch, as process_page would have, and check it. */
+async function seedOcr(batchId: number, expectedPages: number): Promise<void> {
+  const { data, error } = await supabase
+    .from("exam_scan_pages")
+    .update(SEEDED_OCR)
+    .eq("batch_id", batchId)
+    .select("id, ocr_text, ocr_data");
+  expect(error).toBeNull();
+  expect(data).toHaveLength(expectedPages);
+  for (const p of data ?? []) expect({ ocr_text: p.ocr_text, ocr_data: p.ocr_data }).toEqual(SEEDED_OCR);
+}
+
+async function scannedRowsFor(batchId: number): Promise<number> {
+  const { count } = await supabase
+    .from("exam_scanned_submissions")
+    .select("id", { count: "exact", head: true })
+    .eq("batch_id", batchId);
+  return count ?? 0;
+}
+
+// Queued work is authorized by the batch it was enqueued for. These cover a job that outlived a
+// change to that batch: a page staff moved out, pages deleted after enqueue, or a batch that has
+// already errored or completed.
+test.describe("Exam worker: queued work that no longer matches its batch (#1078)", () => {
+  let a: CourseA;
+  test.beforeAll(async () => {
+    a = await arrangeCourseA();
+  });
+
+  /** As the grader: move X's page into batch Y at page_index 1, pointing at Y's own object. */
+  async function graderMovesPage(
+    pageId: number,
+    y: { batchId: number; ownPath: string },
+    expectedOcr: { ocr_text: string | null; ocr_data: unknown }
+  ) {
+    const { data: moved, error } = await a.grader
+      .from("exam_scan_pages")
+      .update({ batch_id: y.batchId, page_index: 1, image_path: y.ownPath })
+      .eq("id", pageId)
+      .select("batch_id, page_index, image_path")
+      .single();
+    expect(error).toBeNull();
+    expect(moved).toEqual({ batch_id: y.batchId, page_index: 1, image_path: y.ownPath });
+    const { data: stored } = await supabase
+      .from("exam_scan_pages")
+      .select("class_id, batch_id, page_index, image_path, ocr_text, ocr_data")
+      .eq("id", pageId)
+      .single();
+    expect(stored).toEqual({
+      class_id: a.classId,
+      batch_id: y.batchId,
+      page_index: 1,
+      image_path: y.ownPath,
+      ...expectedOcr
+    });
+  }
+
+  test("an OCR job for a page that has since moved to another batch does not OCR it", async () => {
+    const x = await graderCreatesBatch(a, {});
+    const y = await graderCreatesBatch(a, {});
+    await graderMovesPage(x.pageId, y, { ocr_text: null, ocr_data: null });
+    // The message enqueue_exam_process_batch sent for X before the page moved.
+    await runQueuedThroughSentinel(a, {
+      method: "process_page",
+      class_id: a.classId,
+      batch_id: x.batchId,
+      args: { scan_page_id: x.pageId }
+    });
+    // The fake provider's OCR text names the object it read, so a stored result would show Y's path.
+    const { data: page } = await supabase
+      .from("exam_scan_pages")
+      .select("ocr_text, ocr_data")
+      .eq("id", x.pageId)
+      .single();
+    expect(page).toEqual({ ocr_text: null, ocr_data: null });
+    // Obsolete work is a no-op, not a failure of the batch it was queued for.
+    expect(await batch(x.batchId)).toEqual({ status: "uploaded", error: null });
+    const { data: dlq } = await supabase
+      .from("exam_async_worker_dlq_messages")
+      .select("id")
+      .eq("class_id", a.classId)
+      .eq("envelope->>batch_id", String(x.batchId));
+    expect(dlq).toEqual([]);
+  });
+
+  test("a duplicate OCR job for a page that was read and then moved leaves its OCR as it was", async () => {
+    const x = await graderCreatesBatch(a, {});
+    const y = await graderCreatesBatch(a, {});
+    await seedOcr(x.batchId, 1);
+    await graderMovesPage(x.pageId, y, SEEDED_OCR);
+    await runQueuedThroughSentinel(a, {
+      method: "process_page",
+      class_id: a.classId,
+      batch_id: x.batchId,
+      args: { scan_page_id: x.pageId }
+    });
+    const { data: page } = await supabase
+      .from("exam_scan_pages")
+      .select("ocr_text, ocr_data")
+      .eq("id", x.pageId)
+      .single();
+    expect(page).toEqual(SEEDED_OCR);
+  });
+
+  test("matching refuses a batch that lost a page after it was queued, even when the rest divide into exams", async () => {
+    // Two declared pages at one page per exam, so one remaining page still divides evenly.
+    const { data: b, error: batchErr } = await a.grader
+      .from("exam_scan_batches")
+      .insert({ class_id: a.classId, exam_id: a.examId, total_pages: 2, pages_per_exam: 1, status: "uploaded" })
+      .select("id")
+      .single();
+    expect(batchErr).toBeNull();
+    const pageIds: number[] = [];
+    for (const i of [0, 1]) {
+      const path = `classes/${a.classId}/exams/${a.examId}/batches/${b!.id}/sis-${a.studentSis}__name-Alice_Smith__page-${i}.png`;
+      const bytes = Buffer.concat([PNG_1x1, Buffer.from(`course-A-scan-${randomUUID()}`)]);
+      const up = await a.grader.storage.from("exam-scans").upload(path, bytes, { contentType: "image/png" });
+      expect(up.error).toBeNull();
+      const { data: page, error: pageErr } = await a.grader
+        .from("exam_scan_pages")
+        .insert({
+          class_id: a.classId,
+          exam_id: a.examId,
+          batch_id: b!.id,
+          page_index: i,
+          image_path: path,
+          width: 1000,
+          height: 1400
+        })
+        .select("id")
+        .single();
+      expect(pageErr).toBeNull();
+      pageIds.push(page!.id);
+    }
+    // OCR is already done, so match's wait for the OCR fan-out is satisfied.
+    await seedOcr(b!.id, 2);
+    // As the grader, after enqueue_exam_process_batch accepted 2 of 2 pages: delete the second.
+    const { data: deleted, error: deleteErr } = await a.grader
+      .from("exam_scan_pages")
+      .delete()
+      .eq("id", pageIds[1])
+      .select("id");
+    expect(deleteErr).toBeNull();
+    expect(deleted).toEqual([{ id: pageIds[1] }]);
+    const { data: left } = await supabase.from("exam_scan_pages").select("id, ocr_data").eq("batch_id", b!.id);
+    expect(left?.map((p) => p.id)).toEqual([pageIds[0]]);
+    expect(left?.[0].ocr_data).not.toBeNull();
+    const { data: declared } = await supabase
+      .from("exam_scan_batches")
+      .select("total_pages, pages_per_exam, status")
+      .eq("id", b!.id)
+      .single();
+    expect(declared).toEqual({ total_pages: 2, pages_per_exam: 1, status: "uploaded" });
+
+    // The match message as it looks on its last retry. The check is deterministic, so every attempt
+    // fails it the same way; on the last one the dispatcher records the error now rather than after
+    // about five minutes of backoff. This shows the check and its terminal outcome, not the retries.
+    await sendExamMessage({
+      method: "match",
+      class_id: a.classId,
+      batch_id: b!.id,
+      args: { batch_id: b!.id },
+      retry_count: 5
+    });
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return (await batch(b!.id)).status;
+        },
+        { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      )
+      .toMatch(/^(error|review)$/);
+    const state = await batch(b!.id);
+    expect(state.status).toBe("error");
+    expect(state.error ?? "").toMatch(/has 1 of 2 scan pages/);
+    const { data: dlq } = await supabase
+      .from("exam_async_worker_dlq_messages")
+      .select("method, error_message")
+      .eq("class_id", a.classId)
+      .eq("envelope->>batch_id", String(b!.id));
+    expect(dlq).toHaveLength(1);
+    expect(dlq?.[0].method).toBe("match");
+    expect(dlq?.[0].error_message ?? "").toMatch(/has 1 of 2 scan pages/);
+    expect(await scannedRowsFor(b!.id)).toBe(0);
+  });
+
+  for (const terminal of ["error", "completed"] as const) {
+    test(`a stale match job leaves a batch in '${terminal}' as it is`, async () => {
+      const x = await graderCreatesBatch(a, {});
+      await seedOcr(x.batchId, 1);
+      const earlier = terminal === "error" ? "an earlier failure staff still need to read" : null;
+      const { data: set, error: setErr } = await supabase
+        .from("exam_scan_batches")
+        .update({ status: terminal, error: earlier })
+        .eq("id", x.batchId)
+        .select("status, error, total_pages")
+        .single();
+      expect(setErr).toBeNull();
+      expect(set).toEqual({ status: terminal, error: earlier, total_pages: 1 });
+      // Otherwise matchable: every declared page is present and OCR'd.
+      const { data: pages } = await supabase.from("exam_scan_pages").select("ocr_data").eq("batch_id", x.batchId);
+      expect(pages).toHaveLength(1);
+      expect(pages?.[0].ocr_data).not.toBeNull();
+
+      await runQueuedThroughSentinel(a, {
+        method: "match",
+        class_id: a.classId,
+        batch_id: x.batchId,
+        args: { batch_id: x.batchId }
+      });
+      expect(await batch(x.batchId)).toEqual({ status: terminal, error: earlier });
+      expect(await scannedRowsFor(x.batchId)).toBe(0);
+
+      if (terminal === "error") {
+        // Explicit reprocessing is how staff recover an errored batch, and it still works.
+        const { error: reErr } = await a.grader.rpc("enqueue_exam_process_batch", { p_batch_id: x.batchId });
+        expect(reErr).toBeNull();
+        await expect
+          .poll(
+            async () => {
+              await runExamWorker();
+              return (await batch(x.batchId)).status;
+            },
+            { timeout: 60_000, intervals: [1000, 2000, 3000] }
+          )
+          .toBe("review");
+        const { data: scanned } = await supabase
+          .from("exam_scanned_submissions")
+          .select("matched_profile_id, match_status")
+          .eq("batch_id", x.batchId)
+          .single();
+        expect(scanned).toEqual({ matched_profile_id: a.student.private_profile_id, match_status: "suggested" });
+      }
+    });
+  }
 });
