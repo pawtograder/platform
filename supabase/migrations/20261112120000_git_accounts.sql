@@ -28,6 +28,10 @@ COMMENT ON TABLE public.git_accounts IS
   'Accounts Pawtograder created for its users on other git hosts. Written only by forgejo-reconciler.';
 
 ALTER TABLE public.git_accounts ENABLE ROW LEVEL SECURITY;
+-- Default privileges grant ALL to the API roles, and RLS doesn't cover TRUNCATE. Browsers only read rows;
+-- the service role writes them.
+REVOKE ALL ON TABLE public.git_accounts FROM public, anon, authenticated;
+GRANT SELECT ON TABLE public.git_accounts TO authenticated;
 
 CREATE POLICY git_accounts_select_own ON public.git_accounts
   FOR SELECT USING (user_id = auth.uid());

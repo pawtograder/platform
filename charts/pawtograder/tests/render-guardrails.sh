@@ -3200,6 +3200,11 @@ apps_refused "external auth: an overlay dropping the Secret from envFrom is refu
 apps_refused "external auth: another provider 0 in coder.coder.env is refused" \
   "coder.coder.env sets CODER_EXTERNAL_AUTH_0_ID" "${EA[@]}" \
   --set 'coder.coder.env[3].name=CODER_EXTERNAL_AUTH_0_ID' --set 'coder.coder.env[3].value=github'
+# first-owner runs its own coderd from pawtograder-coder-env, so it needs the provider's client id too
+# (staging crash-looped on "client_id must be provided" when only coderd's envFrom had it).
+apps_refused "external auth: a first-owner without the Secret is refused" \
+  "first-owner envFrom is missing pawtograder-coder-external-auth" "${EA[@]}" \
+  --set-json 'coder.coder.initContainers=[{"name":"first-owner","image":"ghcr.io/pawtograder/mirror/coder/coder:v2.37.3","command":["true"],"envFrom":[{"configMapRef":{"name":"pawtograder-coder-env"}},{"secretRef":{"name":"pawtograder-coder-db"}},{"secretRef":{"name":"pawtograder-coder-oidc","optional":true}}]}]'
 
 echo
 
