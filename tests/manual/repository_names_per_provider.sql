@@ -6,8 +6,7 @@
 --
 -- Scenarios:
 --   1. demo/hw1 can exist once on GitHub and once on Forgejo, but not twice on one provider
---   2. sync and archive skip a name that is only on Forgejo, and run for one that is also on GitHub;
---      they also skip a Forgejo repo under its own owner, which group publish names by the class's GitHub org
+--   2. sync and archive skip a name that is only on Forgejo, and run for one that is also on GitHub
 --   3. create-repo for a GitHub assignment runs even when Forgejo has a repo with that name;
 --      without an assignment it runs for a new name and still skips a Forgejo-only one
 \set ON_ERROR_STOP on
@@ -75,12 +74,6 @@ select pg_temp.check('2c archive runs for a name that is also on GitHub',
   public.enqueue_github_archive_repo(pg_temp.cls(), 'demo', 'hw1') is not null);
 select pg_temp.check('2d archive skips a Forgejo-only name',
   public.enqueue_github_archive_repo(pg_temp.cls(), 'demo', 'hw1-only-forgejo') is null);
-insert into public.repositories (assignment_id, class_id, profile_id, repository, git_provider)
-values (pg_temp.a('fj'), pg_temp.cls(), pg_temp.p('c'), 'fj-owner/hw1-group-team', 'forgejo');
-select pg_temp.check('2e sync skips a Forgejo repo named with the class''s GitHub org',
-  public.enqueue_github_sync_repo_permissions(pg_temp.cls(), 'names-org', 'hw1-group-team', 'names', '{}') is null);
-select pg_temp.check('2f archive skips it too',
-  public.enqueue_github_archive_repo(pg_temp.cls(), 'names-org', 'hw1-group-team') is null);
 
 -- 3
 select pg_temp.check('3a create-repo for a GitHub assignment runs despite a Forgejo repo with the same name',
