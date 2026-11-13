@@ -1,6 +1,6 @@
 /**
  * DB-level coverage for the access token hook's Coder email claim
- * (20261109150000_coder_email_claim.sql, #1222). Only tokens issued to Coder's OAuth client gain
+ * (20261113210100_coder_email_claim.sql, #1222). Only tokens issued to Coder's OAuth client gain
  * `coder_email` and Coder's client id in `aud`. Pawtograder's own sessions and every other OAuth
  * client's tokens, such as Forgejo's, come out of the hook unchanged.
  *
