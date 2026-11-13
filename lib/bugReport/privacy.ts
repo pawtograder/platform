@@ -420,6 +420,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "classes.late_tokens_per_student": "none",
   "classes.name": "none",
   "classes.office_hours_description": "none",
+  // Two integers the instructor sets (waiting limit and minutes); no user text is stored.
+  "classes.office_hours_health_thresholds": "none",
   "classes.office_hours_ics_url": "none",
   "classes.slug": "none",
   "classes.solution_template_repo": "none",
@@ -2799,6 +2801,18 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   metrics_workflow_run_percentiles: { "$[*].class_id": "none", "$[*].p50": "none", "$[*].p95": "none" },
   metrics_workflow_runs_by_conclusion: { "$[*].class_id": "none", "$[*].conclusion": "none", "$[*].count": "none" },
+  // Queue names are course content (see the decision in PRIVACY_REVIEW.md); the rest are counts and times.
+  office_hours_queue_health: {
+    "$[*].helping": "none",
+    "$[*].median_wait_seconds_today": "none",
+    "$[*].oldest_wait_seconds": "none",
+    "$[*].queue_id": "none",
+    "$[*].queue_name": "none",
+    "$[*].resolved_today": "none",
+    "$[*].staffed_tas": "none",
+    "$[*].unstaffed_seconds": "none",
+    "$[*].waiting": "none"
+  },
   only_calendar_or_discord_ids_changed: "none",
   only_discord_ids_changed: "none",
   open_discord_circuit: "none",

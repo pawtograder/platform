@@ -14,7 +14,9 @@ export const COURSE_FEATURES = {
   DISCORD_STUDENT_JOIN: "discord-student-join",
   GEMINI_API_KEY_SETUP: "gemini-api-key-setup",
   BUG_REPORT_RECORDING: "bug-report-recording",
-  EXAMS: "exams"
+  EXAMS: "exams",
+  OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
+  OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -158,6 +160,24 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: true,
     switchLabel: "Enable paper exam scanning and grading",
     ariaLabel: "Enable paper exams for this course"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_SHIFT_RELEASE,
+    title: "Office hours: release requests at shift end",
+    description:
+      "When a TA's shift ends, the requests they were still helping with go back to the queue, open and unassigned, instead of staying with them. When off, nothing changes.",
+    defaultWhenMissing: false,
+    switchLabel: "Release a TA's requests when their shift ends",
+    ariaLabel: "Release office hours requests when a TA's shift ends"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT,
+    title: "Office hours: turn alert for students",
+    description:
+      "While a student has an open office hours request, their browser tab shows an alert when a TA picks up their request or they are next in line. When off, nothing changes.",
+    defaultWhenMissing: false,
+    switchLabel: "Alert students in their browser when their office hours turn comes up",
+    ariaLabel: "Alert students in the browser when their office hours turn comes up"
   }
 ];
 

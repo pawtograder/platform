@@ -27,6 +27,8 @@ export interface NotifyOptions {
   tag?: string;
   icon?: string;
   onClick?: () => void;
+  /** Keep the browser notification on screen until the user dismisses it, instead of closing it after 5 seconds. */
+  persistent?: boolean;
 }
 
 const DEFAULT_PREFERENCES: ChatNotificationPreferences = {
@@ -341,9 +343,11 @@ class NotificationManager {
       }
 
       // Auto-close after 5 seconds
-      setTimeout(() => {
-        notification.close();
-      }, 5000);
+      if (!options.persistent) {
+        setTimeout(() => {
+          notification.close();
+        }, 5000);
+      }
     } catch (error) {
       console.error("Failed to show browser notification:", error);
     }

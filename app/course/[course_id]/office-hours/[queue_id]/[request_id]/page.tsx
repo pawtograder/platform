@@ -8,6 +8,9 @@ import { Box, Flex, Spinner, Text, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
 
 type LoadState = "pending" | "loaded" | "not_found" | "error";
 
@@ -100,6 +103,14 @@ export default function RequestDetailPage() {
     return queueRequests.findIndex((r) => r.id === request.id) + 1;
   }, [request, queueRequests]);
 
+  const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
+  const turnMessage = useTurnAlert({
+    status: request?.status,
+    assignee: request?.assignee,
+    position,
+    enabled: turnAlertsOn
+  });
+
   if (!request) {
     if (hiddenFromMasquerade) {
       return (
@@ -142,6 +153,8 @@ export default function RequestDetailPage() {
         />
       </Box>
       <Box flex={{ lg: 8 }} minW={0}>
+        <TurnAlertPrompt enabled={turnAlertsOn} />
+        <TurnAlertBanner message={turnMessage} />
         <CurrentRequest request={request} position={position} />
       </Box>
     </Flex>

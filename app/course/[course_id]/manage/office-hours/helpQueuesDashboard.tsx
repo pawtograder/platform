@@ -7,11 +7,10 @@ import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useHelpQueues,
   useHelpQueueAssignments,
-  useHelpRequests,
   useConnectionStatus,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
@@ -24,6 +23,14 @@ import NotificationPermissionWarning, {
   useShowNotificationWarning
 } from "@/components/notifications/notification-permission-warning";
 import { format, parseISO, differenceInMinutes } from "date-fns";
+import type { useQueueHealth } from "@/hooks/useQueueHealth";
+import QueueHealthStats, {
+  QueueUnstaffedBadge,
+  queueHealthTone,
+  type QueueHealthTone
+} from "@/components/help-queue/queue-health-stats";
+
+const TONE_RANK: Record<QueueHealthTone, number> = { alert: 0, ok: 1 };
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -34,8 +41,10 @@ import { format, parseISO, differenceInMinutes } from "date-fns";
  *
  * Uses real-time updates to show live queue status and assignment changes.
  */
-export default function HelpQueuesDashboard() {
+export default function HelpQueuesDashboard({ health }: { health: ReturnType<typeof useQueueHealth> }) {
   const { course_id } = useParams();
+  const { byQueue: healthByQueue, thresholds: healthThresholds } = health;
+
   const { course } = useCourseController();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
@@ -46,7 +55,6 @@ export default function HelpQueuesDashboard() {
   // Get data using individual hooks
   const queues = useHelpQueues();
   const allQueueAssignments = useHelpQueueAssignments();
-  const allHelpRequests = useHelpRequests();
   const { isConnected, connectionStatus } = useConnectionStatus();
   const officeHoursEvents = useOfficeHoursSchedule();
 
@@ -57,11 +65,6 @@ export default function HelpQueuesDashboard() {
   const activeAssignments = useMemo(() => {
     return allQueueAssignments.filter((assignment) => assignment.ta_profile_id === taProfileId && assignment.is_active);
   }, [allQueueAssignments, taProfileId]);
-
-  // Filter unresolved requests (activeHelpRequests gives us open/in_progress, but we also need to check for resolved_by)
-  const unresolvedRequests = useMemo(() => {
-    return allHelpRequests.filter((request) => request.status !== "resolved" && request.status !== "closed");
-  }, [allHelpRequests]);
 
   // Group all active assignments by queue (used for display)
   const activeAssignmentsByQueue = useMemo(() => {
@@ -96,6 +99,30 @@ export default function HelpQueuesDashboard() {
 
   // TA Dashboard: only show queues marked active (course setting). Full list remains in Queue Management.
   const activeCourseQueues = useMemo(() => sortedQueues.filter((queue) => queue.is_active), [sortedQueues]);
+
+  // Queues are ordered by severity (alerts first, then healthy) once, when health first loads.
+  // The order then stays put while the numbers refresh, so nothing moves under the cursor.
+  const [severityOrder, setSeverityOrder] = useState<number[] | null>(null);
+  useEffect(() => {
+    if (severityOrder !== null || Object.keys(healthByQueue).length === 0 || activeCourseQueues.length === 0) return;
+    const ids = [...activeCourseQueues]
+      .sort((a, b) => {
+        const ra = TONE_RANK[queueHealthTone(healthByQueue[a.id], healthThresholds) ?? "ok"];
+        const rb = TONE_RANK[queueHealthTone(healthByQueue[b.id], healthThresholds) ?? "ok"];
+        return ra - rb || a.name.localeCompare(b.name);
+      })
+      .map((q) => q.id);
+    setSeverityOrder(ids);
+  }, [healthByQueue, healthThresholds, activeCourseQueues, severityOrder]);
+  const orderedQueues = useMemo(() => {
+    if (severityOrder === null) return activeCourseQueues;
+    const byId = new Map(activeCourseQueues.map((q) => [q.id, q]));
+    const known = severityOrder
+      .map((id) => byId.get(id))
+      .filter((q): q is (typeof activeCourseQueues)[number] => Boolean(q));
+    const added = activeCourseQueues.filter((q) => !severityOrder.includes(q.id));
+    return [...known, ...added];
+  }, [activeCourseQueues, severityOrder]);
 
   // Calculate staffing information for each queue
   const queueStaffingInfo = useMemo(() => {
@@ -236,7 +263,7 @@ export default function HelpQueuesDashboard() {
   };
 
   return (
-    <Stack spaceY="4" height="100%" overflowY="auto">
+    <Stack spaceY="4">
       {/* Connection Status Indicator */}
       {!isConnected && (
         <Alert status="warning" title="Real-time updates disconnected">
@@ -262,7 +289,7 @@ export default function HelpQueuesDashboard() {
         Only active queues are listed here. Open Queue Management to view or edit inactive queues.
       </Text>
 
-      {activeCourseQueues.map((queue) => {
+      {orderedQueues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
         const staffingInfo = queueStaffingInfo[queue.id] || {
@@ -284,13 +311,13 @@ export default function HelpQueuesDashboard() {
             aria-label={`Help queue: ${queue.name}`}
           >
             <Box flex={1}>
-              <Text fontWeight="medium">{queue.name}</Text>
+              <HStack spaceX="2" wrap="wrap">
+                <Text fontWeight="medium">{queue.name}</Text>
+                {queueAssignments.length === 0 && <QueueUnstaffedBadge health={healthByQueue[queue.id]} />}
+              </HStack>
               <HStack spaceX="2" mt="1">
                 <Text fontSize="sm">Mode:</Text>
                 <Text fontSize="sm">{queue.queue_type}</Text>
-                <Text fontSize="sm">
-                  · Open Requests: {unresolvedRequests.filter((r) => r.help_queue === queue.id).length}
-                </Text>
               </HStack>
 
               {/* Staffing information */}
@@ -357,7 +384,7 @@ export default function HelpQueuesDashboard() {
                 )}
               </VStack>
             </Box>
-            <Box ml={4}>
+            <Flex direction="column" align="flex-end" ml={4} flexShrink={0}>
               {myAssignment ? (
                 <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
                   Stop Working
@@ -367,7 +394,10 @@ export default function HelpQueuesDashboard() {
                   Start Working
                 </Button>
               )}
-            </Box>
+              <Box mt={3}>
+                <QueueHealthStats health={healthByQueue[queue.id]} thresholds={healthThresholds} />
+              </Box>
+            </Flex>
           </Flex>
         );
       })}
