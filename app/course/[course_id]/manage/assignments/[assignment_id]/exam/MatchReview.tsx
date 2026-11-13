@@ -194,6 +194,7 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
                       </option>
                     ))}
                   </NativeSelect.Field>
+                  <NativeSelect.Indicator />
                 </NativeSelect.Root>
               </Table.Cell>
               <Table.Cell>

@@ -151,6 +151,7 @@ export default function QuestionTreeEditor({
                         </option>
                       ))}
                     </NativeSelect.Field>
+                    <NativeSelect.Indicator />
                   </NativeSelect.Root>
                   <Input
                     size="xs"
@@ -210,6 +211,7 @@ export default function QuestionTreeEditor({
                             </option>
                           ))}
                         </NativeSelect.Field>
+                        <NativeSelect.Indicator />
                       </NativeSelect.Root>
                     )}
                   </HStack>
@@ -229,6 +231,7 @@ export default function QuestionTreeEditor({
                       <option value="true">True</option>
                       <option value="false">False</option>
                     </NativeSelect.Field>
+                    <NativeSelect.Indicator />
                   </NativeSelect.Root>
                 )}
 

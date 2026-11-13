@@ -315,6 +315,13 @@ entrypoint = "./functions/github-repo-webhook/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/github-repo-webhook/*.html" ]
 
+[functions.forgejo-repo-webhook]
+enabled = true
+# Authenticated by the hook's HMAC signature (FORGEJO_WEBHOOK_SECRET), not a JWT.
+verify_jwt = false
+import_map = "./functions/forgejo-repo-webhook/deno.json"
+entrypoint = "./functions/forgejo-repo-webhook/index.ts"
+
 [functions.github-repo-configure-webhook]
 enabled = true
 verify_jwt = false
