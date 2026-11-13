@@ -88,7 +88,7 @@ describe("routePolicy matching", () => {
   });
 
   it("returns null for unlisted routes", () => {
-    expect(recordingLevelFor("/course/1/manage/course/lti")).toBeNull();
+    expect(recordingLevelFor("/course/1/manage/gradebook")).toBeNull();
     expect(recordingLevelFor("/")).toBeNull();
     expect(recordingLevelFor("/course/1/assignments")).toBeNull();
   });
