@@ -15,6 +15,8 @@
 --   4. group_config 'both': a student in a group gets no individual repo; one in no group does
 --   5. save_forgejo_group_repo marks a repo ready only when every current member was granted, and
 --      creates the row the first time
+--   6. publish and copy don't re-permission a GitHub repo that shares a Forgejo group repo's name,
+--      once the class has a GitHub org
 \set ON_ERROR_STOP on
 \timing off
 begin;
@@ -161,6 +163,72 @@ select pg_temp.check('5c a first save creates the group''s Forgejo row',
 insert into saved select 'no-login', public.save_forgejo_group_repo(pg_temp.g('waiting'),
   'grp-org/proj-group-Team-Two', 'https://git.test', array['login-u5']);
 select pg_temp.check('5d a member without a login keeps it not ready', not (select ready from saved where k = 'no-login'));
+
+-- 6
+update public.classes set github_org = 'gh-org' where id = pg_temp.cls();
+insert into fx select 'teacher', gen_random_uuid(), gen_random_uuid(), gen_random_uuid();
+insert into auth.users (id, email, aud, role)
+select user_id, 'teacher-' || left(user_id::text, 8) || '@groups.test', 'authenticated', 'authenticated'
+from fx where name = 'teacher';
+insert into public.profiles (id, class_id, is_private_profile, name)
+select priv, pg_temp.cls(), true, name from fx where name = 'teacher'
+union all select pub, pg_temp.cls(), false, name || ' (public)' from fx where name = 'teacher';
+insert into public.user_roles (user_id, class_id, role, private_profile_id, public_profile_id)
+select user_id, pg_temp.cls(), 'instructor', priv, pub from fx where name = 'teacher';
+-- A target group that already has a Forgejo repo, so copy's permission sync reaches it.
+with g as (
+  insert into public.assignment_groups (assignment_id, class_id, name)
+  values (pg_temp.a('both'), pg_temp.cls(), 'Team One!') returning id
+)
+insert into fx_g select 'lab-one', id from g;
+insert into public.repositories (assignment_id, class_id, assignment_group_id, repository, git_provider, is_github_ready)
+values (pg_temp.a('both'), pg_temp.cls(), pg_temp.g('lab-one'), 'grp-org/lab-group-Team-One', 'forgejo', true);
+-- GitHub repos, on a GitHub assignment, named like the Forgejo group repos under the class's GitHub org.
+-- Released in the future, so inserting it doesn't start repo creation.
+with st as (insert into public.assignment_self_review_settings (class_id) values (pg_temp.cls()) returning id),
+     a as (
+  insert into public.assignments (class_id, title, slug, due_date, release_date, group_config, git_provider,
+                                  self_review_setting_id)
+  select pg_temp.cls(), 'gh', 'gh', now() + interval '14 days', now() + interval '7 days', 'individual', 'github', st.id
+  from st returning id
+)
+insert into fx_a select 'gh', id from a;
+insert into public.repositories (assignment_id, class_id, profile_id, repository, git_provider)
+values (pg_temp.a('gh'), pg_temp.cls(), pg_temp.priv('u1'), 'gh-org/proj-group-Team-One', 'github'),
+       (pg_temp.a('gh'), pg_temp.cls(), pg_temp.priv('u2'), 'gh-org/proj-group-Team-Two', 'github'),
+       (pg_temp.a('gh'), pg_temp.cls(), pg_temp.priv('u3'), 'gh-org/lab-group-Lab-Pair', 'github'),
+       (pg_temp.a('gh'), pg_temp.cls(), pg_temp.priv('u5'), 'gh-org/lab-group-Team-One', 'github');
+create or replace function pg_temp.github_calls() returns bigint language sql as $$
+  select count(*) from public.api_gateway_calls
+  where class_id = pg_temp.cls() and method in ('sync_repo_permissions', 'archive_repo_and_lock')
+$$;
+create temp table calls_before(v bigint); insert into calls_before select pg_temp.github_calls();
+select set_config('request.jwt.claims', json_build_object('sub', user_id, 'role', 'authenticated')::text, true)
+from fx where name = 'teacher';
+-- Nothing here dissolves a group: deleting a Forgejo repository row raises (20261020150000), so a
+-- publish or copy that would dissolve a Forgejo group with a repo fails as a whole.
+-- u4 leaves 'complete', whose repo the GitHub path would re-permission.
+create temp table published as select public.publish_assignment_group_changes(pg_temp.cls(), pg_temp.a('groups'), '[]',
+  jsonb_build_array(
+    jsonb_build_object('profile_id', pg_temp.priv('u4'), 'old_group_id', pg_temp.g('complete'), 'new_group_id', null)
+  )) as r;
+select pg_temp.check('6a publish drops a member from a Forgejo group without GitHub calls',
+  (select (r->>'syncs_enqueued')::int = 0 and jsonb_array_length(r->'errors') = 0 from published)
+  and pg_temp.github_calls() = (select v from calls_before),
+  (select r::text from published) || ' calls: ' || (pg_temp.github_calls() - (select v from calls_before)));
+-- The source gets a 'Lab Pair' too, so copy keeps both target groups, which have Forgejo repos.
+with g as (
+  insert into public.assignment_groups (assignment_id, class_id, name)
+  values (pg_temp.a('groups'), pg_temp.cls(), 'Lab Pair') returning id
+)
+insert into fx_g select 'src-lab', id from g;
+select pg_temp.join('src-lab', 'u4', 'groups');
+create temp table copied as select public.copy_groups_from_assignment(pg_temp.cls(), pg_temp.a('groups'), pg_temp.a('both')) as r;
+select pg_temp.check('6b copy into groups with Forgejo repos makes no GitHub calls',
+  (select (r->>'groups_deleted')::int = 0 from copied)
+  and pg_temp.github_calls() = (select v from calls_before),
+  (select r::text from copied) || ' calls: ' || (pg_temp.github_calls() - (select v from calls_before)));
+select set_config('request.jwt.claims', '', true);
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;

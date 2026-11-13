@@ -81,10 +81,8 @@ declare
 begin
   -- GitHubWrapper treats a supplied owner/name as authoritative, regardless of p_org.
   -- Skip only a name that is on another host and not on GitHub: a name is unique per provider.
-  -- Group publish and copy pass the class's GitHub org with the name after the row's owner, so a
-  -- Forgejo row under its own owner is matched by that name too.
-  if exists (select 1 from public.repositories where class_id = p_class_id and git_provider <> 'github'
-                and (repository = v_full_name or substring(repository from position('/' in repository) + 1) = p_repo))
+  if exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
+                and git_provider <> 'github')
      and not exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
                 and git_provider = 'github') then
     return null;
@@ -106,10 +104,8 @@ declare
 begin
   -- Match the same owner/name that archiveRepoAndLock will use.
   -- Skip only a name that is on another host and not on GitHub: a name is unique per provider.
-  -- Group publish and copy pass the class's GitHub org with the name after the row's owner, so a
-  -- Forgejo row under its own owner is matched by that name too.
-  if exists (select 1 from public.repositories where class_id = p_class_id and git_provider <> 'github'
-                and (repository = v_full_name or substring(repository from position('/' in repository) + 1) = p_repo))
+  if exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
+                and git_provider <> 'github')
      and not exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
                 and git_provider = 'github') then
     return null;
