@@ -174,10 +174,12 @@ function fakeRepoSupabase(
   existing: Record<
     string,
     { id: number; assignment_id: number; profile_id: string | null; assignment_group_id: null }
-  > = {}
+  > = {},
+  taken: string[] = []
 ) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const writes: { kind: "insert" | "update"; row: Record<string, unknown>; id?: unknown }[] = [];
+  let nextId = 100;
   const client = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcCalls.push({ name, args });
@@ -197,8 +199,19 @@ function fakeRepoSupabase(
       return {
         select: () => lookup,
         insert(row: Record<string, unknown>) {
-          writes.push({ kind: "insert", row });
-          return Promise.resolve({ error: null });
+          const conflict = taken.includes(row.repository as string);
+          if (!conflict) writes.push({ kind: "insert", row });
+          const id = nextId++;
+          return {
+            select: () => ({
+              single: () =>
+                Promise.resolve(
+                  conflict
+                    ? { data: null, error: { code: "23505", message: "duplicate" } }
+                    : { data: { id }, error: null }
+                )
+            })
+          };
         },
         update(row: Record<string, unknown>) {
           return {
@@ -242,7 +255,7 @@ Deno.test("repos: asks for this instance's backlog with the pass size", async ()
   ]);
 });
 
-Deno.test("repos: creates each repo, grants write, then records it as a ready Forgejo repo", async () => {
+Deno.test("repos: claims the name, creates the repo, grants write, then marks it ready", async () => {
   const { client, writes } = fakeRepoSupabase([neededRepo("a"), neededRepo("b")]);
   const { ops, calls } = stubOps();
   const result = await reconcileForgejoRepos(client, config, ops);
@@ -255,21 +268,33 @@ Deno.test("repos: creates each repo, grants write, then records it as a ready Fo
     "repo cs4535/hw1-b from cs4535/hw1-handout",
     "write b on cs4535/hw1-b"
   ]);
-  assertEquals(writes[0], {
-    kind: "insert",
-    row: {
-      assignment_id: 9,
-      class_id: 3,
-      profile_id: "profile-a",
-      assignment_group_id: null,
-      repository: "cs4535/hw1-a",
-      git_provider: "forgejo",
-      is_github_ready: true
-    }
-  });
+  assertEquals(writes.slice(0, 2), [
+    {
+      kind: "insert",
+      row: {
+        assignment_id: 9,
+        class_id: 3,
+        profile_id: "profile-a",
+        assignment_group_id: null,
+        repository: "cs4535/hw1-a",
+        git_provider: "forgejo",
+        is_github_ready: false
+      }
+    },
+    { kind: "update", row: { is_github_ready: true }, id: 100 }
+  ]);
 });
 
-Deno.test("repos: a repo the student can't write to is not recorded, and the pass carries on", async () => {
+Deno.test("repos: a name a group claimed first gets no Forgejo calls and no grant", async () => {
+  const { client, writes } = fakeRepoSupabase([neededRepo("a")], {}, ["cs4535/hw1-a"]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(calls, []);
+  assertEquals(writes, []);
+  assertEquals(result.failures.length, 1);
+});
+
+Deno.test("repos: a repo the student can't write to stays not ready, and the pass carries on", async () => {
   const { client, writes } = fakeRepoSupabase([neededRepo("a"), neededRepo("b"), neededRepo("c", "other")]);
   const { ops } = stubOps({
     grantWrite: (_cfg, _repository, login) => Promise.resolve(login !== "a"),
@@ -285,9 +310,14 @@ Deno.test("repos: a repo the student can't write to is not recorded, and the pas
       ["profile-c", "Forgejo org create failed: 403"]
     ]
   );
+  // Each name is claimed; only b, whose student can write, is marked ready.
   assertEquals(
-    writes.map((u) => u.row.repository),
-    ["cs4535/hw1-b"]
+    writes.filter((w) => w.kind === "insert").map((w) => w.row.repository),
+    ["cs4535/hw1-a", "cs4535/hw1-b", "other/hw1-c"]
+  );
+  assertEquals(
+    writes.filter((w) => w.kind === "update"),
+    [{ kind: "update", row: { is_github_ready: true }, id: 101 }]
   );
 });
 
