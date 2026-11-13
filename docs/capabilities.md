@@ -14,10 +14,11 @@ and nothing else.
 
 - **Instructors, students and admins** are on their app role's default role.
 - **Graders** are on the default grader role, or on a custom role such as "Head TA".
-- **A new custom role starts as a copy of the default grader role.** The instructor then turns
-  capabilities on or off. After that the two lists are separate: changing the default grader role
-  doesn't change roles made earlier. So a custom role can hold more than a plain grader (a Head TA)
-  or less (a course coordinator who doesn't grade).
+- **A new custom role starts as a copy of the default grader role.** The copy leaves out any
+  capability its creator doesn't hold in the class (the service role and migrations copy
+  everything). The instructor then turns capabilities on or off. After that the two lists are
+  separate: changing the default grader role doesn't change roles made earlier. So a custom role
+  can hold more than a plain grader (a Head TA) or less (a course coordinator who doesn't grade).
 - **Instructors can edit the default grader role.** The instructor, student and admin roles are fixed.
   The default grader role can't be renamed or deleted.
 - Only graders can be on a custom role, and `manage_roles` is never on the grader role or a custom role.

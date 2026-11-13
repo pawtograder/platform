@@ -241,6 +241,13 @@ function expectBlocked({ data, error }: WriteResult, what: string) {
   expect(error !== null || (data ?? []).length === 0, `${what} must be blocked`).toBe(true);
 }
 
+// For an insert that must be refused by RLS itself. Postgres checks an INSERT policy before the
+// primary key, so a working policy gives 42501 even when the row already exists; a policy that let
+// the row through would give 23505 (duplicate key) instead, which expectBlocked would also accept.
+function expectRlsBlocked({ error }: WriteResult, what: string) {
+  expect((error as { code?: string } | null)?.code, `${what} must be refused by RLS`).toBe("42501");
+}
+
 async function roleCapabilities(role_id: number) {
   const { data, error } = await supabase.from("role_capabilities").select("capability").eq("role_id", role_id);
   expect(error).toBeNull();
@@ -346,8 +353,10 @@ test.describe("custom class roles", () => {
     const graderRole = defaultC("grader");
     const customId = await createCustomRole("Grading TA");
 
+    // The default instructor role already holds publish_groups, so only the error code shows the
+    // policy refused the insert (see expectRlsBlocked).
     for (const app_role of ["instructor", "student", "admin"]) {
-      expectBlocked(
+      expectRlsBlocked(
         await instructor
           .from("role_capabilities")
           .insert({ role_id: defaultC(app_role).id, capability: "publish_groups" })
