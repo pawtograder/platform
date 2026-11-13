@@ -1257,6 +1257,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
           .select("id, created_at")
+          // The same owner/name can exist on GitHub and on Forgejo; only this provider's repository counts.
+          .eq("repository_id", repoData.id)
           .eq("repository", repository)
           .eq("sha", sha)
           .eq("run_number", Number.parseInt(decoded.run_id))

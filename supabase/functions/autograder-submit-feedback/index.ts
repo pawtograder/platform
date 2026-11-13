@@ -597,9 +597,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     class_id = regressionTestRun.autograder.assignments.class_id;
     assignment_id = regressionTestRun.autograder.assignments.id;
   } else {
+    // The same owner/name can exist on GitHub and on Forgejo, so find this provider's repository first and
+    // match the submission by it.
+    const { data: repositoryRow } = await adminSupabase
+      .from("repositories")
+      .select("id")
+      .eq("repository", repository)
+      .eq("git_provider", decoded.provider)
+      .maybeSingle();
+    if (!repositoryRow) {
+      throw new SecurityError(`Repository not found: ${repository}`);
+    }
     const { data: submission, error: submissionError } = await adminSupabase
       .from("submissions")
       .select("*, repository_check_runs!submissions_repository_check_run_id_fkey(*)")
+      .eq("repository_id", repositoryRow.id)
       .eq("repository", repository)
       .eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
@@ -611,16 +623,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to load submission: ${submissionError.message}`);
     }
     if (!submission) {
-      const { data: repositoryRow } = await adminSupabase
-        .from("repositories")
-        .select("id")
-        .eq("repository", repository)
-        .eq("git_provider", decoded.provider)
-        .maybeSingle();
-      if (!repositoryRow) {
-        throw new SecurityError(`Repository not found: ${repository}`);
-      }
-
       const { data: rerunCheckRun, error: rerunCheckRunError } = await adminSupabase
         .from("repository_check_runs")
         .select("*")
