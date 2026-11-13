@@ -225,6 +225,17 @@ export async function reconcileForgejoGroupRepos(
       assertTemplateInOrg(group.template_repo, group.owner);
       // Refuses a name another assignment, student or group already holds.
       await existingRepositoryRow(supabase, repository, owner);
+      // Claim the name before any grant. Classes can share a forgejo_org, and passes can overlap, so
+      // another group may be about to take the same name; the unique index on (git_provider, repository)
+      // lets only one row exist, and nothing granted is left on a repo this group doesn't own.
+      // function-grants: service-role
+      const { error: reserveError } = await supabase.rpc("save_forgejo_group_repo", {
+        p_assignment_group_id: group.assignment_group_id,
+        p_repository: repository,
+        p_instance_url: config.url,
+        p_granted: []
+      });
+      if (reserveError) throw reserveError;
       if (!orgsReady.has(group.owner)) {
         await ops.ensureOrg(config, group.owner);
         orgsReady.add(group.owner);

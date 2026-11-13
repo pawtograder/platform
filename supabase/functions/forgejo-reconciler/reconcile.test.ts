@@ -458,8 +458,11 @@ const neededGroup = (id: number, logins: string[], complete = true): NeededGroup
   all_members_have_logins: complete
 });
 
-/** The backlog and save RPCs. A save reports ready unless the test says the roster changed. */
-function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = []) {
+/**
+ * The backlog and save RPCs. A save with no grants is the pass claiming the name; it fails for a group
+ * in `taken`. A later save reports ready unless the test says the roster changed.
+ */
+function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = [], taken: number[] = []) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const saves: Record<string, unknown>[] = [];
   const client = {
@@ -468,6 +471,10 @@ function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = []) {
       if (name === "save_forgejo_group_repo") {
         saves.push(args);
         const group = needed.find((g) => g.assignment_group_id === args.p_assignment_group_id)!;
+        if ((args.p_granted as string[]).length === 0) {
+          const error = taken.includes(group.assignment_group_id) ? { code: "23505", message: "duplicate" } : null;
+          return Promise.resolve({ data: false, error });
+        }
         const ready = group.all_members_have_logins && !notReady.includes(group.assignment_group_id);
         return Promise.resolve({ data: ready, error: null });
       }
@@ -501,21 +508,27 @@ Deno.test("group repos: one repo per group, every member a writer, saved through
     "write a on cs4535/hw1-group-team-5",
     "write b on cs4535/hw1-group-team-5"
   ]);
+  const save = { p_assignment_group_id: 5, p_repository: "cs4535/hw1-group-team-5", p_instance_url: config.url };
   assertEquals(saves, [
-    {
-      p_assignment_group_id: 5,
-      p_repository: "cs4535/hw1-group-team-5",
-      p_instance_url: config.url,
-      p_granted: ["a", "b"]
-    }
+    { ...save, p_granted: [] },
+    { ...save, p_granted: ["a", "b"] }
   ]);
+});
+
+Deno.test("group repos: a name another group claimed first gets no Forgejo calls and no grants", async () => {
+  const { client } = fakeGroupSupabase([neededGroup(5, ["a", "b"])], [], [5]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(calls, []);
+  assertEquals(result.created, 0);
+  assertEquals(result.failures.length, 1);
 });
 
 Deno.test("group repos: a member who joined during the pass leaves the repo not ready, without a failure", async () => {
   const { client, saves } = fakeGroupSupabase([neededGroup(5, ["a", "b"])], [5]);
   const result = await reconcileForgejoGroupRepos(client, config, stubOps().ops);
   assertEquals(result, { created: 0, failures: [] });
-  assertEquals(saves.length, 1);
+  assertEquals(saves.length, 2);
 });
 
 Deno.test("group repos: a template outside the class's org is refused before any Forgejo call", async () => {
@@ -534,7 +547,7 @@ Deno.test("group repos: a member without an account yet leaves the repo not read
   const { client, saves } = fakeGroupSupabase([neededGroup(5, ["a"], false)]);
   const result = await reconcileForgejoGroupRepos(client, config, stubOps().ops);
   assertEquals(result, { created: 0, failures: [] });
-  assertEquals(saves.length, 1);
+  assertEquals(saves.length, 2);
 });
 
 Deno.test("group repos: a member Forgejo won't make a writer fails that group only", async () => {
@@ -547,7 +560,7 @@ Deno.test("group repos: a member Forgejo won't make a writer fails that group on
     [[5, "Forgejo doesn't report write access for every group member"]]
   );
   assertEquals(
-    saves.map((u) => u.p_assignment_group_id),
+    saves.filter((u) => (u.p_granted as string[]).length > 0).map((u) => u.p_assignment_group_id),
     [6]
   );
 });
