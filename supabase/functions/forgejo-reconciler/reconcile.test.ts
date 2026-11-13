@@ -594,3 +594,83 @@ Deno.test("group repos: a member Forgejo won't make a writer fails that group on
     [6]
   );
 });
+
+/**
+ * One repositories table for an individual and a group pass, unique on the name. Both ownership lookups
+ * finish before either pass claims, as when two passes overlap; `first` decides which claim lands first.
+ */
+function overlappingPasses(first: "student" | "group") {
+  const rows = new Map<string, string>();
+  let lookups = 0;
+  let bothLooked: () => void;
+  const lookedUp = new Promise<void>((resolve) => (bothLooked = resolve));
+  let firstClaimed: () => void;
+  const claimedFirst = new Promise<void>((resolve) => (firstClaimed = resolve));
+  async function claim(by: "student" | "group", repository: string) {
+    if (by !== first) await claimedFirst;
+    const holder = rows.get(repository);
+    const error = holder && holder !== by ? { code: "23505", message: "duplicate" } : null;
+    if (!error) rows.set(repository, by);
+    if (by === first) firstClaimed();
+    return error;
+  }
+  const client = (by: "student" | "group", needed: unknown[]) =>
+    ({
+      async rpc(name: string, args: Record<string, unknown>) {
+        if (name !== "save_forgejo_group_repo") return { data: needed, error: null };
+        if ((args.p_granted as string[]).length === 0) {
+          return { data: false, error: await claim(by, args.p_repository as string) };
+        }
+        return { data: true, error: null };
+      },
+      from() {
+        const filters: Record<string, unknown> = {};
+        const lookup = {
+          select: () => lookup,
+          eq: (column: string, value: unknown) => ((filters[column] = value), lookup),
+          maybeSingle: async () => {
+            if (++lookups === 2) bothLooked();
+            await lookedUp;
+            return { data: null, error: null };
+          }
+        };
+        return {
+          select: () => lookup,
+          insert: (row: Record<string, unknown>) => ({
+            select: () => ({
+              single: async () => {
+                const error = await claim(by, row.repository as string);
+                return error ? { data: null, error } : { data: { id: 1 }, error: null };
+              }
+            })
+          }),
+          update: () => ({ eq: () => Promise.resolve({ error: null }) })
+        };
+      }
+    }) as unknown as Parameters<typeof reconcileForgejoRepos>[0];
+  return { client, rows };
+}
+
+for (const first of ["student", "group"] as const) {
+  Deno.test(
+    `a student and a group deriving the same name: when the ${first} claims first, the other makes no Forgejo calls`,
+    async () => {
+      // Group 5's repo is hw1-group-team-5; so is the repo of a student whose login is group-team-5.
+      const { client, rows } = overlappingPasses(first);
+      const student = stubOps();
+      const group = stubOps();
+      const [studentResult, groupResult] = await Promise.all([
+        reconcileForgejoRepos(client("student", [neededRepo("group-team-5")]), config, student.ops),
+        reconcileForgejoGroupRepos(client("group", [neededGroup(5, ["a", "b"])]), config, group.ops)
+      ]);
+      assertEquals(rows.get("cs4535/hw1-group-team-5"), first);
+      const [winner, loser] = first === "student" ? [student, group] : [group, student];
+      const [won, lost] = first === "student" ? [studentResult, groupResult] : [groupResult, studentResult];
+      assertEquals(won.created, 1);
+      assertEquals(winner.calls.filter((c) => c.startsWith("write")).length > 0, true);
+      assertEquals(lost.created, 0);
+      assertEquals(lost.failures.length, 1);
+      assertEquals(loser.calls, []);
+    }
+  );
+}
