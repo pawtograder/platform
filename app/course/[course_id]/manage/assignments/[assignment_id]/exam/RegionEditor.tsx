@@ -3,6 +3,8 @@
 import { examExtractTemplate } from "@/lib/edgeFunctions";
 import { EXAM_ANSWER_TYPES, normalizeAnswerType } from "@/lib/exam/answerTypes";
 import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
+import { examRubricOutOfDate } from "@/lib/exam/rubricOutOfDate";
+import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -66,7 +68,15 @@ function snapshotOf(questions: EditorQuestion[], regions: EditorRegion[]): strin
   });
 }
 
-export default function RegionEditor({ examId, gradingRubricId }: { examId: number; gradingRubricId: number | null }) {
+export default function RegionEditor({
+  examId,
+  assignmentId,
+  gradingRubricId
+}: {
+  examId: number;
+  assignmentId: number;
+  gradingRubricId: number | null;
+}) {
   const [pages, setPages] = useState<TemplatePage[]>([]);
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [questions, setQuestions] = useState<EditorQuestion[]>([]);
@@ -84,6 +94,9 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
   // rubric built in between is left pointing at the previous ones. (Same failure that was fixed
   // in QuizBuilder; this editor has the identical shape.)
   const [reloadKey, setReloadKey] = useState(0);
+  // Bumped after "Build rubric from exam" succeeds, so the out-of-date notice below re-checks.
+  const [rubricBuilds, setRubricBuilds] = useState(0);
+  const [rubricOutOfDate, setRubricOutOfDate] = useState(false);
   const drawing = useRef<{ page: number; startX: number; startY: number } | null>(null);
   const [preview, setPreview] = useState<(NormRect & { page: number }) | null>(null);
 
@@ -171,6 +184,58 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       });
     });
   }, [examId, reloadKey]);
+
+  // Whether the rubric still matches the SAVED questions (#1190). Only while there are no submissions:
+  // after that Build no longer refreshes points, so it couldn't clear the notice, and a different
+  // value may be a grader's deliberate edit.
+  useEffect(() => {
+    if (!gradingRubricId) {
+      setRubricOutOfDate(false);
+      return;
+    }
+    const supabase = createClient();
+    // A save or Build starts a new check while an older one may still be in flight. Only the
+    // latest may set the notice, or a stale result can hide a newer warning.
+    let cancelled = false;
+    async function check(rubricId: number) {
+      const [examRes, questionsRes, checksRes, submissionsRes] = await Promise.all([
+        supabase.from("exams").select("delivery_mode").eq("id", examId).single(),
+        supabase
+          .from("exam_questions")
+          .select("id, parent_id, points, answer_type, correct_answer")
+          .eq("exam_id", examId),
+        supabase
+          .from("rubric_checks")
+          .select("exam_question_id, points")
+          .eq("rubric_id", rubricId)
+          .not("exam_question_id", "is", null),
+        supabase.from("submissions").select("id", { count: "exact", head: true }).eq("assignment_id", assignmentId)
+      ]);
+      const error = examRes.error ?? questionsRes.error ?? checksRes.error ?? submissionsRes.error;
+      if (error) throw error;
+      if (cancelled) return;
+      setRubricOutOfDate(
+        !submissionsRes.count &&
+          examRubricOutOfDate(
+            questionsRes.data ?? [],
+            (checksRes.data ?? []).flatMap((c) =>
+              c.exam_question_id === null ? [] : [{ exam_question_id: c.exam_question_id, points: c.points }]
+            ),
+            examRes.data?.delivery_mode === "in_app"
+          )
+      );
+    }
+    check(gradingRubricId).catch((e) => {
+      if (cancelled) return;
+      // The notice is a hint, so a failed check hides it rather than blocking the editor.
+      setRubricOutOfDate(false);
+      // eslint-disable-next-line no-console
+      console.error("Failed to check whether the exam rubric is up to date", e);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [examId, assignmentId, gradingRubricId, reloadKey, rubricBuilds]);
 
   const currentSnapshot = useMemo(() => snapshotOf(questions, regions), [questions, regions]);
   const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
@@ -271,6 +336,9 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
         height: preview.height
       }
     ]);
+    // Clear the question so the next box needs a deliberate pick. Keeping it made a second drag
+    // quietly draw another region for the same question (#1273).
+    if (draftKind === "answer") setDraftQuestion("");
     drawing.current = null;
     setPreview(null);
   };
@@ -422,7 +490,10 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
       p_rubric_id: gradingRubricId
     });
     if (error) toaster.error({ title: "Build rubric failed", description: rubricBuildErrorMessage(error) });
-    else toaster.success({ title: "Rubric built from exam structure" });
+    else {
+      toaster.success({ title: "Rubric built from exam structure" });
+      setRubricBuilds((n) => n + 1);
+    }
   }, [examId, gradingRubricId, dirty]);
 
   return (
@@ -438,6 +509,12 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
           Build rubric from exam
         </Button>
       </HStack>
+      {rubricOutOfDate && (
+        <Alert status="warning" role="status" title="The rubric doesn't match the saved questions">
+          Some question points changed, or questions were added, since the rubric was built. Click &quot;Build rubric
+          from exam&quot; to update it before grading starts.
+        </Alert>
+      )}
 
       <Flex gap={6} align="flex-start" wrap="wrap">
         {/* Question tree editor */}
@@ -479,6 +556,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
                           </option>
                         ))}
                       </NativeSelect.Field>
+                      <NativeSelect.Indicator />
                     </NativeSelect.Root>
                     <Input
                       size="xs"
@@ -516,6 +594,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
               <option value="name">Student name region</option>
               <option value="student_id">Student ID region</option>
             </NativeSelect.Field>
+            <NativeSelect.Indicator />
           </NativeSelect.Root>
           {draftKind === "answer" && (
             <NativeSelect.Root size="sm">
@@ -527,6 +606,7 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
                   </option>
                 ))}
               </NativeSelect.Field>
+              <NativeSelect.Indicator />
             </NativeSelect.Root>
           )}
         </Box>
@@ -591,7 +671,21 @@ export default function RegionEditor({ examId, gradingRubricId }: { examId: numb
                       onPointerDown={(e) => e.stopPropagation()}
                       aria-label={`Remove ${regionLabel} region on page ${p.page_number}`}
                     >
-                      <Text fontSize="2xs" bg="bg.panel" px={1}>
+                      {/* A tag above the box's top-left corner, so it never covers the area the
+                          student writes in (#1273). */}
+                      <Text
+                        position="absolute"
+                        // Offsets match the 2px border, which the positioning is measured inside of.
+                        bottom="calc(100% + 2px)"
+                        left="-2px"
+                        fontSize="2xs"
+                        lineHeight="short"
+                        px={1}
+                        whiteSpace="nowrap"
+                        color="white"
+                        bg={r.kind === "answer" ? "green.600" : "purple.600"}
+                        borderTopRadius="sm"
+                      >
                         {regionLabel}
                       </Text>
                     </Box>
