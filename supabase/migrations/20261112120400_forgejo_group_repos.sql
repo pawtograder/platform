@@ -110,10 +110,12 @@ SET search_path = ''
 AS $$
 BEGIN
   -- save_forgejo_group_repo takes the same lock, so a pass either counts the new members or has
-  -- already saved, and this clears what it saved.
+  -- already saved, and this clears what it saved. NO KEY UPDATE, not UPDATE: each insert already
+  -- holds the foreign key's KEY SHARE on its group, and two inserts upgrading to UPDATE would deadlock.
   PERFORM 1 FROM public.assignment_groups g
+  JOIN public.assignments a ON a.id = g.assignment_id AND a.git_provider = 'forgejo'
   WHERE g.id IN (SELECT DISTINCT assignment_group_id FROM new_members)
-  ORDER BY g.id FOR UPDATE;
+  ORDER BY g.id FOR NO KEY UPDATE OF g;
   UPDATE public.repositories r SET is_github_ready = false
   WHERE r.git_provider = 'forgejo' AND r.is_github_ready
     AND r.assignment_group_id IN (SELECT DISTINCT assignment_group_id FROM new_members);
@@ -149,7 +151,7 @@ DECLARE
   v_group public.assignment_groups%ROWTYPE;
   v_ready boolean;
 BEGIN
-  SELECT * INTO v_group FROM public.assignment_groups WHERE id = p_assignment_group_id FOR UPDATE;
+  SELECT * INTO v_group FROM public.assignment_groups WHERE id = p_assignment_group_id FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'assignment group % not found', p_assignment_group_id;
   END IF;
