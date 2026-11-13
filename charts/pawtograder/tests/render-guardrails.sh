@@ -3141,6 +3141,12 @@ apps_refused "template: production refuses an untagged workspace image" \
   "coderBootstrap.workspaces.image's tag=\"\"" "${APPS_PROD[@]}" --set coderBootstrap.workspaces.image=registry.school.edu/ws
 apps_refused "template: arm64 workspaces need their own image" \
   "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64
+apps_refused "template: arm64 refuses our amd64 image at an explicit tag" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64 \
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:staging-latest
+apps_refused "template: arm64 refuses our amd64 image by digest" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64 \
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:1.2.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
 apps_has "template: arm64 renders with its own image" yes 'arch: "arm64"' \
   --set coderBootstrap.workspaces.arch=arm64 --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 \
   --show-only templates/coder-bootstrap.yaml
