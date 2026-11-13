@@ -2985,9 +2985,13 @@ coder:
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
           - name: ADMIN_PASSWORD
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        # Same Secrets as coderd's envFrom above: pawtograder-coder-env names an external-auth provider
+        # (and OIDC), and this coderd refuses to start without its client id.
         envFrom:
           - configMapRef: { name: pawtograder-coder-env }
           - secretRef: { name: pawtograder-coder-db }
+          - secretRef: { name: pawtograder-coder-oidc, optional: true }
+          - secretRef: { name: pawtograder-coder-external-auth, optional: true }
         securityContext:
           allowPrivilegeEscalation: false
           capabilities: { drop: [ALL] }
