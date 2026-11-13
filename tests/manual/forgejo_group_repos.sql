@@ -16,7 +16,7 @@
 --   5. save_forgejo_group_repo marks a repo ready only when every current member was granted, and
 --      creates the row the first time
 --   6. publish and copy don't re-permission a GitHub repo that shares a Forgejo group repo's name,
---      once the class has a GitHub org
+--      once the class has a GitHub org; copy into a Forgejo assignment needs no GitHub org
 \set ON_ERROR_STOP on
 \timing off
 begin;
@@ -228,6 +228,13 @@ select pg_temp.check('6b copy into groups with Forgejo repos makes no GitHub cal
   (select (r->>'groups_deleted')::int = 0 from copied)
   and pg_temp.github_calls() = (select v from calls_before),
   (select r::text from copied) || ' calls: ' || (pg_temp.github_calls() - (select v from calls_before)));
+update public.classes set github_org = null where id = pg_temp.cls();
+do $$ begin
+  perform public.copy_groups_from_assignment(pg_temp.cls(), pg_temp.a('groups'), pg_temp.a('both'));
+  perform pg_temp.check('6c copy into a released Forgejo assignment works in a class with no GitHub org', true);
+exception when others then
+  perform pg_temp.check('6c copy into a released Forgejo assignment works in a class with no GitHub org', false, sqlerrm);
+end $$;
 select set_config('request.jwt.claims', '', true);
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
