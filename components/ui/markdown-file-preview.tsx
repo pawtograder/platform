@@ -207,12 +207,6 @@ function isImageFile(filename: string): boolean {
   return ["png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "ico", "tiff", "tif"].includes(ext);
 }
 
-// Check if a file is a markdown file
-export function isMarkdownFile(filename: string): boolean {
-  const ext = filename.split(".").pop()?.toLowerCase() || "";
-  return ["md", "markdown", "mdown", "mkdn", "mkd"].includes(ext);
-}
-
 // Resolve a relative path from the current file's directory
 function resolveRelativePath(currentFilePath: string, relativePath: string): string {
   // Absolute paths (root-relative): e.g. /images/photo.png -> images/photo.png
