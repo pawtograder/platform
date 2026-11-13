@@ -23,6 +23,10 @@
  * Step 5 (20261108120000_review_assignments_by_capability.sql): seeing and deleting review
  * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
  *
+ * 20261112120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
+ * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
+ * edit the default grader role. This replaces step 2's "custom roles only add" rule.
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -336,11 +340,28 @@ test.describe("custom class roles", () => {
     expect(await classRole(roleId)).toBeNull();
   });
 
-  test("an instructor can't change default roles, move a role, or grant manage_roles", async () => {
+  test("an instructor can't rename or delete default roles, edit the other default roles, move a role, or grant manage_roles", async () => {
     const instructor = await createAuthenticatedClient(instructorC);
     const instructorRole = defaultC("instructor");
     const graderRole = defaultC("grader");
     const customId = await createCustomRole("Grading TA");
+
+    for (const app_role of ["instructor", "student", "admin"]) {
+      expectBlocked(
+        await instructor
+          .from("role_capabilities")
+          .insert({ role_id: defaultC(app_role).id, capability: "publish_groups" })
+          .select("role_id"),
+        `adding a capability to the default ${app_role} role`
+      );
+    }
+    expectBlocked(
+      await instructor
+        .from("role_capabilities")
+        .insert({ role_id: graderRole.id, capability: "manage_roles" })
+        .select("role_id"),
+      "adding manage_roles to the default grader role"
+    );
 
     expectBlocked(
       await instructor.from("class_roles").update({ name: "renamed" }).eq("id", graderRole.id).select("id"),
@@ -367,18 +388,11 @@ test.describe("custom class roles", () => {
     expectBlocked(
       await instructor
         .from("role_capabilities")
-        .insert({ role_id: graderRole.id, capability: "manage_assignments" })
-        .select("role_id"),
-      "adding a capability to a default role"
-    );
-    expectBlocked(
-      await instructor
-        .from("role_capabilities")
         .delete()
         .eq("role_id", instructorRole.id)
         .eq("capability", "manage_assignments")
         .select("role_id"),
-      "removing a capability from a default role"
+      "removing a capability from the default instructor role"
     );
     expectBlocked(
       await instructor.from("class_roles").update({ default_for: "grader" }).eq("id", customId).select("id"),
@@ -404,6 +418,9 @@ test.describe("custom class roles", () => {
     });
     expect(await roleCapabilities(graderRole.id)).toEqual([]);
     expect(await roleCapabilities(instructorRole.id)).toEqual(SEEDED_CAPABILITIES);
+    for (const app_role of ["student", "admin"]) {
+      expect(await roleCapabilities(defaultC(app_role).id), `the default ${app_role} role`).toEqual([]);
+    }
     expect(await classRole(customId)).toMatchObject({ class_id: classC.id, default_for: null });
     expect(await roleCapabilities(customId)).toEqual([]);
     const { data: fakeRoles, error: fakeRolesError } = await supabase
@@ -684,110 +701,187 @@ test.describe("custom class roles", () => {
   });
 });
 
-test.describe("custom roles build on the default grader role", () => {
+test.describe("custom roles start as a copy of the default grader role", () => {
   let classE: Awaited<ReturnType<typeof createClass>>;
   let instructorE: TestingUser;
   let studentE: TestingUser;
   let plainGrader: TestingUser;
   let headTa: TestingUser;
+  let coordinator: TestingUser;
+  let graderRoleId: number;
   let headTaRoleId: number;
+  let coordinatorRoleId: number;
 
-  async function holds(user: TestingUser, capability: string) {
+  async function holds(user: TestingUser, capability: string, class_id = classE.id) {
     const client = await createAuthenticatedClient(user);
     const { data, error } = await client.rpc("user_class_ids_with_capability", { p_capability: capability });
     expect(error).toBeNull();
-    return (data ?? []).includes(classE.id);
+    return (data ?? []).includes(class_id);
   }
 
-  // Changes the class's default roles directly, as a migration would: the default grader role gains
-  // publish_groups and the default instructor role loses it, so a grader-base capability is visible
-  // on its own.
+  // Roles are made through the instructor's own client, as the roles page does.
+  async function createRoleAsInstructor(name: string) {
+    const instructor = await createAuthenticatedClient(instructorE);
+    const { data, error } = await instructor
+      .from("class_roles")
+      .insert({ class_id: classE.id, name })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    return data!.id;
+  }
+
+  async function putOnRole(user: TestingUser, role_id: number) {
+    const row = await userRole(user);
+    expect((await supabase.from("user_roles").update({ class_role_id: role_id }).eq("id", row.id)).error).toBeNull();
+  }
+
+  // The default grader role holds publish_groups, as a migration would set up. Head TA turns
+  // manage_review_assignments on; Course coordinator turns publish_groups off.
   test.beforeAll(async () => {
-    classE = await createClass({ name: "E2E Grader Base E" });
+    classE = await createClass({ name: "E2E Grader Copy E" });
     instructorE = await createUserInClass({ role: "instructor", class_id: classE.id });
     studentE = await createUserInClass({ role: "student", class_id: classE.id });
     plainGrader = await createUserInClass({ role: "grader", class_id: classE.id });
     headTa = await createUserInClass({ role: "grader", class_id: classE.id });
-    const roles = await defaultRoles(classE.id);
-    const defaultFor = (app_role: string) => roles.find((r) => r.default_for === app_role)!.id;
-
+    coordinator = await createUserInClass({ role: "grader", class_id: classE.id });
+    graderRoleId = (await defaultRoles(classE.id)).find((r) => r.default_for === "grader")!.id;
     expect(
-      (await supabase.from("role_capabilities").insert({ role_id: defaultFor("grader"), capability: "publish_groups" }))
+      (await supabase.from("role_capabilities").insert({ role_id: graderRoleId, capability: "publish_groups" })).error
+    ).toBeNull();
+
+    const instructor = await createAuthenticatedClient(instructorE);
+    headTaRoleId = await createRoleAsInstructor("Head TA");
+    expect(
+      (
+        await instructor
+          .from("role_capabilities")
+          .insert({ role_id: headTaRoleId, capability: "manage_review_assignments" })
+      ).error
+    ).toBeNull();
+    await putOnRole(headTa, headTaRoleId);
+
+    coordinatorRoleId = await createRoleAsInstructor("Course coordinator");
+    const { data: removed, error: removeError } = await instructor
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", coordinatorRoleId)
+      .eq("capability", "publish_groups")
+      .select("capability");
+    expect(removeError).toBeNull();
+    expect(removed, "the copied default can be turned off").toHaveLength(1);
+    await putOnRole(coordinator, coordinatorRoleId);
+  });
+
+  test("a new custom role starts with the default grader role's capabilities, without manage_roles", async () => {
+    // manage_roles can't be put on the default grader role through the app; a migration could.
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: graderRoleId, capability: "manage_roles" })).error
+    ).toBeNull();
+    try {
+      const roleId = await createRoleAsInstructor("Copied TA");
+      expect(await roleCapabilities(roleId)).toEqual(["publish_groups"]);
+    } finally {
+      expect(
+        (await supabase.from("role_capabilities").delete().eq("role_id", graderRoleId).eq("capability", "manage_roles"))
+          .error
+      ).toBeNull();
+    }
+  });
+
+  test("a grader on a custom role holds what that role turns on", async () => {
+    expect(await roleCapabilities(headTaRoleId)).toEqual(["manage_review_assignments", "publish_groups"]);
+    expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
+    expect(await holds(headTa, "publish_groups"), "copied from the default grader role").toBe(true);
+    expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
+  });
+
+  test("a custom role can turn a default off, so it holds less than a plain grader", async () => {
+    expect(await roleCapabilities(coordinatorRoleId)).toEqual([]);
+    expect(await holds(coordinator, "publish_groups"), "the coordinator turned it off").toBe(false);
+    expect(await holds(plainGrader, "publish_groups"), "plain graders keep it").toBe(true);
+  });
+
+  test("an instructor can edit the default grader role, and roles made earlier don't change", async () => {
+    const instructor = await createAuthenticatedClient(instructorE);
+    expect(
+      (await instructor.from("role_capabilities").insert({ role_id: graderRoleId, capability: "manage_assignments" }))
         .error
     ).toBeNull();
+    expect(await holds(plainGrader, "manage_assignments"), "plain graders gain it").toBe(true);
+    expect(await holds(headTa, "manage_assignments"), "a copy made earlier stays as it was").toBe(false);
+
+    const { data: removed, error } = await instructor
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", graderRoleId)
+      .eq("capability", "manage_assignments")
+      .select("capability");
+    expect(error).toBeNull();
+    expect(removed).toHaveLength(1);
+    expect(await holds(plainGrader, "manage_assignments"), "plain graders lose it").toBe(false);
+  });
+
+  test("instructors still hold every capability, and students hold none", async () => {
+    for (const capability of SEEDED_CAPABILITIES) {
+      expect(await holds(instructorE, capability), `instructor: ${capability}`).toBe(true);
+      expect(await holds(studentE, capability), `student: ${capability}`).toBe(false);
+    }
+  });
+
+  test("a role manager can't grant a capability they don't hold", async () => {
+    // A class whose instructor role lacks manage_assignments, as after a migration took it away.
+    const classX = await createClass({ name: "E2E Grader Copy X" });
+    const instructorX = await createUserInClass({ role: "instructor", class_id: classX.id });
+    const rolesX = await defaultRoles(classX.id);
+    const roleX = (app_role: string) => rolesX.find((r) => r.default_for === app_role)!.id;
     expect(
       (
         await supabase
           .from("role_capabilities")
           .delete()
-          .eq("role_id", defaultFor("instructor"))
-          .eq("capability", "publish_groups")
+          .eq("role_id", roleX("instructor"))
+          .eq("capability", "manage_assignments")
       ).error
     ).toBeNull();
-
-    const { data: headTaRole, error } = await supabase
+    const instructor = await createAuthenticatedClient(instructorX);
+    const { data: custom, error } = await instructor
       .from("class_roles")
-      .insert({ class_id: classE.id, name: "Head TA" })
+      .insert({ class_id: classX.id, name: "Head TA" })
       .select("id")
       .single();
     expect(error).toBeNull();
-    headTaRoleId = headTaRole!.id;
+
+    for (const [role_id, which] of [
+      [roleX("grader"), "the default grader role"],
+      [custom!.id, "a custom role"]
+    ] as const) {
+      expectBlocked(
+        await instructor
+          .from("role_capabilities")
+          .insert({ role_id, capability: "manage_assignments" })
+          .select("role_id"),
+        `granting manage_assignments to ${which} without holding it`
+      );
+      expect(await roleCapabilities(role_id), which).toEqual([]);
+    }
+
+    // Nor through the copy: a role made from a default grader role that has it doesn't get it.
     expect(
       (
-        await supabase
-          .from("role_capabilities")
-          .insert({ role_id: headTaRoleId, capability: "manage_review_assignments" })
+        await supabase.from("role_capabilities").insert([
+          { role_id: roleX("grader"), capability: "manage_assignments" },
+          { role_id: roleX("grader"), capability: "publish_groups" }
+        ])
       ).error
     ).toBeNull();
-    const row = await userRole(headTa);
-    expect(
-      (await supabase.from("user_roles").update({ class_role_id: headTaRoleId }).eq("id", row.id)).error
-    ).toBeNull();
-  });
-
-  test("a grader on a custom role holds its extras", async () => {
-    expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
-    expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
-  });
-
-  test("a capability on the default grader role reaches graders on custom roles", async () => {
-    expect(await holds(plainGrader, "publish_groups")).toBe(true);
-    expect(await holds(headTa, "publish_groups"), "a custom role builds on the grader base").toBe(true);
-  });
-
-  test("students and instructors gain nothing from the grader base", async () => {
-    expect(await holds(studentE, "publish_groups")).toBe(false);
-    expect(await holds(instructorE, "publish_groups")).toBe(false);
-    expect(await holds(instructorE, "manage_roles"), "the instructor keeps their own role's capabilities").toBe(true);
-  });
-
-  test("a role manager can't grant a capability they don't hold", async () => {
-    const instructor = await createAuthenticatedClient(instructorE);
-    expectBlocked(
-      await instructor
-        .from("role_capabilities")
-        .insert({ role_id: headTaRoleId, capability: "publish_groups" })
-        .select("role_id"),
-      "an instructor without publish_groups granting it"
-    );
-    expect(await roleCapabilities(headTaRoleId)).toEqual(["manage_review_assignments"]);
-  });
-
-  test("removing a capability from a custom role keeps it when the grader base has it", async () => {
-    const instructor = await createAuthenticatedClient(instructorE);
-    // Added as a migration would: this instructor doesn't hold publish_groups, so can't add it.
-    expect(
-      (await supabase.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "publish_groups" })).error
-    ).toBeNull();
-    const { data: removed, error } = await instructor
-      .from("role_capabilities")
-      .delete()
-      .eq("role_id", headTaRoleId)
-      .eq("capability", "publish_groups")
-      .select("capability");
-    expect(error).toBeNull();
-    expect(removed).toHaveLength(1);
-    expect(await holds(headTa, "publish_groups"), "a custom role can only add").toBe(true);
+    const { data: copied, error: copyError } = await instructor
+      .from("class_roles")
+      .insert({ class_id: classX.id, name: "Copied TA" })
+      .select("id")
+      .single();
+    expect(copyError).toBeNull();
+    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual(["publish_groups"]);
   });
 });
 
@@ -800,6 +894,7 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
   let headTaF: TestingUser;
   let graderG: TestingUser;
   let headTaRoleId: number;
+  let graderRoleId: number;
 
   async function capabilitiesOf(user: TestingUser) {
     const client = await createAuthenticatedClient(user);
@@ -808,7 +903,8 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     return (data ?? []).map((row) => `${row.class_id}:${row.capability}`).sort();
   }
 
-  // The default grader role gains publish_groups, and Head TA adds manage_review_assignments.
+  // The default grader role gains publish_groups, then Head TA is made (a copy, so it has
+  // publish_groups too) and adds manage_review_assignments.
   test.beforeAll(async () => {
     classF = await createClass({ name: "E2E Use Capability F" });
     classG = await createClass({ name: "E2E Use Capability G" });
@@ -818,7 +914,7 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     headTaF = await createUserInClass({ role: "grader", class_id: classF.id });
     graderG = await createUserInClass({ role: "grader", class_id: classG.id });
     const roles = await defaultRoles(classF.id);
-    const graderRoleId = roles.find((r) => r.default_for === "grader")!.id;
+    graderRoleId = roles.find((r) => r.default_for === "grader")!.id;
 
     expect(
       (await supabase.from("role_capabilities").insert({ role_id: graderRoleId, capability: "publish_groups" })).error
@@ -843,8 +939,8 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     ).toBeNull();
   });
 
-  test("user_class_capabilities() returns the role's extras plus the grader base, per class", async () => {
-    expect(await capabilitiesOf(headTaF), "Head TA: the extra plus the grader base").toEqual([
+  test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
+    expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
       `${classF.id}:manage_review_assignments`,
       `${classF.id}:publish_groups`
     ]);
@@ -852,10 +948,10 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
       `${classF.id}:publish_groups`
     ]);
     expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([]);
-    expect(await capabilitiesOf(studentF), "a student gets nothing from the grader base").toEqual([]);
+    expect(await capabilitiesOf(studentF), "a student gets nothing from the grader role").toEqual([]);
   });
 
-  test("changing a custom role's capabilities sends a staff note for its class", async () => {
+  test("changing a custom or default grader role's capabilities sends a staff note for its class", async () => {
     const instructor = await createAuthenticatedClient(instructorF);
     const topic = `class:${classF.id}:staff`;
     const notes: Record<string, unknown>[] = [];
@@ -904,6 +1000,26 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
 
       for (const note of [...capabilityNotes("INSERT"), ...capabilityNotes("DELETE")]) {
         expect(note).toMatchObject({ type: "staff_data_change", class_id: classF.id, row_id: headTaRoleId });
+      }
+
+      // The default grader role is editable now, so plain graders' pages must hear about it too.
+      expect(
+        (await instructor.from("role_capabilities").insert({ role_id: graderRoleId, capability: "manage_assignments" }))
+          .error
+      ).toBeNull();
+      await expect.poll(() => capabilityNotes("INSERT").length, { timeout: 15_000 }).toBe(2);
+      expect(
+        (
+          await instructor
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", graderRoleId)
+            .eq("capability", "manage_assignments")
+        ).error
+      ).toBeNull();
+      await expect.poll(() => capabilityNotes("DELETE").length, { timeout: 15_000 }).toBe(2);
+      for (const note of [capabilityNotes("INSERT")[1], capabilityNotes("DELETE")[1]]) {
+        expect(note).toMatchObject({ type: "staff_data_change", class_id: classF.id, row_id: graderRoleId });
       }
     } finally {
       await instructor.removeChannel(channel);
