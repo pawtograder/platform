@@ -4193,6 +4193,47 @@ export type Database = {
           }
         ];
       };
+      git_accounts: {
+        Row: {
+          claimed_at: string;
+          created_at: string;
+          id: number;
+          instance_url: string;
+          login: Pii<"handle", string> | null;
+          provider: string;
+          remote_user_id: Pii<"handle", number> | null;
+          user_id: string;
+        };
+        Insert: {
+          claimed_at?: string;
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          login?: string | null;
+          provider: string;
+          remote_user_id?: number | null;
+          user_id: string;
+        };
+        Update: {
+          claimed_at?: string;
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          login?: string | null;
+          provider?: string;
+          remote_user_id?: number | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       github_async_errors: {
         Row: {
           created_at: string;
@@ -13421,6 +13462,14 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      claim_git_account: {
+        Args: {
+          p_instance_url: string;
+          p_stale_minutes: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
       class_team_member_usernames: {
         Args: { p_class_id: number; p_kind: string };
         Returns: string[];
@@ -13486,6 +13535,7 @@ export type Database = {
         };
         Returns: Json;
       };
+      cloud_workspaces_enabled: { Args: { p_features: Json }; Returns: boolean };
       complete_eligible_grading_reviews: {
         Args: { p_assignment_id: number };
         Returns: number;
@@ -13960,6 +14010,18 @@ export type Database = {
       fix_assignment_repo_permissions: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
+      };
+      forgejo_accounts_needed: {
+        Args: {
+          p_instance_url: string;
+          p_limit: number;
+          p_stale_minutes: number;
+        };
+        Returns: {
+          email: string;
+          name: string;
+          user_id: string;
+        }[];
       };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
@@ -14758,6 +14820,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_forgejo_reconciler_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_github_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -14793,6 +14859,7 @@ export type Database = {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
+      kick_forgejo_reconciler: { Args: never; Returns: undefined };
       log_api_gateway_call: {
         Args: {
           p_class_id?: number;

@@ -844,6 +844,10 @@
       { "name": "flashcards_deck_id_fkey", "columns": ["deck_id"], "ref": "flashcard_decks" }
     ]
   },
+  "git_accounts": {
+    "kind": "table",
+    "fks": [{ "name": "git_accounts_user_id_fkey", "columns": ["user_id"], "ref": "users" }]
+  },
   "github_async_errors": { "kind": "table", "fks": [] },
   "github_circuit_breaker_events": { "kind": "table", "fks": [] },
   "github_circuit_breakers": { "kind": "table", "fks": [] },
