@@ -113,20 +113,19 @@ export async function existingRepositoryRow(
   return data.id;
 }
 
-export async function saveRepositoryRow(
+/** Inserts the row not ready and returns its id. */
+export async function reserveRepositoryRow(
   supabase: SupabaseClient<Database>,
-  existingId: number | null,
   owner: RepoOwner,
-  repository: string,
-  ready: boolean
-): Promise<void> {
-  const { error } =
-    existingId === null
-      ? await supabase
-          .from("repositories")
-          .insert({ ...owner, repository, git_provider: "forgejo", is_github_ready: ready })
-      : await supabase.from("repositories").update({ is_github_ready: ready }).eq("id", existingId);
+  repository: string
+): Promise<number> {
+  const { data, error } = await supabase
+    .from("repositories")
+    .insert({ ...owner, repository, git_provider: "forgejo", is_github_ready: false })
+    .select("id")
+    .single();
   if (error) throw error;
+  return data.id;
 }
 
 /**
@@ -169,7 +168,12 @@ export async function reconcileForgejoRepos(
     };
     try {
       assertTemplateInOrg(repo.template_repo, repo.owner);
-      const existingId = await existingRepositoryRow(supabase, repository, owner);
+      // Claim the name before any Forgejo call: a group repo in a 'both' assignment can derive the same
+      // name (group "blue", login "group-blue"), and the unique index on (git_provider, repository) lets
+      // only one of them hold it. The row stays not ready, so the student is still listed, until they can push.
+      const id =
+        (await existingRepositoryRow(supabase, repository, owner)) ??
+        (await reserveRepositoryRow(supabase, owner, repository));
       if (!orgsReady.has(repo.owner)) {
         await ops.ensureOrg(config, repo.owner);
         orgsReady.add(repo.owner);
@@ -178,8 +182,8 @@ export async function reconcileForgejoRepos(
       if (!(await ops.grantWrite(config, repository, repo.login))) {
         throw new Error("Forgejo doesn't report write access for the student");
       }
-      // Written only once the student can push, so a row never points at a repo they can't use.
-      await saveRepositoryRow(supabase, existingId, owner, repository, true);
+      const { error: readyError } = await supabase.from("repositories").update({ is_github_ready: true }).eq("id", id);
+      if (readyError) throw readyError;
       result.created++;
     } catch (failure) {
       result.failures.push({ assignmentId: repo.assignment_id, profileId: repo.profile_id, error: failure });
