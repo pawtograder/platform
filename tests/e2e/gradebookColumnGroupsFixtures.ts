@@ -54,9 +54,10 @@ async function insertColumns(
   specs: ColumnSpec[],
   students: TestingUser[],
   sortOrders?: number[]
-): Promise<{ ids: Map<string, number>; releasedAt: Date }> {
+): Promise<{ ids: Map<string, number>; writesStartedAt: Date }> {
   const gradebook_id = await gradebookIdFor(class_id);
   const ids = new Map<string, number>();
+  let writesStartedAt: Date | undefined;
   for (const [i, spec] of specs.entries()) {
     const deps = spec.depends_on?.map((slug) => {
       const id = ids.get(slug);
@@ -77,10 +78,12 @@ async function insertColumns(
         released: false,
         sort_order: sortOrders?.[i] ?? i
       })
-      .select("id")
+      .select("id, created_at")
       .single();
     if (error) throw new Error(`Failed to create column ${spec.slug}: ${error.message}`);
     ids.set(spec.slug, data.id);
+    // The database's own clock, so the recalculation wait can't be thrown off by client skew.
+    writesStartedAt ??= new Date(data.created_at);
   }
 
   for (const spec of specs) {
@@ -99,15 +102,15 @@ async function insertColumns(
   }
 
   const toRelease = specs.filter((s) => !s.score_expression).map((s) => ids.get(s.slug)!);
-  const { data: released, error: releaseError } = await supabase
+  const { error: releaseError } = await supabase
     .from("gradebook_columns")
     .update({ released: true })
-    .in("id", toRelease)
-    .select("updated_at");
+    .in("id", toRelease);
   if (releaseError) throw new Error(`Failed to release columns: ${releaseError.message}`);
-  // The database's own clock, so the recalculation wait can't be thrown off by client skew.
-  const releasedAt = new Date(Math.min(...(released ?? []).map((r) => new Date(r.updated_at).getTime())));
-  return { ids, releasedAt };
+  // Wait from the first write, not from the release: releasing re-dirties only the public rows, so
+  // a private row the worker already recalculated from the scores is never touched again, and a
+  // wait that starts at the release would never see it catch up.
+  return { ids, writesStartedAt: writesStartedAt ?? new Date() };
 }
 
 /**
@@ -210,8 +213,8 @@ export async function createCs4535StyleGradebook() {
   // Leave the hole where quiz-3 was deleted: quizzes 4 and 5 sit one slot further right.
   const quizStart = labs.length + homework.length + 2;
   const sortOrders = specs.map((s, i) => (i >= quizStart + 2 ? i + 1 : i));
-  const { ids: columns, releasedAt } = await insertColumns(course.id, specs, students, sortOrders);
-  await waitForGradebookRecalculation(course.id, releasedAt);
+  const { ids: columns, writesStartedAt } = await insertColumns(course.id, specs, students, sortOrders);
+  await waitForGradebookRecalculation(course.id, writesStartedAt);
   return { course, instructor, students, columns };
 }
 
@@ -257,7 +260,7 @@ export async function createCs2100StyleGradebook() {
     score: pct(n + 30)
   }));
   const specs = [...session1, ...session2, ...stragglers, ...standings, ...homework];
-  const { ids: columns, releasedAt } = await insertColumns(course.id, specs, students);
+  const { ids: columns, writesStartedAt } = await insertColumns(course.id, specs, students);
 
   // The quiz sessions are the groups (the occasion axis); topics are the other axis.
   const gradebook_id = await gradebookIdFor(course.id);
@@ -272,6 +275,6 @@ export async function createCs2100StyleGradebook() {
     });
     if (error) throw new Error(`Failed to create group ${name}: ${error.message}`);
   }
-  await waitForGradebookRecalculation(course.id, releasedAt);
+  await waitForGradebookRecalculation(course.id, writesStartedAt);
   return { course, instructor, students, columns, gradebook_id };
 }

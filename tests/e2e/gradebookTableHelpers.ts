@@ -72,3 +72,25 @@ export async function scrollTableHome(page: Page) {
   await tableRegion(page).evaluate((el) => el.scrollTo({ left: 0, top: 0 }));
   await waitForVirtualizerIdle(page);
 }
+
+/**
+ * Click a menu item, reopening its menu with `open` if the menu has closed. A realtime refresh
+ * re-renders the table under an open menu, which can close it between a screenshot and the
+ * click; a plain click would then wait for an item that never comes back.
+ */
+export async function clickMenuItem(page: Page, name: string, open: () => Promise<void>) {
+  const item = page.getByRole("menuitem", { name });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (await item.isVisible()) {
+      try {
+        await item.click({ timeout: 10_000 });
+        return;
+      } catch {
+        // The menu closed under the click; reopen it below.
+      }
+    }
+    await open();
+    await item.waitFor({ state: "visible", timeout: 10_000 }).catch(() => {});
+  }
+  await item.click({ timeout: 10_000 });
+}

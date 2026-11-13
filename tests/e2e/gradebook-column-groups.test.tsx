@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import { expect, test } from "../global-setup";
 import { createCs4535StyleGradebook } from "./gradebookColumnGroupsFixtures";
 import {
+  clickMenuItem,
   GRADEBOOK_VIEWPORT,
   headerUnits,
   openColumnMenu,
@@ -170,7 +171,7 @@ test.describe("Gradebook column groups (existing course)", () => {
     await visualScreenshot(page, "gradebook-groups-column-menu");
 
     // Group… for a column: existing groups, or a new one by name.
-    await page.getByRole("menuitem", { name: "Group…" }).click();
+    await clickMenuItem(page, "Group…", () => openColumnMenu(page, "Quiz 1"));
     const groupDialog = page.getByRole("dialog", { name: /Group for .Quiz 1./ });
     await expect(groupDialog.getByLabel("Group")).toHaveValue(/\d+/);
     await groupDialog.getByLabel("Group").selectOption("new");
@@ -183,7 +184,9 @@ test.describe("Gradebook column groups (existing course)", () => {
     await tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click();
     await expect(page.getByRole("menuitem", { name: "Move group left" })).toBeEnabled();
     await visualScreenshot(page, "gradebook-groups-group-menu");
-    await page.getByRole("menuitem", { name: "Rename group" }).click();
+    await clickMenuItem(page, "Rename group", () =>
+      tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click()
+    );
     const renameDialog = page.getByRole("dialog", { name: "Rename group" });
     await renameDialog.getByLabel("Group name").fill("Weekly quizzes");
     await visualScreenshot(page, "gradebook-groups-rename-dialog", { element: renameDialog });

@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import { expect, test } from "../global-setup";
 import { createCs2100StyleGradebook, waitForGradebookRecalculation } from "./gradebookColumnGroupsFixtures";
 import {
+  clickMenuItem,
   GRADEBOOK_VIEWPORT,
   headerUnits,
   openColumnMenu,
@@ -58,9 +59,12 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     await dialog.getByText("duplicate attempt").first().scrollIntoViewIfNeeded();
     await visualScreenshot(page, "gradebook-topics-suggest", { element: dialog });
 
-    // Drop the stray second "Attempt 2" (slug 2svm), which the standing does not read.
-    const strays = dialog.getByRole("checkbox", { name: "Attempt 2: Stakeholder-value Matrices" });
-    await strays.last().click({ force: true });
+    // Drop the stray second "Attempt 2" (slug 2svm), which the standing does not read. Click the
+    // visible label: WebKit ignores a forced click on Chakra's visually hidden input.
+    await dialog.getByText("Attempt 2: Stakeholder-value Matrices", { exact: true }).last().click();
+    await expect(
+      dialog.getByRole("checkbox", { name: "Attempt 2: Stakeholder-value Matrices" }).last()
+    ).not.toBeChecked();
     await expect(dialog.getByRole("button", { name: "Create topics" })).toBeEnabled();
     await dialog.getByRole("button", { name: "Create topics" }).click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
@@ -143,7 +147,7 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     await visualScreenshot(page, "gradebook-topics-column-menu");
 
     // Topic… for a column: an existing topic and an attempt number (blank = the next one).
-    await page.getByRole("menuitem", { name: "Topic…" }).click();
+    await clickMenuItem(page, "Topic…", () => openColumnMenu(page, "HW1"));
     const topicDialog = page.getByRole("dialog", { name: /Topic for .HW1./ });
     await topicDialog.getByLabel("Topic").selectOption({ label: "Git" });
     await expect(topicDialog.getByLabel("Attempt number")).toBeVisible();
@@ -158,7 +162,9 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     await tableRegion(page).getByRole("button", { name: "Topic options for Git" }).click();
     await expect(page.getByRole("menuitem", { name: "Standing: keep the column's own expression" })).toBeDisabled();
     await visualScreenshot(page, "gradebook-topics-topic-menu");
-    await page.getByRole("menuitem", { name: "Rename topic" }).click();
+    await clickMenuItem(page, "Rename topic", () =>
+      tableRegion(page).getByRole("button", { name: "Topic options for Git" }).click()
+    );
     const renameDialog = page.getByRole("dialog", { name: "Rename topic" });
     await renameDialog.getByLabel("Topic name").fill("Version control");
     await visualScreenshot(page, "gradebook-topics-rename-dialog", { element: renameDialog });
