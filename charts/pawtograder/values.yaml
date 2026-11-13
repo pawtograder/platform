@@ -3073,6 +3073,7 @@ coderBootstrap:
     dormancyAutoDeletion: "0" # deletes the workspace and its home volume
   workspaces:
     # "" uses ghcr.io/pawtograder/coder-workspace:<chart appVersion>, built from images/coder-workspace by release-images.yml.
+    # A source checkout's appVersion (0.0.1) isn't published, so set a published tag, e.g. ghcr.io/pawtograder/coder-workspace:staging-latest.
     image: ""
     # "" uses the image's code-server.
     codeServerVersion: 4.143.1
