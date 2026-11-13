@@ -20,7 +20,7 @@ export function useQueueRedAlerts(health: {
   byQueue: Record<number, QueueHealth>;
   thresholds: QueueHealthThresholds;
 }): void {
-  const enabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT);
+  const enabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH);
   const { role } = useClassProfiles();
   const isInstructor = role.role === "instructor";
   const wasRed = useRef(new Map<number, boolean>());

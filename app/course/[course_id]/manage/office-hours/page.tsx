@@ -2,6 +2,8 @@
 
 import { RequestRow } from "@/components/help-queue/request-row";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useQueueHealth } from "@/hooks/useQueueHealth";
 import { useQueueRedAlerts } from "@/hooks/useQueueRedAlerts";
 import {
@@ -22,7 +24,8 @@ import HelpQueuesDashboard from "./helpQueuesDashboard";
 export default function OfficeHoursAdminPage() {
   const { course_id } = useParams();
   const { private_profile_id } = useClassProfiles();
-  const health = useQueueHealth(Number(course_id));
+  const queueHealthOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
+  const health = useQueueHealth(Number(course_id), queueHealthOn);
   useQueueRedAlerts(health);
 
   // Get data for working view
@@ -148,5 +151,5 @@ export default function OfficeHoursAdminPage() {
   }
 
   // If user is not working, show TA Dashboard
-  return <HelpQueuesDashboard health={health} />;
+  return <HelpQueuesDashboard health={health} healthOn={queueHealthOn} />;
 }

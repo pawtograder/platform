@@ -3,6 +3,8 @@
 import HelpQueueManagement from "../../helpQueueManagement";
 import { Box, Button, Field, Heading, HStack, Input, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useEffect, useState } from "react";
@@ -117,6 +119,7 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
 export default function QueuesSettingsPage() {
   const courseController = useCourseController();
   const course = courseController?.course;
+  const queueHealthOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
 
   const {
     register,
@@ -192,7 +195,7 @@ export default function QueuesSettingsPage() {
         </Box>
       </Box>
 
-      <QueueHealthColorsSection classId={course?.id} />
+      {queueHealthOn && <QueueHealthColorsSection classId={course?.id} />}
 
       <Box>
         <Heading size="lg" mb={4}>

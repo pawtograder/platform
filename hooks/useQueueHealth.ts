@@ -26,7 +26,10 @@ const REFRESH_MS = 30_000;
  * Health numbers for every queue in the class, keyed by queue id, plus the class's thresholds for
  * the colors. Refreshes every 30 seconds.
  */
-export function useQueueHealth(classId: number): {
+export function useQueueHealth(
+  classId: number,
+  enabled: boolean = true
+): {
   byQueue: Record<number, QueueHealth>;
   thresholds: QueueHealthThresholds;
 } {
@@ -36,6 +39,7 @@ export function useQueueHealth(classId: number): {
   const thresholds = useMemo(() => parseQueueHealthThresholds(course?.office_hours_health_thresholds), [course]);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     const supabase = createClient();
     const load = async () => {
@@ -54,7 +58,7 @@ export function useQueueHealth(classId: number): {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [classId]);
+  }, [classId, enabled]);
 
   return useMemo(() => ({ byQueue, thresholds }), [byQueue, thresholds]);
 }

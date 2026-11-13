@@ -41,7 +41,13 @@ const TONE_RANK: Record<QueueHealthTone, number> = { alert: 0, ok: 1 };
  *
  * Uses real-time updates to show live queue status and assignment changes.
  */
-export default function HelpQueuesDashboard({ health }: { health: ReturnType<typeof useQueueHealth> }) {
+export default function HelpQueuesDashboard({
+  health,
+  healthOn
+}: {
+  health: ReturnType<typeof useQueueHealth>;
+  healthOn: boolean;
+}) {
   const { course_id } = useParams();
   const { byQueue: healthByQueue, thresholds: healthThresholds } = health;
 
@@ -104,7 +110,13 @@ export default function HelpQueuesDashboard({ health }: { health: ReturnType<typ
   // The order then stays put while the numbers refresh, so nothing moves under the cursor.
   const [severityOrder, setSeverityOrder] = useState<number[] | null>(null);
   useEffect(() => {
-    if (severityOrder !== null || Object.keys(healthByQueue).length === 0 || activeCourseQueues.length === 0) return;
+    if (
+      !healthOn ||
+      severityOrder !== null ||
+      Object.keys(healthByQueue).length === 0 ||
+      activeCourseQueues.length === 0
+    )
+      return;
     const ids = [...activeCourseQueues]
       .sort((a, b) => {
         const ra = TONE_RANK[queueHealthTone(healthByQueue[a.id], healthThresholds) ?? "ok"];
@@ -113,7 +125,7 @@ export default function HelpQueuesDashboard({ health }: { health: ReturnType<typ
       })
       .map((q) => q.id);
     setSeverityOrder(ids);
-  }, [healthByQueue, healthThresholds, activeCourseQueues, severityOrder]);
+  }, [healthOn, healthByQueue, healthThresholds, activeCourseQueues, severityOrder]);
   const orderedQueues = useMemo(() => {
     if (severityOrder === null) return activeCourseQueues;
     const byId = new Map(activeCourseQueues.map((q) => [q.id, q]));
@@ -313,7 +325,7 @@ export default function HelpQueuesDashboard({ health }: { health: ReturnType<typ
             <Box flex={1}>
               <HStack spaceX="2" wrap="wrap">
                 <Text fontWeight="medium">{queue.name}</Text>
-                {queueAssignments.length === 0 && <QueueUnstaffedBadge health={healthByQueue[queue.id]} />}
+                {healthOn && queueAssignments.length === 0 && <QueueUnstaffedBadge health={healthByQueue[queue.id]} />}
               </HStack>
               <HStack spaceX="2" mt="1">
                 <Text fontSize="sm">Mode:</Text>
@@ -394,9 +406,11 @@ export default function HelpQueuesDashboard({ health }: { health: ReturnType<typ
                   Start Working
                 </Button>
               )}
-              <Box mt={3}>
-                <QueueHealthStats health={healthByQueue[queue.id]} thresholds={healthThresholds} />
-              </Box>
+              {healthOn && (
+                <Box mt={3}>
+                  <QueueHealthStats health={healthByQueue[queue.id]} thresholds={healthThresholds} />
+                </Box>
+              )}
             </Flex>
           </Flex>
         );

@@ -16,7 +16,8 @@ export const COURSE_FEATURES = {
   BUG_REPORT_RECORDING: "bug-report-recording",
   EXAMS: "exams",
   OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
-  OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert"
+  OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert",
+  OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -178,6 +179,15 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     defaultWhenMissing: false,
     switchLabel: "Alert students in their browser when their office hours turn comes up",
     ariaLabel: "Alert students in the browser when their office hours turn comes up"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH,
+    title: "Office hours: queue health on staff cards",
+    description:
+      "Staff cards show students waiting, the oldest wait, and an Unstaffed badge, and queues sort so the ones that need attention come first. Instructors also get a browser alert when a queue turns red. When off, the cards look as they did before.",
+    defaultWhenMissing: false,
+    switchLabel: "Show queue health on staff office hours cards",
+    ariaLabel: "Show queue health on staff office hours cards"
   }
 ];
 
