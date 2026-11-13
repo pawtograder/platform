@@ -160,6 +160,24 @@ test.describe("Exam structure editor", () => {
     const labelBox = (await region.getByText("Item 1").boundingBox())!;
     expect(labelBox.y + labelBox.height).toBeLessThanOrEqual(regionBox.y + 1);
   });
+
+  test("lists each question under its parent (#1264)", async ({ page }) => {
+    await openExamEditor(page, { emptyRubric: true });
+    // Each question row's only textbox is its label. The points inputs are spinbuttons.
+    const labels = () => page.getByRole("textbox").evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value));
+
+    // Loaded by level then ordinal, Item 1 used to show under Q2.
+    await expect.poll(labels).toEqual(["Part A", "Q1", "Item 1", "Q2", "Item 2"]);
+
+    // A new child of Q1 goes under Q1, not at the bottom of the list. Rows render Part A, Q1, Q2 with "+ child".
+    await page.getByRole("button", { name: "+ child" }).nth(1).click();
+    await expect.poll(labels).toEqual(["Part A", "Q1", "Item 1", "Item 3", "Q2", "Item 2"]);
+
+    await page.getByRole("button", { name: "Save structure" }).click();
+    await expect(page.getByText("Saved exam structure and built the rubric")).toBeVisible();
+    await page.reload();
+    await expect.poll(labels).toEqual(["Part A", "Q1", "Item 1", "Item 3", "Q2", "Item 2"]);
+  });
 });
 
 test("Scan & Match without a template links to the template page (#1273)", async ({ page }) => {

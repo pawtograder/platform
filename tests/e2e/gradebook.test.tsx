@@ -921,7 +921,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expectCalculatedCell(page, students[0].private_profile_name, "Final Grade", 51.95, { classId: course.id });
 
     // Take screenshot for visual regression testing
-    await visualScreenshot(page, "Gradebook Page - Full Data");
+    // Keep the scroll-right above: the point is to capture the virtualized columns.
+    await visualScreenshot(page, "Gradebook Page - Full Data", { resetInnerScroll: false });
   });
 
   test("Editing a manual column updates the Participation cell value", async ({ page }) => {
