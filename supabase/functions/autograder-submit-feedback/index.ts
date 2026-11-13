@@ -599,12 +599,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   } else {
     // The same owner/name can exist on GitHub and on Forgejo, so find this provider's repository first and
     // match the submission by it.
-    const { data: repositoryRow } = await adminSupabase
+    const { data: repositoryRow, error: repositoryError } = await adminSupabase
       .from("repositories")
       .select("id")
       .eq("repository", repository)
       .eq("git_provider", decoded.provider)
       .maybeSingle();
+    if (repositoryError) {
+      console.error(repositoryError);
+      Sentry.captureException(repositoryError, scope);
+      throw new UserVisibleError(`Internal error: Failed to load repository: ${repositoryError.message}`);
+    }
     if (!repositoryRow) {
       throw new SecurityError(`Repository not found: ${repository}`);
     }

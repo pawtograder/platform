@@ -14,7 +14,7 @@
 --      with no github_org
 --   4. group_config 'both': a student in a group gets no individual repo; one in no group does
 --   5. save_forgejo_group_repo marks a repo ready only when every current member was granted, and
---      creates the row the first time
+--      creates the row the first time; the pass's first save claims the name, so a second group can't
 --   6. publish and copy don't re-permission a GitHub repo that shares a Forgejo group repo's name,
 --      once the class has a GitHub org; copy into a Forgejo assignment needs no GitHub org
 \set ON_ERROR_STOP on
@@ -163,6 +163,12 @@ select pg_temp.check('5c a first save creates the group''s Forgejo row',
 insert into saved select 'no-login', public.save_forgejo_group_repo(pg_temp.g('waiting'),
   'grp-org/proj-group-Team-Two', 'https://git.test', array['login-u5']);
 select pg_temp.check('5d a member without a login keeps it not ready', not (select ready from saved where k = 'no-login'));
+do $$ begin
+  perform public.save_forgejo_group_repo(pg_temp.g('waiting'), 'grp-org/proj-group-Team-One', 'https://git.test', '{}');
+  perform pg_temp.check('5e a pass can''t claim a name another group holds', false, 'save succeeded');
+exception when unique_violation then
+  perform pg_temp.check('5e a pass can''t claim a name another group holds', true);
+end $$;
 
 -- 6
 update public.classes set github_org = 'gh-org' where id = pg_temp.cls();
