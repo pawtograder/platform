@@ -15265,6 +15265,15 @@ export type Database = {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;
       };
+      save_forgejo_group_repo: {
+        Args: {
+          p_assignment_group_id: number;
+          p_granted: string[];
+          p_instance_url: string;
+          p_repository: string;
+        };
+        Returns: boolean;
+      };
       seed_default_class_roles: {
         Args: { p_class_id: number };
         Returns: undefined;
