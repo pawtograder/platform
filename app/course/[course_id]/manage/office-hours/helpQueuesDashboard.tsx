@@ -8,6 +8,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useEffect, useMemo, useState } from "react";
+import { useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import {
   useHelpQueues,
   useHelpQueueAssignments,
@@ -50,6 +51,12 @@ export default function HelpQueuesDashboard({
 }) {
   const { course_id } = useParams();
   const { byQueue: healthByQueue, thresholds: healthThresholds } = health;
+
+  // Open-request count shown on each card when the queue health flag is off.
+  const allHelpRequests = useHelpRequests();
+  const unresolvedRequests = useMemo(() => {
+    return allHelpRequests.filter((request) => request.status !== "resolved" && request.status !== "closed");
+  }, [allHelpRequests]);
 
   const { course } = useCourseController();
 
@@ -330,6 +337,11 @@ export default function HelpQueuesDashboard({
               <HStack spaceX="2" mt="1">
                 <Text fontSize="sm">Mode:</Text>
                 <Text fontSize="sm">{queue.queue_type}</Text>
+                {!healthOn && (
+                  <Text fontSize="sm">
+                    · Open Requests: {unresolvedRequests.filter((r) => r.help_queue === queue.id).length}
+                  </Text>
+                )}
               </HStack>
 
               {/* Staffing information */}

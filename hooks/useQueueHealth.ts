@@ -41,16 +41,32 @@ export function useQueueHealth(
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
+    let inFlight = false;
     const supabase = createClient();
     const load = async () => {
-      // The RPC is not in the generated types yet, so the call is typed here.
-      const { data, error } = await (
-        supabase as unknown as {
-          rpc: (fn: string, args: object) => Promise<{ data: QueueHealth[] | null; error: { message: string } | null }>;
+      // Skip a tick while the last request is still running, so an older response can't replace a newer one.
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        // The RPC is not in the generated types yet, so the call is typed here.
+        const { data, error } = await (
+          supabase as unknown as {
+            rpc: (
+              fn: string,
+              args: object
+            ) => Promise<{ data: QueueHealth[] | null; error: { message: string } | null }>;
+          }
+        ).rpc("office_hours_queue_health", { p_class_id: classId });
+        if (cancelled) return;
+        // A failed refresh clears the numbers, so the cards don't show an old healthy snapshot as current.
+        if (error || !data) {
+          setByQueue({});
+          return;
         }
-      ).rpc("office_hours_queue_health", { p_class_id: classId });
-      if (cancelled || error || !data) return;
-      setByQueue(Object.fromEntries(data.map((row) => [row.queue_id, row])));
+        setByQueue(Object.fromEntries(data.map((row) => [row.queue_id, row])));
+      } finally {
+        inFlight = false;
+      }
     };
     load();
     const timer = setInterval(load, REFRESH_MS);

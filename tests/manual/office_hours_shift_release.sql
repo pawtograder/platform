@@ -1,4 +1,5 @@
 -- Manual check for 20261111120000_office_hours_release_on_shift_end.sql.
+-- Fixtures: an active help_queue_assignments row for the TA below on queue 3 (the seeded instructor shift).
 -- Run against a local database with the migration applied. Everything is rolled back.
 --   psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/manual/office_hours_shift_release.sql
 
@@ -14,6 +15,14 @@ DECLARE
   v_assignee uuid;
   v_other_status text;
 BEGIN
+  -- Fixture check: the TA needs an active shift on the queue. Seed one first if this fails.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.help_queue_assignments
+    WHERE ta_profile_id = v_ta AND help_queue_id = v_queue AND ended_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Missing fixture: no active shift for TA % on queue %. Start a shift for this TA on this queue, then rerun.', v_ta, v_queue;
+  END IF;
+
   -- Flag off: the shift ends and nothing is released.
   UPDATE public.classes SET features = '[]'::jsonb WHERE id = v_class;
   UPDATE public.help_requests SET status = 'in_progress', assignee = v_ta WHERE id = 1;

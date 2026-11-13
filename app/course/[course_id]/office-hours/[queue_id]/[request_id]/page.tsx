@@ -9,6 +9,7 @@ import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar
 import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
 
@@ -103,12 +104,21 @@ export default function RequestDetailPage() {
     return queueRequests.findIndex((r) => r.id === request.id) + 1;
   }, [request, queueRequests]);
 
+  // The turn alert counts only waiting requests, so a request becomes position 1 as soon as it is first in line.
+  const turnPosition = useMemo(() => {
+    if (!request || request.status !== "open") return 0;
+    const waiting = queueRequests.filter((r) => r.status === "open");
+    return waiting.findIndex((r) => r.id === request.id) + 1;
+  }, [request, queueRequests]);
+
+  const { private_profile_id } = useClassProfiles();
+  const isRequestMember = private_profile_id != null && memberProfileIds.includes(private_profile_id);
   const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
   const turnMessage = useTurnAlert({
     status: request?.status,
     assignee: request?.assignee,
-    position,
-    enabled: turnAlertsOn
+    position: turnPosition,
+    enabled: turnAlertsOn && isRequestMember
   });
 
   if (!request) {
