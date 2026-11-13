@@ -139,7 +139,15 @@ do $$ begin
   perform pg_temp.check('5c a user cannot insert', false, 'insert succeeded');
 exception when insufficient_privilege then perform pg_temp.check('5c a user cannot insert', true);
 end $$;
-update public.git_accounts set login = 'hijacked' where user_id = (select id from fx where name = 'student');
+do $$ begin
+  update public.git_accounts set login = 'hijacked' where user_id = (select id from fx where name = 'student');
+exception when insufficient_privilege then null;
+end $$;
+do $$ begin
+  truncate public.git_accounts;
+  perform pg_temp.check('5g a user cannot truncate the table', false, 'truncate succeeded');
+exception when insufficient_privilege then perform pg_temp.check('5g a user cannot truncate the table', true);
+end $$;
 reset role;
 select pg_temp.check('5d a user cannot update their row',
   (select login = 'student' from public.git_accounts where user_id = (select id from fx where name = 'student')));
