@@ -855,6 +855,16 @@
     ]
   },
   "github_orgs": { "kind": "table", "fks": [] },
+  "gradebook_column_groups": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "gradebook_column_groups_gradebook_class_fkey",
+        "columns": ["gradebook_id", "class_id"],
+        "ref": "gradebooks"
+      }
+    ]
+  },
   "gradebook_column_students": {
     "kind": "table",
     "fks": [
@@ -883,10 +893,27 @@
     "kind": "table",
     "fks": [
       { "name": "gradebook_columns_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
-      { "name": "gradebook_columns_gradebook_id_fkey", "columns": ["gradebook_id"], "ref": "gradebooks" }
+      { "name": "gradebook_columns_gradebook_id_fkey", "columns": ["gradebook_id"], "ref": "gradebooks" },
+      {
+        "name": "gradebook_columns_group_fkey",
+        "columns": ["group_id", "gradebook_id"],
+        "ref": "gradebook_column_groups"
+      },
+      { "name": "gradebook_columns_topic_fkey", "columns": ["topic_id", "gradebook_id"], "ref": "gradebook_topics" }
     ]
   },
   "gradebook_row_recalc_state": { "kind": "table", "fks": [] },
+  "gradebook_topics": {
+    "kind": "table",
+    "fks": [
+      { "name": "gradebook_topics_gradebook_class_fkey", "columns": ["gradebook_id", "class_id"], "ref": "gradebooks" },
+      {
+        "name": "gradebook_topics_standing_column_fkey",
+        "columns": ["standing_column_id", "gradebook_id"],
+        "ref": "gradebook_columns"
+      }
+    ]
+  },
   "gradebooks": {
     "kind": "table",
     "fks": [
