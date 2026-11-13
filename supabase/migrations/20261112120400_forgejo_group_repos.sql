@@ -287,7 +287,7 @@ $function$;
 
 -- publish_assignment_group_changes() and copy_groups_from_assignment(): latest bodies from
 -- 20261031120000_fail_safe_group_repo_deletes.sql. Their archive and permission-sync calls now skip
--- non-GitHub rows. They name the repo by the class's GitHub org and the name after the row's owner,
+-- non-GitHub rows, and copy creates repos through the GitHub path only for a GitHub target. They name the repo by the class's GitHub org and the name after the row's owner,
 -- so a Forgejo group repo could otherwise archive or re-permission a GitHub repo of the same name.
 create or replace function public.publish_assignment_group_changes(
     p_class_id       bigint,
@@ -725,6 +725,7 @@ DECLARE
   v_template_repo text;
   v_group_config text;
   v_release_date timestamptz;
+  v_git_provider text;
   v_groups_processed int := 0;
   v_members_copied int := 0;
   v_memberships_removed int := 0;
@@ -770,8 +771,8 @@ BEGIN
       USING ERRCODE = 'data_exception';
   END IF;
 
-  SELECT c.slug, c.github_org, a.template_repo, a.group_config, a.release_date
-  INTO v_course_slug, v_github_org, v_template_repo, v_group_config, v_release_date
+  SELECT c.slug, c.github_org, a.template_repo, a.group_config, a.release_date, a.git_provider
+  INTO v_course_slug, v_github_org, v_template_repo, v_group_config, v_release_date, v_git_provider
   FROM assignments a
   JOIN classes c ON c.id = a.class_id
   WHERE a.id = p_target_assignment_id
@@ -911,7 +912,10 @@ BEGIN
     v_groups_deleted := v_groups_deleted + 1;
   END LOOP;
 
-  IF v_group_config IN ('groups', 'both')
+  -- A Forgejo target's repos come from forgejo-reconciler, which the member inserts above kick. The
+  -- GitHub path raises for a class with no github_org.
+  IF v_git_provider = 'github'
+     AND v_group_config IN ('groups', 'both')
      AND v_template_repo IS NOT NULL AND v_template_repo != ''
      AND v_release_date IS NOT NULL AND v_release_date <= now()
   THEN
