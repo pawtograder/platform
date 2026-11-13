@@ -336,6 +336,9 @@ export default function RegionEditor({
         height: preview.height
       }
     ]);
+    // Clear the question so the next box needs a deliberate pick. Keeping it made a second drag
+    // quietly draw another region for the same question (#1273).
+    if (draftKind === "answer") setDraftQuestion("");
     drawing.current = null;
     setPreview(null);
   };
@@ -553,6 +556,7 @@ export default function RegionEditor({
                           </option>
                         ))}
                       </NativeSelect.Field>
+                      <NativeSelect.Indicator />
                     </NativeSelect.Root>
                     <Input
                       size="xs"
@@ -590,6 +594,7 @@ export default function RegionEditor({
               <option value="name">Student name region</option>
               <option value="student_id">Student ID region</option>
             </NativeSelect.Field>
+            <NativeSelect.Indicator />
           </NativeSelect.Root>
           {draftKind === "answer" && (
             <NativeSelect.Root size="sm">
@@ -601,6 +606,7 @@ export default function RegionEditor({
                   </option>
                 ))}
               </NativeSelect.Field>
+              <NativeSelect.Indicator />
             </NativeSelect.Root>
           )}
         </Box>
@@ -665,7 +671,21 @@ export default function RegionEditor({
                       onPointerDown={(e) => e.stopPropagation()}
                       aria-label={`Remove ${regionLabel} region on page ${p.page_number}`}
                     >
-                      <Text fontSize="2xs" bg="bg.panel" px={1}>
+                      {/* A tag above the box's top-left corner, so it never covers the area the
+                          student writes in (#1273). */}
+                      <Text
+                        position="absolute"
+                        // Offsets match the 2px border, which the positioning is measured inside of.
+                        bottom="calc(100% + 2px)"
+                        left="-2px"
+                        fontSize="2xs"
+                        lineHeight="short"
+                        px={1}
+                        whiteSpace="nowrap"
+                        color="white"
+                        bg={r.kind === "answer" ? "green.600" : "purple.600"}
+                        borderTopRadius="sm"
+                      >
                         {regionLabel}
                       </Text>
                     </Box>
