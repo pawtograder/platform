@@ -13,6 +13,8 @@
 --      group changes on a Forgejo assignment no longer reach the GitHub path, which raised for a class
 --      with no github_org
 --   4. group_config 'both': a student in a group gets no individual repo; one in no group does
+--   5. save_forgejo_group_repo marks a repo ready only when every current member was granted, and
+--      creates the row the first time
 \set ON_ERROR_STOP on
 \timing off
 begin;
@@ -96,6 +98,16 @@ select pg_temp.check('1d a member still waiting for an account makes the group i
   exists (select 1 from needed where assignment_group_id = pg_temp.g('waiting')
           and logins = '{}' and not all_members_have_logins));
 
+-- Separate statements: within one query Postgres can reuse a subquery's rows instead of calling again.
+create temp table orders(o bigint[]);
+do $$ begin
+  for i in 1..20 loop
+    insert into orders select array_agg(assignment_group_id)
+    from public.forgejo_group_repos_needed('https://git.test', 100) where class_id = pg_temp.cls();
+  end loop;
+end $$;
+select pg_temp.check('1e the list is sampled, not in a fixed order', (select count(distinct o) from orders) > 1);
+
 -- 2
 insert into public.repositories (assignment_id, class_id, assignment_group_id, repository, git_provider, is_github_ready)
 values (pg_temp.a('groups'), pg_temp.cls(), pg_temp.g('complete'), 'grp-org/proj-group-Team-One', 'forgejo', true);
@@ -125,6 +137,30 @@ select pg_temp.check('4a in a ''both'' assignment, a grouped student gets no ind
 select pg_temp.check('4b and a student in no group does',
   exists (select 1 from public.forgejo_repos_needed('https://git.test', 100)
           where assignment_id = pg_temp.a('both') and profile_id = pg_temp.priv('u2')));
+
+-- 5: 'complete' now has u1, u2 and u4. Each save runs on its own: a check written as `save() and
+-- (select ...)` can read the row before the save.
+create temp table saved(k text primary key, ready boolean);
+insert into saved select 'partial', public.save_forgejo_group_repo(pg_temp.g('complete'),
+  'grp-org/proj-group-Team-One', 'https://git.test', array['login-u1', 'login-u2']);
+select pg_temp.check('5a a pass that granted only the members it read leaves the repo not ready',
+  not (select ready from saved where k = 'partial')
+  and not (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete')));
+insert into saved select 'all', public.save_forgejo_group_repo(pg_temp.g('complete'),
+  'grp-org/proj-group-Team-One', 'https://git.test', array['login-u1', 'login-u2', 'login-u4']);
+select pg_temp.check('5b granting every member makes it ready, on the same row',
+  (select ready from saved where k = 'all')
+  and (select count(*) = 1 and bool_and(is_github_ready) from public.repositories
+       where assignment_group_id = pg_temp.g('complete')));
+insert into saved select 'first', public.save_forgejo_group_repo(pg_temp.g('lab'),
+  'grp-org/lab-group-Lab-Pair', 'https://git.test', array['login-u1']);
+select pg_temp.check('5c a first save creates the group''s Forgejo row',
+  (select ready from saved where k = 'first')
+  and exists (select 1 from public.repositories where assignment_group_id = pg_temp.g('lab')
+              and git_provider = 'forgejo' and profile_id is null and is_github_ready));
+insert into saved select 'no-login', public.save_forgejo_group_repo(pg_temp.g('waiting'),
+  'grp-org/proj-group-Team-Two', 'https://git.test', array['login-u5']);
+select pg_temp.check('5d a member without a login keeps it not ready', not (select ready from saved where k = 'no-login'));
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;

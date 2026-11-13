@@ -17,7 +17,7 @@ RETURNS TABLE (
   template_repo text
 )
 LANGUAGE sql
-STABLE
+VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
@@ -38,7 +38,9 @@ AS $$
       SELECT 1 FROM public.repositories r
       WHERE r.assignment_id = a.id AND r.profile_id = ur.private_profile_id AND r.is_github_ready
     )
-  ORDER BY a.id, ur.private_profile_id
+  -- Random, not by id: a row that keeps failing stays listed, and a fixed order would let 50 of them
+  -- fill every pass. Each pass samples the backlog, so everything is reached eventually.
+  ORDER BY random()
   LIMIT p_limit;
 $$;
 

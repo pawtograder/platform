@@ -21,7 +21,7 @@ RETURNS TABLE (
   all_members_have_logins boolean
 )
 LANGUAGE sql
-STABLE
+VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
@@ -49,7 +49,9 @@ AS $$
       WHERE r.assignment_id = a.id AND r.assignment_group_id = g.id AND r.is_github_ready
     )
   GROUP BY a.id, a.class_id, g.id, c.forgejo_org, c.slug, a.slug, g.name, a.template_repo
-  ORDER BY a.id, g.id
+  -- Random, not by id: a row that keeps failing stays listed, and a fixed order would let 50 of them
+  -- fill every pass. Each pass samples the backlog, so everything is reached eventually.
+  ORDER BY random()
   LIMIT p_limit;
 $$;
 
@@ -68,7 +70,7 @@ RETURNS TABLE (
   template_repo text
 )
 LANGUAGE sql
-STABLE
+VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
@@ -92,7 +94,9 @@ AS $$
       SELECT 1 FROM public.repositories r
       WHERE r.assignment_id = a.id AND r.profile_id = ur.private_profile_id AND r.is_github_ready
     )
-  ORDER BY a.id, ur.private_profile_id
+  -- Random, not by id: a row that keeps failing stays listed, and a fixed order would let 50 of them
+  -- fill every pass. Each pass samples the backlog, so everything is reached eventually.
+  ORDER BY random()
   LIMIT p_limit;
 $$;
 
@@ -105,6 +109,11 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
+  -- save_forgejo_group_repo takes the same lock, so a pass either counts the new members or has
+  -- already saved, and this clears what it saved.
+  PERFORM 1 FROM public.assignment_groups g
+  WHERE g.id IN (SELECT DISTINCT assignment_group_id FROM new_members)
+  ORDER BY g.id FOR UPDATE;
   UPDATE public.repositories r SET is_github_ready = false
   WHERE r.git_provider = 'forgejo' AND r.is_github_ready
     AND r.assignment_group_id IN (SELECT DISTINCT assignment_group_id FROM new_members);
@@ -121,6 +130,49 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.forgejo_group_member_added() FROM public, anon, authenticated;
+
+-- Records a group's Forgejo repo once `p_granted` have write access. It is ready only if every current
+-- member has a login on this instance and was granted: a member added after the pass read the roster
+-- makes it not ready, so the next pass grants them. The group row lock orders this against
+-- forgejo_group_member_added.
+CREATE OR REPLACE FUNCTION public.save_forgejo_group_repo(
+  p_assignment_group_id bigint,
+  p_repository text,
+  p_instance_url text,
+  p_granted text[]
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_group public.assignment_groups%ROWTYPE;
+  v_ready boolean;
+BEGIN
+  SELECT * INTO v_group FROM public.assignment_groups WHERE id = p_assignment_group_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'assignment group % not found', p_assignment_group_id;
+  END IF;
+  SELECT coalesce(bool_and(ga.login IS NOT NULL AND ga.login = ANY (p_granted)), false) INTO v_ready
+  FROM public.assignment_groups_members m
+  JOIN public.user_roles ur ON ur.class_id = v_group.class_id AND ur.private_profile_id = m.profile_id
+    AND NOT ur.disabled
+  LEFT JOIN public.git_accounts ga ON ga.user_id = ur.user_id AND ga.provider = 'forgejo'
+    AND ga.instance_url = p_instance_url AND ga.login IS NOT NULL
+  WHERE m.assignment_group_id = p_assignment_group_id;
+  UPDATE public.repositories SET is_github_ready = v_ready
+  WHERE git_provider = 'forgejo' AND repository = p_repository AND assignment_group_id = p_assignment_group_id;
+  IF NOT FOUND THEN
+    INSERT INTO public.repositories
+      (assignment_id, class_id, profile_id, assignment_group_id, repository, git_provider, is_github_ready)
+    VALUES (v_group.assignment_id, v_group.class_id, NULL, p_assignment_group_id, p_repository, 'forgejo', v_ready);
+  END IF;
+  RETURN v_ready;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.save_forgejo_group_repo(bigint, text, text, text[]) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.save_forgejo_group_repo(bigint, text, text, text[]) TO service_role;
 
 CREATE TRIGGER forgejo_group_member_added
   AFTER INSERT ON public.assignment_groups_members

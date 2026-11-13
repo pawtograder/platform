@@ -12,6 +12,7 @@ type SsoConfig = {
   pawtograderBaseUrl: string;
   forgejoBaseUrl: string;
   forgejo: { authSourceName: string; authSourceId: number; admin: { username: string; password: string } };
+  autoApproveForgejo?: boolean;
 };
 const cfg: SsoConfig = JSON.parse(fs.readFileSync(path.join(__dirname, ".forgejo-coder-e2e.json"), "utf8"));
 const forgejoAuth =
@@ -154,7 +155,8 @@ test("the student's first sign-in lands on that account, which can see the repo"
   await loginAsUser(page, student);
   await page.goto(`${cfg.forgejoBaseUrl}/user/login`);
   await page.locator(`a[href$="/user/oauth2/${cfg.forgejo.authSourceName}"]`).click();
-  await page.getByRole("button", { name: "Authorize" }).click();
+  // With auto-approval the consent page approves on the server and never shows the button.
+  if (!cfg.autoApproveForgejo) await page.getByRole("button", { name: "Authorize" }).click();
   await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
 
   const after = await forgejoAccountsFor(student);

@@ -223,7 +223,8 @@ export async function reconcileForgejoGroupRepos(
     };
     try {
       assertTemplateInOrg(group.template_repo, group.owner);
-      const existingId = await existingRepositoryRow(supabase, repository, owner);
+      // Refuses a name another assignment, student or group already holds.
+      await existingRepositoryRow(supabase, repository, owner);
       if (!orgsReady.has(group.owner)) {
         await ops.ensureOrg(config, group.owner);
         orgsReady.add(group.owner);
@@ -234,8 +235,17 @@ export async function reconcileForgejoGroupRepos(
         if (!(await ops.grantWrite(config, repository, login))) allWrite = false;
       }
       if (!allWrite) throw new Error("Forgejo doesn't report write access for every group member");
-      await saveRepositoryRow(supabase, existingId, owner, repository, group.all_members_have_logins);
-      if (group.all_members_have_logins) result.created++;
+      // The database decides readiness against the current roster, so a member who joined during this
+      // pass leaves the repo not ready and the next pass grants them.
+      // function-grants: service-role
+      const { data: ready, error: saveError } = await supabase.rpc("save_forgejo_group_repo", {
+        p_assignment_group_id: group.assignment_group_id,
+        p_repository: repository,
+        p_instance_url: config.url,
+        p_granted: group.logins
+      });
+      if (saveError) throw saveError;
+      if (ready) result.created++;
     } catch (failure) {
       result.failures.push({
         assignmentId: group.assignment_id,
