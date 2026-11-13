@@ -243,6 +243,16 @@
 {{- if ne ($init.imagePullPolicy | default "IfNotPresent") $policy }}
 {{- fail (printf "coder.coder.initContainers first-owner imagePullPolicy must match coder.coder.image.pullPolicy (%s)" $policy) }}
 {{- end }}
+{{- $initRefs := list }}
+{{- range $init.envFrom }}{{ $initRefs = append $initRefs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
+{{- $initWant := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- if .Values.coder.oidc.enabled }}{{ $initWant = append $initWant (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- range $w := $initWant }}
+{{- if not (has $w $initRefs) }}
+{{- fail (printf "coder.coder.initContainers first-owner envFrom is missing %s; its coderd reads the same provider settings as coder.coder.envFrom and won't start without them" $w) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}
