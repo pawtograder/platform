@@ -379,6 +379,11 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // Note: We check that the real name is not visible in parentheses
     await expect(rubricSidebar).not.toContainText(`(${instructor!.private_profile_name})`);
 
+    // The self-review was completed in the first test, but the toolbar can still be showing the
+    // "review is required" banner from before the review assignment's completed_at arrived. That
+    // banner adds a card and shifts the page, so wait for it to go before capturing.
+    await expect(page.getByText(/Self-Review Rubric review .*is required/)).toBeHidden({ timeout: 20_000 });
+
     // Scroll grading rubric to top of its container
     await stabilizeRubricSidebar(page, "Grading Rubric");
     await visualScreenshot(page, "Pseudonymous grading - Student sees only pseudonym", {
