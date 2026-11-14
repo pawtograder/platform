@@ -2,9 +2,16 @@ import AuthBrandHeader from "@/components/branding/auth-brand-header";
 import { FormMessage } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { getBranding } from "@/lib/branding";
-import { getAuthorizationDetails, isAutoApproved, OAuthServerError } from "@/lib/oauthServer";
+import {
+  decideAuthorization,
+  getAuthorizationDetails,
+  isAutoApproved,
+  isFirstPartyRedirect,
+  OAuthServerError
+} from "@/lib/oauthServer";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Container, HStack, List, Stack, Text } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
 import { redirect } from "next/navigation";
 import { decideOAuthConsentAction } from "./actions";
 
@@ -68,6 +75,23 @@ export default async function OAuthConsent(props: { searchParams: Promise<Search
 
   if (isAutoApproved(details)) {
     redirect(details.redirect_url);
+  }
+
+  if (isFirstPartyRedirect(details.redirect_uri)) {
+    let approvedUrl: string | undefined;
+    try {
+      ({ redirect_url: approvedUrl } = await decideAuthorization(
+        session.access_token,
+        details.authorization_id,
+        "approve"
+      ));
+    } catch (e) {
+      Sentry.captureException(e, {
+        tags: { area: "oauth-consent" },
+        extra: { authorization_id: details.authorization_id, client_id: details.client.id }
+      });
+    }
+    if (approvedUrl) redirect(approvedUrl);
   }
 
   const scopes = details.scope.split(/\s+/).filter(Boolean);
