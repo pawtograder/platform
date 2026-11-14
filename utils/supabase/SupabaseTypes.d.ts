@@ -14023,6 +14023,31 @@ export type Database = {
           user_id: string;
         }[];
       };
+      forgejo_group_repos_needed: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          all_members_have_logins: boolean;
+          assignment_group_id: number;
+          assignment_id: number;
+          class_id: number;
+          logins: string[];
+          name: string;
+          owner: string;
+          template_repo: string;
+        }[];
+      };
+      forgejo_repos_needed: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          assignment_id: number;
+          class_id: number;
+          login: string;
+          name: string;
+          owner: string;
+          profile_id: string;
+          template_repo: string;
+        }[];
+      };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
       get_assessment_export_pepper: { Args: never; Returns: string };
@@ -15239,6 +15264,15 @@ export type Database = {
       save_error_pin: {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;
+      };
+      save_forgejo_group_repo: {
+        Args: {
+          p_assignment_group_id: number;
+          p_granted: string[];
+          p_instance_url: string;
+          p_repository: string;
+        };
+        Returns: boolean;
       };
       seed_default_class_roles: {
         Args: { p_class_id: number };

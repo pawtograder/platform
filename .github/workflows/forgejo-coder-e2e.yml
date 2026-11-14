@@ -32,6 +32,11 @@ jobs:
         with:
           version: 2.105.0
 
+      # forgejo-provisioning.forgejo-coder.spec.ts runs forgejo-reconciler's pass under Deno.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Ensure docker compose v2
         run: |
           if ! docker compose version >/dev/null 2>&1; then

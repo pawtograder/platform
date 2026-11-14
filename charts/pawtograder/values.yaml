@@ -2822,6 +2822,10 @@ forgejo:
         SSL_MODE: disable
       service:
         DISABLE_REGISTRATION: true
+      admin:
+        # Only Pawtograder's admin makes orgs. A student who registered a class's org name first would
+        # otherwise own every classmate's repo created in it (the reconciler also refuses such an org).
+        DISABLE_REGULAR_ORG_CREATION: true
       actions:
         ENABLED: true
       session:

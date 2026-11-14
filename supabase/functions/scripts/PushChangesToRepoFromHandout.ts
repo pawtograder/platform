@@ -50,6 +50,8 @@ async function getRepositoryFromDB(
         "id, repository, synced_handout_sha, synced_repo_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
       )
       .eq("id", parseInt(repoIdOrFullName))
+      // This script only talks to GitHub; a Forgejo row's id must not reach a same-named GitHub repo.
+      .eq("git_provider", "github")
       .single();
     data = result.data;
     error = result.error;
@@ -59,6 +61,7 @@ async function getRepositoryFromDB(
       .select(
         "id, repository, synced_handout_sha, synced_repo_sha, assignment_id, class_id, assignments(latest_template_sha, template_repo, title)"
       )
+      .eq("git_provider", "github")
       .eq("repository", repoIdOrFullName)
       .single();
     data = result.data;

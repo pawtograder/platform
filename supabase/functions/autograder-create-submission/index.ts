@@ -575,6 +575,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
+    .eq("git_provider", decoded.provider)
     .maybeSingle();
   if (repoError) {
     Sentry.captureException(repoError, scope);
@@ -1256,6 +1257,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
           .select("id, created_at")
+          // The same owner/name can exist on GitHub and on Forgejo; only this provider's repository counts.
+          .eq("repository_id", repoData.id)
           .eq("repository", repository)
           .eq("sha", sha)
           .eq("run_number", Number.parseInt(decoded.run_id))
