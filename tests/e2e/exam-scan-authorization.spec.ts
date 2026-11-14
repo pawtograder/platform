@@ -12,6 +12,7 @@ import {
   supabase,
   type TestingUser
 } from "./TestingUtils";
+import { backendPid, privilegedClient, waitUntilBlocked } from "./courseGeminiKeyDb";
 
 /**
  * #1078: a grader must not be able to make the exam worker read or copy a scan from another
@@ -928,6 +929,34 @@ async function runQueuedThroughSentinel(
     description: JSON.stringify({ targetMsgId, sentinelMsgId, target })
   });
   await drainThrough(sentinel.pageId);
+  // The sentinel finishing shows the target was claimed, not that its worker has finished with it:
+  // another invocation may still be running it. Wait until the target itself is archived, which
+  // the worker does only after processing it or dead-lettering it (on its last retry there is no
+  // requeue).
+  await waitForArchived(targetMsgId);
+}
+
+/** Waits until queue message `msgId` has been archived and is no longer in the queue. */
+async function waitForArchived(msgId: number): Promise<void> {
+  const pg = await privilegedClient();
+  try {
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          const { rows } = await pg.query<{ archived: number; queued: number }>(
+            `SELECT (SELECT count(*) FROM pgmq.a_exam_processing WHERE msg_id = $1)::int AS archived,
+                    (SELECT count(*) FROM pgmq.q_exam_processing WHERE msg_id = $1)::int AS queued`,
+            [msgId]
+          );
+          return rows[0];
+        },
+        { timeout: 60_000, intervals: [500, 1000, 2000] }
+      )
+      .toEqual({ archived: 1, queued: 0 });
+  } finally {
+    await pg.end();
+  }
 }
 
 /** DLQ rows for the exact message `target` (same method, batch and args). */
@@ -1636,6 +1665,186 @@ test.describe("Exam scan pages: only matching changes which exam a page belongs 
     expect(await storedSha(page.path)).toBe(page.sha);
     expect(error).not.toBeNull();
     expect(await storedSha(`${page.path}.moved.png`)).toBeNull();
+  });
+
+  test("a service-role upload cannot replace a matched page's scan either", async () => {
+    // Storage checks an upload's policy before it receives the bytes and then records the object as
+    // a privileged role. A service-role upload takes that same unchecked commit path.
+    const { batchId, page } = await matchedOnePageExam("Service upload");
+    const { error } = await supabase.storage
+      .from("exam-scans")
+      .upload(page.path, replacement(), { contentType: "image/png", upsert: true });
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([page.sha]);
+    expect(error).not.toBeNull();
+    expect(await storedSha(page.path)).toBe(page.sha);
+  });
+
+  /** The object row behind a scan, read directly. */
+  async function objectVersion(pg: import("pg").Client, path: string) {
+    const { rows } = await pg.query<{ version: string }>(
+      "SELECT version FROM storage.objects WHERE bucket_id = 'exam-scans' AND name = $1",
+      [path]
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0].version;
+  }
+  /** A scanned exam whose page (and its stored object) is not linked yet, plus the row to link it to. */
+  async function unlinkedPageAndRow(label: string) {
+    const examId = await createExam(a.classId, `${label} ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice]);
+    const rows = await processAndConfirm(batchId, 1);
+    await forgePage(pages[0].id, { scanned_submission_id: null });
+    return { examId, batchId, page: pages[0], scannedId: rows.get(alice.profileId)! };
+  }
+
+  // The storage write here is the statement Storage runs to record an upload (a new version on the
+  // object row); it is issued directly so the test controls exactly when it commits.
+  test("a scan write that has not committed when matching links its page is refused", async () => {
+    const { page, scannedId } = await unlinkedPageAndRow("Link first");
+    const [linker, writer, monitor] = await Promise.all([privilegedClient(), privilegedClient(), privilegedClient()]);
+    try {
+      // Read before either session blocks: a query on a busy client waits behind its statement.
+      const [linkerPid, writerPid] = [await backendPid(linker), await backendPid(writer)];
+      const before = await objectVersion(monitor, page.path);
+      // Matching links the page; its transaction has not committed yet.
+      await linker.query("BEGIN");
+      await linker.query("UPDATE public.exam_scan_pages SET scanned_submission_id = $1 WHERE id = $2", [
+        scannedId,
+        page.id
+      ]);
+      // A write to the page's object starts meanwhile.
+      await writer.query("BEGIN");
+      const write = writer
+        .query("UPDATE storage.objects SET version = $1 WHERE bucket_id = 'exam-scans' AND name = $2", [
+          randomUUID(),
+          page.path
+        ])
+        .then(
+          () => null,
+          (e: Error) => e
+        );
+      const waited = await waitUntilBlocked(monitor, writerPid, linkerPid, 3000);
+      await linker.query("COMMIT");
+      const writeErr = await write;
+      await writer.query(writeErr ? "ROLLBACK" : "COMMIT");
+      // The object is unchanged now that the page is linked...
+      expect(await objectVersion(monitor, page.path)).toBe(before);
+      // ...because the write waited for the link and was then refused.
+      expect(waited.observed).toBe(true);
+      expect(writeErr?.message ?? "").toMatch(/refusing to change the object of a linked scan page/);
+    } finally {
+      await Promise.all([linker.end(), writer.end(), monitor.end()]);
+    }
+  });
+
+  test("a scan write that has not committed when a linked page is inserted for it is refused", async () => {
+    const { examId, batchId, scannedId } = await unlinkedPageAndRow("Insert first");
+    // An object no page refers to yet, uploaded by the grader.
+    const path = `classes/${a.classId}/exams/${examId}/batches/${batchId}/inserted-page.png`;
+    const { error: upErr } = await a.grader.storage
+      .from("exam-scans")
+      .upload(path, replacement(), { contentType: "image/png" });
+    expect(upErr).toBeNull();
+    const [linker, writer, monitor] = await Promise.all([privilegedClient(), privilegedClient(), privilegedClient()]);
+    try {
+      // Read before either session blocks: a query on a busy client waits behind its statement.
+      const [linkerPid, writerPid] = [await backendPid(linker), await backendPid(writer)];
+      const before = await objectVersion(monitor, path);
+      // A page that is already linked is inserted for that object; not committed yet.
+      await linker.query("BEGIN");
+      await linker.query(
+        `INSERT INTO public.exam_scan_pages
+           (class_id, exam_id, batch_id, page_index, image_path, width, height, scanned_submission_id)
+         VALUES ($1, $2, $3, 100, $4, 1000, 1400, $5)`,
+        [a.classId, examId, batchId, path, scannedId]
+      );
+      await writer.query("BEGIN");
+      const write = writer
+        .query("UPDATE storage.objects SET version = $1 WHERE bucket_id = 'exam-scans' AND name = $2", [
+          randomUUID(),
+          path
+        ])
+        .then(
+          () => null,
+          (e: Error) => e
+        );
+      const waited = await waitUntilBlocked(monitor, writerPid, linkerPid, 3000);
+      await linker.query("COMMIT");
+      const writeErr = await write;
+      await writer.query(writeErr ? "ROLLBACK" : "COMMIT");
+      expect(await objectVersion(monitor, path)).toBe(before);
+      expect(waited.observed).toBe(true);
+      expect(writeErr?.message ?? "").toMatch(/refusing to change the object of a linked scan page/);
+    } finally {
+      await Promise.all([linker.end(), writer.end(), monitor.end()]);
+    }
+  });
+
+  test("a scan write at a higher isolation level is refused, since its check could not see the link", async () => {
+    const { page, scannedId } = await unlinkedPageAndRow("Isolation");
+    const [linker, writer, monitor] = await Promise.all([privilegedClient(), privilegedClient(), privilegedClient()]);
+    try {
+      const before = await objectVersion(monitor, page.path);
+      await linker.query("BEGIN");
+      await linker.query("UPDATE public.exam_scan_pages SET scanned_submission_id = $1 WHERE id = $2", [
+        scannedId,
+        page.id
+      ]);
+      // A REPEATABLE READ transaction keeps the snapshot of its first statement, from before the link.
+      await writer.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      const write = writer
+        .query("UPDATE storage.objects SET version = $1 WHERE bucket_id = 'exam-scans' AND name = $2", [
+          randomUUID(),
+          page.path
+        ])
+        .then(
+          () => null,
+          (e: Error) => e
+        );
+      await linker.query("COMMIT");
+      const writeErr = await write;
+      await writer.query(writeErr ? "ROLLBACK" : "COMMIT");
+      expect(await objectVersion(monitor, page.path)).toBe(before);
+      expect(writeErr?.message ?? "").toMatch(/can only be written at READ COMMITTED/);
+    } finally {
+      await Promise.all([linker.end(), writer.end(), monitor.end()]);
+    }
+  });
+
+  test("a scan write that committed before matching linked its page stands, and the link follows it", async () => {
+    const { page, scannedId } = await unlinkedPageAndRow("Write first");
+    const [linker, writer, monitor] = await Promise.all([privilegedClient(), privilegedClient(), privilegedClient()]);
+    try {
+      // Read before either session blocks: a query on a busy client waits behind its statement.
+      const [linkerPid, writerPid] = [await backendPid(linker), await backendPid(writer)];
+      const newVersion = randomUUID();
+      // The write starts first and has not committed...
+      await writer.query("BEGIN");
+      await writer.query("UPDATE storage.objects SET version = $1 WHERE bucket_id = 'exam-scans' AND name = $2", [
+        newVersion,
+        page.path
+      ]);
+      // ...when matching links the page.
+      await linker.query("BEGIN");
+      const link = linker
+        .query("UPDATE public.exam_scan_pages SET scanned_submission_id = $1 WHERE id = $2", [scannedId, page.id])
+        .then(
+          () => null,
+          (e: Error) => e
+        );
+      const waited = await waitUntilBlocked(monitor, linkerPid, writerPid, 3000);
+      await writer.query("COMMIT");
+      expect(await link).toBeNull();
+      await linker.query("COMMIT");
+      // The write landed before the link: it stands, and the page is linked to the object as written.
+      expect(await objectVersion(monitor, page.path)).toBe(newVersion);
+      expect((await pageState(page.id))?.scanned_submission_id).toBe(scannedId);
+      // ...and the link did wait for the write: the two are serialized, not merely ordered by luck.
+      expect(waited.observed).toBe(true);
+    } finally {
+      await Promise.all([linker.end(), writer.end(), monitor.end()]);
+    }
   });
 
   test("scans that no page has been matched to can still be uploaded, retried and deleted", async () => {
