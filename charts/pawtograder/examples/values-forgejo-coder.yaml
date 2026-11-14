@@ -1,0 +1,100 @@
+# Pre-create the Secrets listed in README "Forgejo and Coder"; run scripts/setup-sso-clients.sh once Pawtograder is up.
+
+auth:
+  oauthServer:
+    enabled: true
+    autoApproveFirstParty: true
+
+# The render refuses job pods and workspaces alongside meta, Studio or Kong's admin API unless networkPolicy.cilium.enabled.
+meta:
+  enabled: false
+studio:
+  enabled: false
+kong:
+  metricsListener: status
+
+forgejo:
+  enabled: true
+  database: pawtograder
+  ingress:
+    hosts:
+      - host: git.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: example-wildcard-tls
+        hosts: [git.example.com]
+  gitea:
+    oauth:
+      - name: pawtograder
+        provider: openidConnect
+        existingSecret: pawtograder-forgejo-oauth
+        autoDiscoverUrl: https://api.pawtograder.example.com/auth/v1/.well-known/openid-configuration
+        scopes: email profile
+    additionalConfigFromEnvs:
+      - name: FORGEJO__DATABASE__PASSWD
+        valueFrom:
+          secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
+      - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID }
+      - name: FORGEJO__STORAGE__MINIO_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY }
+    config:
+      oauth2_client:
+        # Uncomment to create a Forgejo account on first sign-in for anyone who can sign in to Pawtograder.
+        # ENABLE_AUTO_REGISTRATION: true
+        USERNAME: userid
+        ACCOUNT_LINKING: disabled
+      storage:
+        STORAGE_TYPE: minio
+        MINIO_ENDPOINT: s3.example.com
+        MINIO_USE_SSL: true
+        MINIO_BUCKET: pawtograder
+        MINIO_BUCKET_LOOKUP: path
+        MINIO_LOCATION: us-east-1
+        MINIO_BASE_PATH: forgejo/
+
+# Enable the runner after Forgejo is up: it needs the token Secrets below.
+forgejoRunner:
+  enabled: true
+  jobNamespace: pawtograder-actions # create it first
+  dispatcher:
+    tokenSecret: pawtograder-forgejo-runner-token
+  actions:
+    tokenSecret: pawtograder-forgejo-mirror-token
+  image:
+    repository: registry.example.com/pawtograder/forgejo-runner
+    tag: 13.2.0-jdk21
+
+coder:
+  enabled: true
+  database: pawtograder
+  oidc:
+    enabled: true
+    # Uncomment to create a Coder account, with workspace compute, on first sign-in for anyone who can sign in to Pawtograder.
+    # allowSignups: true
+  # Run scripts/setup-coder-forgejo-auth.sh first; coderd exits at startup without the client ID.
+  externalAuth:
+    forgejo:
+      enabled: true
+  coder:
+    env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
+      - name: CODER_ACCESS_URL
+        value: https://coder.example.com
+      - name: CODER_WILDCARD_ACCESS_URL
+        value: "*.example.com"
+    ingress:
+      host: coder.example.com
+      wildcardHost: "*.example.com"
+      tls:
+        enable: true
+        secretName: example-wildcard-tls
+        wildcardSecretName: example-wildcard-tls

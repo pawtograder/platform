@@ -1,0 +1,161 @@
+name: Bug reporter release
+
+# The bug reporter's release tier (spec §7.1, ADR 8). The bug reporter builds Sentry replay
+# envelopes itself, so a Sentry SDK or rrweb upgrade can break uploads without any code change
+# here. This runs F8, F7 (with the large-segment upload), and the ADR 8 contract checks
+# (envelope and upload Jest suites, F1/F2/F5/F6 on both browsers) against a full-profile build and
+# the real dev Sentry. The work is in _bug-reporter-e2e.yml.
+#
+# When it runs (the `detect` job decides, reading only the event and the two package.json files
+# through the API, never the PR's code):
+#   * a PR that changes the version of any @sentry/* or @sentry-internal/* dependency. Renovate
+#     opens those as one group (renovate.json) labeled `bug-reporter-release`;
+#   * a PR labeled `bug-reporter-release`, to ask for a run by hand;
+#   * a promotion PR, from this repository's `staging` into `main`. Promotion is currently a
+#     direct push, not a PR, so today this never fires; for a direct push, check the latest run
+#     on staging (next item) or start one with workflow_dispatch first. Other PRs into main
+#     (chart bumps, mostly) don't run it;
+#   * a push to `staging` that changes a Sentry or rrweb version or the Sentry wiring (the
+#     tunnel, the Sentry configs, next.config.ts), so the staging commit that gets promoted has a
+#     release-tier result;
+#   * workflow_dispatch.
+#
+# Fork PRs get the same trust gate as the nightly tier (see bug-reporter-nightly.yml).
+#
+# Secrets: SENTRY_URL, SENTRY_ORG, SENTRY_AUTH_TOKEN, NEXT_PUBLIC_SENTRY_DSN (HU2).
+# Variable: SENTRY_PROJECT (default pawtograder-web).
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [staging]
+    paths:
+      # A pre-filter; `detect` then checks that package.json changed a Sentry or rrweb version.
+      # Keep the wiring paths in step with WIRING in `detect`.
+      - "package.json"
+      - "app/api/tunnel/**"
+      - "instrumentation-client.ts"
+      - "sentry.*.config.ts"
+      - "next.config.ts"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: bug-reporter-release-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'bug-reporter-release' && format('-noop-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  detect:
+    # No checkout, on a GitHub-hosted VM: the decision reads PR data, never runs it.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      run: ${{ steps.d.outputs.run }}
+    steps:
+      - id: d
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          decide() {
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            if [ "$1" = true ]; then echo "::notice title=Release tier runs::$2"; else echo "::notice title=Release tier not needed::$2"; fi
+            exit 0
+          }
+          # The Sentry and rrweb dependency specs at one commit, as sorted "name spec" lines.
+          pins() {
+            gh api -H "Accept: application/vnd.github.raw+json" "repos/$1/contents/package.json?ref=$2" \
+              | jq -r '[.dependencies, .devDependencies, .optionalDependencies] | add // {}
+                       | to_entries[] | select(.key | test("^@sentry(-internal)?/")) | "\(.key) \(.value)"' \
+              | sort
+          }
+          versions_changed() {
+            local a b
+            a=$(pins "$1" "$2")
+            b=$(pins "$3" "$4")
+            [ "$a" != "$b" ] || return 1
+            diff <(echo "$a") <(echo "$b") || true
+          }
+          WIRING='^(app/api/tunnel/|instrumentation-client\.ts$|sentry\.[a-z]+\.config\.ts$|next\.config\.ts$)'
+
+          case "$EVENT_NAME" in
+            workflow_dispatch) decide true "manual run" ;;
+            push)
+              [[ "$BEFORE_SHA" =~ ^0+$ ]] && decide true "push with no previous commit to compare"
+              files=$(gh api "repos/${REPO}/compare/${BEFORE_SHA}...${SHA}" --jq '.files[].filename')
+              grep -Eq "$WIRING" <<<"$files" && decide true "the push changes the Sentry wiring"
+              versions_changed "$REPO" "$BEFORE_SHA" "$REPO" "$SHA" && decide true "the push changes a Sentry or rrweb version"
+              decide false "package.json changed, but no Sentry or rrweb version"
+              ;;
+            pull_request_target) ;;
+            *) decide false "event ${EVENT_NAME} is not a release-tier trigger" ;;
+          esac
+
+          if [ "$ACTION" = "labeled" ]; then
+            [ "$LABEL" = "bug-reporter-release" ] && decide true "labeled bug-reporter-release"
+            decide false "another label was added"
+          fi
+          [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" = "staging" ] && [ "${HEAD_REPO:-}" = "$REPO" ] \
+            && decide true "promotion PR from staging into main"
+          labels=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name')
+          grep -Fxq bug-reporter-release <<<"$labels" && decide true "PR labeled bug-reporter-release"
+          versions_changed "$REPO" "$BASE_SHA" "${HEAD_REPO:-$REPO}" "$HEAD_SHA" \
+            && decide true "the PR changes a Sentry or rrweb version"
+          decide false "no Sentry or rrweb version change, not a promotion, not labeled"
+
+  gate:
+    needs: detect
+    if: needs.detect.outputs.run == 'true' && github.event_name == 'pull_request_target'
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: ./.github/workflows/_trust-gate.yml
+    secrets:
+      trust_token: ${{ secrets.CI_TRUST_TOKEN }}
+
+  untrusted:
+    needs: gate
+    if: ${{ always() && needs.gate.result != 'skipped' && (needs.gate.result != 'success' || needs.gate.outputs.trusted != 'true') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Refuse an untrusted ref
+        run: |
+          echo "::error title=Untrusted ref::The bug reporter release tier cannot run for this PR. Add the contributor to the pawtograder-contributors team, or have a ci-approval reviewer approve the run."
+          exit 1
+
+  release:
+    needs: [detect, gate]
+    if: ${{ !cancelled() && needs.detect.outputs.run == 'true' && (github.event_name != 'pull_request_target' || (needs.gate.result == 'success' && needs.gate.outputs.trusted == 'true')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_bug-reporter-e2e.yml
+    with:
+      tier: release
+      lane: sentry
+      sentry: true
+      suites: f8 f7 contract
+      timeout-minutes: 120
+    secrets:
+      SENTRY_URL: ${{ secrets.SENTRY_URL }}
+      SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}

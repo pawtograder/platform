@@ -518,6 +518,9 @@ async function copySingleAssignment(
     debugLog?: AssignmentCopyDebugLog;
   }
 ): Promise<CopyResult> {
+  if (sourceAssignment.git_provider !== "github") {
+    throw new CLICommandError("Copying Forgejo assignments is not supported yet");
+  }
   const mark = (phase: string, detail?: Record<string, unknown>) => options.debugLog?.(phase, detail);
 
   mark("assignment_start", {
@@ -574,6 +577,9 @@ async function copySingleAssignment(
   mark("resolved_target_assignment", { was_existing: wasExisting });
 
   if (existingAssignment) {
+    if (existingAssignment.git_provider !== "github") {
+      throw new CLICommandError("Copying into a Forgejo assignment is not supported yet");
+    }
     newAssignment = existingAssignment as AssignmentWithAutograder;
     status.assignmentCreated = true;
   } else {

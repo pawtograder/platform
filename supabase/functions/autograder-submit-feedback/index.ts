@@ -11,6 +11,7 @@ import {
   RepositoryCheckRun
 } from "../_shared/FunctionTypes.d.ts";
 import {
+  assertJobTokenMatchesRepository,
   resolveRef,
   publicSupabaseUrl,
   validateOIDCTokenOrAllowE2E,
@@ -490,6 +491,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   scope?.setTag("run_attempt", run_attempt);
   // One click from any event this request reports to the run that caused it.
   attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
+  await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
   scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
   let assignment_id: number | null = null;

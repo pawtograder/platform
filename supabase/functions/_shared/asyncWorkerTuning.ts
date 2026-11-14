@@ -248,7 +248,7 @@ export const MIN_DRAIN_CONCURRENCY = 1;
  * one:
  *
  *  * THE SHARED CONTENT LIMITER, which is the real ceiling. `create_repo`
- *    wraps the ENTIRE `github.createRepo(...)` call in a single
+ *    wraps the ENTIRE `getGitProvider().createRepo(...)` call in a single
  *    `getCreateContentLimiter(org).schedule(...)` (github-async-worker/index.ts
  *    ~line 992), and that limiter is REDIS-BACKED, i.e. FLEET-WIDE per org, keyed
  *    `create_content:<org>:<GITHUB_APP_ID>` with
