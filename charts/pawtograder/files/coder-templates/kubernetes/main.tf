@@ -83,7 +83,19 @@ variable "code_server_version" {
 variable "image" {
   type        = string
   description = "Workspace container image."
-  default     = "ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005"
+  default     = "ghcr.io/pawtograder/coder-workspace:latest"
+}
+
+variable "external_auth_id" {
+  type        = string
+  description = "ID of the Coder external auth provider (CODER_EXTERNAL_AUTH_<n>_ID) whose token clones and pushes the repository."
+  default     = "forgejo"
+}
+
+variable "forgejo_url" {
+  type        = string
+  description = "Forgejo's public URL; repo_url must name a repository on it. Empty accepts any HTTPS host."
+  default     = ""
 }
 
 data "coder_parameter" "cpu" {
@@ -130,10 +142,49 @@ data "coder_parameter" "home_disk_size" {
   }
 }
 
+data "coder_parameter" "repo_url" {
+  name         = "repo_url"
+  display_name = "Repository"
+  description  = "HTTPS clone URL of the repository to work on."
+  type         = "string"
+  mutable      = false
+  validation {
+    regex = local.repo_url_regex
+    error = "Must be a clone URL like ${var.forgejo_url == "" ? "https://<host>" : trimsuffix(var.forgejo_url, "/")}/<owner>/<repository>.git, whose repository name doesn't start with a dot."
+  }
+}
+
+# Coder refuses to create a workspace until the owner links this provider; the agent's GIT_ASKPASS then hands git its token.
+data "coder_external_auth" "git" {
+  id = var.external_auth_id
+}
+
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
+# Blocks login until it ends, so a failure shows as the agent's start_error rather than a ready workspace.
+resource "coder_script" "git_clone" {
+  agent_id     = coder_agent.main.id
+  display_name = "Git Clone"
+  icon         = "/icon/git.svg"
+  script = templatefile("${path.module}/clone.sh", {
+    url   = data.coder_parameter.repo_url.value
+    dir   = local.repo_dir
+    limit = local.clone_timeout
+    auth  = var.external_auth_id
+  })
+  run_on_start       = true
+  start_blocks_login = true
+  # A backstop: clone.sh gives up on its own after clone_timeout.
+  timeout = local.clone_timeout + 120
+}
+
 locals {
+  # Owner and repository names are Forgejo's characters; a name can't start with a dot, so the clone can't land on a dotfile.
+  # "" passes because template import checks the parameter without a value; clone.sh fails a workspace created with it.
+  repo_url_regex = "^(${var.forgejo_url == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : replace(trimsuffix(var.forgejo_url, "/"), "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")}/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+  repo_dir       = "/home/coder/${trimsuffix(basename(data.coder_parameter.repo_url.value), ".git")}"
+  clone_timeout  = 300
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
   name = "coder-${data.coder_workspace.me.id}"
   labels = {
@@ -146,10 +197,18 @@ locals {
 }
 
 resource "coder_agent" "main" {
-  os             = "linux"
-  arch           = var.arch
+  os   = "linux"
+  arch = var.arch
+  # Passed as variables so a quote in a name can't break the script.
+  env = {
+    # The provider reports an empty name as "default", and Pawtograder's ID tokens carry the email as the name.
+    OWNER_GIT_NAME  = contains(["", "default", data.coder_workspace_owner.me.email], data.coder_workspace_owner.me.full_name) ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
+    OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
+  }
   startup_script = <<-EOT
     set -e
+    git config --global user.name "$OWNER_GIT_NAME"
+    git config --global user.email "$OWNER_GIT_EMAIL"
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
     if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
@@ -165,6 +224,9 @@ resource "coder_agent" "main" {
       fi
     fi
     [ -n "$CS" ] || { echo "the workspace image has no code-server and code_server_version is empty" >&2; exit 1; }
+    # VS Code's own askpass would replace the agent's GIT_ASKPASS, so Source Control pushes would prompt for a login.
+    S="$HOME/.local/share/code-server/Machine/settings.json"
+    [ -f "$S" ] || { mkdir -p "$(dirname "$S")" && echo '{"git.useIntegratedAskPass": false}' >"$S"; }
     "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
   EOT
 
@@ -195,7 +257,7 @@ resource "coder_app" "code_server" {
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "VS Code"
-  url          = "http://localhost:13337/?folder=/home/coder"
+  url          = "http://localhost:13337/?folder=${local.repo_dir}"
   icon         = "/icon/code.svg"
   subdomain    = true
   share        = "owner"

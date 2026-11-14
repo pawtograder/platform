@@ -2,6 +2,7 @@
 {{- $files := .Files.Glob "files/coder-templates/**" }}
 {{- $tag := .Values.coder.coder.image.tag | default (printf "v%v" .Subcharts.coder.Chart.AppVersion) }}
 {{- $pullSecrets := concat (.Values.global.imagePullSecrets | default list) (.Values.coder.coder.image.pullSecrets | default list) | uniq }}
+{{- $workspaceImage := include "pawtograder.coderWorkspaceImage" . }}
 {{- $placement := dict "nodeSelector" (.Values.coderBootstrap.nodeSelector | default .Values.coder.coder.nodeSelector) "tolerations" (.Values.coderBootstrap.tolerations | default .Values.coder.coder.tolerations) "affinity" .Values.coderBootstrap.affinity }}
 apiVersion: v1
 kind: ConfigMap
@@ -91,7 +92,7 @@ spec:
               namespace: {{ .Values.coderBootstrap.workspaceNamespace | default .Release.Namespace | toString | toJson }}
               node_selector: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml | toJson | toJson }}
               tolerations: {{ include "pawtograder.tolerations" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYamlArray | toJson | toJson }}
-              image: {{ .Values.coderBootstrap.workspaces.image | toString | toJson }}
+              image: {{ $workspaceImage | toString | toJson }}
               arch: {{ .Values.coderBootstrap.workspaces.arch | default "amd64" | toString | toJson }}
               image_pull_policy: {{ .Values.coderBootstrap.workspaces.imagePullPolicy | default "IfNotPresent" | toString | toJson }}
               image_pull_secrets: {{ .Values.coderBootstrap.workspaces.imagePullSecrets | default list | toJson | toJson }}
@@ -100,6 +101,8 @@ spec:
               ephemeral_storage_limit: {{ .Values.coderBootstrap.workspaces.ephemeralStorageLimit | default "4Gi" | toString | toJson }}
               node_affinity: {{ (include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml).nodeAffinity | default dict | toJson | toJson }}
               code_server_version: {{ .Values.coderBootstrap.workspaces.codeServerVersion | default "" | toString | toJson }}
+              external_auth_id: {{ .Values.coderBootstrap.workspaces.externalAuthId | default "forgejo" | toString | toJson }}
+              forgejo_url: {{ if .Values.forgejo.enabled }}{{ include "pawtograder.forgejo.url" . | toString | toJson }}{{ else }}""{{ end }}
               VARS
               for dir in /templates/*/; do
                 name="$(basename "$dir")"
