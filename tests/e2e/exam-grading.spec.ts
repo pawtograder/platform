@@ -273,6 +273,27 @@ test.describe("Exam grading OCR pipeline", () => {
     const graded = (submissions ?? [])[1]!;
     await loginAsUser(page, grader, course);
     await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${graded.id}/files`);
+
+    // The grader lands on the exam_v1 artifact finalize wrote, and it renders (#1187). Before #1149,
+    // ArtifactView signed a storage file that exam_v1 artifacts don't have, so every finalized exam
+    // showed "Error downloading artifact" in place of the whole view, and the card never appeared.
+    const { data: gradedArtifact } = await supabase
+      .from("submission_artifacts")
+      .select("data")
+      .eq("submission_id", graded.id)
+      .eq("data->>format", "exam_v1")
+      .single();
+    const [gradedQuestion] = (gradedArtifact!.data as { questions: { exam_question_id: number }[] }).questions;
+    const [gradedSis, otherSis] =
+      graded.profile_id === alice.private_profile_id ? [aliceSis, bobSis] : [bobSis, aliceSis];
+    await expect(
+      page.getByRole("heading", { name: `Question ${gradedQuestion.exam_question_id}`, exact: true })
+    ).toBeVisible();
+    await expect(page.getByText("OCR text").first()).toBeVisible();
+    await expect(page.getByText(`sis-${gradedSis}`).first()).toBeVisible();
+    await expect(page.getByText(`sis-${otherSis}`)).toHaveCount(0);
+    await expect(page.getByText(/Error downloading artifact/)).toHaveCount(0);
+
     await page.getByRole("checkbox", { name: /Item 1/ }).check({ force: true });
     await page.getByLabel("Points for Item 1").fill("3");
     await page.getByRole("button", { name: "Add Check" }).click();
