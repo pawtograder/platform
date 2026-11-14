@@ -3150,6 +3150,12 @@ apps_refused "template: production refuses an untagged workspace image" \
   "coderBootstrap.workspaces.image's tag=\"\"" "${APPS_PROD[@]}" --set coderBootstrap.workspaces.image=registry.school.edu/ws
 apps_refused "template: arm64 workspaces need their own image" \
   "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64
+apps_refused "template: arm64 refuses our amd64 image at an explicit tag" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64 \
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:staging-latest
+apps_refused "template: arm64 refuses our amd64 image by digest" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64 \
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:1.2.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
 apps_has "template: arm64 renders with its own image" yes 'arch: "arm64"' \
   --set coderBootstrap.workspaces.arch=arm64 --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 \
   --show-only templates/coder-bootstrap.yaml
@@ -3239,6 +3245,11 @@ apps_refused "external auth: an overlay dropping the Secret from envFrom is refu
 apps_refused "external auth: another provider 0 in coder.coder.env is refused" \
   "coder.coder.env sets CODER_EXTERNAL_AUTH_0_ID" "${EA[@]}" \
   --set 'coder.coder.env[3].name=CODER_EXTERNAL_AUTH_0_ID' --set 'coder.coder.env[3].value=github'
+# first-owner runs its own coderd from pawtograder-coder-env, so it needs the provider's client id too
+# (staging crash-looped on "client_id must be provided" when only coderd's envFrom had it).
+apps_refused "external auth: a first-owner without the Secret is refused" \
+  "first-owner envFrom is missing pawtograder-coder-external-auth" "${EA[@]}" \
+  --set-json 'coder.coder.initContainers=[{"name":"first-owner","image":"ghcr.io/pawtograder/mirror/coder/coder:v2.37.3","command":["true"],"envFrom":[{"configMapRef":{"name":"pawtograder-coder-env"}},{"secretRef":{"name":"pawtograder-coder-db"}},{"secretRef":{"name":"pawtograder-coder-oidc","optional":true}}]}]'
 
 echo
 

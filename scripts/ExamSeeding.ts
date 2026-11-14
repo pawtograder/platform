@@ -22,6 +22,7 @@ import { addDays, addMinutes } from "date-fns";
 import { PDFDocument, PDFFont, StandardFonts } from "pdf-lib";
 import sharp from "sharp";
 
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { generateExamPdf, type ExamPdfDrawOp, type GeneratedQuestion } from "@/lib/exam/pdfGenerate";
 import { wordsInRegion, type NormRect, type WordBox } from "@/lib/exam/regionMath";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
@@ -1240,6 +1241,24 @@ export async function seedExams(people: ClassPeople, config: ExamConfig = {}): P
   const scenarios = EXAM_SCENARIOS.filter((s) => !wanted || wanted.has(s.key));
   const maxScanned = config.maxScannedStudents ?? 40;
   console.log(`\n📝 Creating ${scenarios.length} exams and quizzes...`);
+
+  // The `exams` flag defaults off, so without this a seeded class has no Exam (Scan & OCR) nav
+  // entry and its exam pages report the feature is not enabled: everything below is seeded and
+  // then unreachable. Set it here rather than at the call site so any caller of seedExams gets a
+  // class that can actually open what was seeded.
+  //
+  // The RPC directly, not TestingUtils' setCourseFeature: that helper also evicts the server's
+  // cached getCourse() row through an endpoint that needs a Next server running with
+  // E2E_ENABLE=true, which seeding does not otherwise require. The class is new here, so there is
+  // nothing cached to evict.
+  const { error: flagError } = await supabase.rpc("merge_class_feature_as_service_role", {
+    p_class_id: people.classId,
+    p_name: COURSE_FEATURES.EXAMS,
+    p_enabled: true
+  });
+  if (flagError) {
+    throw new Error(`enable the exams feature for class ${people.classId}: ${flagError.message}`);
+  }
 
   const summary: ExamSeedSummary = { assignments: [] };
   for (const scenario of scenarios) {

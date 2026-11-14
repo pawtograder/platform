@@ -27,6 +27,7 @@ export function CommitHistoryDialog({
         assignmentId={assignment.id}
         repositoryId={repository.data[0].id}
         repositoryFullName={repository.data[0].repository}
+        gitProvider={repository.data[0].git_provider}
         showTriggerAction={false}
       />
     )

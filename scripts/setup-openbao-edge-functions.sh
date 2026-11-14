@@ -27,6 +27,13 @@
 #                                        github-repo-webhook; lives here, not aws-chime,
 #                                        because it's GitHub-only and github-app is
 #                                        already mounted into edge functions.)
+#   apps/pawtograder/forgejo-webhook-<env>
+#                                        FORGEJO_WEBHOOK_SECRET
+#                                        (the secret on Forgejo's push webhooks, checked by
+#                                        forgejo-repo-webhook. FORGEJO_URL is not here: the
+#                                        chart sets it from forgejo.ingress.hosts. Not
+#                                        forgejo-<env>, which holds Forgejo's own admin and
+#                                        database passwords: scripts/setup-openbao-forgejo-coder.sh.)
 #   apps/pawtograder/coder-api-<env>     CODER_API_TOKEN
 #                                        (a Coder owner's API token for workspace-open, which
 #                                        creates students' Coder users and workspaces and reads
@@ -96,6 +103,7 @@ declare -A BUNDLE_KEYS=(
   [web]="GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET AZURE_OAUTH_CLIENT_ID AZURE_OAUTH_CLIENT_SECRET DISCORD_OAUTH_CLIENT_ID DISCORD_OAUTH_CLIENT_SECRET DISCORD_PUBLIC_KEY DISCORD_WEBHOOK_PUBLIC_KEY LTI_KEY_ENCRYPTION_SECRET LTI_TOOL_ISSUER LTI_STATE_SECRET LTI_CRON_SHARED_SECRET CACHE_INVALIDATION_SECRET AZURE_OPENAI_ENDPOINT OPENAI_MODEL"
   [llm]="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY AZURE_OPENAI_KEY"
   [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET EVENTBRIDGE_SECRET"
+  [forgejo-webhook]="FORGEJO_WEBHOOK_SECRET"
   [coder-api]="CODER_API_TOKEN"
   [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN"
   [discord]="DISCORD_APPLICATION_ID DISCORD_BOT_TOKEN"

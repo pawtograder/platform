@@ -243,6 +243,16 @@
 {{- if ne ($init.imagePullPolicy | default "IfNotPresent") $policy }}
 {{- fail (printf "coder.coder.initContainers first-owner imagePullPolicy must match coder.coder.image.pullPolicy (%s)" $policy) }}
 {{- end }}
+{{- $initRefs := list }}
+{{- range $init.envFrom }}{{ $initRefs = append $initRefs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
+{{- $initWant := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- if .Values.coder.oidc.enabled }}{{ $initWant = append $initWant (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- range $w := $initWant }}
+{{- if not (has $w $initRefs) }}
+{{- fail (printf "coder.coder.initContainers first-owner envFrom is missing %s; its coderd reads the same provider settings as coder.coder.envFrom and won't start without them" $w) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
 {{- $wsAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.coderBootstrap.workspaces) | fromYaml }}
@@ -281,8 +291,10 @@
 {{- fail (printf "coderBootstrap.workspaces.codeServerVersion=%q must be a code-server release such as 4.143.1 (no leading v), or empty to use the image's code-server" $csv) }}
 {{- end }}
 {{- $arch := .Values.coderBootstrap.workspaces.arch | default "amd64" | toString }}
-{{- if and (ne $arch "amd64") (not .Values.coderBootstrap.workspaces.image) }}
-{{- fail (printf "coderBootstrap.workspaces.arch=%s needs coderBootstrap.workspaces.image: release-images.yml builds ghcr.io/pawtograder/coder-workspace for linux/amd64 only, so set it to a build for %s" $arch $arch) }}
+{{- /* The resolved image without its digest and tag, so any tag of ours counts, the default and staging-latest included. */}}
+{{- $wsRepo := regexReplaceAll ":[^/:]*$" (regexReplaceAll "@.*$" (include "pawtograder.coderWorkspaceImage" .) "") "" }}
+{{- if and (ne $arch "amd64") (eq $wsRepo "ghcr.io/pawtograder/coder-workspace") }}
+{{- fail (printf "coderBootstrap.workspaces.arch=%s needs coderBootstrap.workspaces.image set to a build for %s: release-images.yml builds ghcr.io/pawtograder/coder-workspace for linux/amd64 only" $arch $arch) }}
 {{- end }}
 {{- end }}
 

@@ -8,7 +8,7 @@
 // subject. We never let a real, transferable email decide that: each Coder user gets
 // `<Pawtograder user id>@coder.pawtograder.invalid`, and Coder reads the email from the `coder_email`
 // claim, which the access token hook sets to the same address for the token's subject (migration
-// 20261109150000, chart CODER_OIDC_EMAIL_FIELD). Every later login is matched by subject. Before a
+// 20261113210100, chart CODER_OIDC_EMAIL_FIELD). Every later login is matched by subject. Before a
 // workspace is created or started we still read the bound subject back and require it to be the
 // caller's, and a user who hasn't signed in to Coder yet gets linkUrl, which signs them in first.
 

@@ -28,8 +28,8 @@ if [ -e "$DIR" ] || [ -L "$DIR" ]; then
   elif ! top="$(cd "$DIR" 2>/dev/null && pwd -P)" || [ "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" != "$top" ]; then
     fail "$DIR exists but isn't a git checkout. Nothing was changed; move it aside and restart the workspace."
   elif [ "$(normalize "$origin")" != "$(normalize "$URL")" ]; then
-    # The origin can hold a username and token, which the logs mustn't.
-    fail "$DIR's origin is '$(printf '%s\n' "$origin" | sed 's#^\([^:/]*://\)[^/]*@#\1#')', not $URL. Nothing was changed; move it aside and restart the workspace."
+    # The origin isn't printed: it can hold a username and token in forms no redaction catches (https::https://…).
+    fail "$DIR is a checkout of another repository, not $URL. Nothing was changed; move it aside and restart the workspace."
   else
     # Only a finished clone is renamed into place, so a checkout without a commit is an empty repository's.
     echo "$DIR is already a clone of $URL; keeping it."
