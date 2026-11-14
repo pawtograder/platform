@@ -10,7 +10,14 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpRequests,
+  useHelpQueues,
+  useHelpRequestStudents,
+  useHelpRequestEscalations
+} from "@/hooks/useOfficeHoursRealtime";
+import { latestEscalationNoteByRequest } from "@/lib/helpRequestEscalation";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -33,6 +40,11 @@ export default function HelpRequestList() {
   // Use individual hooks for additional data
   const helpQueues = useHelpQueues();
   const realtimeHelpRequestStudents = useHelpRequestStudents();
+  const helpRequestEscalations = useHelpRequestEscalations();
+  const latestEscalationNotes = useMemo(
+    () => latestEscalationNoteByRequest(helpRequestEscalations),
+    [helpRequestEscalations]
+  );
   const officeHoursLoading = false; // Individual hooks don't expose loading state
 
   // Create a mapping of help request ID to student profile IDs
@@ -90,7 +102,8 @@ export default function HelpRequestList() {
     return allHelpRequestsFromController;
   }, [allHelpRequestsFromController, searchTerm, requestStudentsMap, studentNameMap]);
 
-  // Enhanced requests with queue information and students
+  // Enhanced requests with queue information and students, oldest first. Escalation priority is
+  // applied only to the Working and Unassigned groups below; Resolved and Closed stay chronological.
   const enhancedRequests = useMemo(() => {
     return allHelpRequests
       .map((request): EnhancedHelpRequest => {
@@ -161,6 +174,7 @@ export default function HelpRequestList() {
             <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Working help requests">
               {enhancedRequests
                 .filter((r) => r.status === "in_progress" && r.assignee === private_profile_id)
+                .sort(compareHelpRequestQueueOrder)
                 .map((request) => (
                   <NextLink
                     href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
@@ -177,7 +191,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -194,6 +210,7 @@ export default function HelpRequestList() {
             <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Unassigned help requests">
               {enhancedRequests
                 .filter((r) => r.status === "open")
+                .sort(compareHelpRequestQueueOrder)
                 .map((request) => (
                   <NextLink
                     href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
@@ -210,7 +227,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -244,7 +263,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />
@@ -278,7 +299,9 @@ export default function HelpRequestList() {
                         students: request.students,
                         queue: request.queue,
                         isVideoLive: request.is_video_live,
-                        created_by: request.created_by ?? undefined
+                        created_by: request.created_by ?? undefined,
+                        escalationCount: request.escalation_count,
+                        escalationNote: latestEscalationNotes.get(request.id)
                       }}
                       selected={activeRequestID === request.id}
                     />

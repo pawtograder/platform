@@ -18,6 +18,7 @@ export default function QueueStatusPage() {
       <HelpRequestHistory
         requests={queueRequests}
         readOnly={false}
+        preserveOrder
         requestCollaborators={requestCollaborators}
         userRequestIds={userRequestIds}
       />

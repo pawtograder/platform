@@ -13,6 +13,7 @@ import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivate
 import {
   HELP_REQUEST_RESOLUTION_STATUSES,
   TERMINAL_HELP_REQUEST_STATUSES,
+  checkInExpiresAtForClose,
   parseStatusFilter,
   participantsNeedingActivity,
   resolvedAtForClose
@@ -263,7 +264,7 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   const { data: existing, error: fetchError } = await supabase
     .from("help_requests")
-    .select("id, class_id, status, is_video_live, resolved_at")
+    .select("id, class_id, status, is_video_live, resolved_at, check_in_expires_at")
     .eq("id", id)
     .maybeSingle();
 
@@ -308,10 +309,13 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   const resolvedBy = await getCallerPrivateProfileId(supabase, ctx.userId, existing.class_id);
 
+  const now = new Date();
   const update: Database["public"]["Tables"]["help_requests"]["Update"] = {
     status: targetStatus,
     resolved_by: resolvedBy,
-    resolved_at: resolvedAtForClose(wasAlreadyTerminal, existing.resolved_at, new Date().toISOString())
+    resolved_at: resolvedAtForClose(wasAlreadyTerminal, existing.resolved_at, now.toISOString()),
+    // Same rule as the office-hours Resolve / End ticket buttons (finish_help_request).
+    check_in_expires_at: checkInExpiresAtForClose(targetStatus, existing.status, now, existing.check_in_expires_at)
   };
   if (resolutionStatus) update.resolution_status = resolutionStatus;
   if (p.notes !== undefined) update.resolution_notes = p.notes ?? null;
@@ -331,6 +335,17 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
     closeQuery = closeQuery.eq("is_video_live", false);
   }
 
+  // A forced correction to a resolved ticket writes the observed check-in back. If the student
+  // answered it between the read and this write, the status predicate still matches (answering
+  // "fixed" leaves the ticket resolved), so without this the answered check-in would reappear.
+  const preservesCheckIn = targetStatus === "resolved" && existing.status === "resolved";
+  if (preservesCheckIn) {
+    closeQuery =
+      existing.check_in_expires_at === null
+        ? closeQuery.is("check_in_expires_at", null)
+        : closeQuery.eq("check_in_expires_at", existing.check_in_expires_at);
+  }
+
   const { data: updated, error: updateError } = await closeQuery
     .select(
       "id, class_id, help_queue, status, resolved_at, resolved_by, resolution_status, resolution_notes, is_video_live"
@@ -339,8 +354,8 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
 
   if (updateError) throw new CLICommandError(`Failed to close help request: ${updateError.message}`, 500);
   if (!updated) {
-    // Either the status moved or a call started; re-read so the message says
-    // which, rather than making the operator guess.
+    // The status moved, a call started, or the student answered the check-in;
+    // re-read so the message says which, rather than making the operator guess.
     const { data: current } = await supabase
       .from("help_requests")
       .select("status, is_video_live")
@@ -348,9 +363,11 @@ async function handleHelpRequestsClose(ctx: MCPAuthContext, params: Record<strin
       .maybeSingle();
 
     const reason =
-      current?.is_video_live === true
+      current?.is_video_live === true && p.force !== true
         ? "a video call is now live on it"
-        : `its status is now ${current?.status ?? "unknown"} (it was ${existing.status})`;
+        : current?.status !== existing.status
+          ? `its status is now ${current?.status ?? "unknown"} (it was ${existing.status})`
+          : "the student answered its check-in";
     throw new CLICommandError(
       `Help request ${id} changed while this command was running: ${reason}. Re-run to see its current state.`,
       409

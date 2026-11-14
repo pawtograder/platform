@@ -3,6 +3,7 @@ import { Box } from "@chakra-ui/react";
 import React from "react";
 
 import { BugReportIngestArm } from "@/components/bugReport/BugReportIngestArm";
+import { EscalationCheckInDialog } from "@/components/help-queue/escalation-check-in-dialog";
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { GlobalSearchProvider } from "@/components/ui/global-search";
@@ -104,6 +105,7 @@ const ProtectedLayout = async ({
                         {children}
                       </Box>
                       <FloatingHelpRequestWidget />
+                      <EscalationCheckInDialog />
                     </KeyboardShortcutsProvider>
                   </GlobalSearchProvider>
                 </HelpDrawerProvider>
