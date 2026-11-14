@@ -10,6 +10,7 @@ import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import { useCourseFeature } from "@/hooks/useCourseFeatures";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { createClient } from "@/utils/supabase/client";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
 
@@ -112,7 +113,24 @@ export default function RequestDetailPage() {
   }, [request, queueRequests]);
 
   const { private_profile_id } = useClassProfiles();
-  const isRequestMember = private_profile_id != null && memberProfileIds.includes(private_profile_id);
+  // Ask the database whether this student is on the request. The realtime membership list can lag behind
+  // a request that was just created, so it isn't reliable for this check. Students can read their own rows.
+  const [isRequestMember, setIsRequestMember] = useState(false);
+  useEffect(() => {
+    if (private_profile_id == null || !Number.isFinite(requestIdNum)) return;
+    let cancelled = false;
+    createClient()
+      .from("help_request_students")
+      .select("profile_id")
+      .eq("help_request_id", requestIdNum)
+      .eq("profile_id", private_profile_id)
+      .then(({ data }) => {
+        if (!cancelled) setIsRequestMember((data?.length ?? 0) > 0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [private_profile_id, requestIdNum]);
   const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
   const turnMessage = useTurnAlert({
     status: request?.status,
