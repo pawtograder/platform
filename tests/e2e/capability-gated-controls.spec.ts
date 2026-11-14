@@ -6,7 +6,9 @@
  *   manage_review_assignments. Without it those two pages send you back to the reviews page.
  * - Manage Groups: every change needs publish_groups; without it the page is read-only.
  *
- * Default roles only: the instructor role holds both capabilities, the grader role holds neither.
+ * Default roles only: the instructor role holds both capabilities, the grader role holds neither,
+ * until the last test gives the default grader role manage_review_assignments (instructors can edit
+ * it since 20261112120000_custom_roles_copy_grader_role.sql).
  */
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
@@ -193,5 +195,41 @@ test.describe("controls gated by capabilities", () => {
     await dialog.locator('input[name="name"]').fill(`e2egrp${Date.now().toString(36)}`);
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("button", { name: "Publish Changes" })).toBeEnabled();
+  });
+
+  // Runs last: it changes the default grader role, which every other test reads.
+  test("a grader sees the review-assignment actions once the default grader role has manage_review_assignments", async ({
+    page
+  }) => {
+    const { data: graderRole, error: roleError } = await supabase
+      .from("class_roles")
+      .select("id")
+      .eq("class_id", course.id)
+      .eq("default_for", "grader")
+      .single();
+    expect(roleError).toBeNull();
+    const { error: addError } = await supabase
+      .from("role_capabilities")
+      .insert({ role_id: graderRole!.id, capability: "manage_review_assignments" });
+    expect(addError).toBeNull();
+
+    try {
+      await loginAsUser(page, grader, course);
+      await openReviewsTable(page);
+      for (const name of REVIEW_LINKS) {
+        await expect(page.getByRole("link", { name }), name).toBeVisible();
+      }
+      for (const name of REVIEW_ACTIONS) {
+        await expect(page.getByRole("button", { name }), name).toBeVisible();
+      }
+      await expect(page.getByRole("button", { name: "Delete review assignment" }).first()).toBeVisible();
+    } finally {
+      const { error } = await supabase
+        .from("role_capabilities")
+        .delete()
+        .eq("role_id", graderRole!.id)
+        .eq("capability", "manage_review_assignments");
+      expect(error).toBeNull();
+    }
   });
 });
