@@ -14,9 +14,10 @@ import DownloadLink from "@/components/ui/download-link";
 import { GroupMemberSelectOption } from "@/components/ui/group-member-select-option";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
-import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
+import MarkdownFilePreview from "@/components/ui/markdown-file-preview";
 import BinaryFilePreview from "@/components/ui/binary-file-preview";
 import ExamSubmissionRenderer from "@/components/ui/exam-submission-renderer";
+import { isMarkdownFile, pickDefaultView } from "@/lib/submissionFiles";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -1521,19 +1522,8 @@ export default function FilesView() {
       ? selectedArtifactId
       : null;
 
-  // Default to a source-code file rather than whatever happens to be first: the embedded
-  // submission_files arrive in an unspecified order, and opening a markdown file shows its rendered
-  // *preview* (no code lines) — graders want to land on code. Pick deterministically by name so the
-  // default is stable across loads, preferring code over markdown/binary, falling back to the
-  // name-first file when there is no code file.
-  const filesByName = useMemo(
-    () => [...submissionFiles].sort((a: SubmissionFile, b: SubmissionFile) => a.name.localeCompare(b.name)),
-    [submissionFiles]
-  );
-  const defaultFileId =
-    (filesByName.find((file: SubmissionFile) => !file.is_binary && !isMarkdownFile(file.name)) ?? filesByName[0])?.id ??
-    null;
-  const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
+  // With nothing in the URL: a paper exam's crops, else a code file, else the first artifact.
+  const defaultView = pickDefaultView(submissionFiles, submissionArtifacts);
   // Prefer file when both file_id and artifact_id are valid in the URL — checking
   // artifact first would null out the file and then artifact suppression would null both.
   const effectiveFileId =
@@ -1541,17 +1531,13 @@ export default function FilesView() {
       ? normalizedSelectedFileId
       : normalizedSelectedArtifactId !== null
         ? null
-        : defaultFileId !== null
-          ? defaultFileId
-          : null;
+        : defaultView.fileId;
   const effectiveArtifactId =
     normalizedSelectedFileId !== null
       ? null
       : normalizedSelectedArtifactId !== null
         ? normalizedSelectedArtifactId
-        : defaultFileId === null && defaultArtifactId !== null
-          ? defaultArtifactId
-          : null;
+        : defaultView.artifactId;
 
   const curFileIndex = submissionFiles.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1));
   const selectedFile =
