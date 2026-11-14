@@ -27,6 +27,8 @@ type RepositoryCommitHistoryDialogProps = {
   assignmentId: number;
   repositoryId?: number;
   repositoryFullName: string;
+  /** `repositories.git_provider`. The live commit list is GitHub's, so a Forgejo repository shows only recorded commits. */
+  gitProvider?: string;
   studentOrGroupLabel?: string;
   showTriggerAction?: boolean;
   trigger?: ReactNode;
@@ -96,6 +98,7 @@ export function RepositoryCommitHistoryDialog({
   assignmentId,
   repositoryId,
   repositoryFullName,
+  gitProvider,
   studentOrGroupLabel,
   showTriggerAction = false,
   trigger
@@ -177,8 +180,11 @@ export function RepositoryCommitHistoryDialog({
     setGithubPage(0);
     setHasMoreGitHubCommits(false);
     setGithubCommitError(null);
+    if (gitProvider === "forgejo") {
+      return;
+    }
     void loadGitHubCommits(1);
-  }, [open, loadGitHubCommits]);
+  }, [open, loadGitHubCommits, gitProvider]);
 
   const entries = useMemo(
     () =>
@@ -276,9 +282,13 @@ export function RepositoryCommitHistoryDialog({
                   {entries.map((entry) => (
                     <Table.Row key={entry.sha}>
                       <Table.Cell>
-                        <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                        {entry.htmlUrl || gitProvider !== "forgejo" ? (
+                          <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                            <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
+                          </Link>
+                        ) : (
                           <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
-                        </Link>
+                        )}
                       </Table.Cell>
                       <Table.Cell>
                         {entry.commitDate ? (

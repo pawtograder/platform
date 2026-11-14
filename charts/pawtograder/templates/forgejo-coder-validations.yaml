@@ -34,6 +34,12 @@
 {{- end }}
 {{- end }}
 
+{{- if and .Values.auth.oauthServer.autoApproveFirstParty (not .Values.auth.oauthServer.enabled) }}
+{{- fail "auth.oauthServer.autoApproveFirstParty needs auth.oauthServer.enabled=true" }}
+{{- end }}
+{{- if and .Values.auth.oauthServer.autoApproveFirstParty .Values.auth.oauthServer.allowDynamicRegistration }}
+{{- fail "auth.oauthServer.autoApproveFirstParty can't be on with allowDynamicRegistration: anyone could register a client on Forgejo's or Coder's callback and skip the consent page" }}
+{{- end }}
 {{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
 {{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
 {{- end }}
@@ -236,6 +242,16 @@
 {{- $policy := $img.pullPolicy | default "IfNotPresent" }}
 {{- if ne ($init.imagePullPolicy | default "IfNotPresent") $policy }}
 {{- fail (printf "coder.coder.initContainers first-owner imagePullPolicy must match coder.coder.image.pullPolicy (%s)" $policy) }}
+{{- end }}
+{{- $initRefs := list }}
+{{- range $init.envFrom }}{{ $initRefs = append $initRefs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
+{{- $initWant := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
+{{- if .Values.coder.oidc.enabled }}{{ $initWant = append $initWant (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- range $w := $initWant }}
+{{- if not (has $w $initRefs) }}
+{{- fail (printf "coder.coder.initContainers first-owner envFrom is missing %s; its coderd reads the same provider settings as coder.coder.envFrom and won't start without them" $w) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}

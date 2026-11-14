@@ -13,6 +13,9 @@ import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useTags from "@/hooks/useTags";
 import { createClient } from "@/utils/supabase/client";
+import { type ForgejoLogins, useForgejoLogins } from "@/hooks/useForgejoLogins";
+import { COURSE_FEATURES, courseFeatureEffectiveEnabled } from "@/lib/courseFeatures";
+import type { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -67,6 +70,7 @@ import StudentSummaryTrigger from "@/components/ui/student-summary";
 import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
+import { selectionKey, setRowChecked } from "./rosterSelection";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -151,6 +155,13 @@ function discordStatusLabel(
  * Provides filtering, pagination, bulk tag add/remove, and per-user actions
  * including editing profile, editing role, and removing users from the course.
  */
+function forgejoUsernameLabel(row: EnrollmentTableRow, logins: ForgejoLogins): string {
+  if (row.type === "invitation") return "N/A";
+  if (logins.error) return "Unavailable";
+  if (logins.loading) return "Loading…";
+  return logins.byUserId.get(row.user_id) ?? "Not created yet";
+}
+
 export default function EnrollmentsTable() {
   const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
@@ -160,6 +171,12 @@ export default function EnrollmentsTable() {
   const classSections = useClassSections();
   const course = useCourse();
   const discordServerConfigured = !!course?.discord_server_id;
+  const cloudWorkspacesEnabled = courseFeatureEffectiveEnabled(
+    (course as CourseWithFeatures | undefined)?.features,
+    COURSE_FEATURES.CLOUD_WORKSPACES,
+    false
+  );
+  const forgejoLogins = useForgejoLogins(cloudWorkspacesEnabled);
   const {
     byUserId: discordStateByUser,
     loading: discordStatusLoadingRaw,
@@ -252,11 +269,7 @@ export default function EnrollmentsTable() {
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
 
   const handleSingleCheckboxChange = useCallback((row: EnrollmentTableRow, checked: boolean) => {
-    if (checked === true) {
-      checkedBoxesRef.current.add(row);
-    } else {
-      checkedBoxesRef.current.delete(row);
-    }
+    setRowChecked(checkedBoxesRef.current, row, checked);
     setCheckedBoxes(new Set(checkedBoxesRef.current));
   }, []);
 
@@ -344,14 +357,8 @@ export default function EnrollmentsTable() {
         id: "checkbox",
         header: "",
         cell: ({ row }) => {
-          const isChecked =
-            Array.from(checkedBoxesRef.current).find((box) => {
-              if (row.original.type === "invitation") {
-                return box.type === "invitation" && box.id === row.original.id;
-              } else {
-                return box.type === "enrollment" && box.private_profile_id === row.original.private_profile_id;
-              }
-            }) !== undefined;
+          const key = selectionKey(row.original);
+          const isChecked = Array.from(checkedBoxesRef.current).some((box) => selectionKey(box) === key);
 
           return (
             <Checkbox.Root
@@ -647,6 +654,16 @@ export default function EnrollmentsTable() {
           return values.includes(username);
         }
       },
+      // Only for cloud-workspaces classes, where Pawtograder creates each person's Forgejo account.
+      ...(cloudWorkspacesEnabled
+        ? [
+            {
+              id: "forgejo_username",
+              header: "Forgejo Username",
+              accessorFn: (row: EnrollmentTableRow) => forgejoUsernameLabel(row, forgejoLogins)
+            }
+          ]
+        : []),
       {
         id: "github_org_confirmed",
         header: "GitHub Org Status",
@@ -1012,7 +1029,9 @@ export default function EnrollmentsTable() {
       setSisSyncOptOut,
       discordServerConfigured,
       discordStateByUser,
-      discordStatusUnknown
+      discordStatusUnknown,
+      cloudWorkspacesEnabled,
+      forgejoLogins
     ]
   );
 
@@ -1047,9 +1066,19 @@ export default function EnrollmentsTable() {
     // definitions, so when the membership RPC resolves (or refresh() replaces the map) the Discord
     // Status filter kept selecting rows with the previous map: a student could render "In server"
     // while still listed under a "Cannot invite" filter until some unrelated table state changed.
-    // Returning a new array identity is what invalidates that model.
+    // Returning a new array identity is what invalidates that model. The Forgejo lookup is here for
+    // the same reason: rows cache the Forgejo Username accessor, so a lookup that resolves after the
+    // first render would otherwise leave "Loading…" on them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userRolesData, invitations, discordStateByUser, discordStatusUnknown]);
+  }, [
+    userRolesData,
+    invitations,
+    discordStateByUser,
+    discordStatusUnknown,
+    forgejoLogins.byUserId,
+    forgejoLogins.loading,
+    forgejoLogins.error
+  ]);
 
   // Create local table using react-table
   const table = useReactTable({
@@ -1114,6 +1143,7 @@ export default function EnrollmentsTable() {
       "Class Section",
       "Lab Section",
       "GitHub Username",
+      ...(cloudWorkspacesEnabled ? ["Forgejo Username"] : []),
       "GitHub Org Status",
       ...(discordServerConfigured ? ["Discord Status"] : []),
       "SIS User ID",
@@ -1223,6 +1253,7 @@ export default function EnrollmentsTable() {
         classSection,
         labSection,
         githubUsername,
+        ...(cloudWorkspacesEnabled ? [forgejoUsernameLabel(original, forgejoLogins)] : []),
         githubOrgStatus,
         ...(discordServerConfigured ? [discordStatus] : []),
         sisUserId,
@@ -1256,7 +1287,9 @@ export default function EnrollmentsTable() {
     course_id,
     discordServerConfigured,
     discordStateByUser,
-    discordStatusUnknown
+    discordStatusUnknown,
+    cloudWorkspacesEnabled,
+    forgejoLogins
   ]);
 
   return (
@@ -1305,7 +1338,7 @@ export default function EnrollmentsTable() {
                                       getRowModel()
                                         .rows.map((row) => row.original)
                                         .forEach((row) => {
-                                          checkedBoxesRef.current.add(row);
+                                          setRowChecked(checkedBoxesRef.current, row, true);
                                         });
                                       setCheckedBoxes(new Set(checkedBoxesRef.current));
                                     } else {
@@ -1596,7 +1629,7 @@ export default function EnrollmentsTable() {
               getRowModel()
                 .rows.map((row) => row.original)
                 .forEach((row) => {
-                  checkedBoxesRef.current.add(row);
+                  setRowChecked(checkedBoxesRef.current, row, true);
                 });
               setCheckedBoxes(new Set(checkedBoxesRef.current));
             }}
