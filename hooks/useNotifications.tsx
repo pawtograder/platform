@@ -1,9 +1,12 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { useUpdate, useDelete } from "@refinedev/core";
+import { useUpdate, useDelete, useDataProvider, useInvalidate } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
+import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
+import { isMissingRowError, isRefusedWriteError } from "@/lib/refineDataProvider";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -36,6 +39,8 @@ export function useNotifications(resource?: string, id?: number) {
     resource: "notifications"
   });
   const { mutateAsync: delete_notification } = useDelete<Notification>();
+  const dataProvider = useDataProvider();
+  const invalidate = useInvalidate();
 
   // Always declare state hooks at the top level
   const [resourceNotifications, setResourceNotifications] = useState<Notification[]>([]);
@@ -48,6 +53,7 @@ export function useNotifications(resource?: string, id?: number) {
   const set_read = useCallback(
     async (notification: Notification, read: boolean) => {
       if (isReadOnly) return;
+      const previousViewedAt = notification.viewed_at;
       notification.viewed_at = read ? new Date().toISOString() : null;
       try {
         await update_notification({
@@ -57,13 +63,29 @@ export function useNotifications(resource?: string, id?: number) {
           }
         });
       } catch (error) {
+        // Put the old value back so the inbox doesn't show a read state the server refused.
+        notification.viewed_at = previousViewedAt;
         // eslint-disable-next-line no-console
         console.error("error setting notification read", error);
+        // Fixed id: mark_all_read and scroll-to-read can fail many at once; show one toast.
+        toaster.error({
+          id: "notification-set-read-error",
+          title: "Failed to update notification",
+          description: getErrorMessage(error)
+        });
       }
     },
     [update_notification, isReadOnly]
   );
 
+  // Removes the notification from the local store right away, then deletes it. Never rejects:
+  // a notification that is already gone (another tab, a double click) resolves in the data
+  // provider, and failures are handled here, so callers (including fire-and-forget onClick
+  // handlers) don't need their own catch.
+  //
+  // Only put the notification back when the server says it still exists. A failed request can
+  // still have deleted the row (the response was lost), and a refetch never removes a row that
+  // was put back locally, so restoring on every failure could show a deleted notification (#1249).
   const dismiss = useCallback(
     async (notification: Notification) => {
       if (isReadOnly) return;
@@ -75,9 +97,50 @@ export function useNotifications(resource?: string, id?: number) {
         channel: "resources/notifications",
         date: new Date()
       });
-      await delete_notification({ id: notification.id, resource: "notifications" });
+      const restore = (error: unknown) => {
+        controller.handleGenericDataEvent("notifications", {
+          type: "created",
+          payload: notification,
+          channel: "resources/notifications",
+          date: new Date()
+        });
+        toaster.error({
+          title: "Failed to dismiss notification",
+          description: getErrorMessage(error)
+        });
+      };
+      try {
+        await delete_notification({ id: notification.id, resource: "notifications" });
+      } catch (error) {
+        // The provider saw the row after the delete matched nothing: the delete was refused.
+        if (isRefusedWriteError(error)) {
+          restore(error);
+          return;
+        }
+        let stillExists: boolean | undefined;
+        try {
+          await dataProvider().getOne({ resource: "notifications", id: notification.id, meta: { select: "id" } });
+          stillExists = true;
+        } catch (checkError) {
+          // Not visible: deleted, or hidden by RLS. Notifications are only readable by their
+          // owner, so a row this session can't see would not be in its inbox either.
+          stillExists = isMissingRowError(checkError) ? false : undefined;
+        }
+        if (stillExists === true) {
+          restore(error);
+        } else if (stillExists === undefined) {
+          // Couldn't tell. Leave it removed and refetch the list: a row that still exists comes
+          // back with the next successful fetch (React Query retries an invalidated query on
+          // reconnect), and a deleted one stays gone.
+          void invalidate({ resource: "notifications", invalidates: ["list"] });
+          toaster.error({
+            title: "Couldn't confirm the notification was dismissed",
+            description: `If it wasn't, it will come back when your notifications reload. ${getErrorMessage(error)}`
+          });
+        }
+      }
     },
-    [delete_notification, controller, isReadOnly]
+    [delete_notification, dataProvider, invalidate, controller, isReadOnly]
   );
 
   const mark_all_read = useCallback(

@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Type guard to check if a unit is a mutation test unit
@@ -215,7 +216,16 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
-  const { data: regressionTestRepos, isLoading: regressionTestReposLoading } = useList<AutograderRegressionTest>({
+  // `isError` is true while the latest load of this list failed, including a failed refetch that
+  // kept the old rows. Save is off then: there is no unique constraint on (autograder_id,
+  // repository), so a Save computed from an out-of-date list can insert the same row twice (#1248).
+  const {
+    data: regressionTestRepos,
+    isLoading: regressionTestReposLoading,
+    isError: regressionTestReposStale,
+    isFetching: regressionTestReposFetching,
+    refetch: refetchRegressionTestRepos
+  } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
     meta: { select: "*" },
     pagination: { pageSize: 1000 },
@@ -283,30 +293,56 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     // We should really get rid of refine.dev!!
   }, [graderRepo, assignment, course_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // refetch() resolves even when the request fails (React Query keeps the old rows and sets isError),
+  // so check the result instead of awaiting it and assuming the list is current.
+  const reloadRegressionTestRepos = useCallback(async () => {
+    const result = await refetchRegressionTestRepos();
+    if (result.isError) {
+      toaster.error({
+        id: "regression-test-list-reload-error",
+        title: "Couldn't reload the regression test list",
+        description: getErrorMessage(result.error)
+      });
+    }
+  }, [refetchRegressionTestRepos]);
+
   const saveRegressionTests = useCallback(async () => {
+    if (regressionTestReposStale) return;
     setSaveLoading(true);
     const additions = selectedRepos.filter((r) => !regressionTestRepos?.data.some((rt) => rt.repository === r));
     const deletions = regressionTestRepos?.data
       .filter((rt) => !selectedRepos.includes(rt.repository))
       .map((rt) => rt.id);
-    async function saveAdditions() {
-      return Promise.all(
-        additions.map(async (repo) => {
-          await createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } });
-        })
-      );
+    // Wait for every write to settle before re-enabling Save. With Promise.all, the first failure
+    // re-enabled it while other inserts were still in flight, and a retry could insert the same
+    // regression-test row twice.
+    const results = await Promise.allSettled([
+      ...additions.map((repo) =>
+        createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } })
+      ),
+      ...(deletions ?? []).map((id) => deleteRegressionTest({ resource: "autograder_regression_test", id: id }))
+    ]);
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      toaster.error({
+        title:
+          failures.length === 1
+            ? "Failed to save a regression test change"
+            : `Failed to save ${failures.length} regression test changes`,
+        description: getErrorMessage(failures[0].reason)
+      });
     }
-    async function saveDeletions() {
-      if (deletions)
-        return Promise.all(
-          deletions.map(async (id) => {
-            await deleteRegressionTest({ resource: "autograder_regression_test", id: id });
-          })
-        );
-    }
-    await Promise.all([saveAdditions(), saveDeletions()]);
+    await reloadRegressionTestRepos();
     setSaveLoading(false);
-  }, [selectedRepos, regressionTestRepos, assignment_id, createRegressionTest, deleteRegressionTest]);
+  }, [
+    regressionTestReposStale,
+    selectedRepos,
+    regressionTestRepos,
+    assignment_id,
+    createRegressionTest,
+    deleteRegressionTest,
+    reloadRegressionTestRepos
+  ]);
   const toggleRepo = useCallback(
     (repo: string) => {
       setSelectedRepos((oldRepos) => {
@@ -410,8 +446,16 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
           ))}
         </Table.Body>
       </Table.Root>
+      {regressionTestReposStale && (
+        <Alert status="warning" title="The regression test list didn't load">
+          Save is off until it loads, so a save can&apos;t add the same repository twice.{" "}
+          <Button size="xs" variant="outline" loading={regressionTestReposFetching} onClick={reloadRegressionTestRepos}>
+            Reload list
+          </Button>
+        </Alert>
+      )}
       <Button
-        disabled={saveLoading}
+        disabled={saveLoading || regressionTestReposStale}
         colorPalette="green"
         variant="surface"
         loading={saveLoading}
