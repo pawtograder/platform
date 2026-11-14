@@ -1,5 +1,7 @@
 "use client";
 
+import { ExamFeatureGate } from "../ExamFeatureGate";
+
 import { toaster } from "@/components/ui/toaster";
 import { uploadExamTemplate } from "@/lib/exam/examClient";
 import { createClient } from "@/utils/supabase/client";
@@ -8,7 +10,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RegionEditor from "../RegionEditor";
 
-export default function ExamTemplatePage() {
+function ExamTemplatePageContent() {
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -76,10 +78,23 @@ export default function ExamTemplatePage() {
       </Box>
 
       {examId ? (
-        <RegionEditor key={`${examId}-${templateRevision}`} examId={examId} gradingRubricId={gradingRubricId} />
+        <RegionEditor
+          key={`${examId}-${templateRevision}`}
+          examId={examId}
+          assignmentId={assignmentId}
+          gradingRubricId={gradingRubricId}
+        />
       ) : (
         <Text color="fg.muted">Upload a template PDF to start labeling regions.</Text>
       )}
     </VStack>
+  );
+}
+
+export default function ExamTemplatePage() {
+  return (
+    <ExamFeatureGate>
+      <ExamTemplatePageContent />
+    </ExamFeatureGate>
   );
 }

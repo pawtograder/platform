@@ -101,7 +101,7 @@ secret_value() {
 }
 old_ids() {
   echo "$existing" | jq -r --arg n "$1" --arg r "$2" --arg cur "$3" \
-    '(if type == "array" then . else .clients end)[] | select((.client_name == $n and ((.redirect_uris // []) | index($r))) or (.client_id == $cur and $cur != "")) | .client_id'
+    '(if type == "array" then . else (.clients // []) end)[] | select((.client_name == $n and ((.redirect_uris // []) | index($r))) or (.client_id == $cur and $cur != "")) | .client_id'
 }
 create_client() {
   gotrue -X POST "$auth/admin/oauth/clients" \
