@@ -286,9 +286,11 @@ test.describe("Exam grading OCR pipeline", () => {
     const [gradedQuestion] = (gradedArtifact!.data as { questions: { exam_question_id: number }[] }).questions;
     const [gradedSis, otherSis] =
       graded.profile_id === alice.private_profile_id ? [aliceSis, bobSis] : [bobSis, aliceSis];
-    await expect(
-      page.getByRole("heading", { name: `Question ${gradedQuestion.exam_question_id}`, exact: true })
-    ).toBeVisible();
+    const questionCard = page.getByRole("heading", {
+      name: `Question ${gradedQuestion.exam_question_id}`,
+      exact: true
+    });
+    await expect(questionCard).toBeVisible();
     await expect(page.getByText("OCR text").first()).toBeVisible();
     await expect(page.getByText(`sis-${gradedSis}`).first()).toBeVisible();
     await expect(page.getByText(`sis-${otherSis}`)).toHaveCount(0);
@@ -311,6 +313,11 @@ test.describe("Exam grading OCR pipeline", () => {
       )
       .toBe(3);
     await expect(page.getByText("Q1 3/5")).toBeVisible();
+    // Checked again after the grading round trip: the renderer mounts before ArtifactView's own
+    // signing request settles, so the checks above could run before a failed signing replaced the
+    // view. By now that request has long since settled.
+    await expect(questionCard).toBeVisible();
+    await expect(page.getByText(/Error downloading artifact/)).toHaveCount(0);
 
     // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
     const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
