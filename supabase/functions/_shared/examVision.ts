@@ -57,6 +57,28 @@ export class ProviderRateLimitError extends Error {
   }
 }
 
+export type TransientFailureCategory = "server_error" | "timeout" | "aborted" | "network";
+
+/**
+ * Thrown when a provider request failed in transit or with a 5xx: the request may succeed if
+ * retried, so callers must not treat it as an unusable answer. The worker's dispatcher retries it
+ * on its normal backoff.
+ *
+ * The message is deliberately bounded to provider, category and status. It is persisted to the
+ * batch error and DLQ and sent to Sentry, so it must not carry response bodies or transport
+ * error text, either of which can reflect request material such as the API key.
+ */
+export class ProviderTransientError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly category: TransientFailureCategory,
+    readonly status?: number
+  ) {
+    super(`${provider} request failed: category=${category}${status === undefined ? "" : ` status=${status}`}`);
+    this.name = "ProviderTransientError";
+  }
+}
+
 /** Text of the words whose center falls inside `region` (reading order: top-to-bottom, left-to-right). */
 export function wordsInRegion(words: WordBox[], region: NormRect): string {
   const inside = words.filter((w) => {
@@ -259,15 +281,17 @@ class GeminiVision {
   constructor(
     private apiKey: string,
     private model: string,
-    rpm: number
+    rpm: number,
+    private baseUrl: string
   ) {
     this.limiter = new RateLimiter(rpmToInterval(rpm));
   }
   private async generate(parts: unknown[]): Promise<string> {
     await this.limiter.wait();
     // Key in a header rather than the query string; see GoogleVisionOcr.ocrImage.
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
-    const res = await fetch(url, {
+    // Build the request before sending it, so a malformed URL, header or body throws here as the
+    // programming error it is, and only a failure of the request itself reaches the catch below.
+    const request = new Request(`${this.baseUrl}/v1beta/models/${this.model}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify({
@@ -275,11 +299,39 @@ class GeminiVision {
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
       }),
       // Bound the call so a stalled connection can't hang the worker indefinitely.
-      signal: AbortSignal.timeout(60000)
+      signal: AbortSignal.timeout(60000),
+      // fetch would otherwise follow a redirect and resend x-goog-api-key to wherever it points.
+      // A redirect rejects as a TypeError, classified below like any other failed request.
+      redirect: "error"
     });
+    let res: Response;
+    let body: string;
+    try {
+      res = await fetch(request);
+      // Read the body here too: a connection that resets, or a timeout that fires, after the
+      // headers arrive surfaces from the body read rather than from fetch.
+      body = await res.text();
+    } catch (err) {
+      // The request rejects with a TypeError when the connection fails or is reset, and with a
+      // TimeoutError/AbortError when the signal above fires. Those are worth retrying, unlike an
+      // unusable answer, so they must not reach structureAnswer's caller as a plain Error. Only
+      // the category is kept: transport error text embeds the URL and can echo request material.
+      if (err instanceof TypeError) throw new ProviderTransientError("gemini", "network");
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        throw new ProviderTransientError("gemini", "timeout");
+      }
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ProviderTransientError("gemini", "aborted");
+      }
+      throw err;
+    }
     if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
-    if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${await res.text()}`);
-    const json = await res.json();
+    // No body in either error: an error page can reflect request material, and both messages reach
+    // the batch error, the DLQ and Sentry (see ProviderTransientError). A 4xx stays a plain Error.
+    if (res.status >= 500) throw new ProviderTransientError("gemini", "server_error", res.status);
+    if (!res.ok) throw new Error(`Gemini failed: ${res.status}`);
+    // Outside the catch: a body that is not JSON stays a SyntaxError, as before.
+    const json = JSON.parse(body);
     return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
   }
   private imagePart(page: PageImage) {
@@ -418,6 +470,41 @@ function buildExamVisionProvider(): ExamVisionProvider {
   const geminiRpm = parseInt(Deno.env.get("EXAM_GEMINI_RPM") ?? "60", 10);
   return new CompositeExamVisionProvider(
     new GoogleVisionOcr(ocrKey, ocrRpm),
-    new GeminiVision(geminiKey, model, geminiRpm)
+    new GeminiVision(geminiKey, model, geminiRpm, geminiBaseUrl(Deno.env.get("EXAM_GEMINI_BASE_URL")))
   );
+}
+
+// Hosts EXAM_GEMINI_BASE_URL may name. The override exists only to point the real adapter at a
+// local fault-injecting stand-in (tests/e2e/exam-provider-faults.spec.ts), and every request
+// carries GOOGLE_API_KEY, so it must not be configurable to any other destination.
+// host.docker.internal is here because the edge runtime runs in a container, where loopback is
+// the container itself, not the machine running the stand-in. This bounds what the variable can
+// name; where these names resolve is still up to the host's resolver and Docker configuration.
+const GEMINI_TEST_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "host.docker.internal"]);
+
+function geminiBaseUrl(raw: string | undefined): string {
+  // An empty value (e.g. `EXAM_GEMINI_BASE_URL=` in an env file) means unset, not a relative URL.
+  const value = raw?.trim();
+  if (!value) return "https://generativelanguage.googleapis.com";
+  let url: URL | null = null;
+  try {
+    url = new URL(value);
+  } catch {
+    // Reported below with every other rejection.
+  }
+  // Checked on the parsed URL, not the string, and the request is built from url.origin, so the
+  // host checked is the host requested. A bare origin only: a path, query, fragment or userinfo
+  // has no use here. The value is not echoed, since this message reaches the batch error.
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !GEMINI_TEST_HOSTS.has(url.hostname) ||
+    url.href !== `${url.origin}/`
+  ) {
+    throw new Error(
+      "EXAM_GEMINI_BASE_URL may only point at a local test server: an http(s) origin on localhost, " +
+        "127.0.0.1, [::1] or host.docker.internal, with no path. Leave it unset to use Gemini."
+    );
+  }
+  return url.origin;
 }
