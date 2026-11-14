@@ -162,7 +162,10 @@ BEGIN
   LEFT JOIN public.git_accounts ga ON ga.user_id = ur.user_id AND ga.provider = 'forgejo'
     AND ga.instance_url = p_instance_url AND ga.login IS NOT NULL
   WHERE m.assignment_group_id = p_assignment_group_id;
-  UPDATE public.repositories SET is_github_ready = v_ready
+  -- No grants is the pass claiming the name before any Forgejo call: it inserts the row if it's missing
+  -- and leaves an existing row's readiness alone, which an overlapping pass may have just set.
+  UPDATE public.repositories r
+  SET is_github_ready = CASE WHEN cardinality(p_granted) = 0 THEN r.is_github_ready ELSE v_ready END
   WHERE git_provider = 'forgejo' AND repository = p_repository AND assignment_group_id = p_assignment_group_id;
   IF NOT FOUND THEN
     INSERT INTO public.repositories
