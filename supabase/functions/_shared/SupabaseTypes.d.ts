@@ -4196,6 +4196,47 @@ export type Database = {
           }
         ];
       };
+      git_accounts: {
+        Row: {
+          claimed_at: string;
+          created_at: string;
+          id: number;
+          instance_url: string;
+          login: Pii<"handle", string> | null;
+          provider: string;
+          remote_user_id: Pii<"handle", number> | null;
+          user_id: string;
+        };
+        Insert: {
+          claimed_at?: string;
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          login?: string | null;
+          provider: string;
+          remote_user_id?: number | null;
+          user_id: string;
+        };
+        Update: {
+          claimed_at?: string;
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          login?: string | null;
+          provider?: string;
+          remote_user_id?: number | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       github_async_errors: {
         Row: {
           created_at: string;
@@ -4370,6 +4411,41 @@ export type Database = {
         };
         Relationships: [];
       };
+      gradebook_column_groups: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          gradebook_id: number;
+          id: number;
+          name: string;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          gradebook_id: number;
+          id?: number;
+          name: string;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          gradebook_id?: number;
+          id?: number;
+          name?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "gradebook_column_groups_gradebook_class_fkey";
+            columns: ["gradebook_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebooks";
+            referencedColumns: ["id", "class_id"];
+          }
+        ];
+      };
       gradebook_column_students: {
         Row: {
           class_id: number;
@@ -4482,12 +4558,14 @@ export type Database = {
       };
       gradebook_columns: {
         Row: {
+          attempt_number: number | null;
           class_id: number;
           created_at: string;
           dependencies: Json | null;
           description: string | null;
           external_data: Pii<"free_text", Json> | null;
           gradebook_id: number;
+          group_id: number | null;
           id: number;
           instructor_only: boolean;
           max_score: number | null;
@@ -4499,15 +4577,18 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          topic_id: number | null;
           updated_at: string;
         };
         Insert: {
+          attempt_number?: number | null;
           class_id: number;
           created_at?: string;
           dependencies?: Json | null;
           description?: string | null;
           external_data?: Json | null;
           gradebook_id: number;
+          group_id?: number | null;
           id?: number;
           instructor_only?: boolean;
           max_score?: number | null;
@@ -4519,15 +4600,18 @@ export type Database = {
           show_max_score?: boolean;
           slug: string;
           sort_order?: number | null;
+          topic_id?: number | null;
           updated_at?: string;
         };
         Update: {
+          attempt_number?: number | null;
           class_id?: number;
           created_at?: string;
           dependencies?: Json | null;
           description?: string | null;
           external_data?: Json | null;
           gradebook_id?: number;
+          group_id?: number | null;
           id?: number;
           instructor_only?: boolean;
           max_score?: number | null;
@@ -4539,6 +4623,7 @@ export type Database = {
           show_max_score?: boolean;
           slug?: string;
           sort_order?: number | null;
+          topic_id?: number | null;
           updated_at?: string;
         };
         Relationships: [
@@ -4555,6 +4640,20 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "gradebooks";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "gradebook_columns_group_fkey";
+            columns: ["group_id", "gradebook_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_column_groups";
+            referencedColumns: ["id", "gradebook_id"];
+          },
+          {
+            foreignKeyName: "gradebook_columns_topic_fkey";
+            columns: ["topic_id", "gradebook_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_topics";
+            referencedColumns: ["id", "gradebook_id"];
           }
         ];
       };
@@ -4590,6 +4689,54 @@ export type Database = {
           version?: number;
         };
         Relationships: [];
+      };
+      gradebook_topics: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          gradebook_id: number;
+          id: number;
+          name: string;
+          standing_column_id: number | null;
+          standing_rule: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          gradebook_id: number;
+          id?: number;
+          name: string;
+          standing_column_id?: number | null;
+          standing_rule?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          gradebook_id?: number;
+          id?: number;
+          name?: string;
+          standing_column_id?: number | null;
+          standing_rule?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "gradebook_topics_gradebook_class_fkey";
+            columns: ["gradebook_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebooks";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "gradebook_topics_standing_column_fkey";
+            columns: ["standing_column_id", "gradebook_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_columns";
+            referencedColumns: ["id", "gradebook_id"];
+          }
+        ];
       };
       gradebooks: {
         Row: {
@@ -13318,6 +13465,14 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      claim_git_account: {
+        Args: {
+          p_instance_url: string;
+          p_stale_minutes: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
       class_team_member_usernames: {
         Args: { p_class_id: number; p_kind: string };
         Returns: string[];
@@ -13383,6 +13538,7 @@ export type Database = {
         };
         Returns: Json;
       };
+      cloud_workspaces_enabled: { Args: { p_features: Json }; Returns: boolean };
       complete_eligible_grading_reviews: {
         Args: { p_assignment_id: number };
         Returns: number;
@@ -13857,6 +14013,18 @@ export type Database = {
       fix_assignment_repo_permissions: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
+      };
+      forgejo_accounts_needed: {
+        Args: {
+          p_instance_url: string;
+          p_limit: number;
+          p_stale_minutes: number;
+        };
+        Returns: {
+          email: string;
+          name: string;
+          user_id: string;
+        }[];
       };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
@@ -14420,15 +14588,29 @@ export type Database = {
         Args: { p_gradebook_id: number };
         Returns: undefined;
       };
+      gradebook_auto_layout_inner: {
+        Args: { p_gradebook_id: number };
+        Returns: undefined;
+      };
+      gradebook_column_family_display_name: {
+        Args: { p_family: string };
+        Returns: string;
+      };
+      gradebook_column_group_create: {
+        Args: { p_column_ids: number[]; p_gradebook_id: number; p_name: string };
+        Returns: number;
+      };
       gradebook_column_move_left: {
         Args: { p_column_id: number };
         Returns: {
+          attempt_number: number | null;
           class_id: number;
           created_at: string;
           dependencies: Json | null;
           description: string | null;
           external_data: Json | null;
           gradebook_id: number;
+          group_id: number | null;
           id: number;
           instructor_only: boolean;
           max_score: number | null;
@@ -14440,6 +14622,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          topic_id: number | null;
           updated_at: string;
         };
         SetofOptions: {
@@ -14452,12 +14635,14 @@ export type Database = {
       gradebook_column_move_right: {
         Args: { p_column_id: number };
         Returns: {
+          attempt_number: number | null;
           class_id: number;
           created_at: string;
           dependencies: Json | null;
           description: string | null;
           external_data: Json | null;
           gradebook_id: number;
+          group_id: number | null;
           id: number;
           instructor_only: boolean;
           max_score: number | null;
@@ -14469,6 +14654,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          topic_id: number | null;
           updated_at: string;
         };
         SetofOptions: {
@@ -14478,9 +14664,90 @@ export type Database = {
           isSetofReturn: false;
         };
       };
+      gradebook_column_slug_family: {
+        Args: { p_slug: string };
+        Returns: string;
+      };
+      gradebook_columns_auto_group: {
+        Args: { p_gradebook_id: number };
+        Returns: number;
+      };
+      gradebook_columns_auto_group_plan: {
+        Args: { p_gradebook_id: number };
+        Returns: Json;
+      };
+      gradebook_columns_auto_group_preview: {
+        Args: { p_gradebook_id: number };
+        Returns: Json;
+      };
+      gradebook_columns_compact_groups: {
+        Args: { p_gradebook_id: number };
+        Returns: undefined;
+      };
       gradebook_columns_reorder: {
         Args: { p_ordered_column_ids: number[] };
         Returns: undefined;
+      };
+      gradebook_columns_reorder_inner: {
+        Args: { p_ordered_column_ids: number[] };
+        Returns: undefined;
+      };
+      gradebook_columns_set_group: {
+        Args: { p_column_ids: number[]; p_group_id: number };
+        Returns: undefined;
+      };
+      gradebook_columns_set_topic: {
+        Args: {
+          p_attempt_number: number;
+          p_column_id: number;
+          p_topic_id: number;
+        };
+        Returns: undefined;
+      };
+      gradebook_common_name_prefix: {
+        Args: { p_names: string[] };
+        Returns: string;
+      };
+      gradebook_common_prefix_length: {
+        Args: { p_a: string; p_b: string };
+        Returns: number;
+      };
+      gradebook_enable_column_groups: {
+        Args: { p_class_id: number };
+        Returns: number;
+      };
+      gradebook_pluralize: { Args: { p_text: string }; Returns: string };
+      gradebook_require_instructor: {
+        Args: { p_gradebook_id: number };
+        Returns: number;
+      };
+      gradebook_topic_create: {
+        Args: { p_gradebook_id: number; p_name: string };
+        Returns: number;
+      };
+      gradebook_topic_regenerate_standing: {
+        Args: { p_topic_id: number };
+        Returns: undefined;
+      };
+      gradebook_topic_set_standing: {
+        Args: {
+          p_rule: string;
+          p_standing_column_id: number;
+          p_topic_id: number;
+        };
+        Returns: number;
+      };
+      gradebook_topic_standing_expression: {
+        Args: { p_topic_id: number };
+        Returns: string;
+      };
+      gradebook_topics_apply_suggestion: {
+        Args: { p_gradebook_id: number; p_suggestion: Json };
+        Returns: number;
+      };
+      gradebook_topics_suggest: {
+        Args: { p_gradebook_id: number };
+        Returns: Json;
       };
       help_request_is_private: {
         Args: { p_help_request_id: number };
@@ -14570,6 +14837,10 @@ export type Database = {
         Args: never;
         Returns: undefined;
       };
+      invoke_forgejo_reconciler_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_github_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -14605,6 +14876,7 @@ export type Database = {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
+      kick_forgejo_reconciler: { Args: never; Returns: undefined };
       log_api_gateway_call: {
         Args: {
           p_class_id?: number;
