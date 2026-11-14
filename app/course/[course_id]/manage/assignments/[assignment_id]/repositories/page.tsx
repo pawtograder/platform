@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
@@ -45,6 +46,7 @@ import { FaExternalLinkAlt, FaTimes } from "react-icons/fa";
 import { useList, useOne } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { TZDate } from "@date-fns/tz";
+import { SyncReportIssuesLink } from "./SyncReportIssuesLink";
 import { computeSyncStatus, type RepositoryRow, type SyncData } from "./sync-status-utils";
 
 function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: number }) {
@@ -687,7 +689,9 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
                       {formatRelative(commitDate, TZDate.tz(time_zone || "America/New_York"))}
                     </Table.Cell>
                     <Table.Cell fontSize="sm">{commit.author || "Unknown"}</Table.Cell>
-                    <Table.Cell fontSize="sm">{commit.message}</Table.Cell>
+                    <ReportBlock>
+                      <Table.Cell fontSize="sm">{commit.message}</Table.Cell>
+                    </ReportBlock>
                   </Table.Row>
                 );
               })}
@@ -774,7 +778,11 @@ export default function RepositoriesPage() {
         id: "group_name",
         header: "Group",
         accessorFn: (row) => row.assignment_groups?.name ?? "—",
-        cell: ({ row }) => <Text>{row.original.assignment_groups?.name ?? "—"}</Text>,
+        cell: ({ row }) => (
+          <ReportBlock>
+            <Text>{row.original.assignment_groups?.name ?? "—"}</Text>
+          </ReportBlock>
+        ),
         filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
@@ -832,9 +840,11 @@ export default function RepositoriesPage() {
                   <Icon as={FaTimes} color="red.500" />
                   <Text color="red.600">Creation failed</Text>
                 </HStack>
-                <Text fontSize="xs" color="fg.muted" maxW="360px" wordBreak="break-word">
-                  {row.original.creation_error}
-                </Text>
+                <ReportBlock>
+                  <Text fontSize="xs" color="fg.muted" maxW="360px" wordBreak="break-word">
+                    {row.original.creation_error}
+                  </Text>
+                </ReportBlock>
                 <RetryRepoCreationButton repoId={row.original.id} tableController={repositories} />
               </VStack>
             ) : row.original.assignment_group_id != null ? (
@@ -1072,14 +1082,7 @@ export default function RepositoriesPage() {
             which will create a pull request to the student repository, auto-merging if there are no conflicts, which
             will create a new submission. This procedure is also heavily rate-limited by GitHub, working at a rate of no
             more than 50 pull requests per-minute per-class. The &quot;Sync&quot; feature is currently in beta, and may
-            not support all use cases; please do not rely heavily on it, and report any issues{" "}
-            <Link
-              href="https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md"
-              target="_blank"
-            >
-              on GitHub
-            </Link>
-            .
+            not support all use cases; please do not rely heavily on it, and <SyncReportIssuesLink />.
           </Text>
         </Box>
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />

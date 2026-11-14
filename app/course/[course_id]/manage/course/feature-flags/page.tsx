@@ -1,9 +1,11 @@
 "use client";
 
+import { AutoGroupPreviewDialog } from "@/components/gradebook/AutoGroupPreviewDialog";
 import { Switch } from "@/components/ui/switch";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  COURSE_FEATURES,
   courseFeatureEffectiveEnabled,
   MANAGEABLE_COURSE_FEATURES,
   type CourseFeatureName
@@ -41,6 +43,18 @@ export default function CourseFeatureFlagsPage() {
   }, [featuresSnapshot]);
   const [flags, setFlags] = useState<Record<CourseFeatureName, boolean>>(derivedFlags);
   const [savingName, setSavingName] = useState<CourseFeatureName | null>(null);
+  // Turning column groups on goes through a preview of the groups it would create.
+  const [isPreviewingGroups, setIsPreviewingGroups] = useState(false);
+  const gradebookId = (role.classes as CourseWithFeatures).gradebook_id ?? null;
+
+  const enableColumnGroups = useCallback(async () => {
+    const supabase = createClient();
+    const { error } = await supabase.rpc("gradebook_enable_column_groups", { p_class_id: courseIdNum });
+    if (error) throw new Error(error.message);
+    setFlags((prev) => ({ ...prev, [COURSE_FEATURES.GRADEBOOK_COLUMN_GROUPS]: true }));
+    router.refresh();
+    toaster.success({ title: "Column groups turned on" });
+  }, [courseIdNum, router]);
 
   useEffect(() => {
     const parsed =
@@ -120,7 +134,11 @@ export default function CourseFeatureFlagsPage() {
               <Switch
                 checked={flags[def.name]}
                 disabled={savingName === def.name}
-                onCheckedChange={(e: { checked: boolean }) => onFlagChange(def.name, e.checked)}
+                onCheckedChange={(e: { checked: boolean }) =>
+                  def.name === COURSE_FEATURES.GRADEBOOK_COLUMN_GROUPS && e.checked
+                    ? setIsPreviewingGroups(true)
+                    : onFlagChange(def.name, e.checked)
+                }
                 inputProps={{
                   "aria-label": def.ariaLabel
                 }}
@@ -131,6 +149,14 @@ export default function CourseFeatureFlagsPage() {
           </Card.Root>
         ))}
       </VStack>
+      <AutoGroupPreviewDialog
+        open={isPreviewingGroups}
+        gradebookId={gradebookId}
+        title="Turn on gradebook column groups"
+        confirmLabel="Turn on"
+        onConfirm={enableColumnGroups}
+        onClose={() => setIsPreviewingGroups(false)}
+      />
     </Box>
   );
 }

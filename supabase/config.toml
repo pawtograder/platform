@@ -92,6 +92,12 @@ public = false
 [storage.buckets.uploads]
 public = true
 
+[storage.buckets.exam-templates]
+public = false
+
+[storage.buckets.exam-scans]
+public = false
+
 # Uncomment to configure local storage buckets
 # [storage.buckets.images]
 # public = false
@@ -124,6 +130,11 @@ minimum_password_length = 6
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""
+
+[auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = false
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
@@ -303,6 +314,13 @@ entrypoint = "./functions/github-repo-webhook/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/github-repo-webhook/*.html" ]
+
+[functions.forgejo-repo-webhook]
+enabled = true
+# Authenticated by the hook's HMAC signature (FORGEJO_WEBHOOK_SECRET), not a JWT.
+verify_jwt = false
+import_map = "./functions/forgejo-repo-webhook/deno.json"
+entrypoint = "./functions/forgejo-repo-webhook/index.ts"
 
 [functions.github-repo-configure-webhook]
 enabled = true
@@ -736,6 +754,18 @@ verify_jwt = false
 import_map = "./functions/github-async-worker/deno.json"
 entrypoint = "./functions/github-async-worker/index.ts"
 
+[functions.exam-async-worker]
+enabled = true
+verify_jwt = false
+import_map = "./functions/exam-async-worker/deno.json"
+entrypoint = "./functions/exam-async-worker/index.ts"
+
+[functions.exam-extract-template]
+enabled = true
+verify_jwt = false
+import_map = "./functions/exam-extract-template/deno.json"
+entrypoint = "./functions/exam-extract-template/index.ts"
+
 [functions.github-repo-reconciler]
 enabled = true
 verify_jwt = false
@@ -747,6 +777,12 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/github-membership-reconciler/deno.json"
 entrypoint = "./functions/github-membership-reconciler/index.ts"
+
+[functions.forgejo-reconciler]
+enabled = true
+verify_jwt = false
+import_map = "./functions/forgejo-reconciler/deno.json"
+entrypoint = "./functions/forgejo-reconciler/index.ts"
 
 [functions.gradebook-column-inserted]
 enabled = true
@@ -811,6 +847,12 @@ entrypoint = "./functions/mcp-tokens/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/cli/index.ts"
+
+# Called by pg_cron with the edge-function secret, not a user JWT (see the bug reporter migration).
+[functions.bug-report-retention-purge]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/bug-report-retention-purge/index.ts"
 
 [functions.index-submission]
 enabled = true

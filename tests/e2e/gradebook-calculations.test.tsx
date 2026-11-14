@@ -21,7 +21,14 @@ import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, loginAsUser, TestingUser, supabase } from "./TestingUtils";
+import {
+  autoGroupClassGradebook,
+  createClass,
+  createUsersInClass,
+  loginAsUser,
+  TestingUser,
+  supabase
+} from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -706,6 +713,9 @@ test.describe("Fixture 1: Weighted Average Course", () => {
       is_private: false,
       expected: 76
     });
+    // Stored groups are on for new courses; group the columns the way the seeder does, so the
+    // student view has the group chrome (Expand All) this fixture checks.
+    await autoGroupClassGradebook(course.id);
   });
 
   test("student UI shows released grades", async ({ page }) => {
@@ -1987,6 +1997,9 @@ test.describe("Fixture 5: Score Override Precedence", () => {
       is_private: false,
       expected: 95.5
     });
+    // Stored groups are on for new courses; group the columns the way the seeder does, so the
+    // student view has the group chrome (Expand All) this fixture checks.
+    await autoGroupClassGradebook(course.id);
   });
 
   test("student UI reflects overridden values", async ({ page }) => {

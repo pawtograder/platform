@@ -38,7 +38,8 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
-import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
+import { useFeatureEnabled, useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
 /**
@@ -1022,6 +1023,13 @@ export default function AssignmentForm({
   // `CourseControllerProvider` (LabDueDatePreview in this file already calls useCourseController).
   const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
   const isEditing = !!form.getValues("id");
+  // #1196. The type can't be changed after creation, so a Paper exam created in a course that
+  // hasn't opted in is stuck: every exam route it links to renders the "not enabled" notice and
+  // there is no way back. Offer the type only where it leads somewhere. An assignment that
+  // already exists keeps its option, so the disabled select still shows its own value if the
+  // course later turns the flag off.
+  const examsEnabled = useFeatureEnabled(COURSE_FEATURES.EXAMS);
+  const examTypeAvailable = isEditing || examsEnabled;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -1111,6 +1119,30 @@ export default function AssignmentForm({
                 </Text>
               </CardHeader>
               <CardBody gap="5px">
+                <Fieldset.Content>
+                  <Field
+                    orientation="horizontal"
+                    label="Assignment type"
+                    helperText={
+                      isEditing
+                        ? "Type cannot be changed after creation"
+                        : examTypeAvailable
+                          ? "Code: GitHub repo + autograder. Quiz: in-app questions, objective answers auto-graded. Paper exam: printable + scan/OCR. Survey: completion earns credit."
+                          : "Code: GitHub repo + autograder. Quiz: in-app questions, objective answers auto-graded. Survey: completion earns credit. Paper exam needs Paper exams turned on under Course Settings › Feature flags."
+                    }
+                  >
+                    <NativeSelectRoot disabled={isEditing}>
+                      <NativeSelectField {...register("assignment_type")}>
+                        <option value="code">Code (GitHub + autograder)</option>
+                        <option value="quiz">Quiz / worksheet (in-app)</option>
+                        <option value="exam" disabled={!examTypeAvailable}>
+                          Paper exam (scan &amp; OCR)
+                        </option>
+                        <option value="survey">Required survey</option>
+                      </NativeSelectField>
+                    </NativeSelectRoot>
+                  </Field>
+                </Fieldset.Content>
                 <Fieldset.Content>
                   <Field
                     orientation="horizontal"
