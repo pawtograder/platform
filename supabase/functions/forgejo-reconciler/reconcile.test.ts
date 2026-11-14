@@ -330,6 +330,10 @@ function fakeHashSupabase(rows: { id: number; template_repo: string }[]) {
     eq: (column: string, value: unknown) => (filters.push([`eq ${column}`, value]), listQuery),
     not: (column: string, op: string, value: unknown) => (filters.push([`not ${column} ${op}`, value]), listQuery),
     is: (column: string, value: unknown) => (filters.push([`is ${column}`, value]), listQuery),
+    // Recorded as "now" when the bound is the current time, so the test can compare the whole list.
+    lte: (column: string, value: string) => (
+      filters.push([`lte ${column}`, Math.abs(Date.parse(value) - Date.now()) < 5000 ? "now" : value]), listQuery
+    ),
     limit: () => Promise.resolve({ data: assignments, error: null })
   };
   const client = {
@@ -364,12 +368,13 @@ Deno.test("hashes: an unset workflow hash becomes the SHA-256 of the handout's g
     return Promise.resolve("abc");
   });
   assertEquals(result, { set: 1, failures: [] });
-  // Only Forgejo assignments with a handout and no hash yet.
+  // Only released Forgejo assignments with a handout and no hash yet.
   assertEquals(filters, [
     ["eq git_provider", "forgejo"],
     ["eq has_autograder", true],
     ["not template_repo is", null],
-    ["is autograder.workflow_sha", null]
+    ["is autograder.workflow_sha", null],
+    ["lte release_date", "now"]
   ]);
   // sha256("abc"), and only if still unset when written.
   assertEquals(updates, [
