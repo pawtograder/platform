@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
-import { createClient as createServiceClient, SupabaseClient } from "@supabase/supabase-js";
+import { createClient as createServiceClient, PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { SERVICE_CLIENT_AUTH_OPTIONS } from "@/utils/supabase/serviceClientOptions";
 import { AzureChatOpenAI, ChatOpenAI } from "@langchain/openai";
 import { OpenAI as OpenAISDK } from "openai";
@@ -217,6 +217,13 @@ async function getPrompt(input: GraderResultTestExtraData["llm"]) {
   return ChatPromptTemplate.fromMessages([["human", input.prompt]]);
 }
 
+function rateLimitQueryError(check: string, status: number, error: PostgrestError): UserVisibleError {
+  // Log only the status and code: PostgREST messages can echo filter values such as profile ids
+  // eslint-disable-next-line no-console
+  console.error(`llm-hint ${check} rate limit query failed (status ${status}, code ${error.code || "none"})`);
+  return new UserVisibleError("Could not check Feedbot rate limits. Please try again.", 500);
+}
+
 async function checkRateLimits(
   testResult: GradrResultTestWithGraderResults,
   rateLimit: LLMRateLimitConfig,
@@ -228,7 +235,11 @@ async function checkRateLimits(
 
   // Check cooldown (minutes since last inference on this assignment, excluding current submission)
   if (rateLimit.cooldown) {
-    const { data: lastUsage } = await serviceSupabase
+    const {
+      data: lastUsage,
+      error: cooldownError,
+      status: cooldownStatus
+    } = await serviceSupabase
       .from("llm_inference_usage")
       .select(
         `
@@ -242,7 +253,10 @@ async function checkRateLimits(
       .neq("submission_id", submissionId)
       .order("created_at", { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
+    if (cooldownError) {
+      throw rateLimitQueryError("cooldown", cooldownStatus, cooldownError);
+    }
 
     if (lastUsage) {
       const minutesSinceLastUsage = Math.floor((Date.now() - new Date(lastUsage.created_at).getTime()) / (1000 * 60));
@@ -259,7 +273,7 @@ async function checkRateLimits(
     // Count usage across all matching submissions for this assignment using a single query
     const query = serviceSupabase
       .from("llm_inference_usage")
-      .select("*", { count: "exact", head: true })
+      .select("id, submissions!inner(assignment_id, profile_id, assignment_group_id)", { count: "exact", head: true })
       .eq("submissions.assignment_id", assignmentId)
       .neq("submission_id", submissionId);
 
@@ -270,7 +284,10 @@ async function checkRateLimits(
       query.eq("submissions.assignment_group_id", testResult.grader_results.submissions.assignment_group_id);
     }
 
-    const { count: assignmentUsageCount } = await query;
+    const { count: assignmentUsageCount, error: assignmentUsageError, status: assignmentUsageStatus } = await query;
+    if (assignmentUsageError) {
+      throw rateLimitQueryError("assignment_total", assignmentUsageStatus, assignmentUsageError);
+    }
 
     if (assignmentUsageCount && assignmentUsageCount >= rateLimit.assignment_total) {
       return `Rate limit: Maximum number of Feedbot responses (${rateLimit.assignment_total}) for this assignment has been reached.`;
@@ -279,10 +296,17 @@ async function checkRateLimits(
 
   // Check class total limit
   if (rateLimit.class_total) {
-    const { count: classUsageCount } = await serviceSupabase
+    const {
+      count: classUsageCount,
+      error: classUsageError,
+      status: classUsageStatus
+    } = await serviceSupabase
       .from("llm_inference_usage")
       .select("*", { count: "exact", head: true })
       .eq("class_id", classId);
+    if (classUsageError) {
+      throw rateLimitQueryError("class_total", classUsageStatus, classUsageError);
+    }
 
     if (classUsageCount && classUsageCount >= rateLimit.class_total) {
       return `Rate limit: Maximum number of Feedbot responses (${rateLimit.class_total}) for this class has been reached.`;
