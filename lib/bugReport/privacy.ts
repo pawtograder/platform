@@ -426,6 +426,39 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "classes.start_date": "none",
   "classes.term": "none",
   "classes.time_zone": "none",
+  "coder_accounts.coder_user_id": "none",
+  // Coder username, built from the email's local part, like a Forgejo login
+  "coder_accounts.coder_username": "handle",
+  "coder_accounts.created_at": "none",
+  "coder_accounts.id": "none",
+  "coder_accounts.instance_url": "none",
+  "coder_accounts.user_id": "none",
+  "coder_workspaces.assignment_archived_seen_at": "none",
+  "coder_workspaces.assignment_deleted_seen_at": "none",
+  "coder_workspaces.assignment_id": "none",
+  "coder_workspaces.class_archived_seen_at": "none",
+  "coder_workspaces.class_id": "none",
+  "coder_workspaces.cleanup_attempts": "none",
+  // Coder API error text from the cleanup job; can echo usernames
+  "coder_workspaces.cleanup_last_error": "free_text",
+  "coder_workspaces.cleanup_status": "none",
+  "coder_workspaces.coder_user_id": "none",
+  "coder_workspaces.coder_workspace_id": "none",
+  "coder_workspaces.coder_workspace_name": "none",
+  "coder_workspaces.created_at": "none",
+  "coder_workspaces.id": "none",
+  "coder_workspaces.instance_url": "none",
+  "coder_workspaces.profile_id": "none",
+  // Forgejo clone URL; the repository name carries the student's username
+  "coder_workspaces.repo_url": "handle",
+  "coder_workspaces.repository_id": "none",
+  "coder_workspaces.restart_phase": "none",
+  "coder_workspaces.restart_started_at": "none",
+  "coder_workspaces.restart_token": "none",
+  "coder_workspaces.student_inactive_seen_at": "none",
+  "coder_workspaces.superseded_at": "none",
+  "coder_workspaces.updated_at": "none",
+  "coder_workspaces.user_id": "none",
   "discord_async_errors.created_at": "none",
   // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
   "discord_async_errors.error_data": "free_text",
@@ -2370,6 +2403,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // UNCERTAIN: $.error is SQLERRM from a WHEN OTHERS handler and is marked free_text to be safe. Its raised messages contain only ids.
   clear_unfinished_review_assignments: { $: "none", "$.error": "free_text" },
   cli_import_submission_comments_batch: "none",
+  coder_workspace_deletion_date: "none",
   complete_eligible_grading_reviews: "none",
   copy_groups_from_assignment: "none",
   create_all_manual_submissions_for_assignment: "none",
@@ -3133,5 +3167,22 @@ export const EDGE_FUNCTIONS: Readonly<Record<string, JsonPathMap>> = {
   },
   // calls RPCs only (attach_no_repo_submission_files, create_no_repo_submission, create_submission_for_student); RPCS classifies the results
   uploadNoRepoSubmission: { $: "none" },
-  userFetchAzureProfile: { $: "none", "$.message": "free_text", "$.sis_user_id": "handle", "$.error": "free_text" }
+  userFetchAzureProfile: { $: "none", "$.message": "free_text", "$.sis_user_id": "handle", "$.error": "free_text" },
+  // Coder URLs carry the student's Coder username; log lines are git and startup-script output
+  workspaceOpen: {
+    $: "none",
+    "$.message": "free_text",
+    "$.redirect_url": "handle",
+    "$.authenticate_url": "handle",
+    "$.failure.log_lines[*]": "free_text",
+    "$.error": "free_text"
+  },
+  workspaceStatus: {
+    $: "none",
+    "$.message": "free_text",
+    "$.redirect_url": "handle",
+    "$.authenticate_url": "handle",
+    "$.failure.log_lines[*]": "free_text",
+    "$.error": "free_text"
+  }
 };

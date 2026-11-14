@@ -462,6 +462,35 @@
       { "name": "classes_gradebook_id_fkey", "columns": ["gradebook_id"], "ref": "gradebooks" }
     ]
   },
+  "coder_accounts": {
+    "kind": "table",
+    "fks": [{ "name": "coder_accounts_user_id_fkey", "columns": ["user_id"], "ref": "users" }]
+  },
+  "coder_workspaces": {
+    "kind": "table",
+    "fks": [
+      { "name": "coder_workspaces_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignment_overview" },
+      { "name": "coder_workspaces_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignments" },
+      {
+        "name": "coder_workspaces_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates"
+      },
+      {
+        "name": "coder_workspaces_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test"
+      },
+      { "name": "coder_workspaces_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
+      { "name": "coder_workspaces_profile_id_fkey", "columns": ["profile_id"], "ref": "profiles" },
+      {
+        "name": "coder_workspaces_profile_id_fkey",
+        "columns": ["profile_id"],
+        "ref": "submissions_with_grades_for_assignment_nice"
+      },
+      { "name": "coder_workspaces_user_id_fkey", "columns": ["user_id"], "ref": "users" }
+    ]
+  },
   "discord_async_errors": { "kind": "table", "fks": [] },
   "discord_async_worker_dlq_messages": {
     "kind": "table",

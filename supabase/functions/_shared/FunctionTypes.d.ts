@@ -366,6 +366,43 @@ export type RepositoryListCommitsRequest = {
   repo_name: string;
   page: number;
 };
+/** workspace-open and workspace-status (#1222). Without repository_id, the caller's own or group repository. */
+export type WorkspaceOpenRequest = {
+  assignment_id: number;
+  repository_id?: number;
+};
+/**
+ * Where the student's Coder workspace is. `step` names the startup step, as in #1170's card:
+ * `build` is the workspace build until the agent connects, `clone` the template's "Git Clone"
+ * script, and `editor` its "Startup Script" (git identity and code-server) plus code-server's
+ * health check.
+ */
+export type WorkspaceStep = "build" | "clone" | "editor";
+export type WorkspaceOpenResponse = {
+  /**
+   * `restarting`: workspace-open is stopping the workspace to start it again; a status read starts it
+   * once the stop finishes, and it reads `starting` from then on. `account_conflict`: the student's
+   * Coder account can't be signed in to and staff have to remove it; `message` says so.
+   */
+  status: "not_started" | "starting" | "restarting" | "ready" | "failed" | "needs_linking" | "account_conflict";
+  step?: WorkspaceStep;
+  message?: string;
+  /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */
+  redirect_url?: string;
+  /**
+   * needs_linking: Coder's OIDC sign-in, which goes on to link the student's Forgejo account, so a
+   * student with no Coder session ends up linked too.
+   */
+  authenticate_url?: string;
+  coder_user_id?: string;
+  workspace_id?: string;
+  workspace_name?: string;
+  build?: { status: string; transition: string; error: string | null };
+  agent?: { lifecycle_state: string; status: string } | null;
+  failure?: { step: WorkspaceStep; script: string | null; exit_code: number | null; log_lines: string[] };
+  /** When the cleanup job (#1223) deletes the workspace. */
+  deletion_date?: string | null;
+};
 export type AutograderTriggerGradingWorkflowRequest = {
   repository: string;
   sha: string;
