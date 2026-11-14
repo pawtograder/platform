@@ -277,7 +277,9 @@ export type HashReconcileResult = { set: number; failures: { assignmentId: numbe
 /**
  * Grading rejects a grade.yml whose SHA-256 differs from autograder.workflow_sha. GitHub sets it from
  * the handout (updateAutograderWorkflowHash); this does the same for Forgejo handouts (#1252). Only an
- * unset hash is filled: one already set may be what students' repos were made with.
+ * unset hash is filled: one already set may be what students' repos were made with. Only released
+ * assignments, like the repo backlogs: a hash taken from a draft handout would never be replaced, and
+ * would reject every submission if the instructor changed grade.yml before release.
  */
 export async function reconcileForgejoWorkflowHashes(
   supabase: SupabaseClient<Database>,
@@ -292,6 +294,7 @@ export async function reconcileForgejoWorkflowHashes(
     .eq("has_autograder", true)
     .not("template_repo", "is", null)
     .is("autograder.workflow_sha", null)
+    .lte("release_date", new Date().toISOString())
     .limit(MAX_REPOS_PER_PASS);
   if (error) throw error;
 
