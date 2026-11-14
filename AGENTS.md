@@ -146,6 +146,17 @@ Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Ad
 - Docker in this cloud VM requires `fuse-overlayfs` storage driver and `iptables-legacy`. These are configured during initial setup.
 - Edge Functions should be started with `.env.local` when needed: `npx supabase functions serve --env-file .env.local`.
 
+### Errors from refine updates and deletes
+
+`lib/refineDataProvider.ts` wraps the refine Supabase data provider. When RLS refuses an `update` or `deleteOne`, PostgREST changes 0 rows and returns no error. The wrapper then throws an `Error` with `statusCode: 403` and a message that names the table and id. Deleting a row that is already gone (another tab, a double click) still succeeds: when `deleteOne` changes nothing, the wrapper selects the row and throws only if the session can still see it. `updateMany` and `deleteMany` are not wrapped.
+
+refine never shows these errors itself. The `notificationProvider` in `components/ui/provider.tsx` is turned off, so the `successNotification` and `errorNotification` options of refine hooks do nothing, and `PopConfirm` only logs a rejected `onConfirm` to the console. Every call to `useUpdate` or `useDelete` has to report failures itself:
+
+- `mutateAsync`: wrap it in `try`/`catch` and call `toaster.error` in the `catch`.
+- `mutate`: pass `onError` in the second argument and call `toaster.error` there.
+
+To tell an RLS refusal apart from other errors, for example to show a permission message, call `isRefusedWriteError(error)` from `lib/refineDataProvider.ts` instead of checking `statusCode`. Other PostgREST errors carry their Postgres code in `statusCode`, so an RLS violation on insert arrives as 42501 and is not one of these refusals.
+
 ### Deleting repositories and submissions
 
 We prefer failing safe to failing dangerously, so foreign keys into `repositories` and `submissions` are `NO ACTION`, not `ON DELETE CASCADE`. A submission carries grades, reviews, comments and regrade requests. A cascade would delete them without anyone deciding to. With `NO ACTION`, a delete path that misses a child table raises 23503 and rolls back. The cost is that every delete path has to clear its child tables explicitly, and has to be updated by hand whenever a new child table appears.

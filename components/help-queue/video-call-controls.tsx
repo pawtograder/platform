@@ -154,13 +154,19 @@ export default function VideoCallControls({
         description: error instanceof Error ? error.message : "An unexpected error occurred"
       });
 
-      // Revert the video live status on error
-      await updateRequest({
-        id: request.id,
-        values: {
-          is_video_live: false
-        }
-      });
+      // Revert the video live status on error. If the first update was refused, this one will be too;
+      // the error above has already been shown, so only log it.
+      try {
+        await updateRequest({
+          id: request.id,
+          values: {
+            is_video_live: false
+          }
+        });
+      } catch (revertError) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to revert is_video_live after a failed video call start", revertError);
+      }
     } finally {
       setIsStartingCall(false);
     }
