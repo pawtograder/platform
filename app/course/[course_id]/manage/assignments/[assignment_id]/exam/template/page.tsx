@@ -78,7 +78,12 @@ function ExamTemplatePageContent() {
       </Box>
 
       {examId ? (
-        <RegionEditor key={`${examId}-${templateRevision}`} examId={examId} gradingRubricId={gradingRubricId} />
+        <RegionEditor
+          key={`${examId}-${templateRevision}`}
+          examId={examId}
+          assignmentId={assignmentId}
+          gradingRubricId={gradingRubricId}
+        />
       ) : (
         <Text color="fg.muted">Upload a template PDF to start labeling regions.</Text>
       )}
