@@ -239,8 +239,8 @@ secrets:
                                   #   and .../install/callback), not only by the
                                   #   worker. Omitting it makes the install button
                                   #   answer 500.
-    edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
-                                  #   canvas, sis, smtp, mcp, redis, sentry, misc
+    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, aws-chime,
+                                  #   discord, canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
     pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
@@ -364,6 +364,43 @@ postgres:
     #     trident.netapp.io/unixPermissions: "0777"
     annotations: {}
 
+  # /dev/shm sizing for the primary.
+  #
+  # dynamic_shared_memory_type=posix means every parallel query allocates its
+  # DSM segments as files under /dev/shm. Kubernetes gives a container the
+  # runtime default of 64Mi and there is no way to raise it from postgresql.conf
+  # -- it is a volume property, so it has to be set here.
+  #
+  # 64Mi is not enough for this workload. On Khoury prod (2026-09-22) /dev/shm
+  # was observed at 94%, then 98%, then 64% over about half an hour, so
+  # occupancy tracks parallel-query load and segments ARE reclaimed -- just
+  # slowly enough that the peaks reach the ceiling. Size this for the PEAK, not
+  # the average; a restart is not a fix, because the peak returns with the
+  # load. When it does hit the ceiling, a parallel worker's segment resize
+  # fails with SQLSTATE 53100:
+  #
+  #   could not resize shared memory segment "/PostgreSQL.NNN" to 2097152
+  #   bytes: No space left on device
+  #
+  # That error is what makes this worth a chart change rather than a tuning
+  # knob: PostgREST treats 53100 as a FATAL connection error, so it tears down
+  # and rebuilds its entire pool and re-queries the schema cache. Every request
+  # in flight on that replica gets a 503. Measured over 24h on prod: 204 such
+  # errors -> 225 pool rebuilds across 3 rest replicas -> 190 user-facing 503s,
+  # the bulk of them GET /submissions. The database never logged a problem and
+  # no alert covered it; see PawtograderPostgresSharedMemoryHigh.
+  #
+  # sizeLimit is a Gi/Mi/Ki or plain-byte quantity (fractions such as 1.5Gi
+  # are fine). pawtograder.quantityToBytes in _helpers.tpl converts it, and
+  # the exporter query and alert threshold are both derived from this value.
+  #
+  # NOTE: medium=Memory emptyDir counts against the container memory LIMIT
+  # (postgres.resources.limits.memory), it is not extra headroom. Keep
+  # sizeLimit well under that limit or the pod is OOMKilled when shm fills.
+  shm:
+    enabled: true
+    sizeLimit: 1Gi
+
   # postgresql.conf overrides — bumped for Realtime fan-out + supavisor.
   config:
     max_connections: "400"
@@ -425,13 +462,12 @@ postgres:
     # (disk-fill risk), so archiving must keep up. archive_timeout forces a
     # segment switch so idle periods still bound RPO.
     archiveTimeout: "60s"
-    # Base backups: the sidecar loop cadence and how many full backups to keep.
-    # WAL older than the oldest retained base backup is pruned with it. Sizing:
-    # retention window ≈ baseBackupIntervalHours × keepBackups.
+    # Base backups: the sidecar loop cadence. How many to keep is
+    # retention.keepBackups below (baseBackup.keepBackups was removed in 0.4.1
+    # and is refused). Retention window ≈ intervalHours × retention.keepBackups.
     baseBackup:
       enabled: true
       intervalHours: 24
-      keepBackups: 8
       # Wait this long after the sidecar starts before the FIRST base backup,
       # so postgres + archiving are healthy first.
       initialDelaySeconds: 120
@@ -439,18 +475,17 @@ postgres:
         requests: { cpu: "50m",  memory: "128Mi" }
         limits:   { cpu: "1",    memory: "512Mi" }
     # Retention CronJob (templates/walg-retention.yaml): `wal-g delete retain
-    # FULL <keepBackups>` in its own pod. Change the retained count HERE, not in
-    # baseBackup.keepBackups: that one is baked into the primary's sidecar, so
-    # editing it restarts Postgres; this one restarts nothing. Set it at or
-    # below baseBackup.keepBackups — above it, the sidecar's prune wins.
+    # FULL <keepBackups>` in its own pod, the only thing that prunes WAL-G. It
+    # lives outside the primary's pod so changing the count restarts nothing.
+    # WAL older than the oldest retained base backup is deleted with it.
     retention:
       enabled: true
       # Hourly: the prune is a listing plus deletes, and running it every hour
       # keeps it close behind each base backup however far the sidecar's
       # interval loop has drifted from its start time.
       schedule: "17 * * * *"
-      # Empty = baseBackup.keepBackups. Must be >= 1.
-      keepBackups: ""
+      # Full base backups to keep. Must be an integer >= 1.
+      keepBackups: 8
       startingDeadlineSeconds: 1800
       activeDeadlineSeconds: 1800
       resources:
@@ -476,6 +511,15 @@ postgres:
       accessMode: ReadWriteOnce
       # Same as postgres.persistence.annotations (e.g. Trident unixPermissions).
       annotations: {}
+    # Same /dev/shm problem as the primary (see postgres.shm). The standby
+    # runs read-only query traffic, so it allocates DSM too -- it just fills
+    # slower (prod standby sat at 2% while the primary was at 98%), which means
+    # a standby promoted during an incident inherits a fresh 64Mi ceiling and
+    # hits the same wall under primary write+read load. Sized independently
+    # because the replica has its own, smaller, memory limit.
+    shm:
+      enabled: true
+      sizeLimit: 1Gi
     resources:
       requests: { cpu: "500m", memory: "2Gi" }
       limits:   { cpu: "2",    memory: "8Gi" }
@@ -711,6 +755,8 @@ auth:
     enabled: false
     authorizationPath: /oauth/consent
     allowDynamicRegistration: false
+    # true: no consent screen when this release's Forgejo or Coder signs in (matched on their callback URLs).
+    autoApproveFirstParty: false
 
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
@@ -2594,6 +2640,12 @@ monitoring:
     # Postgres connection-budget saturation (used/max_connections), percent.
     connectionUsagePercentWarning: 80   # PawtograderPostgresConnectionsHigh fires above this
     connectionUsagePercentCritical: 90  # PawtograderPostgresConnectionsSaturated fires above this
+    # /dev/shm occupancy (used/limit) above which the PawtograderPostgresSharedMemory*
+    # alerts fire. Lower than the connection thresholds on purpose: occupancy is a
+    # leak rather than load -- observed pinned at 94-98% with the database idle -- so
+    # there is no burst to ride out and the only useful warning is an early one.
+    sharedMemoryPercentWarning: 70
+    sharedMemoryPercentCritical: 90
     # Schema-cache reloads per PostgREST pod per hour above which
     # PawtograderPostgrestSchemaCacheChurn fires. A reload means EITHER the pool
     # was rebuilt after a fatal connection error (everything in flight on that
@@ -2727,6 +2779,24 @@ forgejo:
     enabled: true
     className: nginx
     hosts: []
+  # true: /user/login goes straight to the Pawtograder login source. /user/login?password_login=1 keeps the password form.
+  signInRedirect: true
+  # Subchart values aren't templated: the ConfigMap name is <release>-forgejo-templates.
+  extraVolumes:
+    - name: pawtograder-templates
+      configMap: { name: pawtograder-forgejo-templates, optional: true }
+  # Copied, not mounted: a mount inside /data makes the runtime create /data/gitea as root on a fresh volume.
+  extraInitVolumeMounts:
+    - name: pawtograder-templates
+      mountPath: /pawtograder-templates
+      readOnly: true
+  initPreScript: |
+    mkdir -p /data/gitea/templates/custom
+    if [ -f /pawtograder-templates/header.tmpl ]; then
+      cp /pawtograder-templates/header.tmpl /data/gitea/templates/custom/header.tmpl
+    else
+      rm -f /data/gitea/templates/custom/header.tmpl
+    fi
   gitea:
     admin:
       existingSecret: pawtograder-forgejo-admin
@@ -2763,6 +2833,10 @@ forgejo:
       indexer:
         ISSUE_INDEXER_TYPE: bleve
         REPO_INDEXER_ENABLED: false
+      webhook:
+        # GitHub's cap. forgejo-repo-webhook records only the commits a push payload lists, and
+        # Forgejo's default of 15 would drop the rest of a larger push from the commit history.
+        PAYLOAD_COMMIT_LIMIT: 2048
 
 forgejo-db:
   enabled: false
@@ -2848,6 +2922,13 @@ coder:
     signInText: Sign in with Pawtograder
     # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
     allowSignups: false
+  # Run scripts/setup-coder-forgejo-auth.sh before enabling; coderd exits at startup without the client ID.
+  externalAuth:
+    forgejo:
+      enabled: false
+      # Changing it unlinks every user and needs the OAuth app re-registered.
+      id: forgejo
+      displayName: Forgejo
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
@@ -2859,6 +2940,7 @@ coder:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
       - secretRef: { name: pawtograder-coder-oidc, optional: true }
+      - secretRef: { name: pawtograder-coder-external-auth, optional: true }
     # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
     initContainers:
       - name: first-owner
@@ -2907,9 +2989,13 @@ coder:
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
           - name: ADMIN_PASSWORD
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        # Same Secrets as coderd's envFrom above: pawtograder-coder-env names an external-auth provider
+        # (and OIDC), and this coderd refuses to start without its client id.
         envFrom:
           - configMapRef: { name: pawtograder-coder-env }
           - secretRef: { name: pawtograder-coder-db }
+          - secretRef: { name: pawtograder-coder-oidc, optional: true }
+          - secretRef: { name: pawtograder-coder-external-auth, optional: true }
         securityContext:
           allowPrivilegeEscalation: false
           capabilities: { drop: [ALL] }
@@ -2958,6 +3044,22 @@ coder-db:
   initResources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { cpu: 250m, memory: 256Mi }
+
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: false
+    forgejoPath: ""
+    coderPath: ""
+    forgejoOAuthPath: ""
+    coderOIDCPath: ""
+    # With forgejoRunner on: the path holding dispatcher_token and mirror_token, written by
+    # scripts/setup-forgejo-runner-tokens.sh. Syncs forgejoRunner.dispatcher.tokenSecret and
+    # forgejoRunner.actions.tokenSecret (key token). Empty: create those Secrets by hand.
+    runnerPath: ""
+    coderExternalAuthPath: ""
+    storeName: openbao
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
 
 coderBootstrap:
   enabled: true

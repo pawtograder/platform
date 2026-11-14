@@ -43,6 +43,7 @@ type StudentGrade = {
 // call spins forever and OOMs the worker rather than failing.
 let column: GradebookColumn;
 let columns: GradebookColumn[];
+const noGroups: never[] = [];
 let studentGrade: StudentGrade | undefined;
 let submissionStatus: { status: string };
 let controller: { columns: GradebookColumn[]; getRendererForColumn: () => (...args: unknown[]) => string };
@@ -54,11 +55,19 @@ let whatIfController: {
 
 jest.mock("@/hooks/useGradebook", () => ({
   useGradebookColumns: () => columns,
+  useGradebookColumnGroups: () => noGroups,
+  useGradebookTopics: () => noGroups,
   useGradebookColumn: () => column,
   useGradebookColumnStudent: () => studentGrade,
   useGradebookController: () => controller,
   useLinkToAssignment: () => null,
   useSubmissionIDForColumn: () => submissionStatus
+}));
+
+// These tests exercise the slug-prefix grouping, i.e. a course with stored column groups off.
+jest.mock("@/hooks/useCourseFeatures", () => ({
+  useCourseFeature: () => false,
+  useGradebookWhatIfFeatureEnabled: () => true
 }));
 
 jest.mock("@/hooks/useGradebookWhatIf", () => ({
@@ -143,6 +152,19 @@ describe("gradebook score cell", () => {
       const visual = container.querySelector('[aria-hidden="true"]');
       expect(visual).not.toBeNull();
       expect(visual!.textContent).toBe("45/100");
+    });
+  });
+
+  describe("a computed score with a long fraction", () => {
+    beforeEach(() => {
+      studentGrade = makeGrade({ score: 85.33333333333333, released: true });
+      submissionStatus = { status: "found" };
+    });
+
+    it("shows two decimal places, like the instructor gradebook", () => {
+      const { container } = renderGradebook();
+      expect(container.querySelector('[aria-hidden="true"]')!.textContent).toBe("85.33/100");
+      expect(screen.getByText("85.33 of 100 points")).toBeInTheDocument();
     });
   });
 

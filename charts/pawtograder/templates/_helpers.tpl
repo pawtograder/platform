@@ -321,6 +321,28 @@ Internal service hostnames.
 {{- end -}}
 {{- end -}}
 
+{{- define "pawtograder.forgejo.hasPawtograderSource" -}}
+{{- if .Values.forgejo.enabled -}}
+{{- range .Values.forgejo.gitea.oauth -}}{{- if eq .name "pawtograder" -}}true{{- end -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.oauth.firstPartyRedirectURIs" -}}
+{{- $s := .Values.auth.oauthServer -}}
+{{- if and $s.enabled $s.autoApproveFirstParty -}}
+{{- $uris := list -}}
+{{- if include "pawtograder.forgejo.hasPawtograderSource" . -}}
+{{- $uris = append $uris (printf "%s/user/oauth2/pawtograder/callback" (include "pawtograder.forgejo.url" .)) -}}
+{{- end -}}
+{{- $coderURL := "" -}}
+{{- range (dig "coder" "env" list .Values.coder) -}}{{- if eq .name "CODER_ACCESS_URL" -}}{{- $coderURL = .value | default "" | trimSuffix "/" -}}{{- end -}}{{- end -}}
+{{- if and .Values.coder.enabled .Values.coder.oidc.enabled $coderURL -}}
+{{- $uris = append $uris (printf "%s/api/v2/users/oidc/callback" $coderURL) -}}
+{{- end -}}
+{{- join "," $uris -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "pawtograder.forgejo.servicePort" -}}
 {{- dig "service" "http" "port" 3000 .Values.forgejo -}}
 {{- end -}}
@@ -443,17 +465,13 @@ credentials come from secrets.names.s3 (the same secret backup.yaml uses).
 {{- end -}}
 
 {{/*
-Full backups the walg-retention CronJob keeps: postgres.walg.retention.keepBackups,
-or baseBackup.keepBackups when that is unset. Refuses anything below 1, which
-`wal-g delete retain` would take as "delete every backup".
+Full backups the walg-retention CronJob keeps: postgres.walg.retention.keepBackups.
+Refuses anything below 1, which `wal-g delete retain` would take as "delete
+every backup". No `| default`: sprig treats 0 as empty, so an explicit 0 would
+quietly become the default instead of failing.
 */}}
 {{- define "pawtograder.walg.retentionKeep" -}}
-{{- /* Only nil/"" inherit. Not `| default`: sprig treats 0 as empty, so an
-     explicit 0 would quietly become baseBackup.keepBackups instead of failing. */ -}}
 {{- $raw := .Values.postgres.walg.retention.keepBackups -}}
-{{- if or (kindIs "invalid" $raw) (eq (toString $raw) "") -}}
-{{- $raw = .Values.postgres.walg.baseBackup.keepBackups | default 8 -}}
-{{- end -}}
 {{- /* Whole-number syntax before `int`, which would truncate 4.9 to 4, turn
      `true` into 1, and read "010" as octal 8, each then passing the >= 1
      check with a count nobody wrote. So no leading zero (which also rules out
@@ -659,4 +677,65 @@ on — production and the chart default already disagree.
 - { port: {{ $from | quote }}, endPort: 65535, protocol: TCP }
 {{- end }}
 - { port: "1", endPort: 65535, protocol: UDP }
+{{- end -}}
+
+{{/*
+Convert a Kubernetes quantity (1Gi / 1.5Gi / 512Mi / 65536Ki / plain bytes) to
+a byte count.
+
+Used to keep a /dev/shm sizeLimit and the monitoring that watches it derived
+from ONE value: postgres.shm.sizeLimit sets the emptyDir, and the same number
+becomes limit_bytes in the postgres_exporter query and the denominator of
+PawtograderPostgresSharedMemoryHigh. Raising the volume therefore moves the
+alert threshold with it, instead of leaving a rule that still compares against
+the old ceiling.
+
+Fractions are supported deliberately. An earlier version rejected them, which
+turned a perfectly valid Kubernetes quantity into a LATENT render failure:
+monitoring.enabled defaults to false, so `sizeLimit: 1.5Gi` rendered fine and
+then broke the next upgrade that switched monitoring on, in a template the
+operator had not touched. Accepting what Kubernetes accepts removes the trap
+rather than relocating it. (Raised in review on #1021.)
+
+validations.yaml calls this for every enabled shm volume so a malformed value
+fails at render time regardless of whether monitoring is on.
+*/}}
+{{- define "pawtograder.quantityToBytes" -}}
+{{- $v := . | toString | trim -}}
+{{- $mult := 1 -}}
+{{- $n := $v -}}
+{{- if hasSuffix "Gi" $v -}}
+{{- $mult = 1073741824 -}}{{- $n = trimSuffix "Gi" $v -}}
+{{- else if hasSuffix "Mi" $v -}}
+{{- $mult = 1048576 -}}{{- $n = trimSuffix "Mi" $v -}}
+{{- else if hasSuffix "Ki" $v -}}
+{{- $mult = 1024 -}}{{- $n = trimSuffix "Ki" $v -}}
+{{- end -}}
+{{- /*
+  Exponent notation is accepted because Helm PRODUCES it. A bare number in a
+  values file -- `sizeLimit: 1073741824`, the plain-byte form this helper
+  advertises -- is parsed as a float and `toString` renders it
+  "1.073741824e+09". Rejecting that broke every render, not just the monitoring
+  path, once validations.yaml started calling this unconditionally.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$" $n) -}}
+{{- fail (printf "pawtograder.quantityToBytes: unsupported quantity %q (want Gi/Mi/Ki or plain bytes, e.g. 1Gi, 1.5Gi, 512Mi)" $v) -}}
+{{- end -}}
+{{- $bytes := int64 (ceil (mulf (float64 $n) $mult)) -}}
+{{- /*
+  ceil, not truncate: Kubernetes rounds a positive fractional quantity UP to
+  the nearest byte (resource.Quantity.Value), so truncating would disagree with
+  the ceiling the kubelet actually enforces. Immaterial at realistic sizes --
+  1.1Gi differs by one byte -- but a sub-byte value like `0.1` truncates to
+  ZERO, and limit_bytes=0 makes the alert's used/limit division +Inf, which
+  fires instantly and permanently. The positivity check below closes the rest
+  of that class (an explicit 0, or a value small enough to round to nothing),
+  since every consumer of this helper divides by the result.
+  (Raised in review on #1021.)
+*/ -}}
+{{- if le (int64 $bytes) (int64 0) -}}
+{{- fail (printf "pawtograder.quantityToBytes: %q resolves to %d bytes; a /dev/shm sizeLimit must be positive (the monitoring divides by it)" $v $bytes) -}}
+{{- end -}}
+{{- $bytes -}}
 {{- end -}}
