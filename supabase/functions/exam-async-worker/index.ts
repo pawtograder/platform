@@ -13,6 +13,7 @@ import {
   type PageImage,
   type WordBox
 } from "../_shared/examVision.ts";
+import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -125,10 +126,15 @@ async function setBatchError(admin: Admin, batchId: number, message: string): Pr
   // Callers run this BEFORE deadLetter for that reason: if it were second, a failure would
   // redeliver a message that had already been dead-lettered, appending a duplicate DLQ message
   // and audit row on every attempt.
+  //
+  // Never over 'completed': every confirmed exam was finalized from validated pages, so an error
+  // arriving later (a duplicate finalize that read the row before it was stamped) describes stale
+  // work, not the batch. It still reaches the DLQ and Sentry.
   const { error: updErr } = await admin
     .from("exam_scan_batches")
     .update({ status: "error", error: message })
-    .eq("id", batchId);
+    .eq("id", batchId)
+    .neq("status", "completed");
   if (updErr) throw new Error(`mark batch ${batchId} errored failed: ${updErr.message}`);
 }
 
@@ -156,21 +162,38 @@ function downloadImageCached(
   return pending;
 }
 
+// Which class, exam and batch a page's image_path must name (#1078). Taken from the batch row:
+// staff write image_path, and the page's own exam_id is not tied to its batch's exam.
+async function loadScanScope(admin: Admin, batchId: number): Promise<ScanScope> {
+  const { data, error } = await admin
+    .from("exam_scan_batches")
+    .select("id, class_id, exam_id")
+    .eq("id", batchId)
+    .single();
+  if (error || !data) throw new Error(`load scan batch ${batchId} failed: ${error?.message}`);
+  return { classId: data.class_id, examId: data.exam_id, batchId: data.id };
+}
+
 // ---------------------------------------------------------------------------
 // process_page: OCR one scan page
 // ---------------------------------------------------------------------------
-async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
+async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: page, error } = await admin
     .from("exam_scan_pages")
-    .select("id, image_path, width, height, ocr_data")
+    .select("id, batch_id, image_path, width, height, ocr_data")
     .eq("id", args.scan_page_id)
     .single();
   if (error || !page) throw new Error(`scan page ${args.scan_page_id} not found`);
+  // The message was enqueued for batchId, and that batch is what the enqueue RPC authorized. Staff
+  // can move a page to another batch of the course afterwards; this job is then obsolete, so it
+  // reads nothing and does not error either batch (the page's new batch has its own processing).
+  if (page.batch_id !== batchId) return;
   // Idempotent: already OCR'd. Keyed on ocr_data (as the match step's completeness check is),
   // not ocr_text, which is "" for a blank page and would re-send it to the provider every time.
   if (page.ocr_data !== null) return;
 
+  assertScanPathInScope(page.image_path, await loadScanScope(admin, batchId), `scan page ${page.id}`);
   const bytes = await downloadImage(admin, "exam-scans", page.image_path);
   const img: PageImage = {
     name: page.image_path,
@@ -179,10 +202,13 @@ async function processPage(admin: Admin, args: ProcessPageArgs): Promise<void> {
     height: page.height ?? 0
   };
   const result = await provider.ocrImage(img);
+  // Only while the page is still in this batch: if staff moved it during the OCR call, the result
+  // belongs to no queued work and is dropped (a zero-row update is not an error).
   const { error: updErr } = await admin
     .from("exam_scan_pages")
     .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
-    .eq("id", args.scan_page_id);
+    .eq("id", args.scan_page_id)
+    .eq("batch_id", batchId);
   // Throw on write failure so the message is requeued, not archived (would lose the OCR).
   if (updErr) throw new Error(`persist OCR for scan page ${args.scan_page_id} failed: ${updErr.message}`);
 }
@@ -273,15 +299,26 @@ async function matchProfile(
   return { profile_id: null, confidence: 0 };
 }
 
+// The batch states a match job may run from and move out of: the ones before review. A match
+// message that finds its batch anywhere else is stale -- a duplicate that outlived its visibility
+// window, or one still waiting on OCR after the batch errored -- and must not overwrite 'error' or
+// 'completed' (or move a reviewed or finalizing batch backwards). This cannot tell an old attempt's
+// message from a new one once enqueue_exam_process_batch has reset the batch to 'ocr'; that would
+// need an attempt id on the message.
+const MATCHABLE_STATUSES = ["uploaded", "ocr", "matching"];
+
 async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): Promise<void> {
   const classId = env.class_id;
   const provider = getExamVisionProvider();
   const { data: batch, error } = await admin
     .from("exam_scan_batches")
-    .select("id, exam_id, pages_per_exam")
+    .select("id, class_id, exam_id, pages_per_exam, total_pages, status")
     .eq("id", args.batch_id)
     .single();
   if (error || !batch) throw new Error(`batch ${args.batch_id} not found`);
+  // Before the OCR wait below, so a stale job cannot sit out the wait and then replace an existing
+  // batch error with its own.
+  if (!MATCHABLE_STATUSES.includes(batch.status)) return;
 
   // Join the OCR fan-out before doing anything else. enqueue_exam_process_batch sends one
   // process_page message per page plus this single match message, with no ordering guarantee
@@ -309,11 +346,15 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     return;
   }
 
-  const { error: matchingErr } = await admin
+  // Conditional, so a batch that errored or completed since the check above stays as it is.
+  const { data: nowMatching, error: matchingErr } = await admin
     .from("exam_scan_batches")
     .update({ status: "matching" })
-    .eq("id", batch.id);
+    .eq("id", batch.id)
+    .in("status", MATCHABLE_STATUSES)
+    .select("id");
   if (matchingErr) throw new Error(`set batch ${batch.id} to matching failed: ${matchingErr.message}`);
+  if (!nowMatching || nowMatching.length === 0) return;
 
   const perExam = Math.max(1, batch.pages_per_exam);
   const { data: pages, error: pagesErr } = await admin
@@ -326,11 +367,22 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // `error` batches -- so one transient database failure stranded the batch in an empty review
   // state with no way back. Throw so the queue retry path runs instead.
   if (pagesErr) throw new Error(`load scan pages for batch ${batch.id} failed: ${pagesErr.message}`);
+  // enqueue_exam_process_batch checked that every declared page persisted, but staff can delete or
+  // move pages after that. Grouping a short batch would still produce whole exams whenever the
+  // remaining pages divide evenly, just with the wrong pages in them, so require the full count on
+  // the pages actually being grouped. The divisibility check below is a separate requirement.
+  if ((pages?.length ?? 0) !== batch.total_pages) {
+    throw new Error(
+      `batch ${batch.id} has ${pages?.length ?? 0} of ${batch.total_pages} scan pages; ` +
+        `re-upload the scan before processing`
+    );
+  }
   if (!pages || pages.length === 0) {
     const { error: emptyReviewErr } = await admin
       .from("exam_scan_batches")
       .update({ status: "review" })
-      .eq("id", batch.id);
+      .eq("id", batch.id)
+      .in("status", MATCHABLE_STATUSES);
     if (emptyReviewErr) throw new Error(`set empty batch ${batch.id} to review failed: ${emptyReviewErr.message}`);
     return;
   }
@@ -345,6 +397,9 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
         `re-scan the batch or correct pages-per-exam before processing`
     );
   }
+  // Check every page's image path before reading any of them for identity (#1078).
+  const scanScope: ScanScope = { classId: batch.class_id, examId: batch.exam_id, batchId: batch.id };
+  for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
 
   // identity regions (kind name/student_id) defined on the template. A template may
   // define one of each; when both exist we read each independently (they can sit on
@@ -450,15 +505,23 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     // silently left the row with no pages attached, and finalize would then have nothing to
     // assemble -- it now refuses that case loudly, but failing here points at the actual cause
     // instead of surfacing three steps later.
-    const { error: linkErr } = await admin
+    // Only pages still in this batch: one moved away since the load above must not be linked here.
+    // A short count throws into the retry, whose page reload and count check then see the change;
+    // pages already linked are this group's own, and relinking them is idempotent.
+    const { data: linkedPages, error: linkErr } = await admin
       .from("exam_scan_pages")
       .update({ scanned_submission_id: scannedId })
+      .eq("batch_id", batch.id)
       .in(
         "id",
         groupPages.map((p) => p.id)
-      );
+      )
+      .select("id");
     if (linkErr) {
       throw new Error(`link pages to scanned submission ${scannedId} failed: ${linkErr.message}`);
+    }
+    if ((linkedPages?.length ?? 0) !== groupPages.length) {
+      throw new Error(`batch ${batch.id} lost pages while linking scanned submission ${scannedId}; re-run matching`);
     }
 
     // Preserve a human's confirmed/skipped decision across re-runs: leave the existing
@@ -513,12 +576,13 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // Conditional transition. A large match job can outlast the 120s visibility window, so a
   // duplicate worker may still be running this after staff have finalized the batch -- an
   // unconditional write would then stamp 'review' over 'completed' or 'error', hiding the
-  // terminal result. Only advance from the states that precede review.
+  // terminal result. Only advance from the states that precede review; 'error' is not one of them,
+  // since staff recover an errored batch through enqueue_exam_process_batch, which resets it to 'ocr'.
   const { error: reviewErr } = await admin
     .from("exam_scan_batches")
     .update({ status: "review" })
     .eq("id", batch.id)
-    .in("status", ["uploaded", "ocr", "matching", "error"]);
+    .in("status", MATCHABLE_STATUSES);
   if (reviewErr) throw new Error(`set batch ${batch.id} to review failed: ${reviewErr.message}`);
 }
 
@@ -563,11 +627,11 @@ async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> 
   }
 }
 
-async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Promise<void> {
+async function finalize(admin: Admin, classId: number, batchId: number, args: FinalizeArgs): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: scanned, error } = await admin
     .from("exam_scanned_submissions")
-    .select("id, exam_id, batch_id, matched_profile_id, match_status, submission_id, finalized_at")
+    .select("id, class_id, exam_id, batch_id, matched_profile_id, match_status, submission_id, finalized_at")
     .eq("id", args.scanned_submission_id)
     .single();
   if (error || !scanned) throw new Error(`scanned submission ${args.scanned_submission_id} not found`);
@@ -588,6 +652,46 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
   }
   const profileId = scanned.matched_profile_id as string;
 
+  // Scan ownership is judged against the batch this message was enqueued for, whose class the
+  // enqueue RPC checked the caller against. The scanned row's own batch_id is staff-writable and
+  // not tied to its class, so a scope read from it could name another course's batch (#1078).
+  // The row, the batch and the copy destination (this class) must all be the same course.
+  if (scanned.batch_id !== batchId || scanned.class_id !== classId) {
+    throw new ScanPathRejectedError(
+      `scanned submission ${scanned.id} is no longer in batch ${batchId} of class ${classId}; refusing to read its scans`
+    );
+  }
+  const scanScope = await loadScanScope(admin, batchId);
+  if (scanScope.classId !== classId) {
+    throw new ScanPathRejectedError(`batch ${batchId} is not in class ${classId}; refusing to read its scans`);
+  }
+  // The row's exam_id is staff-writable too, and exam_create_submission takes the assignment from
+  // it: a row moved to another exam would file this batch's scans under that exam's assignment.
+  if (scanned.exam_id !== scanScope.examId) {
+    throw new ScanPathRejectedError(
+      `scanned submission ${scanned.id} names exam ${scanned.exam_id}, but batch ${batchId} is exam ${scanScope.examId}; refusing to read its scans`
+    );
+  }
+
+  // Load and check the pages before creating the submission, so a rejected page leaves no
+  // submission or grading review behind (#1078). Every read below uses this validated array;
+  // nothing re-queries image_path.
+  const { data: pages, error: pagesErr } = await admin
+    .from("exam_scan_pages")
+    .select("id, page_index, image_path, width, height, ocr_data")
+    .eq("scanned_submission_id", scanned.id)
+    .order("page_index", { ascending: true });
+  // Never coalesce this to []. A transient PostgREST failure would otherwise read as "this
+  // exam has no pages": the loop below skips every question region, the exam_v1 artifact is
+  // written empty, and finalized_at is stamped -- which permanently marks the submission
+  // finalized, so no retry ever rebuilds it. Throwing requeues the message instead.
+  if (pagesErr) throw new Error(`load scan pages for scanned submission ${scanned.id} failed: ${pagesErr.message}`);
+  if (!pages || pages.length === 0) {
+    throw new Error(`scanned submission ${scanned.id} has no scan pages; refusing to finalize an empty exam artifact`);
+  }
+  // Check every page's image path before copying or structuring from any of them (#1078).
+  for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
+
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
   // row already exists, so a retried finalize reuses the same submission.
@@ -602,21 +706,6 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
   // a crash) re-runs them safely. pageBytes fetches each page image at most once.
   {
     const pageBytes = new Map<string, Promise<Uint8Array>>();
-    const { data: pages, error: pagesErr } = await admin
-      .from("exam_scan_pages")
-      .select("id, page_index, image_path, width, height, ocr_data")
-      .eq("scanned_submission_id", scanned.id)
-      .order("page_index", { ascending: true });
-    // Never coalesce this to []. A transient PostgREST failure would otherwise read as "this
-    // exam has no pages": the loop below skips every question region, the exam_v1 artifact is
-    // written empty, and finalized_at is stamped -- which permanently marks the submission
-    // finalized, so no retry ever rebuilds it. Throwing requeues the message instead.
-    if (pagesErr) throw new Error(`load scan pages for scanned submission ${scanned.id} failed: ${pagesErr.message}`);
-    if (!pages || pages.length === 0) {
-      throw new Error(
-        `scanned submission ${scanned.id} has no scan pages; refusing to finalize an empty exam artifact`
-      );
-    }
     const groupPages = pages;
 
     // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the
@@ -767,16 +856,25 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   try {
     // env.args is narrowed by env.method (discriminated ExamAsyncEnvelope) — no casts needed.
     if (env.method === "process_page") {
-      await processPage(admin, env.args);
+      await processPage(admin, env.batch_id, env.args);
     } else if (env.method === "match") {
       await doMatch(admin, env, env.args);
     } else if (env.method === "finalize") {
-      await finalize(admin, env.class_id, env.args);
+      await finalize(admin, env.class_id, env.batch_id, env.args);
     } else {
       throw new Error(`unknown method ${(env as { method: string }).method}`);
     }
     await archive(admin, msg.msg_id);
   } catch (error) {
+    if (error instanceof ScanPathRejectedError) {
+      // A rejected scan path rejects again on every retry, so surface it on the batch now
+      // instead of after five retries.
+      Sentry.captureException(error, scope);
+      if (env.batch_id) await setBatchError(admin, env.batch_id, error.message);
+      await deadLetter(admin, env, msg.msg_id, error);
+      await archive(admin, msg.msg_id);
+      return;
+    }
     if (error instanceof ProviderRateLimitError) {
       // Rate limits are transient, but bound the retries (see MAX_RATE_LIMIT_RETRIES) so a
       // permanently-exhausted quota can't requeue forever.
