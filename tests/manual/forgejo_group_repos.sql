@@ -169,6 +169,9 @@ do $$ begin
 exception when unique_violation then
   perform pg_temp.check('5e a pass can''t claim a name another group holds', true);
 end $$;
+select public.save_forgejo_group_repo(pg_temp.g('complete'), 'grp-org/proj-group-Team-One', 'https://git.test', '{}');
+select pg_temp.check('5f claiming a name that is already this group''s keeps its readiness',
+  (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete')));
 
 -- 6
 update public.classes set github_org = 'gh-org' where id = pg_temp.cls();
