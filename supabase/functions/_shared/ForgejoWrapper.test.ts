@@ -6,14 +6,17 @@
  */
 import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
+  downloadArchive,
   ensureAccountForUser,
   ensureOrg,
   ensureRepoFromTemplate,
   forgejoConfig,
   type ForgejoConfig,
+  getCommit,
   grantWrite,
   readFile,
   repoPath,
+  startGrading,
   usernameFromEmail
 } from "./ForgejoWrapper.ts";
 
@@ -171,6 +174,30 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
   });
 });
 
+Deno.test("downloadArchive: fetches the commit's zip, and an error status fails", async () => {
+  const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+  await withForgejo([new Response(zip, { status: 200 })], async (calls) => {
+    assertEquals(await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c"), zip);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/archive/b275490c.zip");
+  });
+  await withForgejo([new Response("Not Found", { status: 404 })], async () => {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c"), Error, "404");
+  });
+});
+
+Deno.test("downloadArchive: gives up on a request Forgejo never answers", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+    })) as typeof fetch;
+  try {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "0000", 50), DOMException);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 const status = (code: number, message = "") => new Response(JSON.stringify({ message }), { status: code });
 
 /** The lookups that prove an existing org is the admin's alone: who the admin is, the org's teams, the owners. */
@@ -321,5 +348,53 @@ Deno.test("readFile: decodes the file's base64 content, and a missing file is nu
   });
   await withForgejo([status(500)], async () => {
     await assertRejects(() => readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), Error, "500");
+  });
+});
+
+Deno.test("readFile: asks for the file at a given ref", async () => {
+  await withForgejo([status(404)], async (calls) => {
+    await readFile(config, "cs4535/hw1-alex.kim", ".github/workflows/grade.yml", "27d062d9");
+    assertEquals(
+      calls[0].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/contents/.github/workflows/grade.yml?ref=27d062d9"
+    );
+  });
+});
+
+Deno.test("getCommit: resolves a short sha to the full commit, and a missing one fails", async () => {
+  const commit = { sha: "27d062d99f8551af7be5e9ff7812241574198a0b", commit: { message: "Initial commit\n" } };
+  await withForgejo([ok(commit)], async (calls) => {
+    assertEquals(await getCommit(config, "cs4535/hw1-alex.kim", "27d062d9"), commit);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/git/commits/27d062d9");
+  });
+  await withForgejo([status(404)], async () => {
+    await assertRejects(() => getCommit(config, "cs4535/hw1-alex.kim", "deadbeef"), Error, "commit lookup failed: 404");
+  });
+});
+
+Deno.test("startGrading: tags the commit and dispatches grade.yml at the tag, reusing an existing tag", async () => {
+  const sha = "27d062d99f8551af7be5e9ff7812241574198a0b";
+  for (const tagStatus of [201, 409]) {
+    await withForgejo([status(tagStatus), new Response(null, { status: 204 })], async (calls) => {
+      await startGrading(config, "cs4535/hw1-alex.kim", sha);
+      assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags");
+      assertEquals(calls[0].body, {
+        tag_name: `pawtograder-submit/${sha}`,
+        target: sha,
+        message: "pawtograder submission"
+      });
+      assertEquals(
+        calls[1].url,
+        "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/actions/workflows/grade.yml/dispatches"
+      );
+      assertEquals(calls[1].body, { ref: `pawtograder-submit/${sha}` });
+    });
+  }
+  await withForgejo([status(403)], async (calls) => {
+    await assertRejects(() => startGrading(config, "cs4535/hw1-alex.kim", sha), Error, "submission tag failed: 403");
+    assertEquals(calls.length, 1);
+  });
+  await withForgejo([status(201), status(404)], async () => {
+    await assertRejects(() => startGrading(config, "cs4535/hw1-alex.kim", sha), Error, "workflow dispatch failed: 404");
   });
 });
