@@ -128,7 +128,8 @@ postgres:
     forcePathStyle: true
     baseBackup:
       intervalHours: 24
-      keepBackups: 8   # ~8 days of PITR window
+    retention:
+      keepBackups: 8    # ~8 days of PITR window
 
   # Streaming standby replica: warm failover target + read scaling. local-path
   # is fine (own volume on another node); spreadAcrossNodes keeps it off the
@@ -174,6 +175,9 @@ auth:
     # https://api.staging.pawtograder.net/auth/v1/callback.
     discord:
       enabled: true
+  oauthServer:
+    enabled: true
+    autoApproveFirstParty: true
   # Pawtograder's email templates. Their links go straight to the app's token_hash pages
   # (/auth/reset-password, /auth/confirm, /auth/accept-invitation, /auth/magic-link), which is
   # the flow those pages implement. GoTrue's built-in templates go through /verify and land on
@@ -320,6 +324,13 @@ edgeFunctions:
     # (_shared/examVision.ts), which fail closed without them. Synced by the
     # pawtograder-exam-vision ExternalSecret from kv/apps/pawtograder/exam-vision-staging.
     - pawtograder-exam-vision
+    # FORGEJO_WEBHOOK_SECRET for forgejo-repo-webhook, which answers 500 without it. Needs a
+    # pawtograder-forgejo-webhook ExternalSecret syncing kv/apps/pawtograder/forgejo-webhook-staging
+    # (written by scripts/setup-openbao-edge-functions.sh --bundle forgejo-webhook); until then this
+    # entry is skipped, like any absent envFromSecrets name. envFrom is read at container start, so
+    # roll the edge-function Deployments once the Secret first exists. Not forgejo-staging, which
+    # holds Forgejo's own passwords.
+    - pawtograder-forgejo-webhook
   email:
     # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
     enabled: "true"
@@ -498,3 +509,111 @@ monitoring:
   prometheusRules:
     labels:
       release: kps
+
+# ----- Forgejo and Coder (seed secrets first: scripts/setup-openbao-forgejo-coder.sh)
+forgejoCoderSecrets:
+  externalSecret:
+    enabled: true
+    forgejoPath: apps/pawtograder/forgejo-staging
+    coderPath: apps/pawtograder/coder-staging
+    # Not Ready (PawtograderExternalSecretNotReady fires) until scripts/setup-sso-clients.sh writes them.
+    forgejoOAuthPath: apps/pawtograder/forgejo-oauth-staging
+    coderOIDCPath: apps/pawtograder/coder-oidc-staging
+    # dispatcher_token / mirror_token of the forgejo-actions-bot site admin; scripts/setup-forgejo-runner-tokens.sh.
+    runnerPath: apps/pawtograder/forgejo-runner-staging
+    # Run scripts/setup-coder-forgejo-auth.sh --env staging before deploying coder.externalAuth.
+    coderExternalAuthPath: apps/pawtograder/coder-external-auth-staging
+
+# Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
+networkPolicy:
+  cilium:
+    enabled: true
+
+forgejo:
+  enabled: true
+  # global.nodeSelector/tolerations don't reach subcharts.
+  nodeSelector: { tier: prod-staging }
+  tolerations:
+    - { key: tier, operator: Equal, value: prod-staging, effect: NoSchedule }
+  ingress:
+    hosts:
+      - host: git.staging.pawtograder.net
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: staging-wildcard-tls
+        hosts: [git.staging.pawtograder.net]
+  gitea:
+    # "Sign in with Pawtograder". The init container adds or updates this source on every start, which
+    # needs pawtograder-forgejo-oauth (key, secret; synced from forgejoOAuthPath once
+    # scripts/setup-sso-clients.sh has run) and the discovery URL answering 200: Forgejo fetches it and
+    # the init container fails until it can. Adding the source this way, before Forgejo starts, is what
+    # makes the first sign-in send PKCE (README "Sign in with Pawtograder").
+    oauth:
+      - name: pawtograder
+        provider: openidConnect
+        existingSecret: pawtograder-forgejo-oauth
+        autoDiscoverUrl: https://api.staging.pawtograder.net/auth/v1/.well-known/openid-configuration
+        scopes: email profile
+    config:
+      oauth2_client:
+        # ENABLE_AUTO_REGISTRATION stays unset (off): sign-in reaches only provisioned accounts.
+        # The ID token has no preferred_username; userid names accounts after the GoTrue sub,
+        # where email would collide on the local part (alex@a.edu vs alex@b.edu).
+        USERNAME: userid
+        ACCOUNT_LINKING: disabled
+
+forgejoRunner:
+  enabled: true
+  # Not pawtograder-staging-workspaces: the dispatcher's Role there could mount workspace Secrets.
+  jobNamespace: pawtograder-staging-actions
+  image:
+    repository: ghcr.io/pawtograder/forgejo-runner
+    tag: staging-latest # deploy-staging pins this to the build's tag
+  capacity: 2
+  dispatcher:
+    # Site admin token (write:admin): course orgs aren't fixed yet. Both token Secrets sync from
+    # forgejoCoderSecrets.externalSecret.runnerPath (scripts/setup-forgejo-runner-tokens.sh).
+    tokenSecret: pawtograder-forgejo-runner-token
+  actions:
+    # Scopes: write:organization,write:repository.
+    tokenSecret: pawtograder-forgejo-mirror-token
+
+coder:
+  enabled: true
+  oidc:
+    enabled: true
+  externalAuth:
+    forgejo:
+      enabled: true
+  coder:
+    nodeSelector: { tier: prod-staging }
+    tolerations:
+      - { key: tier, operator: Equal, value: prod-staging, effect: NoSchedule }
+    env:
+      - name: CODER_PG_CONNECTION_URL
+        value: postgres://coder@pawtograder-postgres:5432/coder?sslmode=disable
+      - name: CODER_ACCESS_URL
+        value: https://coder.staging.pawtograder.net
+      # Workspace apps run student code, so they get their own zone: staging session cookies are
+      # scoped to .staging.pawtograder.net (utils/channels.ts) and aren't HttpOnly. Holds only while no
+      # environment scopes cookies to bare .pawtograder.net; prod must keep host-only or own-subdomain cookies.
+      - name: CODER_WILDCARD_ACCESS_URL
+        value: "*.workspaces-staging.pawtograder.net"
+    ingress:
+      host: coder.staging.pawtograder.net
+      wildcardHost: "*.workspaces-staging.pawtograder.net"
+      tls:
+        enable: true
+        secretName: staging-wildcard-tls
+        wildcardSecretName: workspaces-staging-wildcard-tls
+    serviceAccount:
+      # No Role in pawtograder-staging: pod-create there can read every staging secret.
+      workspacePerms: false
+      workspaceNamespaces:
+        - name: pawtograder-staging-workspaces
+          workspacePerms: true
+
+coderBootstrap:
+  workspaceNamespace: pawtograder-staging-workspaces
