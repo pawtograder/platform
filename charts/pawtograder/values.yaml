@@ -239,8 +239,8 @@ secrets:
                                   #   and .../install/callback), not only by the
                                   #   worker. Omitting it makes the install button
                                   #   answer 500.
-    edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
-                                  #   canvas, sis, smtp, mcp, redis, sentry, misc
+    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, aws-chime,
+                                  #   discord, canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
     pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
@@ -755,6 +755,8 @@ auth:
     enabled: false
     authorizationPath: /oauth/consent
     allowDynamicRegistration: false
+    # true: no consent screen when this release's Forgejo or Coder signs in (matched on their callback URLs).
+    autoApproveFirstParty: false
 
   # External OAuth providers. Credentials live in the `web` secret (the chart
   # passes them through to GoTrue via env). Set enabled=true per provider.
@@ -2777,6 +2779,24 @@ forgejo:
     enabled: true
     className: nginx
     hosts: []
+  # true: /user/login goes straight to the Pawtograder login source. /user/login?password_login=1 keeps the password form.
+  signInRedirect: true
+  # Subchart values aren't templated: the ConfigMap name is <release>-forgejo-templates.
+  extraVolumes:
+    - name: pawtograder-templates
+      configMap: { name: pawtograder-forgejo-templates, optional: true }
+  # Copied, not mounted: a mount inside /data makes the runtime create /data/gitea as root on a fresh volume.
+  extraInitVolumeMounts:
+    - name: pawtograder-templates
+      mountPath: /pawtograder-templates
+      readOnly: true
+  initPreScript: |
+    mkdir -p /data/gitea/templates/custom
+    if [ -f /pawtograder-templates/header.tmpl ]; then
+      cp /pawtograder-templates/header.tmpl /data/gitea/templates/custom/header.tmpl
+    else
+      rm -f /data/gitea/templates/custom/header.tmpl
+    fi
   gitea:
     admin:
       existingSecret: pawtograder-forgejo-admin
@@ -2813,6 +2833,10 @@ forgejo:
       indexer:
         ISSUE_INDEXER_TYPE: bleve
         REPO_INDEXER_ENABLED: false
+      webhook:
+        # GitHub's cap. forgejo-repo-webhook records only the commits a push payload lists, and
+        # Forgejo's default of 15 would drop the rest of a larger push from the commit history.
+        PAYLOAD_COMMIT_LIMIT: 2048
 
 forgejo-db:
   enabled: false
@@ -2898,6 +2922,13 @@ coder:
     signInText: Sign in with Pawtograder
     # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
     allowSignups: false
+  # Run scripts/setup-coder-forgejo-auth.sh before enabling; coderd exits at startup without the client ID.
+  externalAuth:
+    forgejo:
+      enabled: false
+      # Changing it unlinks every user and needs the OAuth app re-registered.
+      id: forgejo
+      displayName: Forgejo
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
@@ -2909,6 +2940,7 @@ coder:
       - configMapRef: { name: pawtograder-coder-env }
       - secretRef: { name: pawtograder-coder-db }
       - secretRef: { name: pawtograder-coder-oidc, optional: true }
+      - secretRef: { name: pawtograder-coder-external-auth, optional: true }
     # Whoever reaches a coderd with no users becomes owner; this creates ours on 127.0.0.1 before coderd serves.
     initContainers:
       - name: first-owner
@@ -2957,9 +2989,13 @@ coder:
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
           - name: ADMIN_PASSWORD
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        # Same Secrets as coderd's envFrom above: pawtograder-coder-env names an external-auth provider
+        # (and OIDC), and this coderd refuses to start without its client id.
         envFrom:
           - configMapRef: { name: pawtograder-coder-env }
           - secretRef: { name: pawtograder-coder-db }
+          - secretRef: { name: pawtograder-coder-oidc, optional: true }
+          - secretRef: { name: pawtograder-coder-external-auth, optional: true }
         securityContext:
           allowPrivilegeEscalation: false
           capabilities: { drop: [ALL] }
@@ -3016,6 +3052,11 @@ forgejoCoderSecrets:
     coderPath: ""
     forgejoOAuthPath: ""
     coderOIDCPath: ""
+    # With forgejoRunner on: the path holding dispatcher_token and mirror_token, written by
+    # scripts/setup-forgejo-runner-tokens.sh. Syncs forgejoRunner.dispatcher.tokenSecret and
+    # forgejoRunner.actions.tokenSecret (key token). Empty: create those Secrets by hand.
+    runnerPath: ""
+    coderExternalAuthPath: ""
     storeName: openbao
     storeKind: ClusterSecretStore
     refreshInterval: 1h

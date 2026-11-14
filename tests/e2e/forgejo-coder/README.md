@@ -50,16 +50,23 @@ tests/e2e/forgejo-coder/run-remote.sh --namespace cs4535-workspaces \
 
 ## Journeys
 
-`tests/e2e/sso/sso.forgejo-coder.spec.ts`, run in order:
+`tests/e2e/sso/sso.forgejo-coder.spec.ts`, run in order. The lane runs as the chart does with
+`auth.oauthServer.autoApproveFirstParty` and `forgejo.signInRedirect` on: `run-e2e.sh` sets
+`OAUTH_FIRST_PARTY_REDIRECT_URIS` to both apps' callbacks and mounts `files/forgejo/header.tmpl` into
+Forgejo. Nothing clicks Authorize for Forgejo or Coder, so reaching the app shows no consent page
+stopped the flow. `run-remote.sh` reads both settings from the release and runs the journeys that fit.
 
-1. Forgejo, already signed in to Pawtograder. The user approves on the consent page and Forgejo
+1. Forgejo, already signed in to Pawtograder. `/user/login` goes straight to Pawtograder and Forgejo
    creates an account bound to the `pawtograder` login source.
-2. Forgejo, cold start. With no Pawtograder session, consent sends the user to sign in and back.
-3. Forgejo, deny. No account is created.
-4. Forgejo, repeat sign-in. GoTrue remembers the consent and the user gets the same account.
+2. Forgejo, cold start. With no Pawtograder session, the user signs in and goes on to Forgejo.
+3. Forgejo, deny. No account is created. Runs only without auto-approval.
+4. Forgejo, repeat sign-in. The user gets the same account.
+   4b. `/user/login?password_login=1` keeps Forgejo's own sign-in page.
 5. Coder, already signed in. Coder creates an `oidc` account.
-6. Coder, cold start and deny.
+6. Coder, cold start, and deny (deny only without auto-approval).
 7. GoTrue refuses an authorize request whose `redirect_uri` isn't registered.
+8. A third client named `Coder` with its own callback still gets the consent page, and Deny sends
+   `error=access_denied` back to it.
 
 ## Things this lane found
 

@@ -28,6 +28,22 @@ data:
   CODER_OIDC_ALLOW_SIGNUPS: {{ .Values.coder.oidc.allowSignups | quote }}
   CODER_OIDC_SIGN_IN_TEXT: {{ .Values.coder.oidc.signInText | quote }}
   {{- end }}
+  {{- with .Values.coder.externalAuth.forgejo }}
+  {{- if .enabled }}
+  {{- $public := include "pawtograder.forgejo.url" $ }}
+  {{- $service := printf "http://%s.%s.svc:%v" (include "pawtograder.forgejo.http" $) $.Release.Namespace (include "pawtograder.forgejo.servicePort" $) }}
+  CODER_EXTERNAL_AUTH_0_ID: {{ .id | quote }}
+  CODER_EXTERNAL_AUTH_0_TYPE: "gitea"
+  CODER_EXTERNAL_AUTH_0_DISPLAY_NAME: {{ .displayName | quote }}
+  CODER_EXTERNAL_AUTH_0_AUTH_URL: "{{ $public }}/login/oauth/authorize"
+  CODER_EXTERNAL_AUTH_0_TOKEN_URL: "{{ $service }}/login/oauth/access_token"
+  CODER_EXTERNAL_AUTH_0_VALIDATE_URL: "{{ $service }}/api/v1/user"
+  {{- /* Matches the bare origin too: git asks for credentials with it alone. */}}
+  CODER_EXTERNAL_AUTH_0_REGEX: {{ printf "^%s(/.*)?$" (regexQuoteMeta $public) | quote }}
+  {{- /* Coder's gitea default scopes contain a stray space (" write:repository"). */}}
+  CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"
+  {{- end }}
+  {{- end }}
 ---
 {{- end }}
 # Not a hook: a pre-install hook would run before the Postgres servers exist.
