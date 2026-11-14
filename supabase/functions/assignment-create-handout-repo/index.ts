@@ -3,15 +3,14 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import {
-  createRepo,
   deleteFileFromRepo,
   getDefaultBranchHeadSha,
   GRADE_WORKFLOW_PATH,
-  syncRepoPermissions,
   updateAutograderWorkflowHash
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
-import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserHasCapabilityOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -24,8 +23,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
 
-  // Allow both instructor users and service role (for admin scripts)
-  await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
+  // Allow holders of manage_assignments (instructors, and graders on a role that has it) and service role (for admin scripts)
+  await assertUserHasCapabilityOrServiceRole(class_id, "manage_assignments", req.headers.get("Authorization"));
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -192,7 +191,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     requiredReviewers: 0
   };
 
-  await createRepo(
+  await getGitProvider().createRepo(
     handoutRepoOrg!,
     handoutRepoName,
     sourceTemplateRepo,
@@ -203,7 +202,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     },
     scope
   );
-  await syncRepoPermissions(
+  await getGitProvider().syncRepoPermissions(
     handoutRepoOrg!,
     handoutRepoName,
     assignment.classes.slug,

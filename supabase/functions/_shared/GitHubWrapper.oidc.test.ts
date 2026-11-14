@@ -6,11 +6,11 @@
  */
 import { assertEquals, assertInstanceOf, assertRejects } from "jsr:@std/assert@^1";
 import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
-import { JobTokenRejectedError } from "./HandlerUtils.ts";
+import { JobTokenRejectedError, UserVisibleError } from "./HandlerUtils.ts";
 
 // GitHubWrapper builds a GitHub App at import time, which needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { validateOIDCToken } = await import("./GitHubWrapper.ts");
+const { assertJobTokenMatchesRepository, validateOIDCToken } = await import("./GitHubWrapper.ts");
 // Callers accept only GitHub unless they opt in; the Forgejo cases below opt in.
 const validateEither = (token: string) => validateOIDCToken(token, ["github", "forgejo"]);
 
@@ -303,3 +303,52 @@ Deno.test(
     );
   }
 );
+
+/** A client whose repositories lookup returns `row`, recording the repository it was asked for. */
+function repositoriesClient(row: { git_provider: string } | null, error: { message: string } | null = null) {
+  const asked: unknown[] = [];
+  const query = {
+    select: () => query,
+    eq: (column: string, value: unknown) => {
+      asked.push([column, value]);
+      return query;
+    },
+    maybeSingle: () => Promise.resolve({ data: row, error })
+  };
+  const client = { from: (table: string) => (assertEquals(table, "repositories"), query) };
+  return { client: client as unknown as Parameters<typeof assertJobTokenMatchesRepository>[0], asked };
+}
+
+Deno.test(
+  "assertJobTokenMatchesRepository: a token is accepted only for a repository on its own provider",
+  async () => {
+    const cases: [provider: "github" | "forgejo", row: { git_provider: string } | null, accepted: boolean][] = [
+      ["github", { git_provider: "github" }, true],
+      ["github", null, true], // grader, handout and E2E repositories have no row
+      ["github", { git_provider: "forgejo" }, false],
+      ["forgejo", { git_provider: "forgejo" }, true],
+      ["forgejo", { git_provider: "github" }, false],
+      ["forgejo", null, false]
+    ];
+    for (const [provider, row, accepted] of cases) {
+      const { client, asked } = repositoriesClient(row);
+      const check = () => assertJobTokenMatchesRepository(client, { repository: "demo-class/hw1-student1", provider });
+      if (accepted) {
+        await check();
+      } else {
+        const err = await assertRejects(check);
+        assertInstanceOf(err, JobTokenRejectedError);
+        assertEquals(err.reason, "provider");
+      }
+      assertEquals(asked, [["repository", "demo-class/hw1-student1"]]);
+    }
+  }
+);
+
+Deno.test("assertJobTokenMatchesRepository: a failed lookup is an error, not a rejection", async () => {
+  const { client } = repositoriesClient(null, { message: "502 from PostgREST" });
+  const err = await assertRejects(() =>
+    assertJobTokenMatchesRepository(client, { repository: "demo-class/hw1-student1", provider: "github" })
+  );
+  assertInstanceOf(err, UserVisibleError);
+});

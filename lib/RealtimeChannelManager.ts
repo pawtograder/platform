@@ -2,6 +2,7 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import * as Sentry from "@sentry/nextjs";
+import { bugReportIngest } from "@/lib/bugReport/ingestGate";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -39,19 +40,8 @@ type ManagedChannel = {
 
 type ClassesRow = Database["public"]["Tables"]["classes"]["Row"];
 
-/** postgres_changes UPDATE payload — may include only changed columns, not the full row. */
+/** classes_update broadcast payload `data` — the full updated row. */
 export type ClassesRealtimeUpdate = Partial<ClassesRow> & { id: number };
-
-type ClassesUpdateSubscription = {
-  callback: (updatedCourse: ClassesRealtimeUpdate) => void;
-};
-
-type ManagedPostgresChannel = {
-  channel: RealtimeChannel;
-  subscriptions: ClassesUpdateSubscription[];
-  topic: string;
-  client: SupabaseClient<Database>;
-};
 
 /**
  * Singleton that manages Supabase realtime channel subscriptions and routes messages
@@ -61,11 +51,9 @@ type ManagedPostgresChannel = {
 export class RealtimeChannelManager {
   private static _instance: RealtimeChannelManager | null = null;
   private _channels: Map<string, ManagedChannel> = new Map();
-  private _postgresChannels: Map<string, ManagedPostgresChannel> = new Map();
   private _client: SupabaseClient<Database> | null = null;
   // Prevent duplicate channel creation for the same topic when multiple callers subscribe concurrently
   private _pendingChannelCreates: Map<string, Promise<void>> = new Map();
-  private _pendingPostgresChannelCreates: Map<string, Promise<void>> = new Map();
   // Unique id for this browser/client instance to distinguish multiple tabs
   private _clientInstanceId: string =
     typeof crypto !== "undefined" && (crypto as Crypto).randomUUID
@@ -133,6 +121,14 @@ export class RealtimeChannelManager {
   }
 
   /** Refresh the lease periodically while subscribed */
+  /** Stop refreshing the lease for a channel that is no longer live. */
+  private _stopLeaseRefresh(managed: ManagedChannel) {
+    if (managed.leaseTimer) {
+      clearInterval(managed.leaseTimer);
+      managed.leaseTimer = null;
+    }
+  }
+
   private _startLeaseRefresh(managed: ManagedChannel) {
     if (managed.leaseTimer) {
       clearInterval(managed.leaseTimer);
@@ -149,6 +145,16 @@ export class RealtimeChannelManager {
         this._breadcrumb("lease", "refresh_error", { topic: managed.topic, message: String(err) }, "warning");
       }
     }, 120000); // refresh every 120s to reduce churn; server lease >= 150s
+  }
+
+  /** Registers the lease for a channel that just joined, then restarts its refresh if it is still the live channel. */
+  private _restoreLease(managed: ManagedChannel, channel: ManagedChannel["channel"], isJoined: () => boolean) {
+    void this._registerLease(managed).then(() => {
+      // The channel may have been torn down, replaced, or timed out while the lease was being registered.
+      if (this._channels.get(managed.topic) === managed && managed.channel === channel && isJoined()) {
+        this._startLeaseRefresh(managed);
+      }
+    });
   }
 
   /** Stop refreshing lease and unregister */
@@ -522,6 +528,10 @@ export class RealtimeChannelManager {
     const managedChannel = this._channels.get(topic);
     if (!managedChannel) return;
 
+    // Bug reporter taint ingest (full-row broadcasts); null unless a recorder is running.
+    const ingest = bugReportIngest.sink;
+    if (ingest) ingest.broadcast(message);
+
     for (const subscription of managedChannel.subscriptions) {
       try {
         subscription.callback(message);
@@ -777,9 +787,16 @@ export class RealtimeChannelManager {
       // Subscribe and wait for a definitive outcome
       await new Promise<void>((resolve, reject) => {
         let settled = false;
+        let joined = false;
         newChannel.subscribe((status, err) => {
           // Notify listeners of status changes
           this._handleReconnectionStateEvent(topic, status, err);
+          joined = status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
+          // A replacement channel has no lease and no refresh timer. A rejoin after TIMED_OUT stops the timer,
+          // so restore the lease on every SUBSCRIBED, not only the first one.
+          if (joined) {
+            this._restoreLease(managedChannel, newChannel, () => joined);
+          }
           if (settled) return;
           switch (status) {
             case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED:
@@ -825,6 +842,7 @@ export class RealtimeChannelManager {
         break;
       case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR:
         managedChannel.isReconnecting = false;
+        this._stopLeaseRefresh(managedChannel);
         this._breadcrumb("reconnect", "channel_error", { topic }, "warning");
 
         // Only retry if we haven't exceeded max attempts
@@ -837,6 +855,7 @@ export class RealtimeChannelManager {
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
         // Do not change flags or schedule retries here.
         // The backoff controller (_resubscribeToChannelWithBackoff) manages retry lifecycle.
+        this._stopLeaseRefresh(managedChannel);
         this._breadcrumb(
           "reconnect",
           status === REALTIME_SUBSCRIBE_STATES.CLOSED ? "closed" : "timed_out",
@@ -912,103 +931,28 @@ export class RealtimeChannelManager {
 
   /**
    * Subscribe to UPDATE events on a single course row in `public.classes`.
-   * Multiple callers for the same courseId share one postgres_changes channel.
+   * A DB trigger broadcasts these on the students topic and the staff topic. Staff subscribe to
+   * the staff topic, so they don't join the students topic and receive its events too.
    */
   async subscribeToClassesUpdate(
     courseId: number,
     client: SupabaseClient<Database>,
-    callback: (updatedCourse: ClassesRealtimeUpdate) => void
+    callback: (updatedCourse: ClassesRealtimeUpdate) => void,
+    statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void,
+    isStaff: boolean
   ): Promise<() => void> {
-    const topic = `postgres:classes:${courseId}`;
-    this._breadcrumb("subscription", "subscribe_classes_update_called", { topic, courseId });
-
-    let managedChannel = this._postgresChannels.get(topic);
-    if (!managedChannel) {
-      const pending = this._pendingPostgresChannelCreates.get(topic);
-      if (pending) {
-        await pending;
-      } else {
-        const createPromise = (async () => {
-          await this._refreshSessionIfNeeded(client);
-          const channel = client.channel(topic);
-          this._breadcrumb("channel", "postgres_created", { topic });
-
-          const newManaged: ManagedPostgresChannel = {
-            channel,
-            subscriptions: [],
-            topic,
-            client
-          };
-
-          channel.on(
-            "postgres_changes",
-            { event: "UPDATE", schema: "public", table: "classes", filter: `id=eq.${courseId}` },
-            (payload) => {
-              const updated = payload.new as Partial<ClassesRow>;
-              if (typeof updated.id !== "number") {
-                return;
-              }
-              this._routeClassesUpdate(topic, updated as ClassesRealtimeUpdate);
-            }
-          );
-          channel.subscribe();
-
-          this._postgresChannels.set(topic, newManaged);
-        })().finally(() => {
-          this._pendingPostgresChannelCreates.delete(topic);
-        });
-
-        this._pendingPostgresChannelCreates.set(topic, createPromise);
-        await createPromise;
-      }
-
-      managedChannel = this._postgresChannels.get(topic)!;
-    }
-
-    const subscription: ClassesUpdateSubscription = { callback };
-    managedChannel.subscriptions.push(subscription);
-    this._breadcrumb("subscription", "classes_update_added", {
-      topic,
-      subscriptionCount: managedChannel.subscriptions.length
-    });
-
-    return () => {
-      this._breadcrumb("subscription", "classes_update_unsubscribe_called", {
-        topic,
-        remainingBefore: managedChannel.subscriptions.length
-      });
-
-      const index = managedChannel.subscriptions.indexOf(subscription);
-      if (index > -1) {
-        managedChannel.subscriptions.splice(index, 1);
-      }
-
-      if (managedChannel.subscriptions.length === 0) {
-        this._breadcrumb("channel", "postgres_teardown", { topic });
-        managedChannel.channel.unsubscribe();
-        managedChannel.client.removeChannel(managedChannel.channel);
-        this._postgresChannels.delete(topic);
-      }
-
-      this._breadcrumb("subscription", "classes_update_removed", {
-        topic,
-        remainingAfter: managedChannel.subscriptions.length
-      });
-    };
-  }
-
-  private _routeClassesUpdate(topic: string, updatedCourse: ClassesRealtimeUpdate) {
-    const managedChannel = this._postgresChannels.get(topic);
-    if (!managedChannel) return;
-
-    for (const subscription of managedChannel.subscriptions) {
-      try {
-        subscription.callback(updatedCourse);
-      } catch (error) {
-        console.error("Error routing classes update to subscription:", error);
-        this._breadcrumb("channel", "classes_update_route_error", { topic }, "error");
-      }
-    }
+    return this.subscribe(
+      `class:${courseId}:${isStaff ? "staff" : "students"}`,
+      client,
+      (message) => {
+        const raw = message as unknown as { type?: string; data?: Partial<ClassesRow> };
+        if (raw.type !== "classes_update" || typeof raw.data?.id !== "number") {
+          return;
+        }
+        callback(raw.data as ClassesRealtimeUpdate);
+      },
+      statusCallback
+    );
   }
 
   /**
@@ -1016,18 +960,12 @@ export class RealtimeChannelManager {
    */
   cleanup() {
     this._breadcrumb("manager", "cleanup_called", {
-      channelCount: this._channels.size,
-      postgresChannelCount: this._postgresChannels.size
+      channelCount: this._channels.size
     });
     for (const managedChannel of this._channels.values()) {
       managedChannel.channel.unsubscribe();
       managedChannel.client.removeChannel(managedChannel.channel);
     }
     this._channels.clear();
-    for (const managedChannel of this._postgresChannels.values()) {
-      managedChannel.channel.unsubscribe();
-      managedChannel.client.removeChannel(managedChannel.channel);
-    }
-    this._postgresChannels.clear();
   }
 }

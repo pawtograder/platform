@@ -52,6 +52,16 @@ export function normalizePointValue(points: number): { points: number; wasNegati
   return { points: Math.abs(points), wasNegative: true };
 }
 
+/**
+ * Points a grader typed when applying an exam check, or null if they can't be saved. Exam checks
+ * take any amount from 0 to the question's points, decimals included (#1069).
+ */
+export function parseAppliedExamPoints(input: string, max: number): number | null {
+  if (input.trim() === "") return null;
+  const points = Number(input);
+  return Number.isFinite(points) && points >= 0 && points <= max ? points : null;
+}
+
 function hasOptionsData(
   data: HydratedRubricCheck["data"]
 ): data is HydratedRubricCheck["data"] & { options: RubricChecksDataType["options"] } {

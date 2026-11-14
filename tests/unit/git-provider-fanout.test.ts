@@ -10,7 +10,8 @@ function handler(file: string, name = "handleRequest", context: object) {
   const path = `supabase/functions/${file.endsWith(".ts") ? file : `${file}/index.ts`}`;
   const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest);
   const fn = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)!;
-  return runInNewContext(`${ts.transpile(fn.getText(source), { target: ts.ScriptTarget.ES2022 })}\n${name}`, context);
+  const text = fn.getText(source).replace(/^export /, "");
+  return runInNewContext(`${ts.transpile(text, { target: ts.ScriptTarget.ES2022 })}\n${name}`, context);
 }
 // Fluent database mock with value-sensitive provider predicates.
 function query(data: unknown, overrides: object = {}) {
@@ -115,7 +116,7 @@ test.each(["github-user-sync", "autograder-create-repos-for-student"])("%s scope
       getAdminSupabase: () => client,
       ...runtime,
       TZDate,
-      syncRepoPermissions,
+      getGitProvider: () => ({ syncRepoPermissions }),
       isServiceRoleRequest: () => true,
       isUserInOrg: async () => true,
       isOrgInviteWindowKnownClosed: () => false,
@@ -220,6 +221,14 @@ test.each([
   }
 });
 
+// The student-repo lookup is shared with forgejo-repo-webhook; the routing test runs the real one.
+const repoPush = Object.fromEntries(
+  ["findStudentRepository", "fromGitHubPush", "isDefaultBranchPush"].map((name) => [
+    name,
+    handler("_shared/RepoPush.ts", name, { console, Sentry: { captureException() {} } })
+  ])
+);
+
 test.each(["repositories", "autograder", "assignments"])("push routing respects %s providers", async (table) => {
   const text = readFileSync("supabase/functions/github-repo-webhook/index.ts", "utf8");
   const source = ts.createSourceFile("webhook.ts", text, ts.ScriptTarget.Latest);
@@ -246,6 +255,7 @@ test.each(["repositories", "autograder", "assignments"])("push routing respects 
       tagScopeWithGenericPayload() {},
       maybeCrash() {},
       captureWebhookException() {},
+      ...repoPush,
       handlePushToStudentRepo: dispatch,
       handlePushToGraderSolution: dispatch,
       handlePushToTemplateRepo: dispatch
