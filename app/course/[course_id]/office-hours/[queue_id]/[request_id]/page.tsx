@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import CurrentRequest from "../currentRequest";
 import { useQueueData } from "@/hooks/useQueueData";
 import { useEffect, useMemo, useState } from "react";
@@ -92,15 +92,40 @@ export default function RequestDetailPage() {
   );
   const hiddenFromMasquerade = isMasking && rawRequest != null && !filterHelpRequest(rawRequest, memberProfileIds);
 
+  // useHelpRequest fetches the request by id only and does not check the course. A user who is
+  // enrolled in two courses can put a request id from the other course into this course's URL.
+  // Treat that request as not found.
+  const inOtherCourse = rawRequest != null && rawRequest.class_id !== Number(course_id);
+
+  // queueRequests leaves out resolved and closed requests, and userRequests only has requests
+  // this user is on. So a resolved or closed request can be in neither list, and the page used
+  // to spin forever (#1080). In that case, show the cached row instead. Don't show it if it
+  // belongs to another course, or if view-as hides it from this student.
+  const shownRequest = request ?? (hiddenFromMasquerade || inOtherCourse ? undefined : (rawRequest ?? undefined));
+
+  // If the URL has the wrong queue id, for example from an old or hand-edited link, go to the
+  // same request under its own queue. Otherwise the sidebar and the queue position would use
+  // the wrong queue.
+  const router = useRouter();
+  const correctQueueId = shownRequest && shownRequest.help_queue !== Number(queue_id) ? shownRequest.help_queue : null;
+  useEffect(() => {
+    if (correctQueueId != null) {
+      router.replace(`/course/${course_id}/office-hours/${correctQueueId}/${requestIdNum}`);
+    }
+  }, [correctQueueId, course_id, requestIdNum, router]);
+
   // Calculate position in queue for active requests
   const position = useMemo(() => {
-    if (!request || (request.status !== "open" && request.status !== "in_progress")) {
+    if (!shownRequest || (shownRequest.status !== "open" && shownRequest.status !== "in_progress")) {
       return 0;
     }
-    return queueRequests.findIndex((r) => r.id === request.id) + 1;
-  }, [request, queueRequests]);
+    return queueRequests.findIndex((r) => r.id === shownRequest.id) + 1;
+  }, [shownRequest, queueRequests]);
 
-  if (!request) {
+  if (!shownRequest || correctQueueId != null) {
+    if (inOtherCourse && !request) {
+      return <div>Request not found.</div>;
+    }
     if (hiddenFromMasquerade) {
       return (
         <Flex justify="center" align="center" py={12}>
@@ -142,7 +167,7 @@ export default function RequestDetailPage() {
         />
       </Box>
       <Box flex={{ lg: 8 }} minW={0}>
-        <CurrentRequest request={request} position={position} />
+        <CurrentRequest request={shownRequest} position={position} />
       </Box>
     </Flex>
   );

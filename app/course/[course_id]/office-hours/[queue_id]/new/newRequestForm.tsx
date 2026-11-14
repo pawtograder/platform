@@ -21,6 +21,7 @@ import {
 } from "@/hooks/useOfficeHoursRealtime";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
+import * as Sentry from "@sentry/nextjs";
 import {
   Assignment,
   HelpRequest,
@@ -584,6 +585,55 @@ export default function HelpRequestForm({
             // broadcast from the wrong side, and an awaited fetch can
             // stall router.push if the REST round-trip is slow.
             controller.loadMessagesForHelpRequest(createdHelpRequestId);
+
+            // The RPC also inserted this request's help_request_students rows. Their broadcast
+            // goes to the help_request:<id> channel, which no client has joined yet, so
+            // safe_broadcast drops it. Without these rows, the request page shows 0 students and
+            // no Resolve button (#1003), and it spins forever once the request is resolved
+            // (#1080). So we load the rows ourselves. We don't await this, for the same
+            // router.push reason as above.
+            //
+            // We add the rows twice. The first time is right away, so the page can show them even
+            // if the helpRequestStudents cache's first load never finishes. That first load may
+            // still be running. When it finishes, it replaces every row in the cache, which removes
+            // the rows we added. So we wait for it to finish, whether it succeeds or fails, and add
+            // the rows again. Adding a row that is already in the cache updates it and does not
+            // make a second copy.
+            //
+            // The request is already saved. If loading the rows fails, the only problem is that
+            // the page shows no students until a reload, so report the error and tell the student
+            // to reload. refetchByIds reports a failed query to Sentry but does not throw, so
+            // check that the rows are in the cache at the end.
+            void supabase
+              .from("help_request_students")
+              .select("id")
+              .eq("help_request_id", createdHelpRequestId)
+              .then(async ({ data, error }) => {
+                if (error) {
+                  throw error;
+                }
+                const roster = controller.helpRequestStudents;
+                const ids = (data ?? []).map((row) => row.id);
+                await roster.refetchByIds(ids);
+                await roster.readyPromise.catch(() => {});
+                await roster.refetchByIds(ids);
+                const cachedIds = new Set(roster.rows.map((row) => row.id));
+                if (ids.some((id) => !cachedIds.has(id))) {
+                  throw new Error(
+                    `The help_request_students rows for help request ${createdHelpRequestId} did not load`
+                  );
+                }
+              })
+              .then(undefined, (error: unknown) => {
+                Sentry.withScope((scope) => {
+                  scope.setContext("help_request_roster_refresh", { help_request_id: createdHelpRequestId });
+                  Sentry.captureException(error);
+                });
+                toaster.error({
+                  title: "Could not load the students on this request",
+                  description: "Reload the page to try again."
+                });
+              });
 
             navigated = true;
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequestId}`);
