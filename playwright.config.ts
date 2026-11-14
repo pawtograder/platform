@@ -84,6 +84,10 @@ export default defineConfig({
     // baseURL: 'https://nix.dev.pawtograder.net',
     baseURL: process.env.BASE_URL || "http://localhost:3000",
 
+    /* Pin the browser to the seeded courses' zone (America/New_York). Without it the browser
+       uses the runner's zone, the header shows "Course Time Zone (EDT|EST)", and every DST
+       switch changes ~60 Argos screenshots at once (Nov 1 2026). */
+    timezoneId: "America/New_York",
     screenshot: "only-on-failure",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
