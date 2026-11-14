@@ -5,8 +5,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { createClient } from "@/utils/supabase/client";
-import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useCreate } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
@@ -19,7 +17,6 @@ type MeetingWindow = {
 
 export function useMeetingWindows() {
   const meetingWindows = useRef<Map<string, MeetingWindow>>(new Map());
-  const supabase = createClient();
   const { private_profile_id } = useClassProfiles();
   const allHelpRequestStudents = useHelpRequestStudents();
 
@@ -133,34 +130,6 @@ export function useMeetingWindows() {
     });
     meetingWindows.current.clear();
   }, []);
-
-  /**
-   * Set up real-time subscription to detect meeting state changes
-   */
-  useEffect(() => {
-    const channel = supabase
-      .channel("meeting-windows-cleanup")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "help_requests",
-          filter: "is_video_live=eq.false"
-        },
-        (payload) => {
-          const updatedRequest = payload.new as HelpRequest;
-
-          // Close the meeting window for this help request
-          closeMeetingWindow(updatedRequest.class_id, updatedRequest.id);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [supabase, closeMeetingWindow]);
 
   /**
    * Clean up all windows when component unmounts

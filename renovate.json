@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Scoped to one group on purpose: the bug reporter builds Sentry replay envelopes itself (ADR 8 in the bug reporter spec), so the Sentry SDK and rrweb are pinned to exact versions and move together, behind the release-tier tests. The `bug-reporter-release` label starts .github/workflows/bug-reporter-release.yml on the PR.",
+    "Every other dependency is left alone here; widen `enabled` below if Renovate should manage more."
+  ],
+  "enabledManagers": ["npm"],
+  "packageRules": [
+    {
+      "description": "Nothing outside the group below.",
+      "matchPackageNames": ["*"],
+      "enabled": false
+    },
+    {
+      "description": "ADR 8: @sentry/* and @sentry-internal/* (rrweb and its player) in one PR, pinned exactly.",
+      "matchPackageNames": ["@sentry/*", "@sentry-internal/*"],
+      "enabled": true,
+      "groupName": "sentry sdk and rrweb",
+      "groupSlug": "sentry-rrweb",
+      "rangeStrategy": "pin",
+      "separateMajorMinor": false,
+      "labels": ["bug-reporter-release"]
+    }
+  ]
+}

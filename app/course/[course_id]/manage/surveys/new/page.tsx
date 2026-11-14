@@ -6,6 +6,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
+import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
@@ -103,6 +104,19 @@ export default function NewSurveyPage() {
   const { setValue, reset } = form;
   const hasLoadedDraft = useRef(false);
   const hasLoadedTemplate = useRef(false);
+
+  // Prefill the linked assignment when arriving from "create assignment" with type=survey.
+  // That flow creates the assignment first and redirects here; `assignment_id` otherwise
+  // defaults to null and the survey would be saved unlinked.
+  const hasLoadedAssignmentId = useRef(false);
+  useEffect(() => {
+    const assignmentIdParam = searchParams.get("assignment_id");
+    if (!assignmentIdParam || hasLoadedAssignmentId.current) return;
+    const assignmentId = Number(assignmentIdParam);
+    if (!Number.isFinite(assignmentId)) return;
+    hasLoadedAssignmentId.current = true;
+    setValue("assignment_id", assignmentId, { shouldDirty: true });
+  }, [searchParams, setValue]);
 
   // Load template if template_id query parameter is present
   useEffect(() => {
@@ -355,6 +369,10 @@ export default function NewSurveyPage() {
         error = result.error;
         if (data) setCurrentSurveyId(data.id);
       }
+
+      // Nothing was saved and the form stays open. Throwing would add two generic toasts on top
+      // of the database's reason, ending in "Please try again", which would be refused again.
+      if (reportDuplicateNamesRefusal(error)) return { data: null, error };
 
       if (error || !data) {
         console.error("[saveSurvey] save error:", error);
