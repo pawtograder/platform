@@ -68,6 +68,8 @@ import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 import { selectionKey, setRowChecked } from "./rosterSelection";
 
 type EditProfileModalData = string; // userId
@@ -161,6 +163,7 @@ function forgejoUsernameLabel(row: EnrollmentTableRow, logins: ForgejoLogins): s
 }
 
 export default function EnrollmentsTable() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
   const supabase = createClient();
@@ -252,7 +255,7 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error Removing User",
-          description: `Failed to remove user: ${error instanceof Error ? error.message : "Unknown error"}`,
+          description: `Failed to remove user: ${getUserFacingErrorMessage(error, { role: errorRole })}`,
           type: "error"
         });
         closeRemoveStudentModal();
@@ -260,7 +263,7 @@ export default function EnrollmentsTable() {
         setIsDeletingUserRole(false);
       }
     },
-    [disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
+    [errorRole, disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
 
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
@@ -304,11 +307,11 @@ export default function EnrollmentsTable() {
     } catch (error) {
       toaster.create({
         title: "Error fetching invitations",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     }
-  }, [course_id, supabase]);
+  }, [errorRole, course_id, supabase]);
 
   // Cancel invitation
   const cancelInvitation = useCallback(
@@ -329,12 +332,12 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error cancelling invitation",
-          description: error instanceof Error ? error.message : "Unknown error",
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [supabase, fetchInvitations]
+    [errorRole, supabase, fetchInvitations]
   );
 
   // Load invitations on mount
@@ -812,7 +815,7 @@ export default function EnrollmentsTable() {
                   } catch (error) {
                     toaster.create({
                       title: "Failed to update SIS sync override",
-                      description: error instanceof Error ? error.message : "Unknown error",
+                      description: getUserFacingErrorMessage(error, { role: errorRole }),
                       type: "error"
                     });
                   }
@@ -1011,6 +1014,7 @@ export default function EnrollmentsTable() {
       }
     ],
     [
+      errorRole,
       currentUser,
       course_id,
       openEditProfileModal,
@@ -1671,7 +1675,7 @@ export default function EnrollmentsTable() {
                       } catch (error) {
                         toaster.error({
                           title: "Error adding tag(s)",
-                          description: error instanceof Error ? error.message : "Unknown error"
+                          description: getUserFacingErrorMessage(error, { role: errorRole })
                         });
                       }
                     }}
@@ -1757,7 +1761,7 @@ export default function EnrollmentsTable() {
                         .catch((error: unknown) => {
                           toaster.error({
                             title: "Error removing tags",
-                            description: error instanceof Error ? error.message : "Unknown error"
+                            description: getUserFacingErrorMessage(error, { role: errorRole })
                           });
                         });
                     }}

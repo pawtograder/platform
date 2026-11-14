@@ -26,6 +26,8 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -70,6 +72,7 @@ export default function ReviewsTable({
   openAssignModal,
   onReviewAssignmentDeleted
 }: ReviewsTableProps) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { mutate: deleteReviewAssignment } = useDelete();
   const { role: course } = useClassProfiles();
@@ -196,7 +199,7 @@ export default function ReviewsTable({
         }
         tableController.close();
       } catch (error: unknown) {
-        const description = error instanceof Error ? error.message : "Unknown error";
+        const description = getUserFacingErrorMessage(error, { role: errorRole });
         toaster.error({ title: "Error fetching data for export", description });
         return;
       }
@@ -387,12 +390,16 @@ export default function ReviewsTable({
       document.body.removeChild(link);
 
       toaster.success({ title: "CSV exported successfully" });
-    } catch {
-      toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
+    } catch (error) {
+      toaster.error({
+        title: "Error exporting CSV",
+        description: getUserFacingErrorMessage(error, { role: errorRole })
+      });
     } finally {
       setIsExporting(false);
     }
   }, [
+    errorRole,
     assignmentId,
     variant,
     rubricsReady,

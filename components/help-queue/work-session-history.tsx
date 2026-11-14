@@ -12,12 +12,15 @@ import { BsClock, BsPencil, BsPeople, BsTrash } from "react-icons/bs";
 import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 import { formatDuration, formatDateTime } from "@/utils/time-formatting";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface WorkSessionHistoryProps {
   help_request_id: number;
 }
 
 export default function WorkSessionHistory({ help_request_id }: WorkSessionHistoryProps) {
+  const errorRole = useStaffErrorRole();
   const sessions = useWorkSessionsForRequest(help_request_id);
   const profiles = useAllProfilesForClass();
   const isInstructor = useIsInstructor();
@@ -58,7 +61,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to delete session: ${error instanceof Error ? error.message : "Unknown error"}`
+        description: `Failed to delete session: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setDeletingSessionId(null);

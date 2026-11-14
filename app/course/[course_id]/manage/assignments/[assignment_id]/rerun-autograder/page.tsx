@@ -39,6 +39,8 @@ import { Select as ReactSelect } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface SelectOption {
   label: string;
@@ -51,6 +53,7 @@ type WhatIfGraderResult = Pick<
 >;
 
 function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string }) {
+  const errorRole = useStaffErrorRole();
   const { assignment_id, course_id } = useParams();
   const { role } = useClassProfiles();
   const course = role.classes;
@@ -96,13 +99,13 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       } catch (error) {
         toaster.error({
           title: "Failed to promote",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setPromotingResults((prev) => ({ ...prev, [graderResultId]: false }));
       }
     },
-    [course.id, supabase, tableController]
+    [errorRole, course.id, supabase, tableController]
   );
 
   const openHistory = useCallback(
@@ -958,7 +961,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
               } catch (error) {
                 toaster.error({
                   title: "Error regrading",
-                  description: error instanceof Error ? error.message : "Unknown error"
+                  description: getUserFacingErrorMessage(error, { role: errorRole })
                 });
               } finally {
                 setRegrading(false);

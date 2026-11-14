@@ -11,8 +11,11 @@ import { useCallback } from "react";
 import type { FieldValues } from "react-hook-form";
 import CreateAssignment from "./form";
 import { Box, Heading, Text } from "@chakra-ui/react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 export default function NewAssignmentPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "create" },
@@ -325,13 +328,13 @@ export default function NewAssignmentPage() {
           toaster.dismiss(loadingToast);
           toaster.error({
             title: "Error creating assignment",
-            description: error instanceof Error ? error.message : "An unexpected error occurred"
+            description: getUserFacingErrorMessage(error, { role: errorRole })
           });
         }
       }
       await create();
     },
-    [course_id, getValues, mutateAsync, revalidateServerCaches]
+    [errorRole, course_id, getValues, mutateAsync, revalidateServerCaches]
   );
   return (
     <Box p={4}>

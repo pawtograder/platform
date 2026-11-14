@@ -15,6 +15,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 type VideoCallControlsProps = {
   request: HelpRequest;
   /** Whether the current user can start video calls (TAs/instructors) */
@@ -77,7 +78,7 @@ export default function VideoCallControls({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity: ${getUserFacingErrorMessage(error)}`
           });
         }
       }
@@ -104,7 +105,7 @@ export default function VideoCallControls({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
           });
         }
       }
@@ -151,7 +152,7 @@ export default function VideoCallControls({
     } catch (error) {
       toaster.error({
         title: "Failed to start video call",
-        description: error instanceof Error ? error.message : "An unexpected error occurred"
+        description: getUserFacingErrorMessage(error)
       });
 
       // Revert the video live status on error
@@ -212,7 +213,7 @@ export default function VideoCallControls({
     } catch (error) {
       toaster.error({
         title: "Failed to end video call",
-        description: error instanceof Error ? error.message : "An unexpected error occurred"
+        description: getUserFacingErrorMessage(error)
       });
     } finally {
       setIsEndingCall(false);

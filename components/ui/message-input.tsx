@@ -7,7 +7,7 @@ import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useMentions } from "@/hooks/useMentions";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { getStudentFacingErrorMessage, getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { getLanguageFromFile, isTextFile } from "@/lib/utils";
 import { getCurrentCursorPosition } from "@/utils/cursorPosition";
 import { createClient } from "@/utils/supabase/client";
@@ -303,7 +303,7 @@ export default function MessageInput(props: MessageInputProps) {
         } catch (error) {
           toaster.error({
             title: "Error reading file",
-            description: `Failed to read file content: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to read file content: ${getUserFacingErrorMessage(error)}`
           });
           return null;
         }

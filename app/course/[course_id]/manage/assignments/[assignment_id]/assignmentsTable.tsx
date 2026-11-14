@@ -66,6 +66,8 @@ import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 import { describeBulkReleaseResult } from "@/lib/bulkReleaseMessage";
 import { groupBySubmissionId } from "@/lib/groupBySubmissionId";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * "Grade anyway" action for a student/group with no active submission. Creates
@@ -395,6 +397,7 @@ export default function AssignmentsTable({
   /** When set, restrict the table to these view row ids (used by the rubric-report cohort filter). */
   restrictRowIds?: number[] | null;
 } = {}) {
+  const errorRole = useStaffErrorRole();
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -984,12 +987,12 @@ export default function AssignmentsTable({
       console.error("Error releasing grading reviews for selection:", error);
       toaster.error({
         title: "Error",
-        description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsReleasingAll(false);
     }
-  }, [assignment_id, resetRowSelection, selectedCount, selectedSubmissionIds, supabase, tableController]);
+  }, [errorRole, assignment_id, resetRowSelection, selectedCount, selectedSubmissionIds, supabase, tableController]);
 
   const columnFiltersKey = JSON.stringify(getState().columnFilters);
   useEffect(() => {
@@ -1100,8 +1103,7 @@ export default function AssignmentsTable({
                     console.error("Error unreleasing grading reviews for selection:", error);
                     toaster.error({
                       title: "Error",
-                      description:
-                        error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
+                      description: getUserFacingErrorMessage(error, { role: errorRole })
                     });
                   } finally {
                     setIsUnreleasingAll(false);
@@ -2067,6 +2069,7 @@ async function exportGrades({
 }
 
 function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
+  const errorRole = useStaffErrorRole();
   const supabase = useMemo(() => createClient(), []);
   const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);
   const [includeRubricChecks, setIncludeRubricChecks] = useState(true);
@@ -2096,13 +2099,14 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
         console.error("Error exporting grades:", error);
         toaster.error({
           title: "Error",
-          description: error instanceof Error ? error.message : "Unknown error occurred while exporting grades"
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setIsExporting(null);
       }
     },
     [
+      errorRole,
       assignment_id,
       class_id,
       includeAutograderTestResults,

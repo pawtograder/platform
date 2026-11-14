@@ -61,6 +61,8 @@ import { FaCheck } from "react-icons/fa6";
 import * as Sentry from "@sentry/nextjs";
 import * as YAML from "yaml";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
@@ -257,6 +259,7 @@ function useAllHydratedRubrics(): HydratedRubric[] {
  * Displays the rubric editor interface with YAML editing, validation, and preview features.
  */
 export default function RubricPage() {
+  const errorRole = useStaffErrorRole();
   const assignmentController = useAssignmentController();
   const [ready, setReady] = useState(false);
   //Before showing the rubric page, force a refresh of all rubric data
@@ -276,7 +279,7 @@ export default function RubricPage() {
         Sentry.captureException(error);
         toaster.error({
           title: "Error refreshing rubric data",
-          description: "An unexpected error occurred while refreshing the rubric data. Please try again later."
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
         return;
       }
@@ -287,7 +290,7 @@ export default function RubricPage() {
     return () => {
       cleanedUp = true;
     };
-  }, [assignmentController]);
+  }, [errorRole, assignmentController]);
   if (!ready)
     return (
       <Center height="100%" width="100%">

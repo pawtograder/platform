@@ -33,6 +33,8 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SurveyTemplate = {
   id: string;
@@ -63,6 +65,7 @@ export function SurveyTemplateLibraryModal({
   isEditMode = false,
   onTemplateLoad
 }: SurveyTemplateLibraryModalProps) {
+  const errorRole = useStaffErrorRole();
   const router = useRouter();
   const { allOfMyRoles } = useClassProfiles();
 
@@ -246,15 +249,15 @@ export function SurveyTemplateLibraryModal({
       setIsEditModalOpen(false);
       setEditingTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch {
+    } catch (error) {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
-        description: "An unexpected error occurred.",
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     }
-  }, [editingTemplate, editTitle, editDescription, editScope, courseId, fetchTemplates]);
+  }, [errorRole, editingTemplate, editTitle, editDescription, editScope, courseId, fetchTemplates]);
 
   const handleDeleteClick = useCallback((template: SurveyTemplate) => {
     setDeleteConfirmTemplate(template);
@@ -295,15 +298,15 @@ export function SurveyTemplateLibraryModal({
       setIsDeleteConfirmOpen(false);
       setDeleteConfirmTemplate(null);
       fetchTemplates(); // Refresh the list
-    } catch {
+    } catch (error) {
       toaster.dismiss(loadingToast);
       toaster.create({
         title: "Error",
-        description: "An unexpected error occurred.",
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     }
-  }, [deleteConfirmTemplate, fetchTemplates]);
+  }, [errorRole, deleteConfirmTemplate, fetchTemplates]);
 
   const isOwner = useCallback(
     (template: SurveyTemplate) => {

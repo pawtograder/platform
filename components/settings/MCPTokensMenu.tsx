@@ -11,6 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Dialog, Flex, HStack, IconButton, Portal, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useState } from "react";
 import { LuCopy, LuCheck, LuKey, LuTrash2, LuPlus } from "react-icons/lu";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type TokenType = "mcp" | "cli" | "both";
 
@@ -61,7 +62,7 @@ export default function MCPTokensMenu() {
     } catch (error) {
       toaster.error({
         title: "Error fetching tokens",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error)
       });
     } finally {
       setLoading(false);
@@ -106,7 +107,7 @@ export default function MCPTokensMenu() {
     } catch (error) {
       toaster.error({
         title: "Error creating token",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error)
       });
     } finally {
       setCreating(false);
@@ -128,7 +129,7 @@ export default function MCPTokensMenu() {
     } catch (error) {
       toaster.error({
         title: "Error revoking token",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error)
       });
     } finally {
       setRevokingTokenId(null);
@@ -147,7 +148,7 @@ export default function MCPTokensMenu() {
     } catch (error) {
       toaster.error({
         title: "Failed to copy",
-        description: error instanceof Error ? error.message : "Unknown error"
+        description: getUserFacingErrorMessage(error)
       });
     }
   };

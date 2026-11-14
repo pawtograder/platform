@@ -61,6 +61,7 @@ import NotificationPermissionWarning, {
 import { formatDistanceToNow } from "date-fns";
 import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * Office hours form and UI helper types
@@ -197,7 +198,7 @@ const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequ
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
           });
         }
       }
@@ -853,7 +854,7 @@ const HelpRequestStudents = ({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
           });
         }
       }
@@ -1023,7 +1024,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
           });
         }
       }

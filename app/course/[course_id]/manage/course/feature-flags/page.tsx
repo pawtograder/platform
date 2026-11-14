@@ -15,6 +15,8 @@ import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, Text, VStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 function buildFlagsFromRole(
   features: { name: string; enabled: boolean }[] | null | undefined
@@ -27,6 +29,7 @@ function buildFlagsFromRole(
 }
 
 export default function CourseFeatureFlagsPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const { role } = useClassProfiles();
@@ -88,14 +91,14 @@ export default function CourseFeatureFlagsPage() {
       } catch (e) {
         toaster.error({
           title: "Could not update feature",
-          description: e instanceof Error ? e.message : "Unknown error"
+          description: getUserFacingErrorMessage(e, { role: errorRole })
         });
         setFlags(rollback);
       } finally {
         setSavingName(null);
       }
     },
-    [courseIdNum, features, router]
+    [errorRole, courseIdNum, features, router]
   );
 
   if (!role || role.role !== "instructor") {

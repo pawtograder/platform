@@ -29,12 +29,15 @@ import DiscordInstallationStatus from "@/components/discord/installation-status"
 import DiscordMembershipStatusAlerts from "@/components/discord/membership-status-alerts";
 import PendingInvites from "@/components/discord/pending-invites";
 import { SyncRolesPanel } from "@/components/discord/sync-roles-button";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Admin page for configuring Discord server integration for a class
  * Accessible to instructors and graders, but only instructors can edit settings
  */
 export default function DiscordManagementPage() {
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   const course = courseController.course;
   const isStaff = useIsGraderOrInstructor();
@@ -129,7 +132,7 @@ export default function DiscordManagementPage() {
     } catch (error) {
       toaster.error({
         title: "Failed to save",
-        description: `Error saving Discord settings: ${error instanceof Error ? error.message : "Unknown error"}`
+        description: `Error saving Discord settings: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setIsSaving(false);
@@ -157,7 +160,7 @@ export default function DiscordManagementPage() {
     } catch (error) {
       toaster.error({
         title: "Failed to save",
-        description: `Error saving calendar settings: ${error instanceof Error ? error.message : "Unknown error"}`
+        description: `Error saving calendar settings: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setIsCalendarSaving(false);
