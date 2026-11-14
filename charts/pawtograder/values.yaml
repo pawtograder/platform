@@ -239,8 +239,8 @@ secrets:
                                   #   and .../install/callback), not only by the
                                   #   worker. Omitting it makes the install button
                                   #   answer 500.
-    edgeFunctionsBundles: []      # subset of: github-app, aws-chime, discord,
-                                  #   canvas, sis, smtp, mcp, redis, sentry, misc
+    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, aws-chime,
+                                  #   discord, canvas, sis, smtp, mcp, redis, sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
     pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
@@ -2833,6 +2833,10 @@ forgejo:
       indexer:
         ISSUE_INDEXER_TYPE: bleve
         REPO_INDEXER_ENABLED: false
+      webhook:
+        # GitHub's cap. forgejo-repo-webhook records only the commits a push payload lists, and
+        # Forgejo's default of 15 would drop the rest of a larger push from the commit history.
+        PAYLOAD_COMMIT_LIMIT: 2048
 
 forgejo-db:
   enabled: false
@@ -2985,9 +2989,13 @@ coder:
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: username } }
           - name: ADMIN_PASSWORD
             valueFrom: { secretKeyRef: { name: pawtograder-coder-admin, key: password } }
+        # Same Secrets as coderd's envFrom above: pawtograder-coder-env names an external-auth provider
+        # (and OIDC), and this coderd refuses to start without its client id.
         envFrom:
           - configMapRef: { name: pawtograder-coder-env }
           - secretRef: { name: pawtograder-coder-db }
+          - secretRef: { name: pawtograder-coder-oidc, optional: true }
+          - secretRef: { name: pawtograder-coder-external-auth, optional: true }
         securityContext:
           allowPrivilegeEscalation: false
           capabilities: { drop: [ALL] }

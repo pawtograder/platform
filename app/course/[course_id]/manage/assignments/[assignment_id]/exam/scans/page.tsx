@@ -6,6 +6,7 @@ import { toaster } from "@/components/ui/toaster";
 import { uploadExamScanBatch } from "@/lib/exam/examClient";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Button, Heading, HStack, Input, Spinner, Text, VStack } from "@chakra-ui/react";
+import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import MatchReview from "../MatchReview";
@@ -108,9 +109,14 @@ function ExamScansPageContent() {
   if (loading) return <Spinner />;
   if (!examId) {
     return (
-      <Text color="fg.muted" pt={2}>
-        No exam template yet — configure the template first.
-      </Text>
+      <VStack align="start" gap={3} pt={2}>
+        <Text color="fg.muted">No exam template yet. Upload one before scanning student exams.</Text>
+        <Button asChild colorPalette="green" size="sm">
+          <NextLink href={`/course/${courseId}/manage/assignments/${assignmentId}/exam/template`}>
+            Go to Template &amp; Regions
+          </NextLink>
+        </Button>
+      </VStack>
     );
   }
 
