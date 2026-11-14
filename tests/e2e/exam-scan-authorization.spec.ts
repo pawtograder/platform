@@ -902,10 +902,21 @@ async function drainThrough(sentinelPageId: number): Promise<void> {
   }
 }
 
-/** Send `target`, then a sentinel process_page for a fresh page of course A, and drain through it. */
-async function runQueuedThroughSentinel(a: CourseA, target: Record<string, unknown>): Promise<void> {
+/**
+ * Send `target`, then a sentinel process_page for a fresh page of course A, and drain through it.
+ *
+ * The target goes out as it looks on its last retry (retry_count 5) unless told otherwise. A job that
+ * fails below that is requeued as a new, delayed message the sentinel can finish ahead of, which
+ * would let a no-op assertion pass before the job ran at all. On its last retry a failure is
+ * dead-lettered instead, so callers can see it: see dlqRowsNaming.
+ */
+async function runQueuedThroughSentinel(
+  a: CourseA,
+  target: Record<string, unknown>,
+  { retryCount = 5 }: { retryCount?: number } = {}
+): Promise<void> {
   const sentinel = await graderCreatesBatch(a, {});
-  const targetMsgId = await sendExamMessage(target);
+  const targetMsgId = await sendExamMessage({ ...target, retry_count: retryCount });
   const sentinelMsgId = await sendExamMessage({
     method: "process_page",
     class_id: a.classId,
@@ -917,6 +928,18 @@ async function runQueuedThroughSentinel(a: CourseA, target: Record<string, unkno
     description: JSON.stringify({ targetMsgId, sentinelMsgId, target })
   });
   await drainThrough(sentinel.pageId);
+}
+
+/** DLQ rows for the exact message `target` (same method, batch and args). */
+async function dlqRowsNaming(target: { method: string; batch_id: number; args: Record<string, unknown> }) {
+  const { data, error } = await supabase
+    .from("exam_async_worker_dlq_messages")
+    .select("method, error_type, error_message")
+    .eq("method", target.method)
+    .eq("envelope->>batch_id", String(target.batch_id))
+    .contains("envelope", { args: target.args });
+  expect(error).toBeNull();
+  return data ?? [];
 }
 
 const SEEDED_OCR = { ocr_text: "read earlier", ocr_data: { words: [] } };
@@ -983,12 +1006,15 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
     const y = await graderCreatesBatch(a, {});
     await graderMovesPage(x.pageId, y, { ocr_text: null, ocr_data: null });
     // The message enqueue_exam_process_batch sent for X before the page moved.
-    await runQueuedThroughSentinel(a, {
+    const target = {
       method: "process_page",
       class_id: a.classId,
       batch_id: x.batchId,
       args: { scan_page_id: x.pageId }
-    });
+    };
+    await runQueuedThroughSentinel(a, target);
+    // It ran and completed without failing (a failure on its last retry is dead-lettered).
+    expect(await dlqRowsNaming(target)).toEqual([]);
     // The fake provider's OCR text names the object it read, so a stored result would show Y's path.
     const { data: page } = await supabase
       .from("exam_scan_pages")
@@ -1011,12 +1037,14 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
     const y = await graderCreatesBatch(a, {});
     await seedOcr(x.batchId, 1);
     await graderMovesPage(x.pageId, y, SEEDED_OCR);
-    await runQueuedThroughSentinel(a, {
+    const target = {
       method: "process_page",
       class_id: a.classId,
       batch_id: x.batchId,
       args: { scan_page_id: x.pageId }
-    });
+    };
+    await runQueuedThroughSentinel(a, target);
+    expect(await dlqRowsNaming(target)).toEqual([]);
     const { data: page } = await supabase
       .from("exam_scan_pages")
       .select("ocr_text, ocr_data")
@@ -1137,12 +1165,14 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
     expect(set).toEqual({ status: "completed", error: null });
     const before = await courseRowIds(a.classId);
 
-    await runQueuedThroughSentinel(a, {
+    const target = {
       method: "finalize",
       class_id: a.classId,
       batch_id: x.batchId,
       args: { scanned_submission_id: confirmed!.id }
-    });
+    };
+    await runQueuedThroughSentinel(a, target);
+    expect(await dlqRowsNaming(target)).toHaveLength(1);
     // The rejection still happened and was dead-lettered...
     const { data: dlq } = await supabase
       .from("exam_async_worker_dlq_messages")
@@ -1173,12 +1203,14 @@ test.describe("Exam worker: queued work that no longer matches its batch (#1078)
       expect(pages).toHaveLength(1);
       expect(pages?.[0].ocr_data).not.toBeNull();
 
-      await runQueuedThroughSentinel(a, {
+      const target = {
         method: "match",
         class_id: a.classId,
         batch_id: x.batchId,
         args: { batch_id: x.batchId }
-      });
+      };
+      await runQueuedThroughSentinel(a, target);
+      expect(await dlqRowsNaming(target)).toEqual([]);
       expect(await batch(x.batchId)).toEqual({ status: terminal, error: earlier });
       expect(await scannedRowsFor(x.batchId)).toBe(0);
 
@@ -1304,11 +1336,20 @@ test.describe("Exam scan pages: only matching changes which exam a page belongs 
       .single();
     expect(error).toBeNull();
     expect(row?.finalized_at).not.toBeNull();
+    // The submission and every page file belong to this student, not just to their scanned exam.
+    const { data: submission } = await supabase
+      .from("submissions")
+      .select("profile_id")
+      .eq("id", row!.submission_id!)
+      .single();
+    expect(submission?.profile_id).toBe(profileId);
     const { data: files } = await supabase
       .from("submission_files")
-      .select("name, storage_key")
+      .select("name, storage_key, profile_id")
       .eq("submission_id", row!.submission_id!)
       .order("name");
+    expect(files?.length ?? 0).toBeGreaterThan(0);
+    for (const f of files ?? []) expect(f.profile_id).toBe(profileId);
     const hashes: string[] = [];
     for (const f of files ?? []) {
       const { data } = await supabase.storage.from("submission-files").download(f.storage_key!);
@@ -1456,6 +1497,8 @@ test.describe("Exam scan pages: only matching changes which exam a page belongs 
     const examId = await createExam(a.classId, `Reprocess ${randomUUID()}`, 2);
     const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
     const rows = await processAndConfirm(batchId, 1);
+    // Clear one link (only the service role can), so the relink below is a real change.
+    await forgePage(pages[1].id, { scanned_submission_id: null });
     // Process again: matching runs as the worker and relinks every group, confirmed ones included.
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     for (const p of pages) {
@@ -1463,6 +1506,162 @@ test.describe("Exam scan pages: only matching changes which exam a page belongs 
     }
     await graderFinalizes(batchId);
     expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+  });
+
+  /** A matched and confirmed one-page exam for Alice. */
+  async function matchedOnePageExam(label: string) {
+    const examId = await createExam(a.classId, `${label} ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice]);
+    await processAndConfirm(batchId, 1);
+    return { batchId, page: pages[0] };
+  }
+  const replacement = () => Buffer.concat([PNG_1x1, Buffer.from(`replacement-${randomUUID()}`)]);
+  /** SHA-256 of the object stored at `path`, or null when there is none. */
+  async function storedSha(path: string) {
+    const { data } = await supabase.storage.from("exam-scans").download(path);
+    return data ? sha256(new Uint8Array(await data.arrayBuffer())) : null;
+  }
+
+  test("a matched page's OCR cannot be edited", async () => {
+    const { batchId, page } = await matchedOnePageExam("OCR");
+    const ocr = async () =>
+      (await supabase.from("exam_scan_pages").select("ocr_text, ocr_data").eq("id", page.id).single()).data;
+    const original = await ocr();
+    expect(original?.ocr_data).not.toBeNull();
+    // As the grader: replace the words finalize reads the answer from, and the page's text.
+    const { error: dataErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ ocr_data: { words: [{ text: "FORGED", x: 0.4, y: 0.35, width: 0.1, height: 0.05 }] } })
+      .eq("id", page.id)
+      .select("id");
+    const { error: textErr } = await a.grader
+      .from("exam_scan_pages")
+      .update({ ocr_text: "FORGED" })
+      .eq("id", page.id)
+      .select("id");
+    await graderFinalizes(batchId);
+    // The finalized answers come from the OCR the worker stored...
+    const { data: row } = await supabase
+      .from("exam_scanned_submissions")
+      .select("submission_id")
+      .eq("batch_id", batchId)
+      .single();
+    const { data: artifacts } = await supabase
+      .from("submission_artifacts")
+      .select("data")
+      .eq("submission_id", row!.submission_id!);
+    const exam = (artifacts ?? []).find((x) => (x.data as { format?: string } | null)?.format === "exam_v1");
+    const questions = (exam?.data as { questions: { ocr_text: string }[] } | undefined)?.questions ?? [];
+    expect(questions.length).toBeGreaterThan(0);
+    expect(questions.some((q) => q.ocr_text.includes("FORGED"))).toBe(false);
+    // ...because both edits were refused.
+    expect(dataErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+    expect(textErr?.message ?? "").toMatch(MEMBERSHIP_GUARD);
+    expect(await ocr()).toEqual(original);
+    // The worker's own (service-role) OCR writes still go through.
+    const { data: serviceWrite, error: serviceErr } = await supabase
+      .from("exam_scan_pages")
+      .update({ ocr_text: "re-read by the worker" })
+      .eq("id", page.id)
+      .select("ocr_text");
+    expect(serviceErr).toBeNull();
+    expect(serviceWrite).toEqual([{ ocr_text: "re-read by the worker" }]);
+  });
+
+  test("a matched page's scan cannot be overwritten through storage", async () => {
+    const { batchId, page } = await matchedOnePageExam("Overwrite");
+    const { error } = await a.grader.storage
+      .from("exam-scans")
+      .upload(page.path, replacement(), { contentType: "image/png", upsert: true });
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([page.sha]);
+    expect(error).not.toBeNull();
+    expect(await storedSha(page.path)).toBe(page.sha);
+  });
+
+  test("a matched page's scan cannot be replaced through storage", async () => {
+    const { batchId, page } = await matchedOnePageExam("Replace");
+    const { error } = await a.grader.storage
+      .from("exam-scans")
+      .update(page.path, replacement(), { contentType: "image/png" });
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([page.sha]);
+    expect(error).not.toBeNull();
+    expect(await storedSha(page.path)).toBe(page.sha);
+  });
+
+  test("a matched page's scan cannot be deleted and uploaded again", async () => {
+    const { batchId, page } = await matchedOnePageExam("Reupload");
+    const { data: removed } = await a.grader.storage.from("exam-scans").remove([page.path]);
+    const { error: reuploadErr } = await a.grader.storage
+      .from("exam-scans")
+      .upload(page.path, replacement(), { contentType: "image/png" });
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([page.sha]);
+    // A delete that row security filters out reports no error and removes nothing.
+    expect(removed ?? []).toHaveLength(0);
+    expect(reuploadErr).not.toBeNull();
+    expect(await storedSha(page.path)).toBe(page.sha);
+  });
+
+  test("an instructor cannot overwrite a matched page's scan either", async () => {
+    const { batchId, page } = await matchedOnePageExam("Instructor");
+    const { error } = await instructor.storage
+      .from("exam-scans")
+      .upload(page.path, replacement(), { contentType: "image/png", upsert: true });
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([page.sha]);
+    expect(error).not.toBeNull();
+    expect(await storedSha(page.path)).toBe(page.sha);
+  });
+
+  test("a scan cannot be uploaded to a path a matched page points at", async () => {
+    const { page } = await matchedOnePageExam("Missing");
+    // Fixture: the matched page's object is gone (the service role removes it).
+    const { error: removeErr } = await supabase.storage.from("exam-scans").remove([page.path]);
+    expect(removeErr).toBeNull();
+    expect(await storedSha(page.path)).toBeNull();
+    const { error } = await a.grader.storage
+      .from("exam-scans")
+      .upload(page.path, replacement(), { contentType: "image/png" });
+    // Nothing was put there for finalize to copy...
+    expect(await storedSha(page.path)).toBeNull();
+    // ...because the upload was refused.
+    expect(error).not.toBeNull();
+  });
+
+  test("a matched page's scan cannot be moved away", async () => {
+    const { page } = await matchedOnePageExam("Move object");
+    const { error } = await a.grader.storage.from("exam-scans").move(page.path, `${page.path}.moved.png`);
+    expect(await storedSha(page.path)).toBe(page.sha);
+    expect(error).not.toBeNull();
+    expect(await storedSha(`${page.path}.moved.png`)).toBeNull();
+  });
+
+  test("scans that no page has been matched to can still be uploaded, retried and deleted", async () => {
+    const examId = await createExam(a.classId, `Upload ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice]);
+    // Retry the upload of the same (not yet matched) page with new bytes, as the scans page does.
+    const retried = replacement();
+    const { error: retryErr } = await a.grader.storage
+      .from("exam-scans")
+      .upload(pages[0].path, retried, { contentType: "image/png", upsert: true });
+    expect(retryErr).toBeNull();
+    expect(await storedSha(pages[0].path)).toBe(sha256(retried));
+    // A stray object no page refers to can be uploaded and removed.
+    const stray = `classes/${a.classId}/exams/${examId}/batches/${batchId}/stray.png`;
+    const { error: strayErr } = await a.grader.storage
+      .from("exam-scans")
+      .upload(stray, replacement(), { contentType: "image/png" });
+    expect(strayErr).toBeNull();
+    const { data: removed, error: removeErr } = await a.grader.storage.from("exam-scans").remove([stray]);
+    expect(removeErr).toBeNull();
+    expect(removed ?? []).toHaveLength(1);
+    expect(await storedSha(stray)).toBeNull();
+    // The batch then processes, matches and finalizes with the retried bytes.
+    await processAndConfirm(batchId, 1);
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([sha256(retried)]);
   });
 
   test("deleting a scanned exam or a batch still cascades to its linked pages", async () => {
