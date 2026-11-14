@@ -8,6 +8,11 @@ import { Box, Flex, Spinner, Text, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { createClient } from "@/utils/supabase/client";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
 
 type LoadState = "pending" | "loaded" | "not_found" | "error";
 
@@ -100,6 +105,40 @@ export default function RequestDetailPage() {
     return queueRequests.findIndex((r) => r.id === request.id) + 1;
   }, [request, queueRequests]);
 
+  // The turn alert counts only waiting requests, so a request becomes position 1 as soon as it is first in line.
+  const turnPosition = useMemo(() => {
+    if (!request || request.status !== "open") return 0;
+    const waiting = queueRequests.filter((r) => r.status === "open");
+    return waiting.findIndex((r) => r.id === request.id) + 1;
+  }, [request, queueRequests]);
+
+  const { private_profile_id } = useClassProfiles();
+  // Ask the database whether this student is on the request. The realtime membership list can lag behind
+  // a request that was just created, so it isn't reliable for this check. Students can read their own rows.
+  const [isRequestMember, setIsRequestMember] = useState(false);
+  useEffect(() => {
+    if (private_profile_id == null || !Number.isFinite(requestIdNum)) return;
+    let cancelled = false;
+    createClient()
+      .from("help_request_students")
+      .select("profile_id")
+      .eq("help_request_id", requestIdNum)
+      .eq("profile_id", private_profile_id)
+      .then(({ data }) => {
+        if (!cancelled) setIsRequestMember((data?.length ?? 0) > 0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [private_profile_id, requestIdNum]);
+  const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
+  const turnMessage = useTurnAlert({
+    status: request?.status,
+    assignee: request?.assignee,
+    position: turnPosition,
+    enabled: turnAlertsOn && isRequestMember
+  });
+
   if (!request) {
     if (hiddenFromMasquerade) {
       return (
@@ -142,6 +181,8 @@ export default function RequestDetailPage() {
         />
       </Box>
       <Box flex={{ lg: 8 }} minW={0}>
+        <TurnAlertPrompt enabled={turnAlertsOn} />
+        <TurnAlertBanner message={turnMessage} />
         <CurrentRequest request={request} position={position} />
       </Box>
     </Flex>

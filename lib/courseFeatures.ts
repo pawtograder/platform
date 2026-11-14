@@ -18,7 +18,10 @@ export const COURSE_FEATURES = {
   GRADEBOOK_TOPICS: "gradebook-topics",
   EXAMS: "exams",
   // Off unless set, like the SQL side. Not manageable here yet; the toggle comes with #1091.
-  CLOUD_WORKSPACES: "cloud-workspaces"
+  CLOUD_WORKSPACES: "cloud-workspaces",
+  OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
+  OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert",
+  OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -187,6 +190,33 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: true,
     switchLabel: "Enable paper exam scanning and grading",
     ariaLabel: "Enable paper exams for this course"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_SHIFT_RELEASE,
+    title: "Office hours: release requests at shift end",
+    description:
+      "When a TA's shift ends, the requests they were still helping with go back to the queue, open and unassigned, instead of staying with them. When off, nothing changes.",
+    defaultWhenMissing: false,
+    switchLabel: "Release a TA's requests when their shift ends",
+    ariaLabel: "Release office hours requests when a TA's shift ends"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT,
+    title: "Office hours: turn alert for students",
+    description:
+      "While a student has an open office hours request, their browser tab shows an alert when a TA picks up their request or they are next in line. When off, nothing changes.",
+    defaultWhenMissing: false,
+    switchLabel: "Alert students in their browser when their office hours turn comes up",
+    ariaLabel: "Alert students in the browser when their office hours turn comes up"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH,
+    title: "Office hours: queue health on staff cards",
+    description:
+      "Staff cards show students waiting, the oldest wait, and an Unstaffed badge, and queues sort so the ones that need attention come first. Instructors also get a browser alert when a queue turns red. When off, the cards look as they did before.",
+    defaultWhenMissing: false,
+    switchLabel: "Show queue health on staff office hours cards",
+    ariaLabel: "Show queue health on staff office hours cards"
   }
 ];
 

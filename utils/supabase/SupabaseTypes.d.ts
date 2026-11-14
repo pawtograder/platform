@@ -2088,6 +2088,7 @@ export type Database = {
           late_tokens_per_student: number;
           name: string | null;
           office_hours_description: string | null;
+          office_hours_health_thresholds: Json;
           office_hours_ics_url: string | null;
           slug: string | null;
           solution_template_repo: string | null;
@@ -2117,6 +2118,7 @@ export type Database = {
           late_tokens_per_student?: number;
           name?: string | null;
           office_hours_description?: string | null;
+          office_hours_health_thresholds?: Json;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           solution_template_repo?: string | null;
@@ -2146,6 +2148,7 @@ export type Database = {
           late_tokens_per_student?: number;
           name?: string | null;
           office_hours_description?: string | null;
+          office_hours_health_thresholds?: Json;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           solution_template_repo?: string | null;
@@ -14796,6 +14799,20 @@ export type Database = {
         Returns: undefined;
       };
       invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
+      office_hours_queue_health: {
+        Args: { p_class_id: number };
+        Returns: {
+          helping: number;
+          median_wait_seconds_today: number;
+          oldest_wait_seconds: number;
+          queue_id: number;
+          queue_name: string;
+          resolved_today: number;
+          staffed_tas: number;
+          unstaffed_seconds: number;
+          waiting: number;
+        }[];
+      };
       invoke_bug_report_retention_purge_background_task: {
         Args: never;
         Returns: undefined;
