@@ -15,14 +15,22 @@ export default defineConfig({
   testDir: "./tests/e2e",
   /* The Canvas LTI 1.3 suite is heavy (boots a full Canvas LMS) and runs in its
      own selectively-triggered CI lane via playwright.canvas.config.ts. Keep it
-     out of the default/per-PR E2E run. */
-  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/sso/**", "**/*.forgejo-coder.spec.ts"],
+     out of the default/per-PR E2E run. The *.vision.spec.ts suites call the real
+     Google Vision + Gemini APIs and run in exam-vision-e2e.yml via
+     playwright.vision.config.ts. */
+  testIgnore: ["**/lti/**", "**/*.canvas.spec.ts", "**/sso/**", "**/*.forgejo-coder.spec.ts", "**/*.vision.spec.ts"],
   /* One-time gate before any worker spawns: probe PostgREST until its
      schema cache is loaded. Deployed previews don't admit traffic until
      this finishes, so test setup never races a partial cache. See
      tests/wait-for-schema-cache.ts for the why. Local `supabase start`
      paths short-circuit when SUPABASE_SERVICE_ROLE_KEY is unset. */
   globalSetup: "./tests/wait-for-schema-cache.ts",
+  /* Under BUG_REPORT_TRACE=1 (the bug reporter's taint trace), merge each worker's findings into
+     lib/bugReport/generated/ and print the check results. See tests/e2e/bugReport/traceFixture.ts. */
+  globalTeardown:
+    process.env.BUG_REPORT_TRACE === "1" || process.env.BUG_REPORT_TRACE === "true"
+      ? "./tests/e2e/bugReport/traceTeardown.ts"
+      : undefined,
   /* Run tests in files in parallel */
   fullyParallel: false,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
@@ -76,6 +84,10 @@ export default defineConfig({
     // baseURL: 'https://nix.dev.pawtograder.net',
     baseURL: process.env.BASE_URL || "http://localhost:3000",
 
+    /* Pin the browser to the seeded courses' zone (America/New_York). Without it the browser
+       uses the runner's zone, the header shows "Course Time Zone (EDT|EST)", and every DST
+       switch changes ~60 Argos screenshots at once (Nov 1 2026). */
+    timezoneId: "America/New_York",
     screenshot: "only-on-failure",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */

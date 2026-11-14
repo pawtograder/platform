@@ -2,6 +2,9 @@
 
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useCapability, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
+import { COURSE_FEATURES, courseFeatureEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
+import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Select } from "chakra-react-select";
@@ -18,13 +21,35 @@ import {
   FaPen,
   FaPlay,
   FaPooStorm,
+  FaQuestionCircle,
   FaSearch,
   FaShieldAlt,
-  FaUsers
+  FaUsers,
+  FaFileAlt
 } from "react-icons/fa";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
 
-const LinkItems = (courseId: number, assignmentId: number) => [
+export type AssignmentType = "code" | "quiz" | "exam" | "survey";
+
+// `types` restricts an item to certain assignment types; omit it to show for all types.
+// `repoOnly` marks tools that need a git repository, so they are disabled (desktop) or
+// omitted (mobile) when the assignment's repo_mode is "none"/"no_submission".
+type NavItem = {
+  label: string;
+  href: string;
+  icon: React.ComponentType;
+  instructorsOnly?: boolean | "graderOrInstructor";
+  types?: AssignmentType[];
+  repoOnly?: boolean;
+  // Hides the entry unless this course feature is on. Read through
+  // courseFeatureEnabled, so a course with no entry falls back to the
+  // feature's own default rather than being treated as enabled.
+  feature?: CourseFeatureName;
+  // Shows the item from the capability tables instead of the app role (#1010).
+  capability?: string;
+};
+
+const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
   {
     label: "Edit Assignment",
@@ -37,7 +62,15 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Configure Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/autograder`,
     icon: FaCode,
-    instructorsOnly: true
+    instructorsOnly: true,
+    types: ["code"]
+  },
+  {
+    label: "Quiz (Questions & Grading)",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/quiz`,
+    icon: FaQuestionCircle,
+    instructorsOnly: true,
+    types: ["quiz"]
   },
   {
     label: "Configure Rubric",
@@ -45,12 +78,26 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaPen,
     instructorsOnly: true
   },
-  { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
+  {
+    label: "Test Assignment",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/test`,
+    icon: FaPlay,
+    types: ["code"]
+  },
+  {
+    label: "Exam (Scan & OCR)",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/exam`,
+    icon: FaFileAlt,
+    instructorsOnly: "graderOrInstructor",
+    types: ["exam"],
+    feature: COURSE_FEATURES.EXAMS
+  },
   {
     label: "Repository Status",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
     icon: FaCode,
     instructorsOnly: true,
+    types: ["code"],
     repoOnly: true
   },
   {
@@ -58,6 +105,7 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
     icon: FaPooStorm,
     instructorsOnly: true,
+    types: ["code"],
     repoOnly: true
   },
   {
@@ -69,13 +117,15 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Grading Assignments",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
     icon: FaSearch,
-    instructorsOnly: "graderOrInstructor"
+    instructorsOnly: "graderOrInstructor",
+    types: ["code", "quiz", "exam"]
   },
   {
     label: "Manage Groups",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`,
     icon: FaUsers,
-    instructorsOnly: "graderOrInstructor"
+    instructorsOnly: "graderOrInstructor",
+    types: ["code"]
   },
   {
     label: "Manage Regrade Requests",
@@ -87,6 +137,7 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/security`,
     icon: FaShieldAlt,
     instructorsOnly: true,
+    types: ["code"],
     repoOnly: true
   },
   {
@@ -94,6 +145,7 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/test-insights`,
     icon: FaChartBar,
     instructorsOnly: "graderOrInstructor",
+    types: ["code"],
     repoOnly: true
   }
 ];
@@ -103,10 +155,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
  */
 export function ManageAssignmentNav({
   children,
-  assignmentTitle
+  assignmentTitle,
+  assignmentType = "code"
 }: {
   children: React.ReactNode;
   assignmentTitle: string | null | undefined;
+  assignmentType?: AssignmentType;
 }) {
   const { course_id, assignment_id } = useParams();
   const isInstructor = useIsInstructor();
@@ -115,20 +169,25 @@ export function ManageAssignmentNav({
   const pathname = usePathname();
   const router = useRouter();
   const { assignment } = useAssignmentController();
+  const course = useCourse() as CourseWithFeatures;
+  const courseFeatures = course?.features;
   // Repo-only tools (repository status, rerun autograder, test insights,
   // security audit) don't apply when there's no git repository.
   const noRepo = assignment?.repo_mode === "none" || assignment?.repo_mode === "no_submission";
 
   const filteredLinkItems = React.useMemo(
     () =>
-      LinkItems(parseInt(course_id as string), parseInt(assignment_id as string)).filter((item) => {
-        // A capability the filter doesn't know hides the item rather than showing it to everyone.
-        if (item.capability) return item.capability === "manage_assignments" && canManageAssignments;
-        if (!item.instructorsOnly) return true;
-        if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
-        return isInstructor;
-      }),
-    [course_id, assignment_id, isGraderOrInstructor, isInstructor, canManageAssignments]
+      LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
+        .filter((item) => !item.types || item.types.includes(assignmentType))
+        .filter((item) => {
+          // A capability the filter doesn't know hides the item rather than showing it to everyone.
+          if (item.capability) return item.capability === "manage_assignments" && canManageAssignments;
+          if (!item.instructorsOnly) return true;
+          if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+          return isInstructor;
+        })
+        .filter((item) => !item.feature || courseFeatureEnabled(courseFeatures, item.feature)),
+    [course_id, assignment_id, isGraderOrInstructor, isInstructor, canManageAssignments, assignmentType, courseFeatures]
   );
   // Mobile <Select> can't show disabled options, so omit repo-only items there.
   const selectOptions = React.useMemo(

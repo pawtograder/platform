@@ -108,7 +108,10 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${webBaseUrl()}/reset-password`
+    // Only used when GoTrue sends its built-in recovery email (the chart's template links straight to
+    // /auth/reset-password?token_hash=...). /auth/callback exchanges the code for a session, and the
+    // reset page then updates the password of the signed-in user. There is no /reset-password route.
+    redirectTo: `${webBaseUrl()}/auth/callback?next=${encodeURIComponent("/auth/reset-password")}`
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });

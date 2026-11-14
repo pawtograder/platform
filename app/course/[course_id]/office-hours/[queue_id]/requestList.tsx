@@ -9,6 +9,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useRouter, useParams } from "next/navigation";
 import Markdown from "@/components/ui/markdown";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 /**
  * Office hours UI component prop types
@@ -155,7 +156,9 @@ export default function HelpRequestHistory({
                   flexWrap={{ base: "wrap", md: "nowrap" }}
                 >
                   <Box flex="1" minW={0}>
-                    <Markdown>{request.request}</Markdown>
+                    <ReportBlock as="div">
+                      <Markdown>{request.request}</Markdown>
+                    </ReportBlock>
                     <HStack mt={2} gap={2} wrap="wrap">
                       <Badge
                         colorPalette={

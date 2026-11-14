@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "preserve",
+    "target": "ESNext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["component.tsx"]
+}

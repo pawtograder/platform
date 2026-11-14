@@ -1,5 +1,14 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
+/**
+ * Privacy brand from lib/bugReport/privacy.ts, added by scripts/bugReport/brandPiiColumns.ts. An
+ * optional phantom property, so a branded value stays assignable to and from its plain type; the
+ * pii-render lint rule reads it through the type checker. Null and undefined are never branded.
+ */
+export type Pii<K extends "name" | "email" | "handle" | "grade" | "free_text", T> = T extends null | undefined
+  ? T
+  : T & { readonly __pii?: K };
+
 export type Database = {
   pgmq_public: {
     Tables: {
@@ -93,7 +102,7 @@ export type Database = {
       ai_help_feedback: {
         Row: {
           class_id: number;
-          comment: string | null;
+          comment: Pii<"free_text", string> | null;
           context_type: string;
           created_at: string;
           id: string;
@@ -178,7 +187,7 @@ export type Database = {
           expires_at: string;
           id: string;
           last_used_at: string | null;
-          name: string;
+          name: Pii<"free_text", string>;
           revoked_at: string | null;
           scopes: string[];
           token_id: string;
@@ -289,12 +298,12 @@ export type Database = {
           class_id: number | null;
           created_at: string;
           creator_id: string;
-          hours: number;
+          hours: Pii<"grade", number>;
           id: number;
-          minutes: number;
-          note: string | null;
+          minutes: Pii<"grade", number>;
+          note: Pii<"free_text", string> | null;
           student_id: string | null;
-          tokens_consumed: number;
+          tokens_consumed: Pii<"grade", number>;
           updated_at: string;
         };
         Insert: {
@@ -603,7 +612,7 @@ export type Database = {
           created_at: string;
           id: number;
           mentor_profile_id: string | null;
-          name: string;
+          name: Pii<"free_text", string>;
         };
         Insert: {
           assignment_id: number;
@@ -798,11 +807,11 @@ export type Database = {
       assignment_handout_commits: {
         Row: {
           assignment_id: number;
-          author: string | null;
+          author: Pii<"name", string> | null;
           class_id: number | null;
           created_at: string;
           id: number;
-          message: string;
+          message: Pii<"free_text", string>;
           sha: string;
         };
         Insert: {
@@ -930,7 +939,7 @@ export type Database = {
       assignment_leaderboard: {
         Row: {
           assignment_id: number;
-          autograder_score: number;
+          autograder_score: Pii<"grade", number>;
           class_id: number;
           created_at: string;
           id: number;
@@ -1081,6 +1090,7 @@ export type Database = {
           allow_not_graded_submissions: boolean;
           allow_student_formed_groups: boolean | null;
           archived_at: string | null;
+          assignment_type: Database["public"]["Enums"]["assignment_type"];
           autograder_points: number | null;
           class_id: number;
           created_at: string;
@@ -1133,6 +1143,7 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          assignment_type?: Database["public"]["Enums"]["assignment_type"];
           autograder_points?: number | null;
           class_id: number;
           created_at?: string;
@@ -1185,6 +1196,7 @@ export type Database = {
           allow_not_graded_submissions?: boolean;
           allow_student_formed_groups?: boolean | null;
           archived_at?: string | null;
+          assignment_type?: Database["public"]["Enums"]["assignment_type"];
           autograder_points?: number | null;
           class_id?: number;
           created_at?: string;
@@ -1304,11 +1316,11 @@ export type Database = {
           class_id: number | null;
           created_at: string;
           debug_id: string | null;
-          envelope: Json;
-          error_message: string | null;
+          envelope: Pii<"free_text", Json>;
+          error_message: Pii<"free_text", string> | null;
           error_type: string | null;
           id: number;
-          last_error_context: Json | null;
+          last_error_context: Pii<"free_text", Json> | null;
           log_id: number | null;
           method: Database["public"]["Enums"]["github_async_method"];
           original_msg_id: number | null;
@@ -1384,9 +1396,9 @@ export type Database = {
           class_id: number;
           created_at: string;
           id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
+          ip_addr: Pii<"handle", string> | null;
+          new: Pii<"free_text", Json> | null;
+          old: Pii<"free_text", Json> | null;
           table: string;
           user_id: string | null;
         };
@@ -1425,9 +1437,9 @@ export type Database = {
           class_id: number;
           created_at: string;
           id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
+          ip_addr: Pii<"handle", string> | null;
+          new: Pii<"free_text", Json> | null;
+          old: Pii<"free_text", Json> | null;
           table: string;
           user_id: string | null;
         };
@@ -1538,12 +1550,12 @@ export type Database = {
       };
       autograder_commits: {
         Row: {
-          author: string | null;
+          author: Pii<"name", string> | null;
           autograder_id: number;
           class_id: number;
           created_at: string;
           id: number;
-          message: string;
+          message: Pii<"free_text", string>;
           ref: string;
           sha: string;
         };
@@ -1624,7 +1636,7 @@ export type Database = {
           autograder_id: number;
           created_at: string;
           id: number;
-          repository: string;
+          repository: Pii<"handle", string>;
         };
         Insert: {
           autograder_id: number;
@@ -1648,24 +1660,62 @@ export type Database = {
           }
         ];
       };
+      bug_report_retention_purges: {
+        Row: {
+          class_id: number;
+          first_purged_at: string;
+          last_feedback_deleted: number;
+          last_purged_at: string;
+          last_replays_deleted: number;
+          total_feedback_deleted: number;
+          total_replays_deleted: number;
+        };
+        Insert: {
+          class_id: number;
+          first_purged_at?: string;
+          last_feedback_deleted?: number;
+          last_purged_at?: string;
+          last_replays_deleted?: number;
+          total_feedback_deleted?: number;
+          total_replays_deleted?: number;
+        };
+        Update: {
+          class_id?: number;
+          first_purged_at?: string;
+          last_feedback_deleted?: number;
+          last_purged_at?: string;
+          last_replays_deleted?: number;
+          total_feedback_deleted?: number;
+          total_replays_deleted?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "bug_report_retention_purges_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: true;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       calendar_events: {
         Row: {
           calendar_type: string;
           change_announced_at: string | null;
           class_id: number;
           created_at: string;
-          description: string | null;
+          description: Pii<"free_text", string> | null;
           end_announced_at: string | null;
           end_time: string;
           id: number;
-          location: string | null;
-          organizer_name: string | null;
+          location: Pii<"free_text", string> | null;
+          organizer_name: Pii<"name", string> | null;
           queue_name: string | null;
-          raw_ics_data: Json | null;
+          raw_ics_data: Pii<"free_text", Json> | null;
           resolved_help_queue_id: number | null;
           start_announced_at: string | null;
           start_time: string;
-          title: string;
+          title: Pii<"free_text", string>;
           uid: string;
           updated_at: string;
         };
@@ -1735,7 +1785,7 @@ export type Database = {
           last_etag: string | null;
           last_hash: string | null;
           last_sync_at: string | null;
-          sync_error: string | null;
+          sync_error: Pii<"free_text", string> | null;
         };
         Insert: {
           calendar_type: string;
@@ -1986,7 +2036,7 @@ export type Database = {
           created_at: string;
           id: number;
           setting_key: string;
-          setting_value: string | null;
+          setting_value: Pii<"free_text", string> | null;
           updated_at: string;
         };
         Insert: {
@@ -2123,7 +2173,7 @@ export type Database = {
       discord_async_errors: {
         Row: {
           created_at: string;
-          error_data: Json;
+          error_data: Pii<"free_text", Json>;
           guild_id: string;
           id: number;
           method: string;
@@ -2149,11 +2199,11 @@ export type Database = {
           class_id: number | null;
           created_at: string;
           debug_id: string | null;
-          envelope: Json;
-          error_message: string | null;
+          envelope: Pii<"free_text", Json>;
+          error_message: Pii<"free_text", string> | null;
           error_type: string | null;
           id: number;
-          last_error_context: Json | null;
+          last_error_context: Pii<"free_text", Json> | null;
           log_id: number | null;
           method: string;
           original_msg_id: number | null;
@@ -2235,7 +2285,7 @@ export type Database = {
       discord_circuit_breakers: {
         Row: {
           key: string;
-          last_reason: string | null;
+          last_reason: Pii<"free_text", string> | null;
           open_until: string | null;
           scope: string;
           state: string;
@@ -2316,7 +2366,7 @@ export type Database = {
       discord_membership_status: {
         Row: {
           class_id: number;
-          detail: string | null;
+          detail: Pii<"free_text", string> | null;
           discord_error_code: number | null;
           first_observed_at: string;
           guild_id: string;
@@ -2325,7 +2375,7 @@ export type Database = {
           last_reconciled_at: string | null;
           last_retry_requested_at: string | null;
           observed_count: number;
-          observed_discord_id: string | null;
+          observed_discord_id: Pii<"handle", string> | null;
           self_retry_count: number;
           self_retry_window_started_at: string | null;
           state: Database["public"]["Enums"]["discord_membership_state"];
@@ -2458,16 +2508,16 @@ export type Database = {
       discussion_digest_items: {
         Row: {
           action: string | null;
-          author_name: string;
-          body: string | null;
+          author_name: Pii<"name", string>;
+          body: Pii<"free_text", string> | null;
           class_id: number;
           created_at: string;
           id: number;
           msg_id: number | null;
           notification_reason: string | null;
-          teaser: string | null;
+          teaser: Pii<"free_text", string> | null;
           thread_id: number;
-          thread_name: string;
+          thread_name: Pii<"free_text", string>;
           thread_url: string | null;
           topic_id: number | null;
           user_id: string;
@@ -2766,15 +2816,15 @@ export type Database = {
         Row: {
           answer: number | null;
           author: string;
-          body: string;
+          body: Pii<"free_text", string>;
           children_count: number;
           class_id: number;
           created_at: string;
           draft: boolean;
           duplicate_marked_at: string | null;
-          duplicate_marked_by_display_name: string | null;
+          duplicate_marked_by_display_name: Pii<"name", string> | null;
           duplicate_marked_by_user_id: string | null;
-          duplicate_original_subject: string | null;
+          duplicate_original_subject: Pii<"free_text", string> | null;
           edited_at: string | null;
           id: number;
           instructors_only: boolean;
@@ -2785,7 +2835,7 @@ export type Database = {
           pinned: boolean;
           root: number | null;
           root_class_id: number | null;
-          subject: string;
+          subject: Pii<"free_text", string>;
           topic_id: number;
           updated_at: string;
         };
@@ -3031,7 +3081,7 @@ export type Database = {
       };
       e2e_github_calls: {
         Row: {
-          args: Json;
+          args: Pii<"free_text", Json>;
           created_at: string;
           fn: string;
           id: number;
@@ -3055,13 +3105,13 @@ export type Database = {
       };
       email_batches: {
         Row: {
-          body: string;
-          cc_emails: Json;
+          body: Pii<"free_text", string>;
+          cc_emails: Pii<"email", Json>;
           class_id: number;
           created_at: string;
           id: number;
-          reply_to: string | null;
-          subject: string;
+          reply_to: Pii<"email", string> | null;
+          subject: Pii<"free_text", string>;
         };
         Insert: {
           body: string;
@@ -3094,13 +3144,13 @@ export type Database = {
       emails: {
         Row: {
           batch_id: number;
-          body: string;
-          cc_emails: Json;
+          body: Pii<"free_text", string>;
+          cc_emails: Pii<"email", Json>;
           class_id: number;
           created_at: string;
           id: number;
-          reply_to: string | null;
-          subject: string;
+          reply_to: Pii<"email", string> | null;
+          subject: Pii<"free_text", string>;
           user_id: string;
         };
         Insert: {
@@ -3347,6 +3397,624 @@ export type Database = {
           }
         ];
       };
+      exam_async_worker_dlq_messages: {
+        Row: {
+          class_id: number | null;
+          created_at: string;
+          debug_id: string | null;
+          envelope: Pii<"free_text", Json> | null;
+          error_message: Pii<"free_text", string> | null;
+          error_type: string | null;
+          id: number;
+          last_error_context: Pii<"free_text", Json> | null;
+          method: string | null;
+          original_msg_id: number | null;
+          retry_count: number;
+        };
+        Insert: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json | null;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          method?: string | null;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Update: {
+          class_id?: number | null;
+          created_at?: string;
+          debug_id?: string | null;
+          envelope?: Json | null;
+          error_message?: string | null;
+          error_type?: string | null;
+          id?: number;
+          last_error_context?: Json | null;
+          method?: string | null;
+          original_msg_id?: number | null;
+          retry_count?: number;
+        };
+        Relationships: [];
+      };
+      exam_question_regions: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          exam_id: number;
+          exam_question_id: number | null;
+          height: number;
+          id: number;
+          kind: string;
+          page_number: number;
+          width: number;
+          x: number;
+          y: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          exam_id: number;
+          exam_question_id?: number | null;
+          height: number;
+          id?: number;
+          kind?: string;
+          page_number: number;
+          width: number;
+          x: number;
+          y: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          exam_id?: number;
+          exam_question_id?: number | null;
+          height?: number;
+          id?: number;
+          kind?: string;
+          page_number?: number;
+          width?: number;
+          x?: number;
+          y?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_question_regions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_question_regions_question_exam_fkey";
+            columns: ["exam_question_id", "exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id", "exam_id"];
+          }
+        ];
+      };
+      exam_questions: {
+        Row: {
+          answer_type: string | null;
+          choices: Pii<"free_text", Json> | null;
+          class_id: number;
+          correct_answer: Pii<"free_text", Json> | null;
+          created_at: string;
+          exam_id: number;
+          grading_tolerance: number | null;
+          id: number;
+          label: string | null;
+          level: number;
+          ordinal: number;
+          parent_id: number | null;
+          points: Pii<"grade", number> | null;
+          prompt: Pii<"free_text", string> | null;
+        };
+        Insert: {
+          answer_type?: string | null;
+          choices?: Json | null;
+          class_id: number;
+          correct_answer?: Json | null;
+          created_at?: string;
+          exam_id: number;
+          grading_tolerance?: number | null;
+          id?: number;
+          label?: string | null;
+          level: number;
+          ordinal?: number;
+          parent_id?: number | null;
+          points?: number | null;
+          prompt?: string | null;
+        };
+        Update: {
+          answer_type?: string | null;
+          choices?: Json | null;
+          class_id?: number;
+          correct_answer?: Json | null;
+          created_at?: string;
+          exam_id?: number;
+          grading_tolerance?: number | null;
+          id?: number;
+          label?: string | null;
+          level?: number;
+          ordinal?: number;
+          parent_id?: number | null;
+          points?: number | null;
+          prompt?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_questions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_questions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_questions_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_questions_parent_id_fkey";
+            columns: ["parent_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_scan_batches: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          error: Pii<"free_text", string> | null;
+          exam_id: number;
+          id: number;
+          original_pdf_path: string | null;
+          pages_per_exam: number;
+          status: string;
+          total_pages: number;
+          uploaded_by: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          error?: string | null;
+          exam_id: number;
+          id?: number;
+          original_pdf_path?: string | null;
+          pages_per_exam?: number;
+          status?: string;
+          total_pages?: number;
+          uploaded_by?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          error?: string | null;
+          exam_id?: number;
+          id?: number;
+          original_pdf_path?: string | null;
+          pages_per_exam?: number;
+          status?: string;
+          total_pages?: number;
+          uploaded_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_scan_batches_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_batches_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_scan_batches_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_scan_pages: {
+        Row: {
+          batch_id: number;
+          class_id: number;
+          created_at: string;
+          exam_id: number;
+          height: number;
+          id: number;
+          image_path: string;
+          ocr_data: Pii<"free_text", Json> | null;
+          ocr_text: Pii<"free_text", string> | null;
+          page_index: number;
+          scanned_submission_id: number | null;
+          width: number;
+        };
+        Insert: {
+          batch_id: number;
+          class_id: number;
+          created_at?: string;
+          exam_id: number;
+          height: number;
+          id?: number;
+          image_path: string;
+          ocr_data?: Json | null;
+          ocr_text?: string | null;
+          page_index: number;
+          scanned_submission_id?: number | null;
+          width: number;
+        };
+        Update: {
+          batch_id?: number;
+          class_id?: number;
+          created_at?: string;
+          exam_id?: number;
+          height?: number;
+          id?: number;
+          image_path?: string;
+          ocr_data?: Json | null;
+          ocr_text?: string | null;
+          page_index?: number;
+          scanned_submission_id?: number | null;
+          width?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_scan_pages_batch_class_fkey";
+            columns: ["batch_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_batch_id_fkey";
+            columns: ["batch_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scan_pages_scanned_submission_id_fkey";
+            columns: ["scanned_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scanned_submissions";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exam_scanned_submissions: {
+        Row: {
+          batch_id: number;
+          class_id: number;
+          created_at: string;
+          detected_name: Pii<"name", string> | null;
+          detected_sis_id: Pii<"handle", string> | null;
+          exam_id: number;
+          exam_index: number;
+          extracted: Pii<"free_text", Json> | null;
+          finalized_at: string | null;
+          id: number;
+          match_confidence: number | null;
+          match_status: string;
+          matched_profile_id: string | null;
+          submission_id: number | null;
+        };
+        Insert: {
+          batch_id: number;
+          class_id: number;
+          created_at?: string;
+          detected_name?: string | null;
+          detected_sis_id?: string | null;
+          exam_id: number;
+          exam_index: number;
+          extracted?: Json | null;
+          finalized_at?: string | null;
+          id?: number;
+          match_confidence?: number | null;
+          match_status?: string;
+          matched_profile_id?: string | null;
+          submission_id?: number | null;
+        };
+        Update: {
+          batch_id?: number;
+          class_id?: number;
+          created_at?: string;
+          detected_name?: string | null;
+          detected_sis_id?: string | null;
+          exam_id?: number;
+          exam_index?: number;
+          extracted?: Json | null;
+          finalized_at?: string | null;
+          id?: number;
+          match_confidence?: number | null;
+          match_status?: string;
+          matched_profile_id?: string | null;
+          submission_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_scanned_submissions_batch_id_fkey";
+            columns: ["batch_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_scan_batches";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_matched_profile_id_fkey";
+            columns: ["matched_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_matched_profile_id_fkey";
+            columns: ["matched_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "exam_scanned_submissions_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
+      exam_template_pages: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          exam_id: number;
+          height: number;
+          id: number;
+          image_path: string;
+          page_number: number;
+          width: number;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          exam_id: number;
+          height: number;
+          id?: number;
+          image_path: string;
+          page_number: number;
+          width: number;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          exam_id?: number;
+          height?: number;
+          id?: number;
+          image_path?: string;
+          page_number?: number;
+          width?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exam_template_pages_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exam_template_pages_exam_class_fkey";
+            columns: ["exam_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exam_template_pages_exam_id_fkey";
+            columns: ["exam_id"];
+            isOneToOne: false;
+            referencedRelation: "exams";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      exams: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          created_at: string;
+          created_by: string | null;
+          delivery_mode: string;
+          id: number;
+          num_pages: number;
+          status: string;
+          template_markdown: string | null;
+          template_pdf_path: string | null;
+          template_source_type: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          created_at?: string;
+          created_by?: string | null;
+          delivery_mode?: string;
+          id?: number;
+          num_pages?: number;
+          status?: string;
+          template_markdown?: string | null;
+          template_pdf_path?: string | null;
+          template_source_type?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          created_at?: string;
+          created_by?: string | null;
+          delivery_mode?: string;
+          id?: number;
+          num_pages?: number;
+          status?: string;
+          template_markdown?: string | null;
+          template_pdf_path?: string | null;
+          template_source_type?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_class_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "exams_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "exams_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       flashcard_decks: {
         Row: {
           class_id: number;
@@ -3525,10 +4193,51 @@ export type Database = {
           }
         ];
       };
+      git_accounts: {
+        Row: {
+          claimed_at: string;
+          created_at: string;
+          id: number;
+          instance_url: string;
+          login: Pii<"handle", string> | null;
+          provider: string;
+          remote_user_id: Pii<"handle", number> | null;
+          user_id: string;
+        };
+        Insert: {
+          claimed_at?: string;
+          created_at?: string;
+          id?: never;
+          instance_url: string;
+          login?: string | null;
+          provider: string;
+          remote_user_id?: number | null;
+          user_id: string;
+        };
+        Update: {
+          claimed_at?: string;
+          created_at?: string;
+          id?: never;
+          instance_url?: string;
+          login?: string | null;
+          provider?: string;
+          remote_user_id?: number | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "git_accounts_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       github_async_errors: {
         Row: {
           created_at: string;
-          error_data: Json;
+          error_data: Pii<"free_text", Json>;
           id: number;
           method: string;
           org: string;
@@ -3554,7 +4263,7 @@ export type Database = {
           id: number;
           key: string;
           opened_at: string;
-          reason: string | null;
+          reason: Pii<"free_text", string> | null;
           scope: string;
         };
         Insert: {
@@ -3576,7 +4285,7 @@ export type Database = {
       github_circuit_breakers: {
         Row: {
           key: string;
-          last_reason: string | null;
+          last_reason: Pii<"free_text", string> | null;
           open_until: string | null;
           scope: string;
           state: string;
@@ -3607,14 +4316,14 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
-          creator_login: string | null;
+          creator_login: Pii<"handle", string> | null;
           environment: string | null;
           github_deployment_id: number | null;
           github_deployment_status_id: number | null;
           id: number;
-          payload: Json | null;
+          payload: Pii<"free_text", Json> | null;
           repository_id: number | null;
-          repository_name: string;
+          repository_name: Pii<"handle", string>;
           sha: string | null;
           state: string | null;
           target_url: string | null;
@@ -3673,7 +4382,7 @@ export type Database = {
           default_handout_template_repo: string;
           default_solution_template_repo: string;
           org_name: string;
-          permission_sync_exempt_users: string[];
+          permission_sync_exempt_users: Pii<"handle", string[]>;
           updated_at: string;
           updated_by: string | null;
         };
@@ -3699,6 +4408,41 @@ export type Database = {
         };
         Relationships: [];
       };
+      gradebook_column_groups: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          gradebook_id: number;
+          id: number;
+          name: string;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          gradebook_id: number;
+          id?: number;
+          name: string;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          gradebook_id?: number;
+          id?: number;
+          name?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "gradebook_column_groups_gradebook_class_fkey";
+            columns: ["gradebook_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebooks";
+            referencedColumns: ["id", "class_id"];
+          }
+        ];
+      };
       gradebook_column_students: {
         Row: {
           class_id: number;
@@ -3706,16 +4450,16 @@ export type Database = {
           gradebook_column_id: number;
           gradebook_id: number;
           id: number;
-          incomplete_values: Json | null;
-          is_droppable: boolean;
-          is_excused: boolean;
-          is_missing: boolean;
+          incomplete_values: Pii<"grade", Json> | null;
+          is_droppable: Pii<"grade", boolean>;
+          is_excused: Pii<"grade", boolean>;
+          is_missing: Pii<"grade", boolean>;
           is_private: boolean;
           is_recalculating: boolean;
           released: boolean;
-          score: number | null;
-          score_override: number | null;
-          score_override_note: string | null;
+          score: Pii<"grade", number> | null;
+          score_override: Pii<"grade", number> | null;
+          score_override_note: Pii<"free_text", string> | null;
           student_id: string;
           updated_at: string;
         };
@@ -3811,12 +4555,14 @@ export type Database = {
       };
       gradebook_columns: {
         Row: {
+          attempt_number: number | null;
           class_id: number;
           created_at: string;
           dependencies: Json | null;
           description: string | null;
-          external_data: Json | null;
+          external_data: Pii<"free_text", Json> | null;
           gradebook_id: number;
+          group_id: number | null;
           id: number;
           instructor_only: boolean;
           max_score: number | null;
@@ -3828,15 +4574,18 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          topic_id: number | null;
           updated_at: string;
         };
         Insert: {
+          attempt_number?: number | null;
           class_id: number;
           created_at?: string;
           dependencies?: Json | null;
           description?: string | null;
           external_data?: Json | null;
           gradebook_id: number;
+          group_id?: number | null;
           id?: number;
           instructor_only?: boolean;
           max_score?: number | null;
@@ -3848,15 +4597,18 @@ export type Database = {
           show_max_score?: boolean;
           slug: string;
           sort_order?: number | null;
+          topic_id?: number | null;
           updated_at?: string;
         };
         Update: {
+          attempt_number?: number | null;
           class_id?: number;
           created_at?: string;
           dependencies?: Json | null;
           description?: string | null;
           external_data?: Json | null;
           gradebook_id?: number;
+          group_id?: number | null;
           id?: number;
           instructor_only?: boolean;
           max_score?: number | null;
@@ -3868,6 +4620,7 @@ export type Database = {
           show_max_score?: boolean;
           slug?: string;
           sort_order?: number | null;
+          topic_id?: number | null;
           updated_at?: string;
         };
         Relationships: [
@@ -3884,6 +4637,20 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "gradebooks";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "gradebook_columns_group_fkey";
+            columns: ["group_id", "gradebook_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_column_groups";
+            referencedColumns: ["id", "gradebook_id"];
+          },
+          {
+            foreignKeyName: "gradebook_columns_topic_fkey";
+            columns: ["topic_id", "gradebook_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_topics";
+            referencedColumns: ["id", "gradebook_id"];
           }
         ];
       };
@@ -3919,6 +4686,54 @@ export type Database = {
           version?: number;
         };
         Relationships: [];
+      };
+      gradebook_topics: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          gradebook_id: number;
+          id: number;
+          name: string;
+          standing_column_id: number | null;
+          standing_rule: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          gradebook_id: number;
+          id?: number;
+          name: string;
+          standing_column_id?: number | null;
+          standing_rule?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          gradebook_id?: number;
+          id?: number;
+          name?: string;
+          standing_column_id?: number | null;
+          standing_rule?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "gradebook_topics_gradebook_class_fkey";
+            columns: ["gradebook_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebooks";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "gradebook_topics_standing_column_fkey";
+            columns: ["standing_column_id", "gradebook_id"];
+            isOneToOne: false;
+            referencedRelation: "gradebook_columns";
+            referencedColumns: ["id", "gradebook_id"];
+          }
+        ];
       };
       gradebooks: {
         Row: {
@@ -3971,7 +4786,7 @@ export type Database = {
           created_at: string;
           id: number;
           key: string;
-          note: string | null;
+          note: Pii<"free_text", string> | null;
         };
         Insert: {
           class_id: number;
@@ -4032,7 +4847,7 @@ export type Database = {
           format: string;
           grader_result_id: number;
           id: number;
-          output: string;
+          output: Pii<"free_text", string>;
           student_id: string | null;
           visibility: Database["public"]["Enums"]["feedback_visibility"];
         };
@@ -4107,10 +4922,10 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
-          extra_data: Json | null;
+          extra_data: Pii<"free_text", Json> | null;
           grader_result_test_id: number;
           id: number;
-          output: string;
+          output: Pii<"free_text", string>;
           output_format: string;
         };
         Insert: {
@@ -4153,17 +4968,17 @@ export type Database = {
           assignment_group_id: number | null;
           class_id: number;
           created_at: string;
-          extra_data: Json | null;
+          extra_data: Pii<"free_text", Json> | null;
           grader_result_id: number;
           id: number;
           is_released: boolean;
           max_score: number | null;
           name: string;
           name_format: string;
-          output: string | null;
+          output: Pii<"free_text", string> | null;
           output_format: string | null;
           part: string | null;
-          score: number | null;
+          score: Pii<"grade", number> | null;
           student_id: string | null;
           submission_id: number | null;
         };
@@ -4279,11 +5094,11 @@ export type Database = {
       grader_result_tests_hint_feedback: {
         Row: {
           class_id: number;
-          comment: string | null;
+          comment: Pii<"free_text", string> | null;
           created_at: string;
           created_by: string;
           grader_result_tests_id: number;
-          hint: string;
+          hint: Pii<"free_text", string>;
           id: number;
           submission_id: number;
           useful: boolean;
@@ -4375,19 +5190,19 @@ export type Database = {
           autograder_regression_test: number | null;
           class_id: number;
           created_at: string;
-          errors: Json | null;
+          errors: Pii<"free_text", Json> | null;
           execution_time: number | null;
           grader_action_sha: string | null;
           grader_sha: string | null;
           id: number;
-          lint_output: string;
+          lint_output: Pii<"free_text", string>;
           lint_output_format: string;
           lint_passed: boolean;
           max_score: number;
           profile_id: string | null;
           rerun_for_submission_id: number | null;
           ret_code: number | null;
-          score: number;
+          score: Pii<"grade", number>;
           submission_id: number | null;
         };
         Insert: {
@@ -4538,7 +5353,7 @@ export type Database = {
           created_by_profile_id: string;
           grader_profile_id: string;
           id: number;
-          reason: string | null;
+          reason: Pii<"free_text", string> | null;
           student_profile_id: string;
         };
         Insert: {
@@ -4741,7 +5556,7 @@ export type Database = {
       help_request_feedback: {
         Row: {
           class_id: number;
-          comment: string | null;
+          comment: Pii<"free_text", string> | null;
           created_at: string;
           help_request_id: number;
           id: number;
@@ -4989,7 +5804,7 @@ export type Database = {
           id: number;
           instructors_only: boolean;
           is_system_message: boolean | null;
-          message: string;
+          message: Pii<"free_text", string>;
           reply_to_message_id: number | null;
           updated_at: string;
         };
@@ -5067,7 +5882,7 @@ export type Database = {
           is_permanent: boolean;
           message_id: number | null;
           moderator_profile_id: string;
-          reason: string | null;
+          reason: Pii<"free_text", string> | null;
           student_profile_id: string;
           updated_at: string;
         };
@@ -5323,7 +6138,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           longest_wait_seconds_at_start: number | null;
-          notes: string | null;
+          notes: Pii<"free_text", string> | null;
           queue_depth_at_start: number | null;
           started_at: string;
           ta_profile_id: string;
@@ -5396,8 +6211,8 @@ export type Database = {
           is_video_live: boolean;
           location_type: Database["public"]["Enums"]["location_type"];
           referenced_submission_id: number | null;
-          request: string;
-          resolution_notes: string | null;
+          request: Pii<"free_text", string>;
+          resolution_notes: Pii<"free_text", string> | null;
           resolution_status: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at: string | null;
           resolved_by: string | null;
@@ -5554,16 +6369,16 @@ export type Database = {
           class_id: number;
           class_section_id: number | null;
           created_at: string;
-          email: string | null;
+          email: Pii<"email", string> | null;
           id: number;
           invited_by: string | null;
           lab_section_id: number | null;
-          name: string | null;
+          name: Pii<"name", string> | null;
           private_profile_id: string;
           public_profile_id: string;
           role: Database["public"]["Enums"]["app_role"];
           sis_managed: boolean;
-          sis_user_id: number;
+          sis_user_id: Pii<"handle", number>;
           status: string;
           updated_at: string;
           updated_by: string | null;
@@ -5726,7 +6541,7 @@ export type Database = {
           id: number;
           lab_section_id: number;
           meeting_date: string;
-          notes: string | null;
+          notes: Pii<"free_text", string> | null;
           updated_at: string;
         };
         Insert: {
@@ -5829,7 +6644,7 @@ export type Database = {
           is_submitted: boolean;
           live_poll_id: string;
           public_profile_id: string | null;
-          response: Json;
+          response: Pii<"free_text", Json>;
           submitted_at: string | null;
         };
         Insert: {
@@ -6018,7 +6833,7 @@ export type Database = {
           id: number;
           lab_section_id: number | null;
           last_roster_sync_at: string | null;
-          last_roster_sync_message: string | null;
+          last_roster_sync_message: Pii<"free_text", string> | null;
           last_roster_sync_status: string | null;
           nrps_url: string | null;
           platform_id: number;
@@ -6252,15 +7067,15 @@ export type Database = {
           attempts: number;
           class_id: number;
           created_at: string;
-          error: string | null;
+          error: Pii<"free_text", string> | null;
           id: number;
           last_attempt_at: string | null;
           line_item_id: number | null;
-          lti_user_sub: string | null;
+          lti_user_sub: Pii<"handle", string> | null;
           status: string;
           student_profile_id: string;
           synced_at: string | null;
-          synced_score: number | null;
+          synced_score: Pii<"grade", number> | null;
           updated_at: string;
         };
         Insert: {
@@ -6495,7 +7310,7 @@ export type Database = {
           created_at: string;
           id: number;
           kid: string;
-          private_key_pem_encrypted: string;
+          private_key_pem_encrypted: Pii<"free_text", string>;
           public_jwk: Json;
           retired_at: string | null;
         };
@@ -6522,12 +7337,12 @@ export type Database = {
       lti_users: {
         Row: {
           created_at: string;
-          email: string | null;
+          email: Pii<"email", string> | null;
           id: number;
-          lis_person_sourcedid: string | null;
-          name: string | null;
+          lis_person_sourcedid: Pii<"handle", string> | null;
+          name: Pii<"name", string> | null;
           platform_id: number;
-          sub: string;
+          sub: Pii<"handle", string>;
           updated_at: string;
           user_id: string | null;
         };
@@ -6644,12 +7459,12 @@ export type Database = {
       };
       notifications: {
         Row: {
-          body: Json;
+          body: Pii<"free_text", Json>;
           class_id: number;
           created_at: string;
           id: number;
           style: string | null;
-          subject: Json;
+          subject: Pii<"free_text", Json>;
           updated_at: string;
           user_id: string;
           viewed_at: string | null;
@@ -6737,17 +7552,17 @@ export type Database = {
       };
       profiles: {
         Row: {
-          avatar_url: string | null;
+          avatar_url: Pii<"handle", string> | null;
           class_id: number;
           created_at: string;
-          discussion_karma: number;
+          discussion_karma: Pii<"grade", number>;
           flair: string | null;
           flair_color: string | null;
           id: string;
           is_private_profile: boolean;
-          name: string | null;
-          short_name: string | null;
-          sortable_name: string | null;
+          name: Pii<"name", string> | null;
+          short_name: Pii<"name", string> | null;
+          sortable_name: Pii<"name", string> | null;
           time_zone: string | null;
           updated_at: string;
         };
@@ -6823,18 +7638,18 @@ export type Database = {
           class_id: number;
           created_at: string;
           creation_attempts: number;
-          creation_error: string | null;
+          creation_error: Pii<"free_text", string> | null;
           desired_handout_sha: string | null;
           git_provider: string;
           id: number;
           is_github_ready: boolean;
           last_creation_attempt_at: string | null;
           profile_id: string | null;
-          repository: string;
+          repository: Pii<"handle", string>;
           rerun_queued_at: string | null;
-          sync_block_reason: string | null;
+          sync_block_reason: Pii<"free_text", string> | null;
           sync_blocked_at: string | null;
-          sync_data: Json | null;
+          sync_data: Pii<"free_text", Json> | null;
           synced_handout_sha: string | null;
           synced_repo_sha: string | null;
           updated_at: string;
@@ -7055,7 +7870,7 @@ export type Database = {
         Row: {
           assignment_id: number;
           class_id: number;
-          error_message: string | null;
+          error_message: Pii<"free_text", string> | null;
           id: number;
           last_fetched_at: string | null;
           last_requested_at: string | null;
@@ -7130,16 +7945,16 @@ export type Database = {
       repository_analytics_items: {
         Row: {
           assignment_id: number;
-          author: string | null;
+          author: Pii<"handle", string> | null;
           class_id: number;
           created_date: string;
-          data: Json | null;
+          data: Pii<"free_text", Json> | null;
           github_id: string;
           id: number;
           item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
           repository_id: number;
           state: string | null;
-          title: string | null;
+          title: Pii<"free_text", string> | null;
           updated_at: string;
           url: string;
         };
@@ -7250,7 +8065,7 @@ export type Database = {
           auto_promote_result: boolean | null;
           check_run_id: number | null;
           class_id: number;
-          commit_message: string;
+          commit_message: Pii<"free_text", string>;
           created_at: string;
           id: number;
           is_regression_rerun: boolean | null;
@@ -7258,7 +8073,7 @@ export type Database = {
           repository_id: number;
           requested_grader_sha: string | null;
           sha: string;
-          status: Json;
+          status: Pii<"free_text", Json>;
           target_submission_id: number | null;
           triggered_by: string | null;
         };
@@ -7747,6 +8562,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           file: string | null;
           group: string | null;
           id: number;
@@ -7770,6 +8586,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           file?: string | null;
           group?: string | null;
           id?: number;
@@ -7793,6 +8610,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           file?: string | null;
           group?: string | null;
           id?: number;
@@ -7845,6 +8663,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "rubric_checks_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "rubric_checks_rubric_criteria_id_fkey";
             columns: ["rubric_criteria_id"];
             isOneToOne: false;
@@ -7867,6 +8692,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           id: number;
           is_additive: boolean;
           is_deduction_only: boolean;
@@ -7884,6 +8710,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_additive: boolean;
           is_deduction_only?: boolean;
@@ -7901,6 +8728,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_additive?: boolean;
           is_deduction_only?: boolean;
@@ -7949,6 +8777,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "rubric_criteria_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "rubric_criteria_rubric_id_fkey";
             columns: ["rubric_id"];
             isOneToOne: false;
@@ -7971,6 +8806,7 @@ export type Database = {
           created_at: string;
           data: Json | null;
           description: string | null;
+          exam_question_id: number | null;
           id: number;
           is_assign_to_student: boolean;
           is_individual_grading: boolean;
@@ -7984,6 +8820,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
@@ -7997,6 +8834,7 @@ export type Database = {
           created_at?: string;
           data?: Json | null;
           description?: string | null;
+          exam_question_id?: number | null;
           id?: number;
           is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
@@ -8038,6 +8876,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubric_parts_exam_question_id_fkey";
+            columns: ["exam_question_id"];
+            isOneToOne: false;
+            referencedRelation: "exam_questions";
             referencedColumns: ["id"];
           },
           {
@@ -8131,7 +8976,7 @@ export type Database = {
           created_at: string;
           id: number;
           lab_section_id: number | null;
-          last_sync_message: string | null;
+          last_sync_message: Pii<"free_text", string> | null;
           last_sync_status: string | null;
           last_sync_time: string | null;
           sync_enabled: boolean;
@@ -8186,7 +9031,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
-          hours: number;
+          hours: Pii<"grade", number>;
           id: number;
           includes_lab: boolean;
           student_id: string;
@@ -8291,7 +9136,7 @@ export type Database = {
       };
       student_help_activity: {
         Row: {
-          activity_description: string | null;
+          activity_description: Pii<"free_text", string> | null;
           activity_type: Database["public"]["Enums"]["student_help_activity_type"];
           class_id: number;
           created_at: string;
@@ -8357,8 +9202,8 @@ export type Database = {
           created_at: string;
           created_by_id: string;
           id: number;
-          internal_notes: string | null;
-          karma_score: number;
+          internal_notes: Pii<"free_text", string> | null;
+          karma_score: Pii<"grade", number>;
           last_activity_at: string | null;
           student_profile_id: string;
           updated_at: string;
@@ -8420,14 +9265,14 @@ export type Database = {
         Row: {
           author: string;
           class_id: number;
-          comment: string;
+          comment: Pii<"free_text", string>;
           created_at: string;
           deleted_at: string | null;
           edited_at: string | null;
           edited_by: string | null;
           eventually_visible: boolean;
           id: number;
-          points: number | null;
+          points: Pii<"grade", number> | null;
           regrade_request_id: number | null;
           released: boolean;
           rubric_check_id: number | null;
@@ -8640,7 +9485,7 @@ export type Database = {
           autograder_regression_test_id: number | null;
           class_id: number;
           created_at: string;
-          data: Json | null;
+          data: Pii<"free_text", Json> | null;
           id: number;
           name: string;
           profile_id: string | null;
@@ -8755,14 +9600,14 @@ export type Database = {
         Row: {
           author: string;
           class_id: number;
-          comment: string;
+          comment: Pii<"free_text", string>;
           created_at: string;
           deleted_at: string | null;
           edited_at: string | null;
           edited_by: string | null;
           eventually_visible: boolean;
           id: number;
-          points: number | null;
+          points: Pii<"grade", number> | null;
           regrade_request_id: number | null;
           released: boolean;
           rubric_check_id: number | null;
@@ -8900,7 +9745,7 @@ export type Database = {
         Row: {
           author: string;
           class_id: number;
-          comment: string;
+          comment: Pii<"free_text", string>;
           created_at: string;
           deleted_at: string | null;
           edited_at: string | null;
@@ -8908,7 +9753,7 @@ export type Database = {
           eventually_visible: boolean;
           id: number;
           line: number;
-          points: number | null;
+          points: Pii<"grade", number> | null;
           regrade_request_id: number | null;
           released: boolean;
           rubric_check_id: number | null;
@@ -9063,7 +9908,7 @@ export type Database = {
           profile_id: string | null;
           submission_file_id: number;
           submission_id: number;
-          symbols: Json;
+          symbols: Pii<"free_text", Json>;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -9155,13 +10000,13 @@ export type Database = {
         Row: {
           assignment_group_id: number | null;
           class_id: number;
-          contents: string | null;
+          contents: Pii<"free_text", string> | null;
           created_at: string;
           file_size: number | null;
           id: number;
           is_binary: boolean;
           mime_type: string | null;
-          name: string;
+          name: Pii<"free_text", string>;
           profile_id: string | null;
           storage_key: string | null;
           submission_id: number;
@@ -9336,7 +10181,7 @@ export type Database = {
           created_at: string;
           id: number;
           pr_number: number;
-          pr_repo: string;
+          pr_repo: Pii<"handle", string>;
           profile_id: string | null;
         };
         Insert: {
@@ -9425,7 +10270,7 @@ export type Database = {
           assignment_id: number;
           author: string;
           class_id: number;
-          comment: string;
+          comment: Pii<"free_text", string>;
           created_at: string;
           id: number;
           submission_id: number;
@@ -9548,13 +10393,13 @@ export type Database = {
           class_id: number;
           closed_at: string | null;
           closed_by: string | null;
-          closed_points: number | null;
+          closed_points: Pii<"grade", number> | null;
           created_at: string;
           created_by: string;
           escalated_at: string | null;
           escalated_by: string | null;
           id: number;
-          initial_points: number | null;
+          initial_points: Pii<"grade", number> | null;
           last_commented_at: string | null;
           last_commented_by: string | null;
           last_updated_at: string;
@@ -9562,7 +10407,7 @@ export type Database = {
           resolution_reason: string | null;
           resolved_at: string | null;
           resolved_by: string | null;
-          resolved_points: number | null;
+          resolved_points: Pii<"grade", number> | null;
           rubric_check_id: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id: number | null;
@@ -9799,21 +10644,21 @@ export type Database = {
           created_at: string;
           grader: string | null;
           id: number;
-          individual_scores: Json | null;
+          individual_scores: Pii<"grade", Json> | null;
           meta_grader: string | null;
           name: string;
-          per_student_grading_shared_base: number | null;
-          per_student_grading_totals: Json | null;
-          per_student_tweak_notes: Json | null;
-          per_student_tweaks: Json | null;
+          per_student_grading_shared_base: Pii<"grade", number> | null;
+          per_student_grading_totals: Pii<"grade", Json> | null;
+          per_student_tweak_notes: Pii<"free_text", Json> | null;
+          per_student_tweaks: Pii<"grade", Json> | null;
           released: boolean;
           rubric_id: number;
-          rubric_part_student_assignments: Json | null;
+          rubric_part_student_assignments: Pii<"free_text", Json> | null;
           submission_id: number;
-          total_autograde_score: number;
-          total_score: number;
-          tweak: number;
-          tweak_note: string | null;
+          total_autograde_score: Pii<"grade", number>;
+          total_score: Pii<"grade", number>;
+          tweak: Pii<"grade", number>;
+          tweak_note: Pii<"free_text", string> | null;
           updated_at: string;
         };
         Insert: {
@@ -9973,7 +10818,7 @@ export type Database = {
           pr_state: string | null;
           profile_id: string | null;
           released: string | null;
-          repository: string | null;
+          repository: Pii<"handle", string> | null;
           repository_check_run_id: number | null;
           repository_id: number | null;
           run_attempt: number;
@@ -10192,7 +11037,7 @@ export type Database = {
           id: string;
           is_submitted: boolean;
           profile_id: string;
-          response: Json;
+          response: Pii<"free_text", Json>;
           submitted_at: string | null;
           survey_id: string;
           updated_at: string;
@@ -10485,7 +11330,7 @@ export type Database = {
           key: string;
           updated_at: string;
           updated_by: string | null;
-          value: Json;
+          value: Pii<"free_text", Json>;
         };
         Insert: {
           created_at?: string;
@@ -10527,7 +11372,7 @@ export type Database = {
           created_at: string;
           creator_id: string;
           id: string;
-          name: string;
+          name: Pii<"free_text", string>;
           profile_id: string;
           updated_at: string;
           visible: boolean;
@@ -10614,7 +11459,7 @@ export type Database = {
       };
       user_roles: {
         Row: {
-          canvas_id: number | null;
+          canvas_id: Pii<"handle", number> | null;
           class_id: number;
           class_role_id: number;
           class_section_id: number | null;
@@ -10742,17 +11587,17 @@ export type Database = {
       };
       users: {
         Row: {
-          avatar_url: string | null;
+          avatar_url: Pii<"handle", string> | null;
           created_at: string;
-          discord_id: string | null;
-          discord_username: string | null;
-          email: string | null;
-          github_user_id: string | null;
-          github_username: string | null;
+          discord_id: Pii<"handle", string> | null;
+          discord_username: Pii<"handle", string> | null;
+          email: Pii<"email", string> | null;
+          github_user_id: Pii<"handle", string> | null;
+          github_username: Pii<"handle", string> | null;
           last_github_user_sync: string | null;
-          name: string | null;
-          preferences: Json;
-          sis_user_id: number | null;
+          name: Pii<"name", string> | null;
+          preferences: Pii<"free_text", Json>;
+          sis_user_id: Pii<"handle", number> | null;
           user_id: string;
         };
         Insert: {
@@ -10894,26 +11739,26 @@ export type Database = {
       };
       workflow_events: {
         Row: {
-          actor_login: string | null;
+          actor_login: Pii<"handle", string> | null;
           class_id: number | null;
           conclusion: string | null;
           created_at: string | null;
           event_type: string;
           github_repository_id: number | null;
-          head_branch: string | null;
+          head_branch: Pii<"free_text", string> | null;
           head_sha: string | null;
           id: number;
-          payload: Json | null;
-          pull_requests: Json | null;
+          payload: Pii<"free_text", Json> | null;
+          pull_requests: Pii<"free_text", Json> | null;
           repository_id: number | null;
-          repository_name: string;
+          repository_name: Pii<"handle", string>;
           run_attempt: number | null;
           run_number: number | null;
           run_started_at: string | null;
           run_updated_at: string | null;
           started_at: string | null;
           status: string | null;
-          triggering_actor_login: string | null;
+          triggering_actor_login: Pii<"handle", string> | null;
           updated_at: string | null;
           workflow_name: string | null;
           workflow_path: string | null;
@@ -10993,10 +11838,10 @@ export type Database = {
           autograder_regression_test_id: number | null;
           class_id: number;
           created_at: string;
-          data: Json | null;
+          data: Pii<"free_text", Json> | null;
           id: string;
           is_private: boolean;
-          name: string;
+          name: Pii<"free_text", string>;
           repository_id: number;
           run_attempt: number | null;
           run_number: number | null;
@@ -11089,24 +11934,24 @@ export type Database = {
       };
       workflow_runs: {
         Row: {
-          actor_login: string | null;
+          actor_login: Pii<"handle", string> | null;
           assignment_id: number | null;
           class_id: number;
           completed_at: string | null;
           conclusion: string | null;
           created_at: string;
-          head_branch: string | null;
+          head_branch: Pii<"free_text", string> | null;
           head_sha: string | null;
           id: number;
           in_progress_at: string | null;
           profile_id: string | null;
           queue_time_seconds: number | null;
-          repository_name: string | null;
+          repository_name: Pii<"handle", string> | null;
           requested_at: string | null;
           run_attempt: number;
           run_number: number | null;
           run_time_seconds: number | null;
-          triggering_actor_login: string | null;
+          triggering_actor_login: Pii<"handle", string> | null;
           updated_at: string;
           workflow_name: string | null;
           workflow_path: string | null;
@@ -11218,7 +12063,7 @@ export type Database = {
         Row: {
           assignment_id: number | null;
           class_id: number | null;
-          groupname: string | null;
+          groupname: Pii<"free_text", string> | null;
           student_private_profile_id: string | null;
           submission_id: number | null;
         };
@@ -11356,8 +12201,8 @@ export type Database = {
           grader_repo: string | null;
           id: number | null;
           name: string | null;
-          repository: string | null;
-          score: number | null;
+          repository: Pii<"handle", string> | null;
+          score: Pii<"grade", number> | null;
           sha: string | null;
         };
         Relationships: [
@@ -11446,7 +12291,7 @@ export type Database = {
           keep_trying_count: number | null;
           prompt_views: number | null;
           returned_to_deck: number | null;
-          student_name: string | null;
+          student_name: Pii<"name", string> | null;
           student_profile_id: string | null;
         };
         Relationships: [
@@ -11493,7 +12338,7 @@ export type Database = {
           class_id: number | null;
           deck_id: number | null;
           mastered_count: number | null;
-          name: string | null;
+          name: Pii<"name", string> | null;
           not_mastered_count: number | null;
           prompt_views: number | null;
           returned_to_deck: number | null;
@@ -11582,23 +12427,23 @@ export type Database = {
       submissions_agg: {
         Row: {
           assignment_id: number | null;
-          avatar_url: string | null;
+          avatar_url: Pii<"handle", string> | null;
           created_at: string | null;
           execution_time: number | null;
-          groupname: string | null;
+          groupname: Pii<"free_text", string> | null;
           id: number | null;
           is_review_graded: boolean | null;
           latestsubmissionid: number | null;
-          name: string | null;
+          name: Pii<"name", string> | null;
           profile_id: string | null;
           released: string | null;
-          repository: string | null;
+          repository: Pii<"handle", string> | null;
           ret_code: number | null;
           run_attempt: number | null;
           run_number: number | null;
-          score: number | null;
+          score: Pii<"grade", number> | null;
           sha: string | null;
-          sortable_name: string | null;
+          sortable_name: Pii<"name", string> | null;
           submissioncount: number | null;
           user_id: string | null;
         };
@@ -11686,7 +12531,7 @@ export type Database = {
         Row: {
           activesubmissionid: number | null;
           assignment_id: number | null;
-          autograder_score: number | null;
+          autograder_score: Pii<"grade", number> | null;
           class_id: number | null;
           class_section_id: number | null;
           class_section_name: string | null;
@@ -11694,21 +12539,21 @@ export type Database = {
           effective_due_date: string | null;
           grader_action_sha: string | null;
           grader_sha: string | null;
-          groupname: string | null;
+          groupname: Pii<"free_text", string> | null;
           id: number | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
-          name: string | null;
+          name: Pii<"name", string> | null;
           released: string | null;
-          repository: string | null;
+          repository: Pii<"handle", string> | null;
           rerun_queued_at: string | null;
-          rt_autograder_score: number | null;
+          rt_autograder_score: Pii<"grade", number> | null;
           rt_grader_action_sha: string | null;
           rt_grader_sha: string | null;
           sha: string | null;
-          sortable_name: string | null;
-          whatif_autograder_score: number | null;
+          sortable_name: Pii<"name", string> | null;
+          whatif_autograder_score: Pii<"grade", number> | null;
           whatif_grader_action_sha: string | null;
           whatif_grader_result_id: number | null;
           whatif_grader_sha: string | null;
@@ -11740,16 +12585,16 @@ export type Database = {
       submissions_with_grades_for_assignment_nice: {
         Row: {
           activesubmissionid: number | null;
-          assignedgradername: string | null;
-          assignedmetagradername: string | null;
+          assignedgradername: Pii<"name", string> | null;
+          assignedmetagradername: Pii<"name", string> | null;
           assignment_group_id: number | null;
-          assignment_group_mentor_name: string | null;
+          assignment_group_mentor_name: Pii<"name", string> | null;
           assignment_id: number | null;
           assignment_slug: string | null;
-          autograder_score: number | null;
+          autograder_score: Pii<"grade", number> | null;
           checked_at: string | null;
           checked_by: string | null;
-          checkername: string | null;
+          checkername: Pii<"name", string> | null;
           class_id: number | null;
           class_section_id: number | null;
           class_section_name: string | null;
@@ -11763,28 +12608,28 @@ export type Database = {
           grader: string | null;
           grader_action_sha: string | null;
           grader_sha: string | null;
-          gradername: string | null;
-          groupname: string | null;
-          hours: number | null;
+          gradername: Pii<"name", string> | null;
+          groupname: Pii<"free_text", string> | null;
+          hours: Pii<"grade", number> | null;
           id: number | null;
-          individual_scores: Json | null;
+          individual_scores: Pii<"grade", Json> | null;
           is_placeholder: boolean | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
           meta_grader: string | null;
-          name: string | null;
+          name: Pii<"name", string> | null;
           ordinal: number | null;
-          per_student_grading_shared_base: number | null;
-          per_student_grading_totals: Json | null;
+          per_student_grading_shared_base: Pii<"grade", number> | null;
+          per_student_grading_totals: Pii<"grade", Json> | null;
           released: string | null;
-          repository: string | null;
+          repository: Pii<"handle", string> | null;
           sha: string | null;
-          sortable_name: string | null;
+          sortable_name: Pii<"name", string> | null;
           student_private_profile_id: string | null;
-          tokens_consumed: number | null;
-          total_score: number | null;
-          tweak: number | null;
+          tokens_consumed: Pii<"grade", number> | null;
+          total_score: Pii<"grade", number> | null;
+          tweak: Pii<"grade", number> | null;
         };
         Relationships: [
           {
@@ -11836,10 +12681,10 @@ export type Database = {
           assignment_id: number | null;
           assignment_slug: string | null;
           class_id: number | null;
-          individual_scores: Json | null;
-          per_student_grading_totals: Json | null;
-          scores_by_round_private: Json | null;
-          scores_by_round_public: Json | null;
+          individual_scores: Pii<"grade", Json> | null;
+          per_student_grading_totals: Pii<"grade", Json> | null;
+          scores_by_round_private: Pii<"grade", Json> | null;
+          scores_by_round_public: Pii<"grade", Json> | null;
           student_private_profile_id: string | null;
         };
         Relationships: [];
@@ -12617,6 +13462,14 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      claim_git_account: {
+        Args: {
+          p_instance_url: string;
+          p_stale_minutes: number;
+          p_user_id: string;
+        };
+        Returns: boolean;
+      };
       class_team_member_usernames: {
         Args: { p_class_id: number; p_kind: string };
         Returns: string[];
@@ -12682,6 +13535,7 @@ export type Database = {
         };
         Returns: Json;
       };
+      cloud_workspaces_enabled: { Args: { p_features: Json }; Returns: boolean };
       complete_eligible_grading_reviews: {
         Args: { p_assignment_id: number };
         Returns: number;
@@ -13008,6 +13862,11 @@ export type Database = {
         Args: { p_class_id: number; p_guild_id?: string };
         Returns: undefined;
       };
+      enqueue_exam_finalize: { Args: { p_batch_id: number }; Returns: number };
+      enqueue_exam_process_batch: {
+        Args: { p_batch_id: number };
+        Returns: number;
+      };
       enqueue_github_archive_repo: {
         Args: {
           p_class_id: number;
@@ -13121,6 +13980,29 @@ export type Database = {
         };
         Returns: boolean;
       };
+      exam_create: {
+        Args: {
+          p_assignment_id: number;
+          p_delivery_mode?: string;
+          p_num_pages?: number;
+          p_source_type?: string;
+          p_template_markdown?: string;
+          p_template_pdf_path?: string;
+        };
+        Returns: number;
+      };
+      exam_create_submission: {
+        Args: { p_scanned_submission_id: number };
+        Returns: number;
+      };
+      exam_sync_rubric_from_questions: {
+        Args: { p_exam_id: number; p_rubric_id: number };
+        Returns: undefined;
+      };
+      exam_upsert_questions_and_regions: {
+        Args: { p_exam_id: number; p_questions: Json; p_regions: Json };
+        Returns: undefined;
+      };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
@@ -13128,6 +14010,18 @@ export type Database = {
       fix_assignment_repo_permissions: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
+      };
+      forgejo_accounts_needed: {
+        Args: {
+          p_instance_url: string;
+          p_limit: number;
+          p_stale_minutes: number;
+        };
+        Returns: {
+          email: string;
+          name: string;
+          user_id: string;
+        }[];
       };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
@@ -13228,6 +14122,18 @@ export type Database = {
           notification_emails_queue_size: number;
         }[];
       };
+      get_bug_report_retention_purge_candidates: {
+        Args: {
+          p_grace_days: number;
+          p_limit: number;
+          p_lookback_days: number;
+          p_resweep_after_hours: number;
+        };
+        Returns: {
+          class_id: number;
+          end_date: string;
+        }[];
+      };
       get_circuit_breaker_statuses: {
         Args: never;
         Returns: {
@@ -13247,6 +14153,10 @@ export type Database = {
           p_test_name?: string;
           p_test_part?: string;
         };
+        Returns: Json;
+      };
+      get_course_gemini_key_status: {
+        Args: { p_class_id: number };
         Returns: Json;
       };
       get_discord_circuit: {
@@ -13675,15 +14585,29 @@ export type Database = {
         Args: { p_gradebook_id: number };
         Returns: undefined;
       };
+      gradebook_auto_layout_inner: {
+        Args: { p_gradebook_id: number };
+        Returns: undefined;
+      };
+      gradebook_column_family_display_name: {
+        Args: { p_family: string };
+        Returns: string;
+      };
+      gradebook_column_group_create: {
+        Args: { p_column_ids: number[]; p_gradebook_id: number; p_name: string };
+        Returns: number;
+      };
       gradebook_column_move_left: {
         Args: { p_column_id: number };
         Returns: {
+          attempt_number: number | null;
           class_id: number;
           created_at: string;
           dependencies: Json | null;
           description: string | null;
           external_data: Json | null;
           gradebook_id: number;
+          group_id: number | null;
           id: number;
           instructor_only: boolean;
           max_score: number | null;
@@ -13695,6 +14619,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          topic_id: number | null;
           updated_at: string;
         };
         SetofOptions: {
@@ -13707,12 +14632,14 @@ export type Database = {
       gradebook_column_move_right: {
         Args: { p_column_id: number };
         Returns: {
+          attempt_number: number | null;
           class_id: number;
           created_at: string;
           dependencies: Json | null;
           description: string | null;
           external_data: Json | null;
           gradebook_id: number;
+          group_id: number | null;
           id: number;
           instructor_only: boolean;
           max_score: number | null;
@@ -13724,6 +14651,7 @@ export type Database = {
           show_max_score: boolean;
           slug: string;
           sort_order: number | null;
+          topic_id: number | null;
           updated_at: string;
         };
         SetofOptions: {
@@ -13733,9 +14661,90 @@ export type Database = {
           isSetofReturn: false;
         };
       };
+      gradebook_column_slug_family: {
+        Args: { p_slug: string };
+        Returns: string;
+      };
+      gradebook_columns_auto_group: {
+        Args: { p_gradebook_id: number };
+        Returns: number;
+      };
+      gradebook_columns_auto_group_plan: {
+        Args: { p_gradebook_id: number };
+        Returns: Json;
+      };
+      gradebook_columns_auto_group_preview: {
+        Args: { p_gradebook_id: number };
+        Returns: Json;
+      };
+      gradebook_columns_compact_groups: {
+        Args: { p_gradebook_id: number };
+        Returns: undefined;
+      };
       gradebook_columns_reorder: {
         Args: { p_ordered_column_ids: number[] };
         Returns: undefined;
+      };
+      gradebook_columns_reorder_inner: {
+        Args: { p_ordered_column_ids: number[] };
+        Returns: undefined;
+      };
+      gradebook_columns_set_group: {
+        Args: { p_column_ids: number[]; p_group_id: number };
+        Returns: undefined;
+      };
+      gradebook_columns_set_topic: {
+        Args: {
+          p_attempt_number: number;
+          p_column_id: number;
+          p_topic_id: number;
+        };
+        Returns: undefined;
+      };
+      gradebook_common_name_prefix: {
+        Args: { p_names: string[] };
+        Returns: string;
+      };
+      gradebook_common_prefix_length: {
+        Args: { p_a: string; p_b: string };
+        Returns: number;
+      };
+      gradebook_enable_column_groups: {
+        Args: { p_class_id: number };
+        Returns: number;
+      };
+      gradebook_pluralize: { Args: { p_text: string }; Returns: string };
+      gradebook_require_instructor: {
+        Args: { p_gradebook_id: number };
+        Returns: number;
+      };
+      gradebook_topic_create: {
+        Args: { p_gradebook_id: number; p_name: string };
+        Returns: number;
+      };
+      gradebook_topic_regenerate_standing: {
+        Args: { p_topic_id: number };
+        Returns: undefined;
+      };
+      gradebook_topic_set_standing: {
+        Args: {
+          p_rule: string;
+          p_standing_column_id: number;
+          p_topic_id: number;
+        };
+        Returns: number;
+      };
+      gradebook_topic_standing_expression: {
+        Args: { p_topic_id: number };
+        Returns: string;
+      };
+      gradebook_topics_apply_suggestion: {
+        Args: { p_gradebook_id: number; p_suggestion: Json };
+        Returns: number;
+      };
+      gradebook_topics_suggest: {
+        Args: { p_gradebook_id: number };
+        Returns: Json;
       };
       help_request_is_private: {
         Args: { p_help_request_id: number };
@@ -13787,6 +14796,10 @@ export type Database = {
         Returns: undefined;
       };
       invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
+      invoke_bug_report_retention_purge_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
       invoke_discord_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -13800,6 +14813,14 @@ export type Database = {
         Returns: undefined;
       };
       invoke_email_batch_processor_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
+      invoke_exam_async_worker_background_task: {
+        Args: never;
+        Returns: undefined;
+      };
+      invoke_forgejo_reconciler_background_task: {
         Args: never;
         Returns: undefined;
       };
@@ -13838,6 +14859,7 @@ export type Database = {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
+      kick_forgejo_reconciler: { Args: never; Returns: undefined };
       log_api_gateway_call: {
         Args: {
           p_class_id?: number;
@@ -14039,6 +15061,12 @@ export type Database = {
         Args: { p_force?: boolean; p_repository_ids: number[] };
         Returns: Json;
       };
+      quiz_autograde: { Args: { p_submission_id: number }; Returns: undefined };
+      quiz_get_for_student: { Args: { p_assignment_id: number }; Returns: Json };
+      quiz_submit: {
+        Args: { p_answers: Json; p_assignment_id: number };
+        Returns: number;
+      };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };
         Returns: number;
@@ -14063,6 +15091,14 @@ export type Database = {
       reconcile_stuck_repo_creations: {
         Args: { p_stale_minutes?: number };
         Returns: number;
+      };
+      record_bug_report_retention_purge: {
+        Args: {
+          p_class_id: number;
+          p_feedback_deleted: number;
+          p_replays_deleted: number;
+        };
+        Returns: undefined;
       };
       record_discord_async_error: {
         Args: { p_error_data: Json; p_guild_id: string; p_method: string };
@@ -14118,6 +15154,7 @@ export type Database = {
         Args: { p_column_id: number };
         Returns: undefined;
       };
+      remove_course_gemini_key: { Args: { p_class_id: number }; Returns: Json };
       reorder_surveys_in_series: {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
@@ -14215,6 +15252,10 @@ export type Database = {
         Args: { p_class_id: number; p_handout?: string; p_solution?: string };
         Returns: undefined;
       };
+      set_course_gemini_key: {
+        Args: { p_api_key: string; p_class_id: number };
+        Returns: Json;
+      };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };
         Returns: undefined;
@@ -14282,6 +15323,15 @@ export type Database = {
       survey_allows_response_editing: {
         Args: { p_survey_id: string };
         Returns: boolean;
+      };
+      survey_apply_completion: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_profile_id: string;
+          p_revoke: boolean;
+        };
+        Returns: undefined;
       };
       survey_duplicate_question_names: {
         Args: { p_json: Json };
@@ -14508,6 +15558,7 @@ export type Database = {
         | "template_with_student_forks"
         | "fork_from_prior_assignment"
         | "no_submission";
+      assignment_type: "code" | "quiz" | "exam" | "survey";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
@@ -14715,6 +15766,7 @@ export const Constants = {
         "fork_from_prior_assignment",
         "no_submission"
       ],
+      assignment_type: ["code", "quiz", "exam", "survey"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: [
         "general",

@@ -194,6 +194,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if .Values.postgres.replica.shm.enabled }}
+            # See postgres.replica.shm. A standby serves read traffic, so it
+            # allocates parallel-query DSM too -- and a standby PROMOTED during
+            # an incident inherits whatever ceiling it was started with.
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
             - name: config
               mountPath: /etc/postgresql/postgresql.conf
               subPath: postgresql.conf
@@ -243,6 +250,14 @@ spec:
           resources:
             {{- toYaml .Values.postgres.replica.resources | nindent 12 }}
       volumes:
+        {{- if .Values.postgres.replica.shm.enabled }}
+        # tmpfs; REPLACES the runtime default 64Mi. Counts against
+        # postgres.replica.resources.limits.memory.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.postgres.replica.shm.sizeLimit }}
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-config") }}
