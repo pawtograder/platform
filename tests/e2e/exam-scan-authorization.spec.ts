@@ -1522,19 +1522,540 @@ test.describe("Exam scan pages: only matching changes which exam a page belongs 
     expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
   });
 
-  test("reprocessing still relinks a matched exam's pages", async () => {
+  test("reprocessing still relinks an undecided exam's pages", async () => {
     const examId = await createExam(a.classId, `Reprocess ${randomUUID()}`, 2);
     const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
-    const rows = await processAndConfirm(batchId, 1);
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    const { data: row } = await supabase
+      .from("exam_scanned_submissions")
+      .select("id, match_status")
+      .eq("batch_id", batchId)
+      .single();
+    expect(row?.match_status).toBe("suggested");
     // Clear one link (only the service role can), so the relink below is a real change.
     await forgePage(pages[1].id, { scanned_submission_id: null });
-    // Process again: matching runs as the worker and relinks every group, confirmed ones included.
+    // Process again: matching relinks every group no human has decided yet.
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     for (const p of pages) {
-      expect((await pageState(p.id))?.scanned_submission_id).toBe(rows.get(alice.profileId));
+      expect((await pageState(p.id))?.scanned_submission_id).toBe(row!.id);
     }
+    const { error: confirmErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("id", row!.id);
+    expect(confirmErr).toBeNull();
     await graderFinalizes(batchId);
     expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+  });
+
+  // Re-running Process re-runs matching, which groups the batch's pages afresh. Its inputs (the
+  // batch's pages, total_pages and pages_per_exam, the template's page count) are staff-writable,
+  // so matching must never change the pages of an exam a human has confirmed or skipped, or that
+  // has been finalized: otherwise a grader could re-group a confirmed exam onto other pages.
+
+  /** Every page link and every scanned exam of a batch, to compare before and after. */
+  async function membership(batchId: number) {
+    const { data: pages } = await supabase
+      .from("exam_scan_pages")
+      .select("id, scanned_submission_id")
+      .eq("batch_id", batchId)
+      .order("id");
+    const { data: rows } = await supabase
+      .from("exam_scanned_submissions")
+      .select("id, exam_index, matched_profile_id, match_status")
+      .eq("batch_id", batchId)
+      .order("id");
+    return { pages: pages ?? [], rows: rows ?? [] };
+  }
+  /** As the grader: add an unlinked page to the batch (staff may), pointing at an object of the batch. */
+  async function graderAddsPage(examId: number, batchId: number, pageIndex: number, path: string) {
+    const { data, error } = await a.grader
+      .from("exam_scan_pages")
+      .insert({
+        class_id: a.classId,
+        exam_id: examId,
+        batch_id: batchId,
+        page_index: pageIndex,
+        image_path: path,
+        width: 1000,
+        height: 1400
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    return data!.id;
+  }
+  async function graderSetsBatch(batchId: number, change: { total_pages?: number; pages_per_exam?: number }) {
+    const { data, error } = await a.grader.from("exam_scan_batches").update(change).eq("id", batchId).select("id");
+    expect(error).toBeNull();
+    expect(data).toHaveLength(1);
+  }
+  const GROUP_CHANGE_REFUSED = /would change the pages of exam \d+ \(scanned exam \d+\)/;
+  /** Process as the grader, and require that matching refused to change any page's exam. */
+  async function expectRegroupRefused(
+    batchId: number,
+    before: Awaited<ReturnType<typeof membership>>,
+    added: number[]
+  ) {
+    const processed = await graderProcesses(a, batchId);
+    const after = await membership(batchId);
+    // The pages matched before keep exactly their links, the added ones stay unlinked, and no exam
+    // was added or changed...
+    expect(after.pages.filter((p) => !added.includes(p.id))).toEqual(before.pages);
+    expect(after.pages.filter((p) => added.includes(p.id)).map((p) => p.scanned_submission_id)).toEqual(
+      added.map(() => null)
+    );
+    expect(after.rows).toEqual(before.rows);
+    // ...because matching refused the whole regroup at once, with a message staff can act on.
+    expect(processed).toEqual({ status: "error", error: expect.stringMatching(GROUP_CHANGE_REFUSED) });
+    const { data: dlq } = await supabase
+      .from("exam_async_worker_dlq_messages")
+      .select("method, error_type")
+      .eq("envelope->>batch_id", String(batchId));
+    expect(dlq).toEqual([{ method: "match", error_type: "ScanGroupChangeRejectedError" }]);
+  }
+
+  test("reprocessing cannot regroup confirmed exams onto other pages, and works again once the added pages are removed", async () => {
+    const examId = await createExam(a.classId, `Regroup ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice, bob, bob]);
+    await processAndConfirm(batchId, 2);
+    const before = await membership(batchId);
+    // One unlinked page before the batch and one after it: 6 pages still divide into exams, but
+    // every group boundary moves by one page.
+    const added = [
+      await graderAddsPage(examId, batchId, -1, pages[3].path),
+      await graderAddsPage(examId, batchId, 4, pages[3].path)
+    ];
+    await graderSetsBatch(batchId, { total_pages: 6 });
+    await expectRegroupRefused(batchId, before, added);
+    // Recovery: remove the added pages, restore the total, and Process again.
+    for (const id of added) {
+      const { error } = await a.grader.from("exam_scan_pages").delete().eq("id", id);
+      expect(error).toBeNull();
+    }
+    await graderSetsBatch(batchId, { total_pages: 4 });
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    expect(await membership(batchId)).toEqual(before);
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+    expect(await submittedPages(batchId, bob.profileId)).toEqual([pages[2].sha, pages[3].sha]);
+  });
+
+  test("reprocessing cannot swap two confirmed one-page exams", async () => {
+    const examId = await createExam(a.classId, `Swap ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    await processAndConfirm(batchId, 2);
+    const before = await membership(batchId);
+    const added = [await graderAddsPage(examId, batchId, -1, pages[1].path)];
+    await graderSetsBatch(batchId, { total_pages: 3 });
+    await expectRegroupRefused(batchId, before, added);
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha]);
+    expect(await submittedPages(batchId, bob.profileId)).toEqual([pages[1].sha]);
+  });
+
+  test("a template page count changed after matching cannot shrink a confirmed exam through reprocessing", async () => {
+    const examId = await createExam(a.classId, `Shrink ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(batchId, 1);
+    const before = await membership(batchId);
+    // As the instructor: a one-page template. As the grader: one page per exam, as Process requires.
+    const { data: exam } = await supabase.from("exams").select("assignment_id").eq("id", examId).single();
+    const { error: templateErr } = await instructor.rpc("exam_create", {
+      p_assignment_id: exam!.assignment_id,
+      p_source_type: "pdf",
+      p_num_pages: 1
+    });
+    expect(templateErr).toBeNull();
+    await graderSetsBatch(batchId, { pages_per_exam: 1 });
+    await expectRegroupRefused(batchId, before, []);
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+  });
+
+  test("reprocessing a confirmed batch with its pages unchanged keeps every exam's pages", async () => {
+    const examId = await createExam(a.classId, `Same ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice, bob, bob]);
+    await processAndConfirm(batchId, 2);
+    const before = await membership(batchId);
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    expect(await membership(batchId)).toEqual(before);
+    await graderFinalizes(batchId);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha, pages[1].sha]);
+    expect(await submittedPages(batchId, bob.profileId)).toEqual([pages[2].sha, pages[3].sha]);
+  });
+
+  test("reprocessing cannot change the pages of finalized exams", async () => {
+    const examId = await createExam(a.classId, `Finalized ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    await processAndConfirm(batchId, 2);
+    await graderFinalizes(batchId);
+    const before = await membership(batchId);
+    const added = [await graderAddsPage(examId, batchId, -1, pages[1].path)];
+    await graderSetsBatch(batchId, { total_pages: 3 });
+    await expectRegroupRefused(batchId, before, added);
+    expect(await submittedPages(batchId, alice.profileId)).toEqual([pages[0].sha]);
+    expect(await submittedPages(batchId, bob.profileId)).toEqual([pages[1].sha]);
+  });
+
+  // An exam with a submission or a finalized time keeps its pages only if those stay as finalize set
+  // them; otherwise staff could clear both, reopen and regroup the exam, then point it back at the
+  // student's submission for finalize to rebuild.
+  const FINALIZE_FIELDS_GUARD = /only finalize can set or clear its submission or finalized time/;
+  test("staff cannot set or clear a scanned exam's submission or finalized time", async () => {
+    const examId = await createExam(a.classId, `Finalize fields ${randomUUID()}`, 1);
+    const { batchId } = await graderUploads(examId, 1, [alice, bob]);
+    const rows = await processAndConfirm(batchId, 2);
+    await graderFinalizes(batchId);
+    const [aliceRow, bobRow] = [rows.get(alice.profileId)!, rows.get(bob.profileId)!];
+    const read = async () =>
+      (
+        await supabase
+          .from("exam_scanned_submissions")
+          .select("id, submission_id, finalized_at")
+          .eq("batch_id", batchId)
+          .order("id")
+      ).data;
+    const before = await read();
+    const bobSubmission = before!.find((r) => r.id === bobRow)!.submission_id!;
+    // Clearing either one (which would make the exam regroupable), or moving another submission onto it.
+    for (const [staff, change] of [
+      [a.grader, { submission_id: null }],
+      [a.grader, { finalized_at: null }],
+      [instructor, { submission_id: null, finalized_at: null }],
+      [a.grader, { submission_id: bobSubmission }]
+    ] as const) {
+      const { error } = await staff.from("exam_scanned_submissions").update(change).eq("id", aliceRow).select("id");
+      expect(error?.message ?? "").toMatch(FINALIZE_FIELDS_GUARD);
+    }
+    // Nor can staff create an exam that already names a submission.
+    const { error: insertErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .insert({ class_id: a.classId, exam_id: examId, batch_id: batchId, exam_index: 50, submission_id: bobSubmission })
+      .select("id");
+    expect(insertErr?.message ?? "").toMatch(FINALIZE_FIELDS_GUARD);
+    expect(await read()).toEqual(before);
+  });
+
+  test("a refused regroup leaves undecided exams' pages unchanged too", async () => {
+    const examId = await createExam(a.classId, `Partial ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    // Only Bob's exam (the second group) is confirmed; Alice's stays a suggestion.
+    const { data: confirmed, error: confirmErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", batchId)
+      .eq("matched_profile_id", bob.profileId)
+      .select("id");
+    expect(confirmErr).toBeNull();
+    expect(confirmed).toHaveLength(1);
+    const before = await membership(batchId);
+    // The first group (Alice's, undecided) is relinked before the second (Bob's, confirmed) would be.
+    const added = [await graderAddsPage(examId, batchId, -1, pages[0].path)];
+    await graderSetsBatch(batchId, { total_pages: 3 });
+    await expectRegroupRefused(batchId, before, added);
+  });
+
+  test("a confirmed exam that lost a link is not silently relinked by reprocessing", async () => {
+    const examId = await createExam(a.classId, `Lost link ${randomUUID()}`, 2);
+    const { batchId, pages } = await graderUploads(examId, 2, [alice, alice]);
+    await processAndConfirm(batchId, 1);
+    // Fixture: an operator clears one link with the service role.
+    await forgePage(pages[1].id, { scanned_submission_id: null });
+    const before = await membership(batchId);
+    // Restoring it would change a confirmed exam's pages: reopening the match decides that, not Process.
+    await expectRegroupRefused(batchId, before, []);
+  });
+
+  // The same rule, enforced in the one transaction that links pages: exam_link_scan_groups locks the
+  // batch's scanned exams, checks, and links, so a decision landing concurrently is either seen or
+  // waits. These call it directly in two sessions to force each interleaving.
+
+  /** A grouping for exam_link_scan_groups: one exam per page id list, numbered from 0. */
+  const grouping = (...groups: number[][]) => groups.map((page_ids, exam_index) => ({ exam_index, page_ids }));
+  const linkGroups = (pg: import("pg").Client, batchId: number, groups: ReturnType<typeof grouping>) =>
+    pg.query("SELECT public.exam_link_scan_groups($1, $2::jsonb) AS rows", [batchId, JSON.stringify(groups)]).then(
+      (r) => ({
+        rows: r.rows[0].rows as { exam_index: number; scanned_submission_id: number; match_status: string }[],
+        error: null
+      }),
+      (e: Error & { code?: string }) => ({ rows: null, error: e })
+    );
+  /** What a waiting session is waiting for, from pg_locks. */
+  async function waitingFor(monitor: import("pg").Client, pid: number) {
+    const { rows } = await monitor.query("SELECT locktype, mode FROM pg_locks WHERE pid = $1 AND NOT granted", [pid]);
+    return rows;
+  }
+  /** Two one-page exams (Alice, Bob), matched but not confirmed. */
+  async function suggestedPair(label: string) {
+    const examId = await createExam(a.classId, `${label} ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    expect((await graderProcesses(a, batchId)).status).toBe("review");
+    const { rows } = await membership(batchId);
+    const rowOf = (profileId: string) => rows.find((r) => r.matched_profile_id === profileId)!.id;
+    return { examId, batchId, pages, aliceRow: rowOf(alice.profileId), bobRow: rowOf(bob.profileId) };
+  }
+
+  test("a confirmation committed while a regroup waits is seen, and the regroup is refused", async () => {
+    const { batchId, pages, aliceRow } = await suggestedPair("Confirm first");
+    const before = await membership(batchId);
+    const [confirmer, linker, monitor] = await Promise.all([
+      privilegedClient(),
+      privilegedClient(),
+      privilegedClient()
+    ]);
+    try {
+      const [confirmerPid, linkerPid] = [await backendPid(confirmer), await backendPid(linker)];
+      await confirmer.query("BEGIN");
+      await confirmer.query("UPDATE public.exam_scanned_submissions SET match_status = 'confirmed' WHERE id = $1", [
+        aliceRow
+      ]);
+      // A regroup that swaps the two exams' pages starts meanwhile.
+      const link = linkGroups(linker, batchId, grouping([pages[1].id], [pages[0].id]));
+      const waited = await waitUntilBlocked(monitor, linkerPid, confirmerPid, 3000);
+      test.info().annotations.push({
+        type: "linker-waits-for",
+        description: JSON.stringify(await waitingFor(monitor, linkerPid))
+      });
+      await confirmer.query("COMMIT");
+      const result = await link;
+      expect(await membership(batchId)).toEqual({
+        pages: before.pages,
+        rows: before.rows.map((r) => (r.id === aliceRow ? { ...r, match_status: "confirmed" } : r))
+      });
+      expect(waited.observed).toBe(true);
+      expect(result.error?.code).toBe("EX409");
+      expect(result.error?.message ?? "").toMatch(GROUP_CHANGE_REFUSED);
+    } finally {
+      await Promise.all([confirmer.end(), linker.end(), monitor.end()]);
+    }
+  });
+
+  test("a confirmation committed while a regroup waits is seen even for an exam the regroup leaves out", async () => {
+    // A grouping with fewer exams (as after a larger pages-per-exam) has no position for Bob's exam:
+    // nothing is created at its position, so only the lock on the batch's exams makes this wait.
+    const { batchId, pages, bobRow } = await suggestedPair("Confirm dropped");
+    const before = await membership(batchId);
+    const [confirmer, linker, monitor] = await Promise.all([
+      privilegedClient(),
+      privilegedClient(),
+      privilegedClient()
+    ]);
+    try {
+      const [confirmerPid, linkerPid] = [await backendPid(confirmer), await backendPid(linker)];
+      await confirmer.query("BEGIN");
+      await confirmer.query("UPDATE public.exam_scanned_submissions SET match_status = 'confirmed' WHERE id = $1", [
+        bobRow
+      ]);
+      const link = linkGroups(linker, batchId, grouping([pages[0].id, pages[1].id]));
+      const waited = await waitUntilBlocked(monitor, linkerPid, confirmerPid, 3000);
+      test.info().annotations.push({
+        type: "linker-waits-for",
+        description: JSON.stringify(await waitingFor(monitor, linkerPid))
+      });
+      await confirmer.query("COMMIT");
+      const result = await link;
+      expect(await membership(batchId)).toEqual({
+        pages: before.pages,
+        rows: before.rows.map((r) => (r.id === bobRow ? { ...r, match_status: "confirmed" } : r))
+      });
+      expect(waited.observed).toBe(true);
+      expect(result.error?.code).toBe("EX409");
+    } finally {
+      await Promise.all([confirmer.end(), linker.end(), monitor.end()]);
+    }
+  });
+
+  test("a confirmation that waits for a regroup lands on an exam whose old identity was cleared", async () => {
+    const { batchId, pages, aliceRow, bobRow } = await suggestedPair("Link first");
+    const [confirmer, linker, monitor] = await Promise.all([
+      privilegedClient(),
+      privilegedClient(),
+      privilegedClient()
+    ]);
+    try {
+      const [confirmerPid, linkerPid] = [await backendPid(confirmer), await backendPid(linker)];
+      await linker.query("BEGIN");
+      const linked = await linkGroups(linker, batchId, grouping([pages[1].id], [pages[0].id]));
+      expect(linked.error).toBeNull();
+      const confirm = confirmer
+        .query("UPDATE public.exam_scanned_submissions SET match_status = 'confirmed' WHERE id = $1", [aliceRow])
+        .then(
+          () => null,
+          (e: Error) => e
+        );
+      const waited = await waitUntilBlocked(monitor, confirmerPid, linkerPid, 3000);
+      test.info().annotations.push({
+        type: "confirm-waits-for",
+        description: JSON.stringify(await waitingFor(monitor, confirmerPid))
+      });
+      await linker.query("COMMIT");
+      expect(await confirm).toBeNull();
+      // The decision lands after the change committed: on the new pages, and on a row whose identity
+      // (read from its old pages) the regroup cleared, so it names no student to finalize for.
+      expect(waited.observed).toBe(true);
+      expect((await pageState(pages[1].id))?.scanned_submission_id).toBe(aliceRow);
+      expect((await pageState(pages[0].id))?.scanned_submission_id).toBe(bobRow);
+      const { rows } = await membership(batchId);
+      expect(rows.find((r) => r.id === aliceRow)).toMatchObject({
+        match_status: "confirmed",
+        matched_profile_id: null
+      });
+    } finally {
+      await Promise.all([confirmer.end(), linker.end(), monitor.end()]);
+    }
+  });
+
+  test("a regroup clears the identity of each undecided exam whose pages it changes, and only those", async () => {
+    const { batchId, pages, aliceRow, bobRow } = await suggestedPair("Clear identity");
+    const before = await membership(batchId);
+    const pg = await privilegedClient();
+    try {
+      // The same grouping keeps both suggestions.
+      expect((await linkGroups(pg, batchId, grouping([pages[0].id], [pages[1].id]))).error).toBeNull();
+      expect(await membership(batchId)).toEqual(before);
+      // Swapping the pages leaves neither suggestion standing: each was read from the other pages.
+      expect((await linkGroups(pg, batchId, grouping([pages[1].id], [pages[0].id]))).error).toBeNull();
+      const { rows } = await membership(batchId);
+      for (const id of [aliceRow, bobRow]) {
+        expect(rows.find((r) => r.id === id)).toMatchObject({ match_status: "unmatched", matched_profile_id: null });
+      }
+    } finally {
+      await pg.end();
+    }
+  });
+
+  test("a skipped exam, and one stamped finalized, keep their pages even when not confirmed", async () => {
+    const { batchId, pages, aliceRow } = await suggestedPair("Skipped or finalized");
+    const swap = grouping([pages[1].id], [pages[0].id]);
+    const pg = await privilegedClient();
+    try {
+      // Skipped by a human.
+      const { error: skipErr } = await a.grader
+        .from("exam_scanned_submissions")
+        .update({ match_status: "skipped" })
+        .eq("id", aliceRow);
+      expect(skipErr).toBeNull();
+      const skippedBefore = await membership(batchId);
+      expect((await linkGroups(pg, batchId, swap)).error?.code).toBe("EX409");
+      expect(await membership(batchId)).toEqual(skippedBefore);
+      // Fixture: back to a suggestion, but stamped finalized (only finalize sets finalized_at).
+      await pg.query(
+        "UPDATE public.exam_scanned_submissions SET match_status = 'suggested', finalized_at = now() WHERE id = $1",
+        [aliceRow]
+      );
+      const finalizedBefore = await membership(batchId);
+      expect((await linkGroups(pg, batchId, swap)).error?.code).toBe("EX409");
+      expect(await membership(batchId)).toEqual(finalizedBefore);
+    } finally {
+      await pg.end();
+    }
+  });
+
+  test("a regroup waits for a submission being created, and is refused once it exists", async () => {
+    const { batchId, pages, aliceRow } = await suggestedPair("Finalizing");
+    const { error: confirmErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("id", aliceRow);
+    expect(confirmErr).toBeNull();
+    const before = await membership(batchId);
+    const [finalizer, linker, monitor] = await Promise.all([
+      privilegedClient(),
+      privilegedClient(),
+      privilegedClient()
+    ]);
+    try {
+      const [finalizerPid, linkerPid] = [await backendPid(finalizer), await backendPid(linker)];
+      // As finalize does: create the submission for the confirmed exam (not committed yet).
+      await finalizer.query("BEGIN");
+      await finalizer.query("SELECT public.exam_create_submission($1)", [aliceRow]);
+      const same = linkGroups(linker, batchId, grouping([pages[0].id], [pages[1].id]));
+      const waited = await waitUntilBlocked(monitor, linkerPid, finalizerPid, 3000);
+      await finalizer.query("COMMIT");
+      // The unchanged grouping goes through once the submission exists; a changed one is refused.
+      expect((await same).error).toBeNull();
+      const swapped = await linkGroups(linker, batchId, grouping([pages[1].id], [pages[0].id]));
+      expect(await membership(batchId)).toEqual(before);
+      expect(waited.observed).toBe(true);
+      expect(swapped.error?.code).toBe("EX409");
+    } finally {
+      await Promise.all([finalizer.end(), linker.end(), monitor.end()]);
+    }
+  });
+
+  test("two matchers linking the same new batch at once create each exam once", async () => {
+    const examId = await createExam(a.classId, `Two matchers ${randomUUID()}`, 1);
+    const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
+    const groups = grouping([pages[0].id], [pages[1].id]);
+    const [first, second, monitor] = await Promise.all([privilegedClient(), privilegedClient(), privilegedClient()]);
+    try {
+      const [firstPid, secondPid] = [await backendPid(first), await backendPid(second)];
+      await first.query("BEGIN");
+      expect((await linkGroups(first, batchId, groups)).error).toBeNull();
+      const again = linkGroups(second, batchId, groups);
+      const waited = await waitUntilBlocked(monitor, secondPid, firstPid, 3000);
+      test.info().annotations.push({
+        type: "second-waits-for",
+        description: JSON.stringify(await waitingFor(monitor, secondPid))
+      });
+      await first.query("COMMIT");
+      const result = await again;
+      const { rows, pages: links } = await membership(batchId);
+      expect(waited.observed).toBe(true);
+      expect(result.error).toBeNull();
+      expect(rows.map((r) => r.exam_index)).toEqual([0, 1]);
+      const rowAt = (i: number) => rows.find((r) => r.exam_index === i)!.id;
+      expect(links).toEqual([
+        { id: pages[0].id, scanned_submission_id: rowAt(0) },
+        { id: pages[1].id, scanned_submission_id: rowAt(1) }
+      ]);
+    } finally {
+      await Promise.all([first.end(), second.end(), monitor.end()]);
+    }
+  });
+
+  test("a grouping that cannot be linked in full changes nothing", async () => {
+    const { batchId, pages } = await suggestedPair("Rollback");
+    const other = await suggestedPair("Rollback other");
+    const before = await membership(batchId);
+    const otherBefore = await membership(other.batchId);
+    const pg = await privilegedClient();
+    try {
+      // A third exam whose page belongs to another batch: the link count falls short.
+      const result = await linkGroups(pg, batchId, grouping([pages[0].id], [pages[1].id], [other.pages[0].id]));
+      expect(result.error?.message ?? "").toMatch(/lost pages while linking/);
+      expect(await membership(batchId)).toEqual(before);
+      expect(await membership(other.batchId)).toEqual(otherBefore);
+    } finally {
+      await pg.end();
+    }
+  });
+
+  test("only the worker's service role can call exam_link_scan_groups", async () => {
+    const { batchId, pages } = await suggestedPair("Grants");
+    const before = await membership(batchId);
+    const { error } = await a.grader.rpc("exam_link_scan_groups", {
+      p_batch_id: batchId,
+      p_groups: grouping([pages[1].id], [pages[0].id])
+    });
+    expect(error).not.toBeNull();
+    expect(await membership(batchId)).toEqual(before);
+    const pg = await privilegedClient();
+    try {
+      const { rows } = await pg.query(
+        `SELECT r AS role, has_function_privilege(r, 'public.exam_link_scan_groups(bigint, jsonb)', 'EXECUTE') AS can
+           FROM unnest(array['anon', 'authenticated', 'service_role']) AS r`
+      );
+      expect(rows).toEqual([
+        { role: "anon", can: false },
+        { role: "authenticated", can: false },
+        { role: "service_role", can: true }
+      ]);
+    } finally {
+      await pg.end();
+    }
   });
 
   /** A matched and confirmed one-page exam for Alice. */
