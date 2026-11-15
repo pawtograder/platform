@@ -3565,7 +3565,8 @@ export async function processEnvelope(
             if (tripCount) {
               Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
               scope.setTag("circuit_trip_count", String(tripCount));
-              if (tripCount >= 5) {
+              // open_github_circuit opens a 24h window from the third trip within its 24h decay window.
+              if (tripCount >= 3) {
                 Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
                   level: "error"
                 });
