@@ -13995,6 +13995,10 @@ export type Database = {
         Args: { p_scanned_submission_id: number };
         Returns: number;
       };
+      exam_link_scan_groups: {
+        Args: { p_batch_id: number; p_groups: Json };
+        Returns: Json;
+      };
       exam_sync_rubric_from_questions: {
         Args: { p_exam_id: number; p_rubric_id: number };
         Returns: undefined;

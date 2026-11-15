@@ -41,6 +41,18 @@ type QueueMessage = {
 
 type Admin = SupabaseClient<Database>;
 
+/**
+ * Matching refused to regroup pages because the grouping would change the pages of an exam a human
+ * confirmed or skipped, or that has been finalized (exam_link_scan_groups, errcode EX409). Retrying
+ * gives the same answer, so it is dead-lettered at once and shown on the batch, as a rejected scan is.
+ */
+class ScanGroupChangeRejectedError extends ScanPathRejectedError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScanGroupChangeRejectedError";
+  }
+}
+
 async function archive(admin: Admin, msgId: number): Promise<void> {
   // The one queue call whose error is deliberately ignored. A failed archive leaves the message
   // to be redelivered and the handler re-run, which every handler here is written to tolerate
@@ -449,84 +461,37 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
 
   const roster = await loadRoster(admin, classId);
   const groupCount = Math.ceil(pages.length / perExam);
+  const groups = Array.from({ length: groupCount }, (_, g) => pages.slice(g * perExam, g * perExam + perExam));
+
+  // Create the scanned exams and link every group in one transaction (exam_link_scan_groups). It
+  // refuses, as a whole, a grouping that would change the pages of an exam a human confirmed or
+  // skipped, or that has been finalized: re-processing must not regroup those onto other pages.
+  // Only pages still in this batch are linked; a short count (a page moved or deleted since the
+  // load above) is a plain error, so the retry reloads the batch and its count check sees it.
+  const { data: linkedRows, error: linkErr } = await admin.rpc("exam_link_scan_groups", {
+    p_batch_id: batch.id,
+    p_groups: groups.map((groupPages, g) => ({ exam_index: g, page_ids: groupPages.map((p) => p.id) }))
+  });
+  if (linkErr) {
+    if (linkErr.code === "EX409") throw new ScanGroupChangeRejectedError(`batch ${batch.id}: ${linkErr.message}`);
+    throw new Error(`link scan pages for batch ${batch.id} failed: ${linkErr.message}`);
+  }
+  const rowAt = new Map(
+    ((linkedRows ?? []) as { exam_index: number; scanned_submission_id: number; match_status: string }[]).map((r) => [
+      r.exam_index,
+      r
+    ])
+  );
 
   for (let g = 0; g < groupCount; g++) {
-    const groupPages = pages.slice(g * perExam, g * perExam + perExam);
-    // upsert the scanned submission for this group
-    let scannedId: number;
-    let humanDecided = false;
-    // A discarded error here entered the insert branch as though the group did not exist. With
-    // no uniqueness on (batch_id, exam_index) that silently created a SECOND review row for the
-    // same logical exam; the unique index added alongside this makes such an insert fail safely
-    // even if this check is ever bypassed.
-    const { data: existing, error: existingErr } = await admin
-      .from("exam_scanned_submissions")
-      .select("id, match_status")
-      .eq("batch_id", batch.id)
-      .eq("exam_index", g)
-      .maybeSingle();
-    if (existingErr) {
-      throw new Error(`look up scanned submission (batch ${batch.id}, index ${g}) failed: ${existingErr.message}`);
-    }
-    if (existing?.id) {
-      scannedId = existing.id;
-      // A re-run of the match phase (re-process, or a redelivered 'match' message) must
-      // never clobber a decision a human already made.
-      humanDecided = existing.match_status === "confirmed" || existing.match_status === "skipped";
-    } else {
-      // UPSERT on the (batch_id, exam_index) unique index rather than a bare insert. Matching a
-      // large batch can outlast the queue's 120s visibility window, so a second worker can pick
-      // up the same `match` message, see no row in the lookup above, and insert concurrently.
-      // The unique index makes that fail rather than duplicate, but failing would DLQ the batch;
-      // ignoreDuplicates + a select makes the whole lookup-or-create idempotent, so whichever
-      // worker loses the race simply adopts the existing row.
-      const { error: upsertErr } = await admin
-        .from("exam_scanned_submissions")
-        .upsert(
-          { class_id: classId, exam_id: batch.exam_id, batch_id: batch.id, exam_index: g },
-          { onConflict: "batch_id,exam_index", ignoreDuplicates: true }
-        );
-      if (upsertErr) throw new Error(`create scanned submission failed: ${upsertErr.message}`);
-      const { data: created, error: reReadErr } = await admin
-        .from("exam_scanned_submissions")
-        .select("id, match_status")
-        .eq("batch_id", batch.id)
-        .eq("exam_index", g)
-        .single();
-      if (reReadErr || !created) {
-        throw new Error(`read back scanned submission (batch ${batch.id}, index ${g}) failed: ${reReadErr?.message}`);
-      }
-      scannedId = created.id;
-      // The row may have been created by the concurrent worker AND already decided by a human
-      // between our lookup and now; respect that exactly as the found-row branch does.
-      humanDecided = created.match_status === "confirmed" || created.match_status === "skipped";
-    }
-    // Check this one: it is the only link between a scanned submission and its pages. Failing
-    // silently left the row with no pages attached, and finalize would then have nothing to
-    // assemble -- it now refuses that case loudly, but failing here points at the actual cause
-    // instead of surfacing three steps later.
-    // Only pages still in this batch: one moved away since the load above must not be linked here.
-    // A short count throws into the retry, whose page reload and count check then see the change;
-    // pages already linked are this group's own, and relinking them is idempotent.
-    const { data: linkedPages, error: linkErr } = await admin
-      .from("exam_scan_pages")
-      .update({ scanned_submission_id: scannedId })
-      .eq("batch_id", batch.id)
-      .in(
-        "id",
-        groupPages.map((p) => p.id)
-      )
-      .select("id");
-    if (linkErr) {
-      throw new Error(`link pages to scanned submission ${scannedId} failed: ${linkErr.message}`);
-    }
-    if ((linkedPages?.length ?? 0) !== groupPages.length) {
-      throw new Error(`batch ${batch.id} lost pages while linking scanned submission ${scannedId}; re-run matching`);
-    }
+    const groupPages = groups[g];
+    const row = rowAt.get(g);
+    if (!row) throw new Error(`batch ${batch.id}: no scanned submission returned for exam ${g}; re-run matching`);
+    const scannedId = row.scanned_submission_id;
 
     // Preserve a human's confirmed/skipped decision across re-runs: leave the existing
     // match untouched rather than re-detecting and overwriting it.
-    if (humanDecided) continue;
+    if (row.match_status === "confirmed" || row.match_status === "skipped") continue;
 
     // Read identity. With both an SIS-id and a name region, take the SIS id from the
     // former and the name from the latter; with one region, use just that; with none,

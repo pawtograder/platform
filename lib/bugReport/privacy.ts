@@ -2451,6 +2451,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   exam_create: "none",
   // DRAFT: new entry, review and remove this comment
   exam_create_submission: "none",
+  // Reviewed: service-role only (the exam worker); returns [{exam_index, scanned_submission_id, match_status}].
+  exam_link_scan_groups: "none",
   // DRAFT: new entry, review and remove this comment
   exam_sync_rubric_from_questions: "none",
   // DRAFT: new entry, review and remove this comment
