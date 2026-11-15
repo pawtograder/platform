@@ -23,7 +23,7 @@
  * Step 5 (20261108120000_review_assignments_by_capability.sql): seeing and deleting review
  * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
  *
- * 20261112120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
+ * 20261114120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
