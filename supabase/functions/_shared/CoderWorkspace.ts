@@ -634,12 +634,13 @@ async function finishRestart(
 }
 
 /**
- * Stops the workspace, or waits for a stop already under way, and starts it again if the stop
- * finishes in time. The home volume outlives the stop (#1221's PVC has no count), so the clone and
- * any work on it are kept. Only one call restarts a workspace at a time: the row's restart claim
- * decides which. Returns the workspace and whether the restart is still under way without a start
- * build (another call holds the claim, or time ran short; the claim then stays `stopping`, and a
- * status read posts the start).
+ * Brings the workspace up through the restart claim. A running workspace that needs a restart is
+ * stopped first, a stop already under way is waited for, and a stopped workspace is started. The
+ * home volume outlives the stop (#1221's PVC has no count), so the clone and any work on it are
+ * kept. Only one call does this at a time: the row's restart claim decides which. Returns the
+ * workspace and whether the restart is still under way without a start build (another call holds
+ * the claim, or time ran short; the claim then stays `stopping`, and a status read posts the
+ * start).
  */
 async function restartWorkspace(
   deps: Deps,
@@ -649,11 +650,12 @@ async function restartWorkspace(
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
   const { db, coder } = deps;
   const now = clock(deps);
-  // Coder refuses a second build while one is active, so a stop under way is the restart's stop.
-  const alreadyStopping = isStopping(ws);
-  // Too little time to post the stop: the workspace stays as it is for the next open. A stop under
-  // way needs no post, so its claim is taken whatever time is left, and a status read finishes it.
-  if (!alreadyStopping && deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
+  // A workspace that is stopping or stopped has no stop to post: Coder refuses a second build while
+  // one is active, so a stop under way is the restart's stop.
+  const noStopToPost = isStopping(ws) || isStopped(ws);
+  // Too little time to post the stop: the workspace stays as it is for the next open. With no stop
+  // to post, the claim is taken whatever time is left, and a status read finishes the restart.
+  if (!noStopToPost && deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let token: string | null;
   try {
@@ -663,11 +665,11 @@ async function restartWorkspace(
     if (!token) return { ws, restarting: true };
     // Read again now that the claim is held, and act on that. The caller's read may be older than a
     // restart another call has finished since, and a stop posted on it would take the recovered
-    // workspace down. A call that found a stop under way never posts one: once that stop finishes, a
-    // status read may take this claim and start the workspace, and a stop posted after that would
-    // have no claim left to start it again.
+    // workspace down. A call that found the workspace stopping or stopped never posts a stop: once
+    // it is stopped, a status read may take this claim and start the workspace, and a stop posted
+    // after that would have no claim left to start it again.
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
-    if (!alreadyStopping && needsRestart(ws)) {
+    if (!noStopToPost && needsRestart(ws)) {
       const stopError = await postBuild(coder, ws.id, "stop");
       if (stopError && stopError.status !== 409) {
         await db.releaseRestart(row.id, token);
@@ -805,17 +807,20 @@ export async function openWorkspace(
     }
     if (!ws) throw new Error(`Coder workspace ${name} was neither created nor found`);
     row = await recordWorkspaceId(db, row, ws);
-  } else if (needsRestart(ws) || isStopping(ws)) {
-    // Retry after a startup failure, such as a clone that timed out, or a lost agent. Or the
-    // workspace is being stopped (an autostop, or a stop posted in Coder): the claim keeps this
-    // open, so the workspace starts once the stop finishes instead of the student asking again.
-    ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
   } else if (isStopped(ws) && row.restart_token) {
     // A restart whose stop has finished: an earlier open's, or one whose holder is gone. Taken
     // through the claim like a status read does, so the two never both post its start.
     ({ ws, restarting } = await finishRestart(deps, row, ws, deadline));
-  } else if (isStopped(ws) || ws.latest_build.status === "failed" || ws.latest_build.status === "canceled") {
-    // Stopped after an hour unused, or a build that failed (Retry). An abandoned claim goes too.
+  } else if (needsRestart(ws) || isStopping(ws) || isStopped(ws)) {
+    // Retry after a startup failure, such as a clone that timed out, or a lost agent. Or the
+    // workspace is being stopped (an autostop, or a stop posted in Coder): the claim keeps this
+    // open, so the workspace starts once the stop finishes instead of the student asking again.
+    // Or it is stopped, after an hour unused. Its start goes through the claim too: the row above
+    // was read before the workspace, so it can't say that no other call has claimed a restart
+    // since, and a start posted beside that call's would be a second one.
+    ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
+  } else if (ws.latest_build.status === "failed" || ws.latest_build.status === "canceled") {
+    // A build that failed (Retry). An abandoned claim goes too.
     const error = await postBuild(coder, ws.id, "start");
     if (row.restart_token) await db.releaseRestart(row.id, row.restart_token);
     if (error && error.status !== 409) throw error;
