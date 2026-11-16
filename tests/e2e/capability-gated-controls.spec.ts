@@ -11,6 +11,10 @@
  * - Manage Surveys: create / publish / delete need manage_surveys (instructor-only by default).
  * - Manage Polls: create / open / close / delete need run_polls. The default grader role holds it; a
  *   custom role with it turned off hides those controls.
+ * - Office hours: Start/Stop Working, End/Delete assignment, karma create/edit/delete, and Create New
+ *   Queue need help_students. Chat Moderation shows for help_students OR manage_office_hours.
+ *   Templates settings need manage_office_hours. Start video call stays as on this branch
+ *   (canStartCall follows help_students in the UI; the live-meeting edge functions stay role-based).
  *
  * Default roles only for the review and groups checks: the instructor role holds those capabilities,
  * the grader role holds neither, until the last review test gives the default grader role
@@ -25,6 +29,9 @@ import {
   createUserInClass,
   gotoCourseUrlWhenHeadingVisible,
   insertAssignment,
+  insertHelpQueueAssignment,
+  insertHelpRequest,
+  insertOfficeHoursQueue,
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
@@ -547,34 +554,111 @@ test.describe("office hours controls gated by help_students and manage_office_ho
   let course: Awaited<ReturnType<typeof createClass>>;
   let instructor: TestingUser;
   let graderWithoutHelp: TestingUser;
+  let graderManageOnly: TestingUser;
   let plainGrader: TestingUser;
+  let student: TestingUser;
+  let queueId: number;
+  let helpRequestId: number;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     course = await createClass({ name: `E2E OH Gates ${suffix}` });
     instructor = await createUserInClass({ role: "instructor", class_id: course.id });
     graderWithoutHelp = await createUserInClass({ role: "grader", class_id: course.id });
+    graderManageOnly = await createUserInClass({ role: "grader", class_id: course.id });
     plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
+    student = await createUserInClass({ role: "student", class_id: course.id });
 
-    const { data: role, error } = await supabase
+    const { data: noHelpRole, error: noHelpRoleError } = await supabase
       .from("class_roles")
       .insert({ class_id: course.id, name: "No Help TA" })
       .select("id")
       .single();
-    expect(error).toBeNull();
+    expect(noHelpRoleError).toBeNull();
     expect(
-      (await supabase.from("role_capabilities").delete().eq("role_id", role!.id).eq("capability", "help_students"))
-        .error
+      (
+        await supabase
+          .from("role_capabilities")
+          .delete()
+          .eq("role_id", noHelpRole!.id)
+          .eq("capability", "help_students")
+      ).error
     ).toBeNull();
 
-    const { data: row, error: rowError } = await supabase
+    const { data: noHelpRow, error: noHelpRowError } = await supabase
       .from("user_roles")
       .select("id")
       .eq("user_id", graderWithoutHelp.user_id)
       .eq("class_id", course.id)
       .single();
-    expect(rowError).toBeNull();
-    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+    expect(noHelpRowError).toBeNull();
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: noHelpRole!.id }).eq("id", noHelpRow!.id)).error
+    ).toBeNull();
+
+    const { data: manageOnlyRole, error: manageOnlyRoleError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "Manage OH Only TA" })
+      .select("id")
+      .single();
+    expect(manageOnlyRoleError).toBeNull();
+    expect(
+      (
+        await supabase.from("role_capabilities").insert({
+          role_id: manageOnlyRole!.id,
+          capability: "manage_office_hours"
+        })
+      ).error
+    ).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .delete()
+          .eq("role_id", manageOnlyRole!.id)
+          .eq("capability", "help_students")
+      ).error
+    ).toBeNull();
+
+    const { data: manageOnlyRow, error: manageOnlyRowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderManageOnly.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(manageOnlyRowError).toBeNull();
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: manageOnlyRole!.id }).eq("id", manageOnlyRow!.id))
+        .error
+    ).toBeNull();
+
+    const queue = await insertOfficeHoursQueue({ class_id: course.id, name: `OH Gate Queue ${suffix}` });
+    queueId = queue.id;
+    await insertHelpQueueAssignment({
+      class_id: course.id,
+      help_queue_id: queueId,
+      ta_profile_id: instructor.private_profile_id
+    });
+    const helpRequest = await insertHelpRequest({
+      class_id: course.id,
+      student_profile_id: student.private_profile_id,
+      request: `OH gate help request ${suffix}`,
+      help_queue_id: queueId
+    });
+    helpRequestId = helpRequest.id;
+
+    expect(
+      (
+        await supabase.from("student_karma_notes").insert({
+          class_id: course.id,
+          student_profile_id: student.private_profile_id,
+          karma_score: 1,
+          internal_notes: `OH gate karma ${suffix}`,
+          created_by_id: instructor.user_id,
+          last_activity_at: new Date().toISOString()
+        })
+      ).error
+    ).toBeNull();
   });
 
   test("a grader without help_students does not see Create New Queue", async ({ page }) => {
@@ -582,7 +666,49 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
     await capabilities;
+    await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toHaveCount(0);
+  });
+
+  test("a grader without help_students does not see Start Working, End/Delete assignment, or karma writes", async ({
+    page
+  }) => {
+    await loginAsUser(page, graderWithoutHelp, course);
+
+    const dashboardCapabilities = page.waitForResponse(
+      (r) => r.url().includes("/rpc/user_class_capabilities") && r.ok()
+    );
+    await page.goto(`/course/${course.id}/manage/office-hours`);
+    await dashboardCapabilities;
+    await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Start Working|Stop Working/ })).toHaveCount(0);
+
+    const assignmentCapabilities = page.waitForResponse(
+      (r) => r.url().includes("/rpc/user_class_capabilities") && r.ok()
+    );
+    await page.goto(`/course/${course.id}/manage/office-hours/settings/assignments`);
+    await assignmentCapabilities;
+    await expect(page.getByRole("heading", { name: "Help Queue Assignment Management" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "End Assignment" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+
+    const karmaCapabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/office-hours/settings/karma`);
+    await karmaCapabilities;
+    await expect(page.getByRole("heading", { name: "Student Karma Management" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Add Karma Entry|Create First Karma Entry/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  });
+
+  test("a grader with only manage_office_hours sees Moderation in a request chat", async ({ page }) => {
+    await loginAsUser(page, graderManageOnly, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/office-hours/request/${helpRequestId}`);
+    await capabilities;
+    await expect(page.getByText(`Request #${helpRequestId}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Moderation" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Karma" })).toHaveCount(0);
   });
 
   test("a default grader with help_students sees Create New Queue", async ({ page }) => {
@@ -590,12 +716,15 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
     await capabilities;
+    await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toBeVisible();
   });
 
   test("a grader without manage_office_hours is redirected from templates settings", async ({ page }) => {
     await loginAsUser(page, plainGrader, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
+    await capabilities;
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/office-hours/?$`));
   });
 
