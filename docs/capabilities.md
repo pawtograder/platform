@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -89,6 +89,11 @@ Like `assertUserIsInstructorOrServiceRole`, which it replaces for an action a ca
 also lets through the service role and an admin of any course. Load the row's class from the database
 and filter by it, so a capability in one class can't reach another class's rows.
 
+CLI handlers that gate on a capability use `assertUserHasClassCapability` the same way: call
+`user_class_ids_with_capability()` on the caller-scoped client from `ctx.supabase` (the JWT minted
+for the token owner). Do not join `user_roles` to `role_capabilities` by hand, and do not ask the
+service-role client; without the caller's JWT the RPC has no `auth.uid()` and fails closed.
+
 ## Adding a capability
 
 Write one migration that:
@@ -132,3 +137,20 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## manage_flashcards
+
+`manage_flashcards` covers creating, editing, deleting and copying flashcard decks and cards
+(area 13). Day one, the default instructor role, the default grader role and every existing custom
+role hold it, so instructors and default graders keep the management access graders already had. An
+instructor can then turn it off for the default grader role or a custom role. Before this capability,
+the person who created a deck could still update and delete it and manage its cards without the
+staff check; that creator path is gone so the capability is the only rule for those writes. The
+Course Settings "Flashcard Decks" entry and the create / edit / delete controls follow
+`useCapability("manage_flashcards")`. Left as views: class members reading decks and cards, students
+writing their own progress and interaction logs, and staff reading class-wide progress and logs for
+analytics.
+
+CLI `flashcards.copy` asks `user_class_ids_with_capability('manage_flashcards')` through the
+caller-scoped client (`ctx.supabase`) for both the source and the target class, matching the RLS
+policies rather than joining `role_capabilities` by hand.

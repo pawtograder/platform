@@ -31,6 +31,7 @@ const COMMANDS_DIR = join(__dirname, "../../supabase/functions/cli/commands");
 const AUTHZ_CALLS = [
   "assertUserCanAccessClass",
   "assertUserIsClassInstructor",
+  "assertUserHasClassCapability",
   // classes.list has no single class to assert against, so it filters instead.
   "listAccessibleClassIds"
 ];
@@ -183,7 +184,8 @@ describe("CLI command authorization audit", () => {
       const entry = allCommands.find((c) => c.name === commandName);
       expect(entry).toBeDefined();
       const body = entry!.mod.functions.get(entry!.handler)!;
-      const checks = body.match(/assertUserCanAccessClass|assertUserIsClassInstructor/g) ?? [];
+      const checks =
+        body.match(/assertUserCanAccessClass|assertUserIsClassInstructor|assertUserHasClassCapability/g) ?? [];
       expect(checks.length).toBeGreaterThanOrEqual(2);
       expect(body).toMatch(/sourceClass\.id/);
       expect(body).toMatch(/targetClass\.id/);

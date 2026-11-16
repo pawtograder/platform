@@ -6,7 +6,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveClass } from "../utils/resolvers.ts";
-import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { assertUserCanAccessClass, assertUserHasClassCapability } from "../utils/auth.ts";
 import { pageAll } from "../utils/paging.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse, FlashcardsListParams, FlashcardsCopyParams } from "../types.ts";
@@ -79,10 +79,11 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
-  // Both sides: reading the source and writing the target each need access, or a
-  // grader in one class could copy content into a class they do not belong to.
-  await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
-  await assertUserCanAccessClass(supabase, ctx.userId, targetClass.id);
+  // Copy creates decks and cards in the target, so both sides need manage_flashcards
+  // (#1010). Ask via ctx.supabase (caller JWT) so the check matches RLS; the admin
+  // client has no auth.uid() for user_class_ids_with_capability.
+  await assertUserHasClassCapability(ctx.supabase, ctx.userId, sourceClass.id, "manage_flashcards");
+  await assertUserHasClassCapability(ctx.supabase, ctx.userId, targetClass.id, "manage_flashcards");
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");

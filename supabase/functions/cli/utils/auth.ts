@@ -111,6 +111,34 @@ export async function assertUserIsClassInstructor(
 }
 
 /**
+ * Throws 403 unless the signed-in user holds `capability` in the class (#1010,
+ * docs/capabilities.md). Asks `user_class_ids_with_capability()`, the same
+ * function RLS uses, so a hand-rolled role join cannot disagree with the
+ * policies (for example a grader on a custom role with the capability turned
+ * off). Pass the caller-scoped client from `ctx.supabase` (the JWT minted for
+ * the token owner in authenticateMCPRequest); the admin client has no
+ * auth.uid() and would always fail closed. `userId` is kept for call-site
+ * symmetry with the other helpers; identity comes from the JWT.
+ */
+export async function assertUserHasClassCapability(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  classId: number,
+  capability: string
+): Promise<void> {
+  void userId;
+  const { data: classIds, error } = await supabase.rpc("user_class_ids_with_capability", {
+    p_capability: capability
+  });
+  // Fail closed on lookup errors (same posture as assertUserHasCapabilityOrServiceRole).
+  if (error) throw new CLICommandError(`Failed to verify ${capability}: ${error.message}`, 500);
+  // Number(): a body that sends class_id as a string still matches.
+  if (!(classIds ?? []).includes(Number(classId))) {
+    throw new CLICommandError(`You do not have ${capability} for this class`, 403);
+  }
+}
+
+/**
  * The caller's private profile id in a class.
  *
  * Attribution columns (`help_requests.resolved_by`,
