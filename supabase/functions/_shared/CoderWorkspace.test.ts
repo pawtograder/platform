@@ -7,14 +7,15 @@
  * workspace create, reuse and start, the concurrent-create 409 and 500, the unlinked external auth
  * and unsigned-in paths (always asking Coder about the student, never the service token), a user
  * bound to another subject, the failing startup step with its log lines, a failed build, the
- * restart after a failed or lost agent (within open's time budget, finished by a status read when
- * the stop is slow), one start per restart however the callers interleave, answering within the
- * budget in real time when a Coder or database call hangs, no claim taken without time to use it,
- * a stale claim taken over, an open while Coder is already stopping the workspace (kept as a claim,
- * with no second stop, and started once), readiness only with a connected agent, the editor
- * URL, a group change, which repository a caller may open, the repo_url shape the template accepts,
- * a Coder user that predates the Coder email (an account conflict until staff delete it), and a
- * course without cloud-workspaces.
+ * restart after a failed or lost agent or an unhealthy editor (within open's time budget, finished
+ * by a status read when the stop is slow), no second stop for a workspace another open already
+ * restarted, a failed stop build, one start per restart however the callers interleave, answering
+ * within the budget in real time when a Coder or database call hangs, no claim taken without time
+ * to use it, a stale claim taken over, an open while Coder is already stopping the workspace (kept
+ * as a claim, with no second stop, and started once), readiness only with a connected agent, the
+ * editor URL, a group change, which repository a caller may open, the repo_url shape the template
+ * accepts, a Coder user that predates the Coder email (an account conflict until staff delete it),
+ * and a course without cloud-workspaces.
  *
  * Run from supabase/functions:
  *   deno test --no-check --allow-read --allow-env _shared/CoderWorkspace.test.ts
@@ -1212,12 +1213,13 @@ Deno.test("a stop that finishes as the budget runs out: open leaves the start to
   const { clock, coder, db, deps } = await failedWorkspace();
   coder.latencyMs = 1_000;
   const t0 = clock.t;
-  // The stop finishes on the read that starts 18 s in, when too little time is left for the start.
+  // The stop finishes on the read that starts 16 s in and ends at 17 s, when too little time is left
+  // for the start.
   const base = coder.fetch;
   deps.coder.fetch = async (input, init) => {
     const path = new URL(String(input)).pathname.replace(/^\/api\/v2/, "");
     const build = coder.workspaces[0].latest_build;
-    if (isWorkspaceRead(init?.method ?? "GET", path) && build.transition === "stop" && clock.t - t0 >= 17_000) {
+    if (isWorkspaceRead(init?.method ?? "GET", path) && build.transition === "stop" && clock.t - t0 >= 16_000) {
       build.status = "stopped";
     }
     return await base(input, init);
@@ -1375,9 +1377,43 @@ function holdFirst(base: typeof fetch, match: (method: string, path: string, bod
   return { fetch, reached, release };
 }
 
+/**
+ * Like holdFirst, but Coder has answered and the reply is what waits: the caller goes on with a
+ * state that may no longer hold when it gets it.
+ */
+function holdFirstReply(base: typeof fetch, match: (method: string, path: string, body: string) => boolean) {
+  let release!: () => void;
+  let arrived!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  const reached = new Promise<void>((r) => (arrived = r));
+  let held = false;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname.replace(/^\/api\/v2/, "");
+    const res = await base(input, init);
+    if (!held && match(init?.method ?? "GET", path, String(init?.body ?? ""))) {
+      held = true;
+      arrived();
+      await released;
+    }
+    return res;
+  };
+  return { fetch, reached, release };
+}
+
 const isStartPost = (method: string, path: string, body: string) =>
   method === "POST" && path.endsWith("/builds") && body.includes('"start"');
 const isWorkspaceRead = (method: string, path: string) => method === "GET" && /^\/workspaces\/[^/]+$/.test(path);
+/**
+ * Matches workspace reads once a stop has been posted: the reads a restart waits on. A restart reads
+ * the workspace once before its stop too, with the claim held, to see that it still needs one.
+ */
+function readAfterStop() {
+  let stopPosted = false;
+  return (method: string, path: string, body: string) => {
+    if (method === "POST" && path.endsWith("/builds") && body.includes('"stop"')) stopPosted = true;
+    return stopPosted && isWorkspaceRead(method, path);
+  };
+}
 
 function holding(deps: Deps, fetch: typeof globalThis.fetch): Deps {
   return { ...deps, coder: { ...deps.coder, fetch } };
@@ -1421,7 +1457,7 @@ Deno.test("a status read takes over the open's restart: the open doesn't post a 
   // read takes the claim, holding its own start POST. Then the two go on in each order.
   for (const order of ["open first", "status read first", "status read first, start finished"]) {
     const { coder, db, deps } = await failedWorkspace();
-    const openRead = holdFirst(coder.fetch, isWorkspaceRead);
+    const openRead = holdFirst(coder.fetch, readAfterStop());
     const open = openWorkspace(holding(deps, openRead.fetch), ALEX, { assignment_id: 41 });
     await openRead.reached;
     assertEquals([buildPosts(coder), db.rows[0].restart_phase], [["stop"], "stopping"], order);
@@ -1506,9 +1542,9 @@ Deno.test(
   async () => {
     const t = await failedWorkspace();
     const { coder, db } = t;
-    // The review's case: the read after the stop takes 21 s to come back.
+    // The review's case: the read after the stop (the restart's second) takes 21 s to come back.
     let reads = 0;
-    coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 0 ? 21_000 : 0);
+    coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 1 ? 21_000 : 0);
     const deps = onRealTime(t, OPEN_BUDGET_MS);
     const t0 = Date.now();
     const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
@@ -1620,11 +1656,11 @@ Deno.test("an open takes the restart claim only with time to post the stop", asy
 
 Deno.test("a cut-off restart on a row without the workspace id: the id is recorded first", async () => {
   // The review's repro D. An earlier open's create was cut off after Coder made the workspace, so
-  // the row has no id, and this open's restart is cut off on the read after its stop.
+  // the row has no id, and this open's restart is cut off on the read after its stop (its second).
   const t = await failedWorkspace();
   t.db.rows[0].coder_workspace_id = null;
   let reads = 0;
-  t.coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 0 ? 10_000 : 0);
+  t.coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 1 ? 10_000 : 0);
   const deps = onRealTime(t, 6_000);
   const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
   assertEquals(res.status, "restarting");
@@ -1638,6 +1674,32 @@ Deno.test("a cut-off restart on a row without the workspace id: the id is record
   assertEquals((await workspaceStatus(t.deps, ALEX, { assignment_id: 41 })).status, "starting");
   assertEquals([buildPosts(t.coder), t.db.rows[0].restart_token], [["stop", "start"], null]);
 });
+
+Deno.test(
+  "a restart cut off before its stop: the claim reads restarting until it is stale, then an open retakes it",
+  async () => {
+    // The read a restart makes with the claim held, before its stop, doesn't come back in time. No
+    // stop was posted, and the claim can't be given up: the budget has cut the database off too.
+    const t = await failedWorkspace();
+    let reads = 0;
+    t.coder.slow = (method, path) => (isWorkspaceRead(method, path) && reads++ === 0 ? 10_000 : 0);
+    const deps = onRealTime(t, 6_000);
+    const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
+    assertEquals([res.status, t.db.rows[0].restart_phase, buildPosts(t.coder)], ["restarting", "stopping", []]);
+
+    // Like a stop that never reached Coder: nothing acts on the claim while its holder may be alive.
+    t.coder.slow = undefined;
+    assertEquals((await workspaceStatus(t.deps, ALEX, { assignment_id: 41 })).status, "restarting");
+    assertEquals((await openWorkspace(t.deps, ALEX, { assignment_id: 41 })).status, "restarting");
+    assertEquals(buildPosts(t.coder), []);
+    // Once it is stale the workspace reads as it is, and the next open restarts it.
+    t.clock.t = Date.now() + RESTART_CLAIM_MS + 1;
+    assertEquals((await workspaceStatus(t.deps, ALEX, { assignment_id: 41 })).status, "failed");
+    t.coder.autoBuild = true;
+    assertEquals((await openWorkspace(t.deps, ALEX, { assignment_id: 41 })).status, "ready");
+    assertEquals([buildPosts(t.coder), t.db.rows[0].restart_token], [["stop", "start"], null]);
+  }
+);
 
 Deno.test("an open that read the claim before it went stale doesn't post a start a status read took", async () => {
   // The review's double-start window, at the claim's expiry. The open reads the row and its lookup
@@ -1661,6 +1723,45 @@ Deno.test("an open that read the claim before it went stale doesn't post a start
   readStart.release();
   assertEquals((await read).status, "starting");
   assertEquals([buildPosts(coder), db.rows[0].restart_token], [["stop", "start"], null]);
+});
+
+Deno.test("an open that read the failed workspace before another open restarted it doesn't stop it again", async () => {
+  const { coder, db, deps } = await failedWorkspace();
+  coder.autoBuild = true;
+  // B's lookup answers with the failed workspace, and the answer is held on its way back.
+  const lookup = holdFirstReply(coder.fetch, isWorkspaceLookup);
+  const b = openWorkspace(holding(deps, lookup.fetch), ALEX, { assignment_id: 41 });
+  await lookup.reached;
+  // A restarts the workspace and gives its claim up.
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "ready");
+  assertEquals(buildPosts(coder), ["stop", "start"]);
+  // B takes the free claim, reads the workspace again, and finds nothing to restart.
+  lookup.release();
+  assertEquals((await b).status, "ready");
+  assertEquals(buildPosts(coder), ["stop", "start"], "the recovered workspace is left running");
+  assertEquals(db.rows[0].restart_token, null);
+});
+
+Deno.test("an unhealthy editor is failed at the editor step, and open restarts the workspace", async () => {
+  const { coder, db, deps } = setup();
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  signInAndLink(coder, ALEX);
+  coder.nextAgent = readyAgent();
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "ready");
+
+  // code-server is gone: the build is running and the agent connected and ready, but the app's
+  // health check fails.
+  coder.workspaces[0].latest_build.resources[0].agents![0].apps![0].health = "unhealthy";
+  const res = await workspaceStatus(deps, ALEX, { assignment_id: 41 });
+  assertEquals([res.status, res.step, res.message], ["failed", "editor", "VS Code did not start in the workspace."]);
+  assertEquals(buildPosts(coder), [], "a status read restarts nothing");
+
+  // The startup script that launches code-server runs only when the workspace starts, so the retry
+  // is a restart.
+  coder.autoBuild = true;
+  const reopened = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(buildPosts(coder), ["stop", "start"]);
+  assertEquals([reopened.status, db.rows[0].restart_token], ["ready", null]);
 });
 
 /**
@@ -1734,25 +1835,42 @@ Deno.test("a stop under way that finishes within the open's budget: the open pos
   assertEquals(db.rows[0].restart_started_at, null);
 });
 
-Deno.test("a stop under way that fails or is canceled: the claim is given up, and the next open starts", async () => {
-  for (const outcome of ["failed", "canceled"]) {
-    const { coder, db, deps } = await stoppingWorkspace();
-    // The stop ends badly by the first read after the open took its claim.
-    const base = coder.fetch;
-    deps.coder.fetch = async (input, init) => {
-      const path = new URL(String(input)).pathname.replace(/^\/api\/v2/, "");
-      if (isWorkspaceRead(init?.method ?? "GET", path)) coder.workspaces[0].latest_build.status = outcome;
-      return await base(input, init);
-    };
-    const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
-    assertEquals([res.status, res.build!.status], ["not_started", outcome]);
-    assertEquals([buildPosts(coder), db.rows[0].restart_token], [[], null], "nothing waits on a stop that ended");
+Deno.test(
+  "a stop under way that fails or is canceled: failed with Coder's error, the claim given up, and the next open starts",
+  async () => {
+    for (const outcome of ["failed", "canceled"]) {
+      const { coder, db, deps } = await stoppingWorkspace();
+      // The stop ends badly by the first read after the open took its claim.
+      const base = coder.fetch;
+      deps.coder.fetch = async (input, init) => {
+        const path = new URL(String(input)).pathname.replace(/^\/api\/v2/, "");
+        if (isWorkspaceRead(init?.method ?? "GET", path)) {
+          const ws = coder.workspaces[0];
+          ws.latest_build = { ...ws.latest_build, status: outcome, job: { error: "pod deletion failed" } };
+        }
+        return await base(input, init);
+      };
+      const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+      // A stop build that failed is a failed build, not a workspace nobody started.
+      assertEquals(
+        [res.status, res.step, res.message, res.build],
+        [
+          "failed",
+          "build",
+          "pod deletion failed",
+          { status: outcome, transition: "stop", error: "pod deletion failed" }
+        ]
+      );
+      assertEquals(res.failure, { step: "build", script: null, exit_code: null, log_lines: ["pod deletion failed"] });
+      assertEquals([buildPosts(coder), db.rows[0].restart_token], [[], null], "nothing waits on a stop that ended");
 
-    deps.coder.fetch = base;
-    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting", outcome);
-    assertEquals(buildPosts(coder), ["start"]);
+      deps.coder.fetch = base;
+      assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "failed", outcome);
+      assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting", outcome);
+      assertEquals(buildPosts(coder), ["start"]);
+    }
   }
-});
+);
 
 Deno.test("an open short of time still keeps its claim on a stop under way, which needs no stop posted", async () => {
   const { clock, coder, db, deps } = await stoppingWorkspace();
