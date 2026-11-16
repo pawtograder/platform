@@ -157,9 +157,13 @@ export default function SurveyComponent({
   useEffect(() => {
     if (initialData === undefined) return;
     const dataKey = JSON.stringify(initialData);
-    if (dataKey === appliedDataKeyRef.current) return;
+    // Same JSON as last applied is normally a no-op. When the form is locking read-only,
+    // still reapply: a refused local edit can leave the inputs ahead of that JSON (another tab
+    // submitted the unchanged draft), and the early return would keep showing the rejected edit.
+    if (dataKey === appliedDataKeyRef.current && !(readOnly && hasLocalEditsRef.current)) return;
     if (hasLocalEditsRef.current && !readOnly) return;
     appliedDataKeyRef.current = dataKey;
+    hasLocalEditsRef.current = false;
     survey.data = initialData;
   }, [initialData, survey, readOnly]);
 

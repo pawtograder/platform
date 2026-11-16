@@ -112,7 +112,24 @@ test.describe("Survey answers survive leaving the page and losing the network", 
         const cacheOpen = CacheStorage.prototype.open;
         CacheStorage.prototype.open = function (cacheName: string) {
           record("caches.open", cacheName);
-          return cacheOpen.call(this, cacheName);
+          return cacheOpen.call(this, cacheName).then((cache) => {
+            const put = cache.put.bind(cache);
+            cache.put = (request, response) => {
+              void response
+                .clone()
+                .text()
+                .then((text) => record("caches.put", text))
+                .catch(() => record("caches.put", "[unreadable]"));
+              return put(request, response);
+            };
+            const add = cache.add.bind(cache);
+            cache.add = async (request) => {
+              const result = await add(request);
+              record("caches.add", String(request));
+              return result;
+            };
+            return cache;
+          });
         };
       }
       const cookie = Object.getOwnPropertyDescriptor(Document.prototype, "cookie");
@@ -130,13 +147,17 @@ test.describe("Survey answers survive leaving the page and losing the network", 
         });
       }
     });
-    return writes;
+    // Lets in-flight Cache API body reads reach `__recordBrowserStorageWrite` before assertions.
+    const drainStorageWrites = async () => {
+      await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    };
+    return { writes, drainStorageWrites };
   };
 
   test("an answer typed right before a reload is stored and shown after the reload", async ({ page }) => {
     const survey = await seedSurvey("Fast Reload Survey");
     await loginAsUser(page, student, course);
-    const storageWrites = await recordBrowserStorageWrites(page);
+    const { writes: storageWrites, drainStorageWrites } = await recordBrowserStorageWrites(page);
     await page.clock.install();
 
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
@@ -158,13 +179,14 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       .poll(() => storedResponse(survey.id), { timeout: 10_000 })
       .toEqual({ q1: "Typed right before reload", is_submitted: false });
     await expect(page.getByRole("textbox", { name: "Question 1" })).toHaveValue("Typed right before reload");
+    await drainStorageWrites();
     expect(storageWrites.filter((write) => write.includes("Typed right before reload"))).toEqual([]);
   });
 
   test("an answer given offline is saved after reconnecting, and the page says which", async ({ page }) => {
     const survey = await seedSurvey("Offline Answer Survey");
     await loginAsUser(page, student, course);
-    const storageWrites = await recordBrowserStorageWrites(page);
+    const { writes: storageWrites, drainStorageWrites } = await recordBrowserStorageWrites(page);
 
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
     const input = page.getByRole("textbox", { name: "Question 1" });
@@ -188,6 +210,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     // Saved without a reload: the marker set on this document is still there.
     const sameDocument = await page.evaluate(() => (window as unknown as { __sameDocument?: boolean }).__sameDocument);
     expect(sameDocument).toBe(true);
+    await drainStorageWrites();
     expect(storageWrites.filter((write) => write.includes("Answered while offline"))).toEqual([]);
   });
 
@@ -467,14 +490,21 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     page
   }) => {
     const survey = await seedSurvey("Submitted In Another Tab Survey");
+    // Preload the draft so the first tab applies that JSON before the other tab submits the same
+    // answers. A failure to restore an unchanged preloaded draft would leave the rejected edit on
+    // screen when the form locks.
+    const { error: seedError } = await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student.private_profile_id,
+      response: { q1: "Answer from the first tab" },
+      is_submitted: false
+    });
+    if (seedError) throw new Error(`Failed to seed the response: ${seedError.message}`);
     await loginAsUser(page, student, course);
 
     await page.goto(`/course/${course.id}/surveys/${survey.id}`);
     const input = page.getByRole("textbox", { name: "Question 1" });
-    await input.fill("Answer from the first tab");
-    await expect
-      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
-      .toEqual({ q1: "Answer from the first tab", is_submitted: false });
+    await expect(input).toHaveValue("Answer from the first tab");
     await submitInAnotherTab(page, survey.id, "Answer from the first tab");
 
     // The first tab still shows the form. Editing it again can't change the submitted response.

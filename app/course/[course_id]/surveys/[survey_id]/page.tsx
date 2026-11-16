@@ -437,23 +437,20 @@ export default function SurveyTakingPage() {
 
   // The server holds a submitted response that this page took for a draft: a Complete whose reply
   // was lost, or a submit from another tab. Show it as submitted, as a reload would.
-  const showSubmittedResponse = useCallback(
-    (row: SurveyResponse) => {
-      responseStateRef.current = "submitted";
-      setSubmitError(null);
-      setSubmittedSinceLoad(true);
-      // Without editing the form locks and shows what was submitted. With editing it keeps the
-      // student's answers, which are newer than the row; handing it the row would overwrite them
-      // the next time it turns read-only.
-      if (!allowResponseEditing) setExistingResponse(row);
-      toaster.create({
-        title: "Survey Submitted",
-        description: "Your survey has been submitted.",
-        type: "success"
-      });
-    },
-    [allowResponseEditing]
-  );
+  const showSubmittedResponse = useCallback((row: SurveyResponse) => {
+    responseStateRef.current = "submitted";
+    setSubmitError(null);
+    setSubmittedSinceLoad(true);
+    // Hand the form the submitted row. Without editing it locks and must show what was accepted,
+    // even when that JSON matches the draft already applied (Survey re-applies on lock). With
+    // editing, Survey keeps newer local answers until they save into the submission.
+    setExistingResponse(row);
+    toaster.create({
+      title: "Survey Submitted",
+      description: "Your survey has been submitted.",
+      type: "success"
+    });
+  }, []);
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model, options?: CompleteEvent) => {
