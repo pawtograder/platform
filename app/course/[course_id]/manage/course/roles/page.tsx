@@ -7,11 +7,13 @@ import { toaster } from "@/components/ui/toaster";
 import { useCapabilityOnceLoaded } from "@/hooks/useClassProfiles";
 import {
   capabilityLabel,
+  deleteRoleDialogCopy,
   editableRoles,
   INSTRUCTOR_ONLY_CAPABILITY,
   ROLE_CHANGE_REFUSED_MESSAGE,
   roleChangeErrorMessage,
-  roleDisplayName
+  roleDisplayName,
+  type RoleMembershipCounts
 } from "@/lib/classRoles";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -39,6 +41,20 @@ function showRefused(description: string) {
   toaster.error({ title: "Not saved", description, meta: { reportable: false } });
 }
 
+function membershipCountsForRole(
+  enrollments: { classRoleId: number; disabled: boolean }[],
+  roleId: number
+): RoleMembershipCounts {
+  let active = 0;
+  let disabled = 0;
+  for (const row of enrollments) {
+    if (row.classRoleId !== roleId) continue;
+    if (row.disabled) disabled += 1;
+    else active += 1;
+  }
+  return { active, disabled };
+}
+
 export default function StaffRolesPage() {
   const { course_id } = useParams();
   const classId = Number.parseInt(course_id as string, 10);
@@ -46,7 +62,11 @@ export default function StaffRolesPage() {
   const { data, setData, loadError, reload } = useClassRolesData(classId);
   const announce = useAnnouncer();
   const [saving, setSaving] = useState<Set<string>>(new Set());
-  const [movingUserRoleId, setMovingUserRoleId] = useState<number | undefined>();
+  // Intended checkbox values while a save is in flight; wins over loaded data so a late reload
+  // can't uncheck a box the instructor just turned on.
+  const [pendingHeld, setPendingHeld] = useState<Map<string, boolean>>(new Map());
+  const [movingUserRoleIds, setMovingUserRoleIds] = useState<Set<number>>(new Set());
+  const [pendingMoves, setPendingMoves] = useState<Map<number, number>>(new Map());
   const [dialog, setDialog] = useState<OpenDialog | undefined>();
 
   const roles = useMemo(() => editableRoles(data?.roles ?? []), [data]);
@@ -80,11 +100,11 @@ export default function StaffRolesPage() {
       const key = heldKey(role.id, capability);
       const roleName = roleDisplayName(role);
       setSaving((prev) => new Set(prev).add(key));
-      setHeld(role.id, capability, turnOn);
+      setPendingHeld((prev) => new Map(prev).set(key, turnOn));
 
       const supabase = createClient();
-      // .select() returns the rows written, so a write a policy refuses without an error (no rows)
-      // isn't reported as saved.
+      // Updates and deletes ask for the rows they changed: a policy can refuse those without an
+      // error (no rows). Inserts fail with an error, so createRole does not need .select().
       const { data: written, error } = turnOn
         ? await supabase.from("role_capabilities").insert({ role_id: role.id, capability }).select("role_id")
         : await supabase
@@ -101,7 +121,11 @@ export default function StaffRolesPage() {
       });
 
       if (error || !written || written.length === 0) {
-        setHeld(role.id, capability, !turnOn);
+        setPendingHeld((prev) => {
+          const next = new Map(prev);
+          next.delete(key);
+          return next;
+        });
         const message = error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE;
         showRefused(message);
         announce(`${roleName}, ${capabilityLabel(capability)}: not saved. ${message}`, { priority: "assertive" });
@@ -109,6 +133,14 @@ export default function StaffRolesPage() {
         reload();
         return;
       }
+      // Re-apply into loaded data before clearing pending, so a reload that lands in between
+      // still loses to the pending overlay until this write is committed locally.
+      setHeld(role.id, capability, turnOn);
+      setPendingHeld((prev) => {
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
       announce(`${roleName}: ${capabilityLabel(capability)} turned ${turnOn ? "on" : "off"}. Saved.`);
     },
     [announce, reload, setHeld]
@@ -116,6 +148,8 @@ export default function StaffRolesPage() {
 
   const createRole = useCallback(
     async (name: string) => {
+      // Insert column grants cover only class_id and name; a refused insert raises an error, so
+      // .select() is unnecessary (and would need a broader grant).
       const { error } = await createClient().from("class_roles").insert({ class_id: classId, name });
       if (error) return roleChangeErrorMessage(error);
       await reload();
@@ -158,13 +192,13 @@ export default function StaffRolesPage() {
     async (userRoleId: number, graderName: string, classRoleId: number) => {
       const target = roles.find((role) => role.id === classRoleId);
       if (!target) return;
-      setMovingUserRoleId(userRoleId);
+      setMovingUserRoleIds((prev) => new Set(prev).add(userRoleId));
+      setPendingMoves((prev) => new Map(prev).set(userRoleId, classRoleId));
       const { data: written, error } = await createClient()
         .from("user_roles")
         .update({ class_role_id: classRoleId })
         .eq("id", userRoleId)
         .select("id");
-      setMovingUserRoleId(undefined);
       if (error || !written || written.length === 0) {
         const message = error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE;
         showRefused(message);
@@ -173,6 +207,16 @@ export default function StaffRolesPage() {
         announce(`${graderName} is now on ${roleDisplayName(target)}. Saved.`);
       }
       await reload();
+      setMovingUserRoleIds((prev) => {
+        const next = new Set(prev);
+        next.delete(userRoleId);
+        return next;
+      });
+      setPendingMoves((prev) => {
+        const next = new Map(prev);
+        next.delete(userRoleId);
+        return next;
+      });
     },
     [announce, reload, roles]
   );
@@ -293,10 +337,11 @@ export default function StaffRolesPage() {
                       </Table.Cell>
                       {roles.map((role) => {
                         const key = heldKey(role.id, capability.name);
+                        const checked = pendingHeld.has(key) ? pendingHeld.get(key)! : data.held.has(key);
                         return (
                           <Table.Cell key={role.id}>
                             <Checkbox
-                              checked={data.held.has(key)}
+                              checked={checked}
                               disabled={saving.has(key)}
                               onCheckedChange={(details) =>
                                 toggleCapability(role, capability.name, details.checked === true)
@@ -335,29 +380,35 @@ export default function StaffRolesPage() {
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
-                  {data.graders.map((grader) => (
-                    <Table.Row key={grader.userRoleId}>
-                      <Table.Cell as="th" scope="row" textAlign="start" fontWeight="normal">
-                        {grader.name}
-                      </Table.Cell>
-                      <Table.Cell>
-                        <NativeSelect.Root size="sm" maxW="16rem" disabled={movingUserRoleId === grader.userRoleId}>
-                          <NativeSelect.Field
-                            aria-label={`Role for ${grader.name}`}
-                            value={String(grader.classRoleId)}
-                            onChange={(event) => moveGrader(grader.userRoleId, grader.name, Number(event.target.value))}
-                          >
-                            {roles.map((role) => (
-                              <option key={role.id} value={String(role.id)}>
-                                {roleDisplayName(role)}
-                              </option>
-                            ))}
-                          </NativeSelect.Field>
-                          <NativeSelect.Indicator />
-                        </NativeSelect.Root>
-                      </Table.Cell>
-                    </Table.Row>
-                  ))}
+                  {data.graders.map((grader) => {
+                    const pendingRoleId = pendingMoves.get(grader.userRoleId);
+                    const selectedRoleId = pendingRoleId ?? grader.classRoleId;
+                    return (
+                      <Table.Row key={grader.userRoleId}>
+                        <Table.Cell as="th" scope="row" textAlign="start" fontWeight="normal">
+                          {grader.name}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <NativeSelect.Root size="sm" maxW="16rem" disabled={movingUserRoleIds.has(grader.userRoleId)}>
+                            <NativeSelect.Field
+                              aria-label={`Role for ${grader.name}`}
+                              value={String(selectedRoleId)}
+                              onChange={(event) =>
+                                moveGrader(grader.userRoleId, grader.name, Number(event.target.value))
+                              }
+                            >
+                              {roles.map((role) => (
+                                <option key={role.id} value={String(role.id)}>
+                                  {roleDisplayName(role)}
+                                </option>
+                              ))}
+                            </NativeSelect.Field>
+                            <NativeSelect.Indicator />
+                          </NativeSelect.Root>
+                        </Table.Cell>
+                      </Table.Row>
+                    );
+                  })}
                 </Table.Body>
               </Table.Root>
             </Table.ScrollArea>
@@ -385,7 +436,7 @@ export default function StaffRolesPage() {
       {dialog?.kind === "delete" && (
         <DeleteRoleDialog
           role={dialog.role}
-          memberCount={memberCounts.get(dialog.role.id) ?? 0}
+          copy={deleteRoleDialogCopy(membershipCountsForRole(data.roleEnrollments, dialog.role.id))}
           onDelete={() => deleteRole(dialog.role)}
           onClose={() => setDialog(undefined)}
         />

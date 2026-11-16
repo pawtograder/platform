@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { ROLE_NAME_MAX_LENGTH, roleNameProblem } from "@/lib/classRoles";
-import { Dialog, HStack, Input, Portal, Text } from "@chakra-ui/react";
+import { Dialog, HStack, Input, Portal } from "@chakra-ui/react";
 import { useState } from "react";
 import type { ClassRole } from "./useClassRolesData";
 
@@ -96,20 +96,20 @@ export function RoleNameDialog({
   );
 }
 
-/** Confirms deleting a custom role. A role people are on can't be deleted, so it says who to move. */
+/** Confirms deleting a custom role. A role people (or removed graders) are on can't be deleted. */
 export function DeleteRoleDialog({
   role,
-  memberCount,
+  copy,
   onDelete,
   onClose
 }: {
   role: ClassRole;
-  memberCount: number;
+  copy: { blocked: boolean; description: string };
   onDelete: () => Promise<void>;
   onClose: () => void;
 }) {
   const [isDeleting, setIsDeleting] = useState(false);
-  const blocked = memberCount > 0;
+  const { blocked, description } = copy;
 
   return (
     <Dialog.Root open onOpenChange={(details) => !details.open && onClose()} role="alertdialog">
@@ -121,14 +121,7 @@ export function DeleteRoleDialog({
               <Dialog.Title>Delete {role.name}?</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              {blocked ? (
-                <Text>
-                  {memberCount === 1 ? "1 person is" : `${memberCount} people are`} on this role. Move them to another
-                  role under People first, then delete it.
-                </Text>
-              ) : (
-                <Text>Nobody is on this role. Deleting it can&apos;t be undone.</Text>
-              )}
+              <Dialog.Description>{description}</Dialog.Description>
             </Dialog.Body>
             <Dialog.Footer>
               <HStack gap={3} justify="flex-end">
