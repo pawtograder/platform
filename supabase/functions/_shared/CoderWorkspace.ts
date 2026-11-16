@@ -384,7 +384,7 @@ async function editorUrl(coder: CoderConfig, ws: CoderWorkspace, agent: CoderAge
   const query = app.url ? new URL(app.url).search : "";
   const host = app.subdomain && app.subdomain_name ? await getAppHost(coder) : "";
   if (host) {
-    return `${new URL(coder.url).protocol}//${host.replace("*", app.subdomain_name!)}/${query}`;
+    return `${new URL(coder.url).protocol}//${host.replaceAll("*", app.subdomain_name!)}/${query}`;
   }
   return `${workspacePage(coder, ws)}.${encodeURIComponent(agent.name)}/apps/${app.slug}/${query}`;
 }
