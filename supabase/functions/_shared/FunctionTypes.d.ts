@@ -385,6 +385,8 @@ export type WorkspaceOpenResponse = {
    * on. Keep polling workspace-status while it reads `restarting`. `account_conflict`: the student's
    * Coder account can't be signed in to and staff have to remove it; `message` says so.
    * `credentials_unavailable`: the workspace couldn't be given a token for the repository, so it wasn't started; `message` says whether to wait or retry.
+   * `needs_org_invite`: the student hasn't accepted the course's GitHub organization invitation,
+   * so GitHub wouldn't let them read their own repository; nothing was started.
    */
   status:
     | "not_started"
@@ -394,7 +396,8 @@ export type WorkspaceOpenResponse = {
     | "failed"
     | "needs_linking"
     | "account_conflict"
-    | "credentials_unavailable";
+    | "credentials_unavailable"
+    | "needs_org_invite";
   step?: WorkspaceStep;
   message?: string;
   /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */

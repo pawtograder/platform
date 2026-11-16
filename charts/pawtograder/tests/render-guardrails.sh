@@ -3215,6 +3215,10 @@ apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: 
   --show-only templates/app-databases.yaml
 apps_has "external auth: the template gets the provider id" yes 'github_external_auth_id: "gh-school"' "${EA[@]}" \
   --set coder.externalAuth.github.id=gh-school --show-only templates/coder-bootstrap.yaml
+apps_has "external auth: the edge functions get the provider id" yes "value: \"gh-school\"" "${EA[@]}" \
+  --set coder.externalAuth.github.id=gh-school --show-only templates/edge-functions.yaml
+apps_has "external auth: off tells the edge functions nothing" no "CODER_GITHUB_AUTH_ID" \
+  --set coder.externalAuth.github.enabled=false --show-only templates/edge-functions.yaml
 apps_has "external auth: off declares no provider in the template" yes 'github_external_auth_id: ""' \
   --set coder.externalAuth.github.enabled=false --show-only templates/coder-bootstrap.yaml
 apps_has "external auth: the ExternalSecret maps OpenBao's client to Coder's env" yes \

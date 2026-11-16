@@ -9,6 +9,9 @@ import {
   budgetFetch,
   type Caller,
   type Deps,
+  GITHUB_EXTERNAL_AUTH_ID,
+  type GithubConfig,
+  GITHUB_URL,
   type RepositoryRow,
   type WorkspaceDb,
   type WorkspaceRow
@@ -57,7 +60,7 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
       return check(
         await admin
           .from("user_roles")
-          .select("private_profile_id, disabled")
+          .select("private_profile_id, disabled, github_org_confirmed")
           .eq("user_id", userId)
           .eq("class_id", classId)
           .maybeSingle(),
@@ -251,6 +254,14 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
  * The signed-in caller, the request, and everything the workspace functions need. Every Supabase
  * and Coder call made with them, the sign-in check included, is cut off by the budget.
  */
+/** GitHub needs no credentials of ours: the chart's defaults are the whole configuration. */
+export function githubConfig(): GithubConfig {
+  return {
+    url: (Deno.env.get("GITHUB_URL") || GITHUB_URL).replace(/\/+$/, ""),
+    externalAuthId: Deno.env.get("CODER_GITHUB_AUTH_ID") || GITHUB_EXTERNAL_AUTH_ID
+  };
+}
+
 export async function workspaceRequestContext(
   req: Request,
   budget: Budget
@@ -286,6 +297,7 @@ export async function workspaceRequestContext(
       db: supabaseWorkspaceDb(admin),
       coder: { ...config, fetch: budgetFetch(budget) },
       forgejo: { ...forgejo, fetch: budgetFetch(budget) },
+      github: githubConfig(),
       budget
     },
     caller: { userId: data.user.id, email: data.user.email, name: name ?? null },

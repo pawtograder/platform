@@ -49,7 +49,8 @@ const OWNER_ID = "00000000-0000-0000-0000-00000000aaaa";
 const ORG_ID = "00000000-0000-0000-0000-00000000000f";
 const TEMPLATE = { id: "tmpl-1", active_version_id: "ver-1", default_ttl_ms: 3_600_000 };
 /** The template's repo_url validation with forgejo_url = FORGEJO_URL (main.tf `repo_url_regex`). */
-const REPO_URL_REGEX = /^(https:\/\/git\.example\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$/;
+const REPO_URL_REGEX =
+  /^((https:\/\/git\.example\.com|https:\/\/github\.com)\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$/;
 
 const ALEX: Caller = {
   userId: "1a2b3c4d-5e6f-4a1b-8c2d-0e1f2a3b4c5d",
@@ -100,7 +101,9 @@ class FakeCoder {
     }
   ];
   /** user id -> linked to Forgejo. The owner is linked, so a lookup without user_id says "authenticated". */
-  forgejoLinked = new Set<string>([OWNER_ID]);
+  linked = new Set<string>([OWNER_ID]);
+  /** The template's one external auth provider. Phase 2's GitHub one is optional. */
+  provider = { id: "forgejo", type: "gitea", display_name: "Forgejo", optional: false };
   workspaces: CoderWorkspace[] = [];
   /** Agent state applied to every workspace built after it's set. */
   nextAgent: Partial<CoderAgent> = { lifecycle_state: "starting", status: "connected", scripts: [] };
@@ -309,11 +312,9 @@ class FakeCoder {
       const who = url.searchParams.get("user_id") ?? OWNER_ID;
       return json(200, [
         {
-          id: "forgejo",
-          type: "gitea",
-          display_name: "Forgejo",
-          authenticate_url: `${CODER_URL}/external-auth/forgejo`,
-          authenticated: this.forgejoLinked.has(who)
+          ...this.provider,
+          authenticate_url: `${CODER_URL}/external-auth/${this.provider.id}`,
+          authenticated: this.linked.has(who)
         }
       ]);
     }
@@ -328,10 +329,10 @@ class FakeCoder {
     }
     if ((m = path.match(/^\/users\/([^/]+)\/workspaces$/)) && method === "POST") {
       const owner = this.findUser(decodeURIComponent(m[1]))!;
-      if (!this.noProviders && !this.forgejoLinked.has(owner.id)) {
+      if (!this.noProviders && !this.provider.optional && !this.linked.has(owner.id)) {
         return json(403, {
           message: "External authentication is required to create a workspace with this template.",
-          validations: [{ field: "external_auth", detail: "forgejo" }]
+          validations: [{ field: "external_auth", detail: this.provider.id }]
         });
       }
       const repoUrl = body.rich_parameter_values.find((p: { name: string }) => p.name === "repo_url")?.value;
@@ -434,9 +435,21 @@ const ASSIGNMENT = { id: 41, class_id: 7, git_provider: "forgejo" };
 class FakeDb implements WorkspaceDb {
   constructor(private clock: Clock) {}
   assignments = [ASSIGNMENT, { id: 42, class_id: 7, git_provider: "github" }];
-  enrollments: { user_id: string; class_id: number; private_profile_id: string; disabled: boolean }[] = [
-    { user_id: ALEX.userId, class_id: 7, private_profile_id: "prof-alex", disabled: false },
-    { user_id: JORDAN.userId, class_id: 7, private_profile_id: "prof-jordan", disabled: false }
+  enrollments: {
+    user_id: string;
+    class_id: number;
+    private_profile_id: string;
+    disabled: boolean;
+    github_org_confirmed: boolean | null;
+  }[] = [
+    { user_id: ALEX.userId, class_id: 7, private_profile_id: "prof-alex", disabled: false, github_org_confirmed: true },
+    {
+      user_id: JORDAN.userId,
+      class_id: 7,
+      private_profile_id: "prof-jordan",
+      disabled: false,
+      github_org_confirmed: null
+    }
   ];
   /** classes.features by class id. */
   features: Record<number, unknown> = { 7: [{ name: "cloud-workspaces", enabled: true }] };
@@ -574,6 +587,7 @@ function setup() {
     db,
     coder: { url: CODER_URL, token: "owner-token", fetch: coder.fetch },
     forgejo: { url: FORGEJO_URL, authorization: "Basic eA==", authSourceId: 1, fetch: forgejo.fetch },
+    github: { url: "https://github.com", externalAuthId: "github" },
     report: (e) => reported.push(e),
     now: clock.now,
     sleep: clock.sleep
@@ -585,7 +599,7 @@ function setup() {
 function signInAndLink(coder: FakeCoder, caller: Caller) {
   const u = coder.users.find((u) => u.email === coderEmail(caller.userId))!;
   u.subject = caller.userId;
-  coder.forgejoLinked.add(u.id);
+  coder.linked.add(u.id);
 }
 
 // ---- tests ----------------------------------------------------------------
@@ -703,7 +717,7 @@ Deno.test(
 
     // A user bound to Alex keeps working: Coder rewrites the email on Alex's next sign-in.
     legacy.subject = ALEX.userId;
-    coder.forgejoLinked.add(legacy.id);
+    coder.linked.add(legacy.id);
     assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
     coder.workspaces = [];
     db.rows = [];
@@ -782,7 +796,7 @@ Deno.test("a link removed between the check and the create: needs_linking with t
     ...deps.coder,
     fetch: (input, init) => {
       if (init?.method === "POST" && new URL(String(input)).pathname.endsWith("/workspaces")) {
-        coder.forgejoLinked.delete(u.id);
+        coder.linked.delete(u.id);
       }
       return base(input, init);
     }
@@ -800,7 +814,7 @@ Deno.test("a Coder user bound to another Pawtograder login is refused before any
   await openWorkspace(deps, ALEX, { assignment_id: 41 });
   const u = coder.findUser("alex-kim-1a2b3c4d5e6f")!;
   u.subject = JORDAN.userId; // bound to someone else, however that happened
-  coder.forgejoLinked.add(u.id);
+  coder.linked.add(u.id);
   const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), SecurityError);
   assertEquals(err.details, "Your Coder account is bound to a different Pawtograder login");
   assertEquals(coder.workspaces.length, 0);
@@ -1068,7 +1082,7 @@ Deno.test("ready: redirect_url is VS Code on the app subdomain, opened on the cl
   );
 });
 
-Deno.test("authorization: only the caller's own or group repository, on Forgejo, while enrolled", async () => {
+Deno.test("authorization: only the caller's own or group repository, on a known host, while enrolled", async () => {
   const { coder, db, deps } = setup();
   // Jordan names Alex's repository.
   const err = await assertRejects(
@@ -1087,8 +1101,9 @@ Deno.test("authorization: only the caller's own or group repository, on Forgejo,
   db.enrollments[1].disabled = true;
   await assertRejects(() => openWorkspace(deps, JORDAN, { assignment_id: 41 }), SecurityError);
   db.enrollments[1].disabled = false;
-  // GitHub assignments and bad ids.
-  await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 42 }), IllegalArgumentError);
+  // A host no template accepts, and bad ids.
+  db.assignments.push({ id: 43, class_id: 7, git_provider: "gitlab" });
+  await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 43 }), IllegalArgumentError);
   await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 0 }), IllegalArgumentError);
   await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 99 }), NotFoundError);
   // No repository yet.
@@ -2229,6 +2244,64 @@ Deno.test("credentials: no Forgejo linking; the student signs in to Coder and no
     linkUrl(CODER_URL, "github"),
     `${CODER_URL}/api/v2/users/oidc/callback?redirect=%2Fexternal-auth%2Fgithub%2Fcallback`
   );
+});
+
+// ---- GitHub repositories --------------------------------------------------
+
+/** Phase 2's template: one optional GitHub provider, so an unlinked account blocks nothing. */
+function githubProvider(coder: FakeCoder) {
+  coder.provider = { id: "github", type: "github", display_name: "GitHub", optional: true };
+}
+
+Deno.test("github: a repository on GitHub clones from github.com and mints no Forgejo token", async () => {
+  const { coder, db, deps, forgejo } = setup();
+  githubProvider(coder);
+  await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  signInAndLink(coder, ALEX);
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  assertEquals(res.status, "starting");
+  const created = coder.workspaces[0] as CoderWorkspace & { repo_url: string };
+  assertEquals(created.repo_url, "https://github.com/cs3500-gh/hw2-alex.git");
+  assertEquals(db.rows[0].repo_url, "https://github.com/cs3500-gh/hw2-alex.git");
+  // No token to mint, and no ledger row to revoke later.
+  assertEquals(forgejo.tokens["alex.kim"] ?? [], []);
+  assertEquals(db.recordedTokens, []);
+  // Only the commit email, since the owner's Coder email is a placeholder (#1222).
+  const secrets = coder.secrets[res.coder_user_id!];
+  assertEquals(Object.keys(secrets), ["git_email"]);
+  assertEquals(secrets.git_email, { value: `${ALEX.email}\n`, file_path: "/home/coder/.git-email" });
+  assertEquals(
+    coder.keys.every((k) => k.deleted),
+    true
+  );
+});
+
+Deno.test("github: an unlinked optional provider stops a GitHub workspace, not a Forgejo one", async () => {
+  const { coder, deps } = setup();
+  githubProvider(coder);
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.findUser("alex-kim-1a2b3c4d5e6f")!.subject = ALEX.userId;
+  // Signed in to Coder, GitHub not linked.
+  const forgejoRes = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(forgejoRes.status, "starting");
+  const githubRes = await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  assertEquals(githubRes.status, "needs_linking");
+  assertEquals(githubRes.authenticate_url, linkUrl(CODER_URL, "github"));
+  assertEquals(githubRes.message, "Link your GitHub account in Coder, then open the workspace again.");
+  assertEquals(coder.workspaces.length, 1, "only the Forgejo workspace was created");
+});
+
+Deno.test("github: an unaccepted organization invitation is refused before Coder is called", async () => {
+  const { coder, db, deps } = setup();
+  githubProvider(coder);
+  db.enrollments[0].github_org_confirmed = false;
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  assertEquals(res.status, "needs_org_invite");
+  assert(res.message!.includes("GitHub organization invitation"), res.message);
+  assertEquals(coder.calls.length, 0);
+  assertEquals(db.rows.length, 0);
+  // A status read is refused the same way.
+  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 42 })).status, "needs_org_invite");
 });
 
 Deno.test("credentials: the create stores a repository-scoped student token as the student's secret", async () => {
