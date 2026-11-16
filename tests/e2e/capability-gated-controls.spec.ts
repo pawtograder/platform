@@ -342,6 +342,7 @@ test.describe("survey controls gated by manage_surveys", () => {
   test.describe.configure({ timeout: 180_000 });
   let course: Awaited<ReturnType<typeof createClass>>;
   let instructor: TestingUser;
+  let plainGrader: TestingUser;
   let graderWithout: TestingUser;
   let graderWith: TestingUser;
   let surveyId: string;
@@ -350,11 +351,11 @@ test.describe("survey controls gated by manage_surveys", () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     course = await createClass({ name: `E2E Survey Gates ${suffix}` });
     instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
     graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
     graderWith = await createUserInClass({ role: "grader", class_id: course.id });
 
-    // Graders do not hold manage_surveys by default; put the grader on a custom role anyway so
-    // the check is explicit and does not rely on the default grader role staying empty.
+    // Custom role without manage_surveys: explicit negative case beside the default grader role.
     const { data: role, error } = await supabase
       .from("class_roles")
       .insert({ class_id: course.id, name: "No Surveys TA" })
@@ -418,6 +419,17 @@ test.describe("survey controls gated by manage_surveys", () => {
   });
 
   test("a default grader is redirected from the new-survey and edit pages", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));
+
+    await page.goto(`/course/${course.id}/manage/surveys/${surveyId}/edit`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));
+  });
+
+  test("a custom-role grader without manage_surveys is redirected from the new-survey and edit pages", async ({
+    page
+  }) => {
     await loginAsUser(page, graderWithout, course);
     await page.goto(`/course/${course.id}/manage/surveys/new`);
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));

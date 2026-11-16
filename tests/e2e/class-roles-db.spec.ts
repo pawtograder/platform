@@ -2482,17 +2482,15 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       "inserting class_id=A pointing at a B survey"
     );
 
-    // WITH CHECK can refuse with 42501, or USING/filter can return zero rows; either way the
-    // service-role readback must show the survey_id unchanged.
+    // WITH CHECK on a row the caller can see raises 42501; the survey_id must stay unchanged.
     const retarget = await client
       .from("survey_assignments")
       .update({ survey_id: surveyB.id })
       .eq("id", assignmentA!.id)
       .select("id");
-    expect(
-      retarget.error !== null || (retarget.data ?? []).length === 0,
-      "retargeting an A assignment to a B survey must be refused"
-    ).toBe(true);
+    expect((retarget.error as { code?: string } | null)?.code, "retargeting an A assignment to a B survey").toBe(
+      "42501"
+    );
     const { data: stillA } = await supabase
       .from("survey_assignments")
       .select("survey_id")
@@ -2524,6 +2522,51 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
     expect(deleteB ?? [], "deleting a B assignment without manage_surveys in B").toHaveLength(0);
     const { data: stillB } = await supabase.from("survey_assignments").select("id").eq("id", assignmentB!.id);
     expect(stillB ?? []).toHaveLength(1);
+  });
+
+  test("can_manage_survey_in_class returns true only for manage_surveys holders on matching surveys", async () => {
+    const classB = await createClass({ name: "E2E Surveys Helper B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+
+    const surveyA = await surveyFor("Helper class A survey", instructorS.public_profile_id);
+    const { data: surveyB, error: surveyBError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: classB.id,
+        created_by: instructorB.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Helper class B survey"
+      })
+      .select("id")
+      .single();
+    expect(surveyBError).toBeNull();
+
+    const studentClient = await createAuthenticatedClient(studentB);
+    const { data: studentSeesA, error: studentError } = await studentClient.rpc("can_manage_survey_in_class", {
+      p_survey_id: surveyA.id,
+      p_class_id: classS.id
+    });
+    expect(studentError).toBeNull();
+    expect(studentSeesA, "student of B must not learn that an A survey belongs to A").toBe(false);
+
+    const manager = await createAuthenticatedClient(withCap);
+    const { data: managerSeesA, error: managerAError } = await manager.rpc("can_manage_survey_in_class", {
+      p_survey_id: surveyA.id,
+      p_class_id: classS.id
+    });
+    expect(managerAError).toBeNull();
+    expect(managerSeesA).toBe(true);
+
+    const { data: managerSeesBAsA, error: managerBError } = await manager.rpc("can_manage_survey_in_class", {
+      p_survey_id: surveyB!.id,
+      p_class_id: classS.id
+    });
+    expect(managerBError).toBeNull();
+    expect(managerSeesBAsA, "A manager must not treat a B survey as belonging to A").toBe(false);
   });
 
   test("survey templates and series follow manage_surveys; template delete stays creator-only", async () => {
