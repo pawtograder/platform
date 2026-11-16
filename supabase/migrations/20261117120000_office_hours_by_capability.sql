@@ -23,8 +23,7 @@
 --     manage_office_hours; UPDATE keeps the own-record path and swaps the instructor
 --     half for manage_office_hours.
 --   * help_queues and help_queue_assignments: graders can CRUD these today, so action
---     policies follow help_students (SELECT policies unchanged). Queue assignments also
---     require the parent queue to share class_id.
+--     policies follow help_students (SELECT policies unchanged).
 --   * help_request_templates and student_help_activity instructor FOR ALL -> split into
 --     INSERT / UPDATE / DELETE under manage_office_hours (SELECT / system INSERT stay).
 --   * SECURITY DEFINER helpers that gate a staff write (can_add_profile_to_help_request,
@@ -36,8 +35,10 @@
 --     by design, so this is the one place a role test is OR'd with a capability test.
 --     Signatures, attributes and grants stay. authorizeforhelprequeststaff itself is
 --     unchanged so private-request views keep working for any staff member.
---   * Child-row action policies that name a parent id also require that parent to share
---     class_id (moderation, work sessions, queue assignments).
+--   * Child-row action policies that name a parent id require that parent to share
+--     class_id on INSERT and UPDATE WITH CHECK (moderation, work sessions, queue
+--     assignments, student_help_activity). UPDATE USING and DELETE USING check only the
+--     capability in the row's class so a holder can repair or delete a legacy mismatch.
 --
 -- Not changed (views and student actions):
 --   * help_requests / messages / students / file refs / watchers / receipts SELECT
@@ -461,6 +462,9 @@ DROP POLICY IF EXISTS "Office hours managers can insert moderation records" ON p
 DROP POLICY IF EXISTS "Office hours managers can update moderation records" ON public.help_request_moderation;
 DROP POLICY IF EXISTS "Office hours managers can delete moderation records" ON public.help_request_moderation;
 
+-- New values (INSERT / UPDATE WITH CHECK) must point at a help request of the same
+-- class. Existing rows (UPDATE USING / DELETE USING) need only manage_office_hours in
+-- the row's class so a manager can repair or delete a legacy mismatch.
 CREATE POLICY "Office hours managers can insert moderation records"
 ON public.help_request_moderation
 FOR INSERT TO authenticated
@@ -475,13 +479,7 @@ WITH CHECK (
 CREATE POLICY "Office hours managers can update moderation records"
 ON public.help_request_moderation
 FOR UPDATE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
-  AND EXISTS (
-    SELECT 1 FROM public.help_requests hr
-    WHERE hr.id = help_request_id AND hr.class_id = help_request_moderation.class_id
-  )
-)
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')))
 WITH CHECK (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
   AND EXISTS (
@@ -493,13 +491,7 @@ WITH CHECK (
 CREATE POLICY "Office hours managers can delete moderation records"
 ON public.help_request_moderation
 FOR DELETE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
-  AND EXISTS (
-    SELECT 1 FROM public.help_requests hr
-    WHERE hr.id = help_request_id AND hr.class_id = help_request_moderation.class_id
-  )
-);
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')));
 
 -- ---------------------------------------------------------------------------
 -- student_karma_notes: keep SELECT as grader view; writes -> help_students
@@ -622,6 +614,9 @@ DROP POLICY IF EXISTS "Staff can create help queue assignments" ON public.help_q
 DROP POLICY IF EXISTS "Staff can update help queue assignments" ON public.help_queue_assignments;
 DROP POLICY IF EXISTS "Staff can delete help queue assignments" ON public.help_queue_assignments;
 
+-- New values (INSERT / UPDATE WITH CHECK) must point at a queue of the same class.
+-- Existing rows (UPDATE USING / DELETE USING) need only help_students in the row's
+-- class so a holder can repair or delete a legacy mismatch.
 CREATE POLICY "Staff can create help queue assignments"
 ON public.help_queue_assignments
 FOR INSERT TO authenticated
@@ -636,13 +631,7 @@ WITH CHECK (
 CREATE POLICY "Staff can update help queue assignments"
 ON public.help_queue_assignments
 FOR UPDATE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
-  AND EXISTS (
-    SELECT 1 FROM public.help_queues hq
-    WHERE hq.id = help_queue_id AND hq.class_id = help_queue_assignments.class_id
-  )
-)
+USING (class_id IN (SELECT public.user_class_ids_with_capability('help_students')))
 WITH CHECK (
   class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
   AND EXISTS (
@@ -654,13 +643,7 @@ WITH CHECK (
 CREATE POLICY "Staff can delete help queue assignments"
 ON public.help_queue_assignments
 FOR DELETE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
-  AND EXISTS (
-    SELECT 1 FROM public.help_queues hq
-    WHERE hq.id = help_queue_id AND hq.class_id = help_queue_assignments.class_id
-  )
-);
+USING (class_id IN (SELECT public.user_class_ids_with_capability('help_students')));
 
 -- ---------------------------------------------------------------------------
 -- help_request_templates: instructor-only -> manage_office_hours; SELECT unchanged
@@ -696,6 +679,9 @@ DROP POLICY IF EXISTS "Office hours managers can insert activity records" ON pub
 DROP POLICY IF EXISTS "Office hours managers can update activity records" ON public.student_help_activity;
 DROP POLICY IF EXISTS "Office hours managers can delete activity records" ON public.student_help_activity;
 
+-- New values (INSERT / UPDATE WITH CHECK) must point at a help request of the same
+-- class. Existing rows (UPDATE USING / DELETE USING) need only manage_office_hours in
+-- the row's class so a manager can repair or delete a legacy mismatch.
 CREATE POLICY "Office hours managers can insert activity records"
 ON public.student_help_activity
 FOR INSERT TO authenticated
@@ -710,13 +696,7 @@ WITH CHECK (
 CREATE POLICY "Office hours managers can update activity records"
 ON public.student_help_activity
 FOR UPDATE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
-  AND EXISTS (
-    SELECT 1 FROM public.help_requests hr
-    WHERE hr.id = help_request_id AND hr.class_id = student_help_activity.class_id
-  )
-)
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')))
 WITH CHECK (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
   AND EXISTS (
@@ -728,10 +708,4 @@ WITH CHECK (
 CREATE POLICY "Office hours managers can delete activity records"
 ON public.student_help_activity
 FOR DELETE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
-  AND EXISTS (
-    SELECT 1 FROM public.help_requests hr
-    WHERE hr.id = help_request_id AND hr.class_id = student_help_activity.class_id
-  )
-);
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')));
