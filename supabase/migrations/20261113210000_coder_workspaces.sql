@@ -10,7 +10,9 @@
 
 CREATE TABLE public.coder_accounts (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  user_id uuid NOT NULL REFERENCES public.users (user_id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: the Coder user outlives a deleted Pawtograder user, and this row is the
+  -- only record of it. NULL once that user is gone.
+  user_id uuid REFERENCES public.users (user_id) ON DELETE SET NULL,
   -- CODER_URL at creation, so pointing a deployment at a new Coder creates accounts there again.
   instance_url text NOT NULL,
   coder_user_id uuid NOT NULL,
@@ -32,7 +34,9 @@ CREATE TABLE public.coder_workspaces (
   -- and cleared by every delete path (AGENTS.md), and this row has to outlive the repository until
   -- the cleanup job deletes the workspace.
   repository_id bigint NOT NULL,
-  user_id uuid NOT NULL REFERENCES public.users (user_id) ON DELETE CASCADE,
+  -- SET NULL like the class and assignment: deleting the user must not take the row with it while
+  -- the Coder workspace and its files still exist. NULL once that user is gone.
+  user_id uuid REFERENCES public.users (user_id) ON DELETE SET NULL,
   profile_id uuid REFERENCES public.profiles (id) ON DELETE SET NULL,
   instance_url text NOT NULL,
   coder_user_id uuid NOT NULL,
@@ -52,8 +56,9 @@ CREATE TABLE public.coder_workspaces (
   -- (they changed groups), cleared if they open this one again. The old workspace may hold unpushed
   -- work, so it gets the same 14 days as the conditions below.
   superseded_at timestamptz,
-  -- The restart claim, while a workspace is stopped and started again after a failed startup:
-  -- `stopping` from workspace-open's stop, then `starting` from the moment one call wins the right
+  -- The restart claim, while workspace-open brings a workspace up: `stopping` until the workspace is
+  -- stopped (its own stop after a failed startup, a stop Coder already had under way, or no wait at
+  -- all for a workspace that is stopped), then `starting` from the moment one call wins the right
   -- to post the start (a conditional update on the token) until it has posted it. restart_token
   -- says which call holds it. A claim older than 60 s is abandoned, since every holder answers
   -- within 20 s.
