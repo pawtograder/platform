@@ -9,6 +9,7 @@ import type {
   UpdateResponse
 } from "@refinedev/core";
 import { dataProvider as supabaseDataProvider } from "@refinedev/supabase";
+import { isRefusedWriteError, refusedWriteError } from "./refusedWriteError";
 
 /**
  * The `@refinedev/supabase` data provider, with `getOne` fixed to report a
@@ -72,34 +73,9 @@ export function withMissingRowErrors(base: DataProvider): DataProvider {
   };
 }
 
-/**
- * Error for a write that RLS silently refused (0 rows affected, no PostgREST error).
- *
- * The message is shown to the user as is, so it names no table or id. An update that matched
- * nothing may also mean the row was deleted; a refused delete is only reported after the
- * follow-up select found the row, so its message doesn't offer that possibility.
- */
-function refusedWriteError(action: "update" | "delete") {
-  const message =
-    action === "update"
-      ? "You don't have permission to change this, or it no longer exists. Nothing was changed."
-      : "You don't have permission to delete this. Nothing was changed.";
-  // Shaped like a refine HttpError so mutation `onError` handlers see a status.
-  return Object.assign(new Error(message), { statusCode: 403, refusedWrite: true as const });
-}
-
-/**
- * True when `error` is the error this provider throws for a refine `update` or
- * `deleteOne` that RLS refused (0 rows changed, no PostgREST error).
- *
- * Use it to tell a refusal apart from other failures, e.g. to show a
- * permission message instead of a generic one. A PostgREST error, such as an
- * RLS violation on insert (42501), is not one of these refusals and returns
- * false.
- */
-export function isRefusedWriteError(error: unknown): error is Error & { statusCode: 403; refusedWrite: true } {
-  return error instanceof Error && (error as { refusedWrite?: unknown }).refusedWrite === true;
-}
+// The refusal error lives in its own module so TableController can throw the same one without
+// importing this provider. Re-exported so existing imports keep working.
+export { isRefusedWriteError };
 
 type PostgrestResult = PromiseLike<{
   data: unknown[] | null;
