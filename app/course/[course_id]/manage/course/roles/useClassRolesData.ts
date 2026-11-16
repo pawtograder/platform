@@ -72,9 +72,11 @@ async function fetchClassRolesData(classId: number): Promise<ClassRolesData> {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // Only enrollments that sit on a role of this class (grader default or custom).
-  const roleEnrollments = (enrollmentsResult.data ?? [])
-    .filter((row) => roleIds.has(row.class_role_id))
-    .map((row) => ({ classRoleId: row.class_role_id, disabled: row.disabled }));
+  const roleEnrollments: RoleEnrollment[] = [];
+  for (const row of enrollmentsResult.data ?? []) {
+    if (row.class_role_id == null || !roleIds.has(row.class_role_id)) continue;
+    roleEnrollments.push({ classRoleId: row.class_role_id, disabled: row.disabled });
+  }
 
   return { roles, capabilities: capabilitiesResult.data ?? [], held, graders, roleEnrollments };
 }
