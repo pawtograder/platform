@@ -249,7 +249,8 @@ function permissionHelp(role: ErrorAudienceRole | undefined): string {
  *
  * 42501, PGRST116 and 23503 are not here. On a read they usually mean our bug (a missing GRANT,
  * `.single()` matching several rows, an ID for a row that is gone), so a caller that expects them,
- * such as a save handler blocked by RLS, passes them in `expected`.
+ * such as a save handler blocked by RLS, passes them in `expected`. The exception is a 42501 that
+ * a database function raised on purpose (see `raisedMessage`): like P0001, it is always expected.
  */
 const DEFAULT_EXPECTED_ERROR_CODES: readonly string[] = ["PGRST301", "23505", "23514", "P0001"];
 
@@ -266,6 +267,7 @@ export function isExpectedUserError(error: unknown, options?: ExpectedErrorOptio
   if (isRefusedWriteError(error)) return true;
   const code = getErrorCode(error);
   if (code === undefined) return false;
+  if (code === "42501" && raisedMessage(getErrorProperty(error, "message")) !== undefined) return true;
   return DEFAULT_EXPECTED_ERROR_CODES.includes(code) || (options?.expected?.includes(code) ?? false);
 }
 

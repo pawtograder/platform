@@ -119,6 +119,12 @@ describe("getUserFacingErrorMessage", () => {
         );
       }
     });
+
+    it("are not sent to Sentry", () => {
+      jest.mocked(Sentry.captureException).mockClear();
+      expect(reportUnexpectedError(publishRefused, { operation: "publish" })).toBeUndefined();
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
   });
 
   describe("23505 and 23514", () => {
@@ -227,10 +233,23 @@ describe("isExpectedUserError", () => {
     expect(isExpectedUserError(refusedWriteError("delete"))).toBe(true);
   });
 
-  it("is false by default for permission, no-row and foreign-key errors", () => {
-    for (const code of ["42501", "PGRST116", "23503"]) {
+  it("is false by default for no-row and foreign-key errors, and for Postgres's own permission errors", () => {
+    for (const code of ["PGRST116", "23503"]) {
       expect(isExpectedUserError({ code, message: "x" })).toBe(false);
     }
+    for (const message of [
+      "permission denied for table assignments",
+      "permission denied for function publish_assignment_group_changes",
+      'new row violates row-level security policy for table "assignment_self_review_settings"',
+      "must be owner of table assignments"
+    ]) {
+      expect(isExpectedUserError({ code: "42501", message })).toBe(false);
+    }
+  });
+
+  it("is true for a 42501 a database function raised on purpose", () => {
+    expect(isExpectedUserError({ code: "42501", message: "Only instructors can publish group changes" })).toBe(true);
+    expect(isExpectedUserError({ code: "42501", message: "Access denied" })).toBe(true);
   });
 
   it("is true for codes the caller expects", () => {
