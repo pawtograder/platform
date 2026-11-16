@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -154,3 +154,35 @@ analytics.
 CLI `flashcards.copy` asks `user_class_ids_with_capability('manage_flashcards')` through the
 caller-scoped client (`ctx.supabase`) for both the source and the target class, matching the RLS
 policies rather than joining `role_capabilities` by hand.
+
+## manage_surveys and run_polls
+
+`manage_surveys` covers creating, editing, publishing, closing, deleting and assigning surveys,
+plus survey templates (insert/update), survey series writes, and the
+`create_survey_assignments` / `soft_delete_survey` / `reorder_surveys_in_series` RPCs (area 11).
+Day one, only the default instructor role holds it. Create / publish / close / delete / series
+controls follow `useCapability("manage_surveys")`. Left as views or student actions: staff and
+student SELECT on surveys, assignments and responses; student response writes; template SELECT;
+series SELECT; analytics RPCs. Exception: deleting a survey template stays creator-only, so
+`manage_surveys` does not let you delete someone else's template.
+
+`survey_assignments` action policies call `can_manage_survey_in_class` so the parent survey must
+belong to the assignment's class and the caller must hold `manage_surveys` there. The helper is
+SECURITY DEFINER to avoid RLS recursion with `surveys_select_students`, and the capability check
+stops an unrelated signed-in user from learning survey/class membership through `/rpc`.
+
+A survey can reference a series from another class (CLI `surveys.copy` keeps the source
+`series_id`). That predates this capability work and is left for a follow-up.
+
+`run_polls` covers creating, editing, opening, closing and deleting live polls, and staff writes
+on `live_poll_responses` (area 11). Day one, the default instructor role, the default grader role
+and every existing custom role hold it. Create / open / close / delete controls follow
+`useCapability("run_polls")`. Left as views or student/anon actions: live and staff SELECT on
+`live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
+and cannot change them), and the anon/student insert path through `can_access_poll_response`.
+
+With a write-scoped API token, an active grader of both classes can copy surveys between them with
+`surveys copy` (one or all, keeping the source status) without `manage_surveys`. `assignments copy`
+needs an instructor in the target class, so linked-survey copying there is not a grader path.
+Creating a survey in the app needs `manage_surveys`. The team must decide whether `surveys copy`
+should require `manage_surveys` on both classes, which would take it away from default graders.

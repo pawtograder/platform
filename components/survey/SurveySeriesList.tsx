@@ -13,9 +13,15 @@ type SurveySeriesListProps = {
   classId: number;
   onEditSeries: (series: SurveySeriesRow) => void;
   onDeleteSeries: (seriesId: string) => void;
+  canManage?: boolean;
 };
 
-export default function SurveySeriesList({ classId, onEditSeries, onDeleteSeries }: SurveySeriesListProps) {
+export default function SurveySeriesList({
+  classId,
+  onEditSeries,
+  onDeleteSeries,
+  canManage = true
+}: SurveySeriesListProps) {
   const { series, isLoading, refetch } = useSurveySeries();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -43,6 +49,7 @@ export default function SurveySeriesList({ classId, onEditSeries, onDeleteSeries
           onToggle={() => setExpandedId((prev) => (prev === s.id ? null : s.id))}
           onEdit={() => onEditSeries(s as SurveySeriesRow)}
           onDelete={() => handleDelete(s.id)}
+          canManage={canManage}
         />
       ))}
     </VStack>
@@ -56,9 +63,10 @@ type SeriesCardProps = {
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  canManage: boolean;
 };
 
-function SeriesCard({ series, isExpanded, onToggle, onEdit, onDelete }: SeriesCardProps) {
+function SeriesCard({ series, isExpanded, onToggle, onEdit, onDelete, canManage }: SeriesCardProps) {
   const { surveys, isLoading } = useSurveysInSeries(series.id);
 
   const handleDeleteClick = async () => {
@@ -84,14 +92,22 @@ function SeriesCard({ series, isExpanded, onToggle, onEdit, onDelete }: SeriesCa
               {isLoading ? "…" : surveys.length} survey{surveys.length !== 1 ? "s" : ""}
             </Badge>
           </HStack>
-          <HStack gap={2} onClick={(e) => e.stopPropagation()}>
-            <Button size="xs" variant="ghost" onClick={onEdit}>
-              <Icon as={BsPencil} />
-            </Button>
-            <Button size="xs" variant="ghost" colorPalette="red" onClick={handleDeleteClick}>
-              <Icon as={BsTrash} />
-            </Button>
-          </HStack>
+          {canManage && (
+            <HStack gap={2} onClick={(e) => e.stopPropagation()}>
+              <Button size="xs" variant="ghost" onClick={onEdit} aria-label="Edit series">
+                <Icon as={BsPencil} />
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                colorPalette="red"
+                onClick={handleDeleteClick}
+                aria-label="Delete series"
+              >
+                <Icon as={BsTrash} />
+              </Button>
+            </HStack>
+          )}
         </HStack>
         {series.description && (
           <Text fontSize="sm" color="fg.muted" mt={1} ml={6}>
