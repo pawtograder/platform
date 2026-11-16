@@ -541,3 +541,70 @@ test.describe("poll controls gated by run_polls", () => {
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/polls/new`));
   });
 });
+
+test.describe("office hours controls gated by help_students and manage_office_hours", () => {
+  test.describe.configure({ timeout: 180_000 });
+  let course: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let graderWithoutHelp: TestingUser;
+  let plainGrader: TestingUser;
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    course = await createClass({ name: `E2E OH Gates ${suffix}` });
+    instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    graderWithoutHelp = await createUserInClass({ role: "grader", class_id: course.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
+
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "No Help TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").delete().eq("role_id", role!.id).eq("capability", "help_students"))
+        .error
+    ).toBeNull();
+
+    const { data: row, error: rowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWithoutHelp.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+  });
+
+  test("a grader without help_students does not see Create New Queue", async ({ page }) => {
+    await loginAsUser(page, graderWithoutHelp, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
+    await capabilities;
+    await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toHaveCount(0);
+  });
+
+  test("a default grader with help_students sees Create New Queue", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
+    await capabilities;
+    await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toBeVisible();
+  });
+
+  test("a grader without manage_office_hours is redirected from templates settings", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/office-hours/?$`));
+  });
+
+  test("an instructor with manage_office_hours can open templates settings", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
+    await capabilities;
+    await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Create New Template|Create Your First Template/ })).toBeVisible();
+  });
+});

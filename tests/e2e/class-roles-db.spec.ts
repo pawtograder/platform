@@ -36,6 +36,10 @@
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *
+ * 20261117120000_office_hours_by_capability.sql: staff help-request actions follow help_students
+ * (on the default grader role and every custom role); instructor-only office-hours configuration
+ * follows manage_office_hours.
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -47,12 +51,16 @@ import {
   createAuthenticatedClient,
   insertAssignment,
   insertPreBakedSubmission,
+  insertOfficeHoursQueue,
+  insertHelpRequest,
   type TestingUser
 } from "./TestingUtils";
 
 const SEEDED_CAPABILITIES = [
+  "help_students",
   "manage_assignments",
   "manage_flashcards",
+  "manage_office_hours",
   "manage_review_assignments",
   "manage_roles",
   "manage_surveys",
@@ -60,7 +68,7 @@ const SEEDED_CAPABILITIES = [
   "run_polls"
 ];
 /** Capabilities seed_default_class_roles() puts on the default grader role (not only instructor). */
-const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards", "run_polls"];
+const GRADER_SEEDED_CAPABILITIES = ["help_students", "manage_flashcards", "run_polls"];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
 async function defaultRoles(class_id: number) {
@@ -351,7 +359,12 @@ test.describe("custom class roles", () => {
       .insert({ role_id: roleId, capability: "manage_review_assignments" });
     expect(addError).toBeNull();
     // The copy trigger already put grader-seeded capabilities on the new role from the default grader role.
-    expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "manage_review_assignments", "run_polls"]);
+    expect(await roleCapabilities(roleId)).toEqual([
+      "help_students",
+      "manage_flashcards",
+      "manage_review_assignments",
+      "run_polls"
+    ]);
 
     const { data: removed, error: removeError } = await instructor
       .from("role_capabilities")
@@ -513,7 +526,12 @@ test.describe("custom class roles", () => {
     }
 
     expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
-    expect(await roleCapabilities(customId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
+    expect(await roleCapabilities(customId)).toEqual([
+      "help_students",
+      "manage_flashcards",
+      "publish_groups",
+      "run_polls"
+    ]);
     const { data: extra, error: extraError } = await supabase
       .from("class_roles")
       .select("id")
@@ -770,7 +788,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     expect((await supabase.from("user_roles").update({ class_role_id: role_id }).eq("id", row.id)).error).toBeNull();
   }
 
-  // The default grader role already holds manage_flashcards and run_polls; this also gives it
+  // The default grader role already holds help_students, manage_flashcards and run_polls; this also gives it
   // publish_groups, as a migration would. Head TA turns manage_review_assignments on; Course
   // coordinator turns publish_groups off (and keeps the grader-seeded capabilities).
   test.beforeAll(async () => {
@@ -815,7 +833,12 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     ).toBeNull();
     try {
       const roleId = await createRoleAsInstructor("Copied TA");
-      expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
+      expect(await roleCapabilities(roleId)).toEqual([
+        "help_students",
+        "manage_flashcards",
+        "publish_groups",
+        "run_polls"
+      ]);
     } finally {
       expect(
         (await supabase.from("role_capabilities").delete().eq("role_id", graderRoleId).eq("capability", "manage_roles"))
@@ -826,6 +849,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
 
   test("a grader on a custom role holds what that role turns on", async () => {
     expect(await roleCapabilities(headTaRoleId)).toEqual([
+      "help_students",
       "manage_flashcards",
       "manage_review_assignments",
       "publish_groups",
@@ -837,7 +861,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
   });
 
   test("a custom role can turn a default off, so it holds less than a plain grader", async () => {
-    expect(await roleCapabilities(coordinatorRoleId)).toEqual(["manage_flashcards", "run_polls"]);
+    expect(await roleCapabilities(coordinatorRoleId)).toEqual(["help_students", "manage_flashcards", "run_polls"]);
     expect(await holds(coordinator, "publish_groups"), "the coordinator turned it off").toBe(false);
     expect(await holds(plainGrader, "publish_groups"), "plain graders keep it").toBe(true);
   });
@@ -923,6 +947,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .single();
     expect(copyError).toBeNull();
     expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual([
+      "help_students",
       "manage_flashcards",
       "publish_groups",
       "run_polls"
@@ -986,18 +1011,21 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
 
   test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
     expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
+      `${classF.id}:help_students`,
       `${classF.id}:manage_flashcards`,
       `${classF.id}:manage_review_assignments`,
       `${classF.id}:publish_groups`,
       `${classF.id}:run_polls`
     ]);
     expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
+      `${classF.id}:help_students`,
       `${classF.id}:manage_flashcards`,
       `${classF.id}:publish_groups`,
       `${classF.id}:run_polls`
     ]);
     // graderG holds grader-seeded capabilities in classG, not anything from classF.
     expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([
+      `${classG.id}:help_students`,
       `${classG.id}:manage_flashcards`,
       `${classG.id}:run_polls`
     ]);
@@ -2998,5 +3026,489 @@ test.describe("live polls follow run_polls (#1010, area 11)", () => {
     expect(crossUpdate ?? [], "editing another class's poll").toHaveLength(0);
     const { data: stillThere } = await supabase.from("live_polls").select("is_live").eq("id", otherPoll!.id).single();
     expect(stillThere?.is_live).toBe(false);
+  });
+});
+
+test.describe("office hours follow help_students and manage_office_hours (#1010, area 10)", () => {
+  let classH: Awaited<ReturnType<typeof createClass>>;
+  let instructorH: TestingUser;
+  let plainGrader: TestingUser;
+  let withHelp: TestingUser;
+  let withoutHelp: TestingUser;
+  let withManage: TestingUser;
+  let studentH: TestingUser;
+  let queueId: number;
+  let withoutHelpRoleId: number;
+
+  test.beforeAll(async () => {
+    classH = await createClass({ name: "E2E Office Hours H" });
+    instructorH = await createUserInClass({ role: "instructor", class_id: classH.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classH.id });
+    withHelp = await createUserInClass({ role: "grader", class_id: classH.id });
+    withoutHelp = await createUserInClass({ role: "grader", class_id: classH.id });
+    withManage = await createUserInClass({ role: "grader", class_id: classH.id });
+    studentH = await createUserInClass({ role: "student", class_id: classH.id });
+
+    const queue = await insertOfficeHoursQueue({ class_id: classH.id, name: "Capability Queue" });
+    queueId = queue.id;
+
+    const { data: withHelpRole, error: withHelpError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "Help TA" })
+      .select("id")
+      .single();
+    expect(withHelpError).toBeNull();
+    expect(await roleCapabilities(withHelpRole!.id)).toEqual(GRADER_SEEDED_CAPABILITIES);
+    const withHelpRow = await userRole(withHelp);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withHelpRole!.id }).eq("id", withHelpRow.id)).error
+    ).toBeNull();
+
+    const { data: withoutHelpRole, error: withoutHelpError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "No Help TA" })
+      .select("id")
+      .single();
+    expect(withoutHelpError).toBeNull();
+    withoutHelpRoleId = withoutHelpRole!.id;
+    const { data: removedHelp, error: removeHelpError } = await supabase
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", withoutHelpRoleId)
+      .eq("capability", "help_students")
+      .select("capability");
+    expect(removeHelpError).toBeNull();
+    expect(removedHelp, "help_students turned off").toHaveLength(1);
+    const withoutHelpRow = await userRole(withoutHelp);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withoutHelpRoleId }).eq("id", withoutHelpRow.id)).error
+    ).toBeNull();
+
+    const { data: withManageRole, error: withManageError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "OH Manager TA" })
+      .select("id")
+      .single();
+    expect(withManageError).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .insert({ role_id: withManageRole!.id, capability: "manage_office_hours" })
+      ).error
+    ).toBeNull();
+    const withManageRow = await userRole(withManage);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withManageRole!.id }).eq("id", withManageRow.id)).error
+    ).toBeNull();
+  });
+
+  async function seedRequest(label: string) {
+    return insertHelpRequest({
+      class_id: classH.id,
+      student_profile_id: studentH.private_profile_id,
+      request: label,
+      help_queue_id: queueId,
+      status: "open",
+      active_staff_profile_id: instructorH.private_profile_id
+    });
+  }
+
+  test("an instructor updates help request status and assignment", async () => {
+    const req = await seedRequest("Instructor status");
+    const instructor = await createAuthenticatedClient(instructorH);
+    const { data: updated, error } = await instructor
+      .from("help_requests")
+      .update({ status: "in_progress", assignee: instructorH.private_profile_id })
+      .eq("id", req.id)
+      .select("status, assignee");
+    expect(error).toBeNull();
+    expect(updated).toEqual([{ status: "in_progress", assignee: instructorH.private_profile_id }]);
+  });
+
+  test("a default grader still helps students and manages queues", async () => {
+    const req = await seedRequest("Default grader status");
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { data: updated, error } = await grader
+      .from("help_requests")
+      .update({ status: "in_progress", assignee: plainGrader.private_profile_id })
+      .eq("id", req.id)
+      .select("status, assignee");
+    expect(error).toBeNull();
+    expect(updated).toEqual([{ status: "in_progress", assignee: plainGrader.private_profile_id }]);
+
+    const { data: queue, error: queueError } = await grader
+      .from("help_queues")
+      .insert({
+        class_id: classH.id,
+        name: "Grader queue",
+        description: "default grader can create",
+        depth: 0,
+        available: true,
+        queue_type: "text"
+      })
+      .select("id, name")
+      .single();
+    expect(queueError).toBeNull();
+    expect(queue?.name).toBe("Grader queue");
+  });
+
+  test("a grader with help_students updates status, posts staff chat, and joins a queue", async () => {
+    const req = await seedRequest("Help TA status");
+    const client = await createAuthenticatedClient(withHelp);
+    const { data: updated, error } = await client
+      .from("help_requests")
+      .update({ status: "resolved", assignee: withHelp.private_profile_id })
+      .eq("id", req.id)
+      .select("status, assignee");
+    expect(error).toBeNull();
+    expect(updated).toEqual([{ status: "resolved", assignee: withHelp.private_profile_id }]);
+
+    const { error: messageError } = await client.from("help_request_messages").insert({
+      help_request_id: req.id,
+      class_id: classH.id,
+      author: withHelp.private_profile_id,
+      message: "staff note",
+      instructors_only: true
+    });
+    expect(messageError).toBeNull();
+
+    const { data: assignment, error: assignError } = await client
+      .from("help_queue_assignments")
+      .insert({
+        class_id: classH.id,
+        help_queue_id: queueId,
+        ta_profile_id: withHelp.private_profile_id,
+        is_active: true
+      })
+      .select("id")
+      .single();
+    expect(assignError).toBeNull();
+    expect(assignment?.id).toBeTruthy();
+  });
+
+  test("a grader without help_students is refused for status, chat, queues and assignments", async () => {
+    const req = await seedRequest("No-help refusal");
+    const client = await createAuthenticatedClient(withoutHelp);
+
+    const { data: statusUpdate, error: statusError } = await client
+      .from("help_requests")
+      .update({ status: "closed" })
+      .eq("id", req.id)
+      .select("id");
+    expect(statusError).toBeNull();
+    expect(statusUpdate ?? [], "updating status without help_students").toHaveLength(0);
+    const { data: unchanged } = await supabase.from("help_requests").select("status").eq("id", req.id).single();
+    expect(unchanged?.status).toBe("open");
+
+    expectRlsBlocked(
+      await client.from("help_request_messages").insert({
+        help_request_id: req.id,
+        class_id: classH.id,
+        author: withoutHelp.private_profile_id,
+        message: "should fail",
+        instructors_only: true
+      }),
+      "staff chat without help_students"
+    );
+
+    expectRlsBlocked(
+      await client.from("help_queues").insert({
+        class_id: classH.id,
+        name: "Should fail",
+        description: "no",
+        depth: 0,
+        available: true,
+        queue_type: "text"
+      }),
+      "creating a queue without help_students"
+    );
+
+    const { data: queueUpdate, error: queueUpdateError } = await client
+      .from("help_queues")
+      .update({ description: "nope" })
+      .eq("id", queueId)
+      .select("id");
+    expect(queueUpdateError).toBeNull();
+    expect(queueUpdate ?? [], "editing a queue without help_students").toHaveLength(0);
+
+    const { data: deletedQueue, error: deleteQueueError } = await client
+      .from("help_queues")
+      .delete()
+      .eq("id", queueId)
+      .select("id");
+    expect(deleteQueueError).toBeNull();
+    expect(deletedQueue ?? [], "deleting a queue without help_students").toHaveLength(0);
+    const { data: queueStill } = await supabase.from("help_queues").select("id").eq("id", queueId);
+    expect(queueStill ?? []).toHaveLength(1);
+
+    expectRlsBlocked(
+      await client.from("help_queue_assignments").insert({
+        class_id: classH.id,
+        help_queue_id: queueId,
+        ta_profile_id: withoutHelp.private_profile_id,
+        is_active: true
+      }),
+      "joining a queue without help_students"
+    );
+  });
+
+  test("a student can still create a help request", async () => {
+    const client = await createAuthenticatedClient(studentH);
+    const { data, error } = await client
+      .from("help_requests")
+      .insert({
+        class_id: classH.id,
+        help_queue: queueId,
+        request: "Student still works",
+        created_by: studentH.private_profile_id,
+        status: "open",
+        is_private: false
+      })
+      .select("id")
+      .single();
+    expect(error, "student can still create a help request").toBeNull();
+    expect(data?.id).toBeTruthy();
+  });
+
+  test("help_students in one class does not reach another class", async () => {
+    const otherClass = await createClass({ name: "E2E Office Hours Other" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const otherStudent = await createUserInClass({ role: "student", class_id: otherClass.id });
+    const otherQueue = await insertOfficeHoursQueue({ class_id: otherClass.id, name: "Other queue" });
+    const otherReq = await insertHelpRequest({
+      class_id: otherClass.id,
+      student_profile_id: otherStudent.private_profile_id,
+      request: "Other class request",
+      help_queue_id: otherQueue.id,
+      status: "open",
+      active_staff_profile_id: otherInstructor.private_profile_id
+    });
+
+    // Dual-enrolled: help_students in classH, grader in otherClass on a role without help_students
+    // (the default grader role would grant it there too).
+    const { data: noHelpRoleB, error: roleBError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: otherClass.id, name: "No Help Other" })
+      .select("id")
+      .single();
+    expect(roleBError).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .delete()
+          .eq("role_id", noHelpRoleB!.id)
+          .eq("capability", "help_students")
+      ).error
+    ).toBeNull();
+
+    const { data: privB, error: privError } = await supabase
+      .from("profiles")
+      .insert({ name: "OH dual private", class_id: otherClass.id, is_private_profile: true })
+      .select("id")
+      .single();
+    expect(privError).toBeNull();
+    const { data: pubB, error: pubError } = await supabase
+      .from("profiles")
+      .insert({ name: "OH dual public", class_id: otherClass.id, is_private_profile: false })
+      .select("id")
+      .single();
+    expect(pubError).toBeNull();
+    expect(
+      (
+        await supabase.from("user_roles").insert({
+          user_id: withHelp.user_id,
+          class_id: otherClass.id,
+          private_profile_id: privB!.id,
+          public_profile_id: pubB!.id,
+          role: "grader"
+        })
+      ).error
+    ).toBeNull();
+    const { data: dualRow, error: dualRowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", withHelp.user_id)
+      .eq("class_id", otherClass.id)
+      .single();
+    expect(dualRowError).toBeNull();
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: noHelpRoleB!.id }).eq("id", dualRow!.id)).error
+    ).toBeNull();
+
+    const client = await createAuthenticatedClient(withHelp);
+    const { data: crossUpdate, error: crossUpdateError } = await client
+      .from("help_requests")
+      .update({ status: "closed" })
+      .eq("id", otherReq.id)
+      .select("id");
+    expect(crossUpdateError).toBeNull();
+    expect(crossUpdate ?? [], "editing another class help request").toHaveLength(0);
+    const { data: stillOpen } = await supabase.from("help_requests").select("status").eq("id", otherReq.id).single();
+    expect(stillOpen?.status).toBe("open");
+
+    expectRlsBlocked(
+      await client.from("help_queues").insert({
+        class_id: otherClass.id,
+        name: "Cross-class queue",
+        description: "no",
+        depth: 0,
+        available: true,
+        queue_type: "text"
+      }),
+      "creating a queue in another class without help_students there"
+    );
+  });
+
+  test("a dual-enrolled grader cannot point a class A queue assignment at a class B queue", async () => {
+    const otherClass = await createClass({ name: "E2E OH Cross-Assign B" });
+    await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const otherQueue = await insertOfficeHoursQueue({ class_id: otherClass.id, name: "B queue" });
+
+    const { data: privB, error: privError } = await supabase
+      .from("profiles")
+      .insert({ name: "OH assign private", class_id: otherClass.id, is_private_profile: true })
+      .select("id")
+      .single();
+    expect(privError).toBeNull();
+    const { data: pubB, error: pubError } = await supabase
+      .from("profiles")
+      .insert({ name: "OH assign public", class_id: otherClass.id, is_private_profile: false })
+      .select("id")
+      .single();
+    expect(pubError).toBeNull();
+    expect(
+      (
+        await supabase.from("user_roles").insert({
+          user_id: withHelp.user_id,
+          class_id: otherClass.id,
+          private_profile_id: privB!.id,
+          public_profile_id: pubB!.id,
+          role: "grader"
+        })
+      ).error
+    ).toBeNull();
+
+    const client = await createAuthenticatedClient(withHelp);
+    expectRlsBlocked(
+      await client.from("help_queue_assignments").insert({
+        class_id: classH.id,
+        help_queue_id: otherQueue.id,
+        ta_profile_id: withHelp.private_profile_id,
+        is_active: true
+      }),
+      "pointing a class A assignment at a class B queue"
+    );
+  });
+
+  test("forbid_help_request_privacy_downgrade requires help_students", async () => {
+    const { data: privateReq, error } = await supabase
+      .from("help_requests")
+      .insert({
+        class_id: classH.id,
+        help_queue: queueId,
+        request: "Private for downgrade",
+        created_by: studentH.private_profile_id,
+        status: "open",
+        is_private: true
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (
+        await supabase.from("help_request_students").insert({
+          help_request_id: privateReq!.id,
+          class_id: classH.id,
+          profile_id: studentH.private_profile_id
+        })
+      ).error
+    ).toBeNull();
+
+    // The student can see the row (participant UPDATE), but the trigger refuses the
+    // private -> public change without help_students.
+    const student = await createAuthenticatedClient(studentH);
+    const { error: denied } = await student
+      .from("help_requests")
+      .update({ is_private: false })
+      .eq("id", privateReq!.id);
+    expect(denied?.message ?? "", "privacy downgrade by a student").toMatch(
+      /only course staff may make a private help request public/
+    );
+    const { data: stillPrivate } = await supabase
+      .from("help_requests")
+      .select("is_private")
+      .eq("id", privateReq!.id)
+      .single();
+    expect(stillPrivate?.is_private).toBe(true);
+
+    const withClient = await createAuthenticatedClient(withHelp);
+    const { data: opened, error: openedError } = await withClient
+      .from("help_requests")
+      .update({ is_private: false })
+      .eq("id", privateReq!.id)
+      .select("is_private");
+    expect(openedError).toBeNull();
+    expect(opened).toEqual([{ is_private: false }]);
+  });
+
+  test("manage_office_hours gates templates; default graders stay refused", async () => {
+    const instructor = await createAuthenticatedClient(instructorH);
+    const { data: template, error: createError } = await instructor
+      .from("help_request_templates")
+      .insert({
+        class_id: classH.id,
+        name: "Instructor template",
+        category: "general",
+        template_content: "hello",
+        created_by_id: instructorH.private_profile_id
+      })
+      .select("id, name")
+      .single();
+    expect(createError).toBeNull();
+
+    const grader = await createAuthenticatedClient(plainGrader);
+    expectRlsBlocked(
+      await grader.from("help_request_templates").insert({
+        class_id: classH.id,
+        name: "Grader should fail",
+        category: "general",
+        template_content: "no",
+        created_by_id: plainGrader.private_profile_id
+      }),
+      "default grader creating a template"
+    );
+
+    const manager = await createAuthenticatedClient(withManage);
+    const { data: managed, error: managedError } = await manager
+      .from("help_request_templates")
+      .insert({
+        class_id: classH.id,
+        name: "Manager template",
+        category: "general",
+        template_content: "yes",
+        created_by_id: withManage.private_profile_id
+      })
+      .select("id")
+      .single();
+    expect(managedError).toBeNull();
+
+    const { data: updated, error: updateError } = await manager
+      .from("help_request_templates")
+      .update({ name: "Manager template edited" })
+      .eq("id", managed!.id)
+      .select("name");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ name: "Manager template edited" }]);
+
+    const helper = await createAuthenticatedClient(withHelp);
+    const { data: helperUpdate, error: helperUpdateError } = await helper
+      .from("help_request_templates")
+      .update({ name: "nope" })
+      .eq("id", template!.id)
+      .select("id");
+    expect(helperUpdateError).toBeNull();
+    expect(helperUpdate ?? [], "editing a template with only help_students").toHaveLength(0);
   });
 });
