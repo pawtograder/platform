@@ -5,6 +5,13 @@
 -- an instructor can turn the action off for a role, while default graders and instructors keep
 -- exactly what they had.
 --
+-- Creator access (deliberate removal): before this migration, the person who created a deck could
+-- update and delete it and insert, update and delete its cards even without the staff check
+-- (policies from 20250530021942_flashcard_updates.sql). That creator OR is dropped here so
+-- manage_flashcards is the single rule an instructor controls. A grader whose role has the
+-- capability turned off can no longer edit decks they created, and neither can a former grader
+-- who is now a student.
+--
 -- What:
 --   * Inserts manage_flashcards and puts it on every class's default instructor role, default
 --     grader role, and every custom role. Updates seed_default_class_roles() so new classes put
