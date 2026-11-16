@@ -163,14 +163,17 @@ plus survey templates (insert/update), survey series writes, and the
 Day one, only the default instructor role holds it. Create / publish / close / delete / series
 controls follow `useCapability("manage_surveys")`. Left as views or student actions: staff and
 student SELECT on surveys, assignments and responses; student response writes; template SELECT;
-creator-only template DELETE; series SELECT; analytics RPCs.
+series SELECT; analytics RPCs. Exception: deleting a survey template stays creator-only, so
+`manage_surveys` does not let you delete someone else's template.
 
 `run_polls` covers creating, editing, opening, closing and deleting live polls, and staff writes
 on `live_poll_responses` (area 11). Day one, the default instructor role, the default grader role
 and every existing custom role hold it. Create / open / close / delete controls follow
 `useCapability("run_polls")`. Left as views or student/anon actions: live and staff SELECT on
-`live_polls`, staff SELECT on responses, and the anon/student insert path through
-`can_access_poll_response`.
+`live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
+and cannot change them), and the anon/student insert path through `can_access_poll_response`.
 
-CLI `surveys.copy` asks `user_class_ids_with_capability('manage_surveys')` the same way as
-`flashcards.copy`.
+CLI `surveys.copy` still uses `assertUserCanAccessClass` on both classes (an active grader of
+both classes can copy). Creating a survey in the app needs `manage_surveys`. The team must decide
+whether CLI copying should require `manage_surveys` on both classes (and the same for linked-survey
+copying inside `assignments.copy`), which would take it away from default graders.
