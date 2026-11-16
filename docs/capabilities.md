@@ -119,6 +119,24 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+- **What each role can do:** one column for the default grader role and one per custom role, one
+  row per capability, a checkbox in each cell. A change is one insert or delete on
+  `role_capabilities`, saved at once. `manage_roles` has no row, because it can't go on these roles.
+- **New role, rename, delete:** inserts, renames and deletes on `class_roles`. A role with people on
+  it can't be deleted, and the dialog says to move them first.
+- **People:** every active grader with a role drop-down, which updates `user_roles.class_role_id`.
+
+A row's label is the capability's name in sentence case, and the line under it is the capability's
+`description`. Write the description as the sentence an instructor reads next to the checkbox.
+
+The page asks each write to return the rows it changed. A write that a policy refuses without an
+error changes no rows, and the page reports it as not saved and puts the control back.
+
 ## For the UI: useCapability
 
 ```tsx
