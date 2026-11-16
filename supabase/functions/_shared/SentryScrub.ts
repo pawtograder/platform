@@ -56,12 +56,39 @@ export function scrubEdgeBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
   return scrubbed;
 }
 
-/** Applies scrubEdgeBreadcrumb to the event's breadcrumbs. Never drops the event. */
+const SECRETS: string[] = [];
+const MAX_SECRETS = 200;
+const REDACTED = "[redacted]";
+const CODER_API_KEY = /\b[0-9A-Za-z]{10}-[0-9A-Za-z]{22}\b/g;
+
+/** Call as soon as a credential is in hand, before anything that could throw. */
+export function redactSecret(value: string): void {
+  if (value.length < 16 || SECRETS.includes(value)) return;
+  SECRETS.push(value);
+  if (SECRETS.length > MAX_SECRETS) SECRETS.shift();
+}
+
+export function redactSecretsInText(text: string): string {
+  let out = text;
+  for (const secret of SECRETS) out = out.split(secret).join(REDACTED);
+  return out.replace(CODER_API_KEY, REDACTED);
+}
+
+// Copies: the event shares objects with the scopes.
+function redactDeep(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return redactSecretsInText(value);
+  if (depth > 20 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value)) out[key] = redactDeep(v, depth + 1);
+  return out;
+}
+
 export function scrubEdgeEvent<E extends Event>(event: E): E {
   if (event.breadcrumbs) {
     event.breadcrumbs = event.breadcrumbs.map(scrubEdgeBreadcrumb).filter((b): b is Breadcrumb => b !== null);
   }
-  return event;
+  return redactDeep(event) as E;
 }
 
 Sentry.getGlobalScope().addEventProcessor((event) => scrubEdgeEvent(event));

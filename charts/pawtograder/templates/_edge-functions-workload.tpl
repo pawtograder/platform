@@ -418,6 +418,23 @@ spec:
             {{- if $ctx.Values.forgejo.enabled }}
             - name: FORGEJO_URL
               value: {{ include "pawtograder.forgejo.url" $ctx | quote }}
+            # optional: a missing required secretKeyRef would stop the whole edge tier.
+            - name: FORGEJO_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.forgejo.adminSecret" $ctx }}
+                  key: username
+                  optional: true
+            - name: FORGEJO_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.forgejo.adminSecret" $ctx }}
+                  key: password
+                  optional: true
+            {{- with include "pawtograder.forgejo.authSourceId" $ctx }}
+            - name: FORGEJO_AUTH_SOURCE_ID
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- if $ctx.Values.coder.enabled }}
             # workspace-open (#1222) calls Coder here and builds the student's links from it.

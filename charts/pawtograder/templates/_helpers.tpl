@@ -370,6 +370,22 @@ Internal service hostnames.
 {{- printf "%s-forgejo-http" .Release.Name -}}
 {{- end -}}
 
+{{- define "pawtograder.forgejo.adminSecret" -}}
+{{- .Values.forgejo.gitea.admin.existingSecret | default (printf "%s-forgejo-admin" .Release.Name) -}}
+{{- end -}}
+
+{{/* Not `default`: it would read 0 as unset. */}}
+{{- define "pawtograder.forgejo.authSourceId" -}}
+{{- $id := .Values.forgejo.authSourceId -}}
+{{- if not (kindIs "invalid" $id) -}}{{- toString $id -}}{{- end -}}
+{{- end -}}
+
+{{- define "pawtograder.forgejo.webhookAllowedHostList" -}}
+{{- $apiHost := include "pawtograder.api.url" . | trimPrefix "https://" -}}
+{{- $hosts := concat (.Values.forgejo.webhookAllowedHosts | default list) (list $apiHost) -}}
+{{- join "," (uniq $hosts) -}}
+{{- end -}}
+
 {{- define "pawtograder.appDatabase.host" -}}
 {{- if eq (index .ctx.Values .app).database "pawtograder" -}}
 {{- include "pawtograder.postgres.host" .ctx -}}

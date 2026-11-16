@@ -539,6 +539,8 @@ networkPolicy:
 
 forgejo:
   enabled: true
+  # Inferred, not yet confirmed with `forgejo admin auth list` on staging.
+  authSourceId: 1
   # global.nodeSelector/tolerations don't reach subcharts.
   nodeSelector: { tier: prod-staging }
   tolerations:

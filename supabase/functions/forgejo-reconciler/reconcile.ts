@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import { ensureAccountForUser, type ForgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { ensureAccountForUser, type ForgejoConfig, revokeRepoToken } from "../_shared/ForgejoWrapper.ts";
 
 /** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
 export const STALE_CLAIM_MINUTES = 10;
@@ -55,6 +55,51 @@ export async function reconcileForgejoAccounts(
       result.provisioned++;
     } catch (failure) {
       result.failures.push({ userId: user.user_id, error: failure });
+    }
+  }
+  return result;
+}
+
+export const MAX_REVOCATIONS_PER_PASS = 100;
+
+export type RevokeResult = { revoked: number; failures: { userId: string; error: unknown }[] };
+
+export async function revokeDroppedTokens(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  revoke: typeof revokeRepoToken = revokeRepoToken
+): Promise<RevokeResult> {
+  // function-grants: service-role
+  const { data: due, error } = await supabase.rpc("forgejo_repo_tokens_to_revoke", {
+    p_instance_url: config.url,
+    p_stale_minutes: STALE_CLAIM_MINUTES,
+    p_limit: MAX_REVOCATIONS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: RevokeResult = { revoked: 0, failures: [] };
+  for (const token of due ?? []) {
+    try {
+      // function-grants: service-role
+      const { data: claimed, error: claimError } = await supabase.rpc("claim_forgejo_repo_token_revocation", {
+        p_id: token.id,
+        p_stale_minutes: STALE_CLAIM_MINUTES
+      });
+      if (claimError) throw claimError;
+      if (!claimed) continue;
+
+      if (token.login) await revoke(config, token.login, token.repository_id);
+
+      // A re-mint clears the claim (record_forgejo_repo_token); that row must stay.
+      const { error: deleteError } = await supabase
+        .from("forgejo_repo_tokens")
+        .delete()
+        .eq("id", token.id)
+        .not("revoke_claimed_at", "is", null);
+      if (deleteError) throw deleteError;
+      result.revoked++;
+    } catch (failure) {
+      result.failures.push({ userId: token.user_id, error: failure });
     }
   }
   return result;

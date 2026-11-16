@@ -8,7 +8,7 @@ import { sentryIdentity } from "../_shared/SentryContext.ts";
 import "../_shared/SentryScrub.ts";
 import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
-import { reconcileForgejoAccounts } from "./reconcile.ts";
+import { reconcileForgejoAccounts, revokeDroppedTokens } from "./reconcile.ts";
 
 /**
  * Forgejo Account Reconciler (#1092)
@@ -28,6 +28,17 @@ if (Deno.env.get("SENTRY_DSN")) {
     tracesSampleRate: 0,
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
   });
+}
+
+function reportFailures(scope: Sentry.Scope, step: string, failures: { userId: string; error: unknown }[]) {
+  if (failures.length === 0) return;
+  const stepScope = scope.clone();
+  stepScope.setFingerprint(["forgejo-reconciler", step]);
+  stepScope.setContext("failures", {
+    count: failures.length,
+    user_ids: failures.slice(0, 20).map((f) => f.userId)
+  });
+  Sentry.captureException(failures[0].error, stepScope);
 }
 
 function json(body: unknown, status = 200): Response {
@@ -61,17 +72,19 @@ Deno.serve(async (req) => {
   try {
     const { provisioned, failures } = await reconcileForgejoAccounts(supabase, config);
     console.log(`[forgejo-reconciler] Provisioned ${provisioned}, failed ${failures.length}`);
-    if (failures.length > 0) {
-      // One event per pass, not per user: an outage or a bad credential fails everyone at once.
-      scope.setFingerprint(["forgejo-reconciler", "provision-failed"]);
-      scope.setContext("failures", {
-        count: failures.length,
-        user_ids: failures.slice(0, 20).map((f) => f.userId)
-      });
-      Sentry.captureException(failures[0].error, scope);
-    }
+    reportFailures(scope, "provision-failed", failures);
+
+    const revocation = await revokeDroppedTokens(supabase, config);
+    console.log(`[forgejo-reconciler] Revoked ${revocation.revoked} tokens, failed ${revocation.failures.length}`);
+    reportFailures(scope, "revoke-failed", revocation.failures);
+
     await Sentry.flush(2000);
-    return json({ provisioned, failed: failures.length });
+    return json({
+      provisioned,
+      failed: failures.length,
+      revoked: revocation.revoked,
+      revoke_failed: revocation.failures.length
+    });
   } catch (error) {
     console.error("[forgejo-reconciler] Error:", error);
     Sentry.captureException(error, scope);

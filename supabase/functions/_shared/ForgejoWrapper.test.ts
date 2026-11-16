@@ -4,8 +4,19 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
-import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
-import { ensureAccountForUser, forgejoConfig, type ForgejoConfig, usernameFromEmail } from "./ForgejoWrapper.ts";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
+import {
+  coderTokenName,
+  ensureAccountForUser,
+  forgejoConfig,
+  type ForgejoConfig,
+  mintRepoToken,
+  REPLACED_TOKEN_GRACE_MS,
+  revokeAllCoderTokens,
+  revokeReplacedTokens,
+  revokeRepoToken,
+  usernameFromEmail
+} from "./ForgejoWrapper.ts";
 
 const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "Basic eA==", authSourceId: 3 };
 const user = { userId: "7d1c7c9e-0000-4000-8000-000000000001", email: "Alex.Kim@northeastern.edu", name: "Alex Kim" };
@@ -157,6 +168,150 @@ Deno.test("Forgejo errors keep the status and a known reason, never the response
 Deno.test("ensureAccountForUser: a failed search is an error, not a reason to create", async () => {
   await withForgejo([new Response("bad gateway", { status: 502 })], async (calls) => {
     await assertRejects(() => ensureAccountForUser(config, user), Error, "user search failed: 502");
+    assertEquals(calls.length, 1);
+  });
+});
+
+// Status codes and bodies are what Forgejo 15.0.9 returned in the Phase 0 spike.
+const noContent = () => new Response(null, { status: 204 });
+const notFound = () => new Response(JSON.stringify({ message: "access token does not exist" }), { status: 404 });
+const minted = (sha1: string) =>
+  ok(
+    { id: 7, name: "pawtograder-coder-42", sha1, token_last_eight: sha1.slice(-8), scopes: ["write:repository"] },
+    201
+  );
+
+const NOW = Date.parse("2026-11-16T12:00:00Z");
+const tokenAt = (repositoryId: number, at: number, suffix = "abcd1234") =>
+  `pawtograder-coder-${repositoryId}-${at}-${suffix}`;
+
+Deno.test("coderTokenName: the repository, the mint time, and a random suffix", () => {
+  const a = coderTokenName(42, NOW);
+  const b = coderTokenName(42, NOW);
+  assert(/^pawtograder-coder-42-\d+-[0-9a-f]{8}$/.test(a), a);
+  assert(a.startsWith(`pawtograder-coder-42-${NOW}-`), a);
+  assert(a !== b, "two mints in the same millisecond get different names");
+});
+
+Deno.test("mintRepoToken: mints a token scoped to the repository for the student, deleting nothing", async () => {
+  await withForgejo([minted("f".repeat(40))], async (calls) => {
+    const result = await mintRepoToken(config, "alex.kim", "cs3500-f26/hw1-alex", 42, NOW);
+    assertEquals(result.token, "f".repeat(40));
+    assert(result.name.startsWith(`pawtograder-coder-42-${NOW}-`), result.name);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].method, "POST");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/users/alex.kim/tokens");
+    assertEquals(calls[0].body, {
+      name: result.name,
+      scopes: ["write:repository"],
+      repositories: [{ owner: "cs3500-f26", name: "hw1-alex" }]
+    });
+  });
+});
+
+Deno.test("mintRepoToken: a repository that isn't owner/name fails before calling Forgejo", async () => {
+  for (const repository of ["repo", "org/repo/extra", "/repo", "org/"]) {
+    await withForgejo([], async (calls) => {
+      await assertRejects(() => mintRepoToken(config, "alex.kim", repository, 42), Error, "not owner/name");
+      assertEquals(calls.length, 0);
+    });
+  }
+});
+
+Deno.test("mintRepoToken: a refused mint keeps a known reason and nothing else", async () => {
+  await withForgejo(
+    [new Response(JSON.stringify({ message: "access token name has been used already" }), { status: 400 })],
+    async () => {
+      await assertRejects(
+        () => mintRepoToken(config, "alex.kim", "org/repo", 42),
+        Error,
+        "token mint failed: 400 access token name has been used already"
+      );
+    }
+  );
+  await withForgejo([ok({ id: 7, name: "pawtograder-coder-42" }, 201)], async () => {
+    await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42), Error, "the response has no token");
+  });
+});
+
+Deno.test("mintRepoToken: the token never appears in an error", async () => {
+  await withForgejo([new Response("sha1=deadbeefcafe", { status: 201 })], async () => {
+    const err = await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42));
+    assertEquals(String(err).includes("deadbeefcafe"), false, String(err));
+  });
+});
+
+Deno.test(
+  "revokeReplacedTokens: deletes this repository's tokens past the grace window, except the one kept",
+  async () => {
+    const keep = tokenAt(42, NOW);
+    const old = tokenAt(42, NOW - REPLACED_TOKEN_GRACE_MS);
+    const recent = tokenAt(42, NOW - REPLACED_TOKEN_GRACE_MS + 1);
+    const otherRepo = tokenAt(420, NOW - 2 * REPLACED_TOKEN_GRACE_MS);
+    const list = [keep, old, recent, otherRepo, "pawtograder-coder-42-garbage", "laptop"].map((name) => ({ name }));
+    await withForgejo([ok(list), noContent()], async (calls) => {
+      assertEquals(await revokeReplacedTokens(config, "alex.kim", 42, keep, NOW), 1);
+      assertEquals(calls[1].method, "DELETE");
+      assertEquals(decodeURIComponent(calls[1].url.split("/tokens/")[1]), old);
+      assertEquals(calls.length, 2);
+    });
+  }
+);
+
+Deno.test("revokeRepoToken: deletes every token of the repository and no other; 404 counts as revoked", async () => {
+  const list = [tokenAt(42, 1), tokenAt(42, NOW), tokenAt(420, 1), "laptop"].map((name) => ({ name }));
+  await withForgejo([ok(list), noContent(), notFound()], async (calls) => {
+    assertEquals(await revokeRepoToken(config, "alex.kim", 42), 2);
+    assertEquals(
+      calls.slice(1).map((c) => decodeURIComponent(c.url.split("/tokens/")[1])),
+      [tokenAt(42, 1), tokenAt(42, NOW)]
+    );
+  });
+  await withForgejo(
+    [ok([{ name: tokenAt(42, 1) }]), new Response("<html>bad gateway alex.kim</html>", { status: 502 })],
+    async () => {
+      await assertRejects(
+        () => revokeRepoToken(config, "alex.kim", 42),
+        Error,
+        "token revoke failed: 502 unrecognized response"
+      );
+    }
+  );
+  await withForgejo([new Response(JSON.stringify({ message: "user does not exist" }), { status: 404 })], async () => {
+    assertEquals(await revokeRepoToken(config, "gone", 42), 0);
+  });
+});
+
+Deno.test("revokeAllCoderTokens: deletes only workspace tokens, across pages", async () => {
+  const page1 = Array.from({ length: 50 }, (_, i) => ({ name: i % 2 ? `pawtograder-coder-${i}` : `laptop-${i}` }));
+  const page2 = [{ name: "pawtograder-coder-900" }, { name: "my-own-token" }];
+  await withForgejo([ok(page1), ok(page2), ...Array.from({ length: 26 }, noContent)], async (calls) => {
+    assertEquals(await revokeAllCoderTokens(config, "alex.kim"), 26);
+    assertEquals(new URL(calls[0].url).searchParams.get("page"), "1");
+    assertEquals(new URL(calls[1].url).searchParams.get("page"), "2");
+    const deleted = calls.slice(2).map((c) => decodeURIComponent(c.url.split("/tokens/")[1]));
+    assertEquals(deleted.length, 26);
+    assertEquals(
+      deleted.every((n) => n.startsWith("pawtograder-coder-")),
+      true
+    );
+    assertEquals(deleted.includes("pawtograder-coder-900"), true);
+    assertEquals(
+      calls.slice(2).every((c) => c.method === "DELETE"),
+      true
+    );
+  });
+});
+
+Deno.test("revokeAllCoderTokens: a user that is gone has nothing to revoke", async () => {
+  await withForgejo([new Response(JSON.stringify({ message: "user does not exist" }), { status: 404 })], async () => {
+    assertEquals(await revokeAllCoderTokens(config, "gone"), 0);
+  });
+});
+
+Deno.test("revokeAllCoderTokens: a failed list is an error, and nothing is deleted", async () => {
+  await withForgejo([new Response("bad gateway", { status: 502 })], async (calls) => {
+    await assertRejects(() => revokeAllCoderTokens(config, "alex.kim"), Error, "token list failed: 502");
     assertEquals(calls.length, 1);
   });
 });
