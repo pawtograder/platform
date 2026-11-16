@@ -810,39 +810,66 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   }
 }
 
+// One message per read. A read starts the 120s visibility window, and messages are handled one
+// after another, so reading 5 at once started the clock on 4 that were still waiting their turn.
+// Behind slow provider calls those reappeared while still queued and a concurrent invocation ran
+// them a second time, and a killed isolate stranded all 5 for the full window (#1158). With one
+// message per read, each window starts when that message's work starts. The cost: overlapping
+// invocations now split even a small batch, so `match` is more often claimed while its pages are
+// still in OCR, and it then waits OCR_WAIT_SECONDS before trying again (see doMatch).
+const READ_VISIBILITY_SECONDS = 120;
+// Stop claiming new messages this long after the invocation starts. runBatch runs under
+// EdgeRuntime.waitUntil, and retiring a worker does not cut that short: the drain runs on until
+// the worker's hard lifetime (EDGE_WORKER_TIMEOUT_MS) and is killed mid-message (see
+// _shared/asyncWorkerTuning.ts). The chart retires a worker at half its lifetime
+// (beforeUnload.wallClockRatio: 50), so with the 400s chart default an invocation starts by ~200s
+// into its worker, makes its last claim by ~260s, and leaves the message it is running ~140s
+// (240s, 300s and 180s at production's 480s). This bounds claims, not runtime: a message that
+// itself outlasts that margin is still killed. Unclaimed messages stay visible, and the cron
+// starts more invocations every minute while the queue is non-empty.
+const CLAIM_WINDOW_MS = 60_000;
+// The same per-invocation cap as the previous 50 reads of 5.
+const MAX_MESSAGES_PER_INVOCATION = 250;
+
 async function runBatch(): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
+  const startedAt = Date.now();
   let processed = 0;
-  for (let pass = 0; pass < 50; pass++) {
+  while (processed < MAX_MESSAGES_PER_INVOCATION && Date.now() - startedAt < CLAIM_WINDOW_MS) {
     const { data, error } = await admin.schema("pgmq_public").rpc("read", {
       queue_name: QUEUE,
-      sleep_seconds: 120,
-      n: 5
+      sleep_seconds: READ_VISIBILITY_SECONDS,
+      n: 1
     });
     if (error) {
       Sentry.captureException(error, scope);
       break;
     }
-    const messages = (data ?? []) as QueueMessage[];
-    if (messages.length === 0) break;
-    for (const msg of messages) {
-      // Isolate per-message failures. processMessage handles its own errors, but it can now
-      // throw on the way out: sendEnvelope throws when a requeue cannot be queued (deliberately,
-      // so the original is not archived without a replacement). Letting that escape would
-      // abandon the rest of this read batch. Nothing is lost either way -- an un-archived
-      // message reappears when its 120s visibility timeout lapses -- but the remaining
-      // messages should not have to wait for that.
-      try {
-        await processMessage(admin, msg, scope.clone());
-      } catch (error) {
-        Sentry.captureException(error, scope.clone());
-        console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
+    const msg = ((data ?? []) as QueueMessage[])[0];
+    if (!msg) break;
+    // processMessage handles its own errors, but it can throw on the way out: sendEnvelope throws
+    // when a requeue cannot be queued (deliberately, so the original is not archived without a
+    // replacement). Catch it so the drain carries on. Nothing is lost: an un-archived message
+    // reappears when its visibility window lapses.
+    try {
+      // read_ct counts reads, so above 1 an earlier read of this message ended without an archive:
+      // that reader died, outlived the visibility window and may still be running, or threw on the
+      // way out (see the catch below), or its archive call failed. A log line only, not a Sentry
+      // event; the poison-pill guard in processMessage reports repeat cases.
+      if (msg.read_ct > 1) {
+        console.warn(
+          `exam-async-worker redelivery: msg ${msg.msg_id} read_ct=${msg.read_ct} method=${msg.message?.method} batch=${msg.message?.batch_id}`
+        );
       }
-      processed++;
+      await processMessage(admin, msg, scope.clone());
+    } catch (error) {
+      Sentry.captureException(error, scope.clone());
+      console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
     }
+    processed++;
   }
   return processed;
 }
