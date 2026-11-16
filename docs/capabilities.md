@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`, `20261117120000_office_hours_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -186,3 +186,33 @@ With a write-scoped API token, an active grader of both classes can copy surveys
 needs an instructor in the target class, so linked-survey copying there is not a grader path.
 Creating a survey in the app needs `manage_surveys`. The team must decide whether `surveys copy`
 should require `manage_surveys` on both classes, which would take it away from default graders.
+
+## help_students and manage_office_hours
+
+`help_students` covers what staff do to help in office hours (area 10): updating and deleting help
+requests (status, assignee, resolve/close/reopen), staff chat messages (`instructors_only`), staff
+membership updates, creating moderation records, karma note writes, work-session inserts, joining
+and leaving queues (`help_queue_assignments` writes), and creating/editing/deleting help queues.
+Day one, the default instructor role, the default grader role and every existing custom role hold
+it. Assign / resolve / moderate / karma / start-call controls and queue create/edit/delete follow
+`useCapability("help_students")`. `live-meeting-end` asks the same capability through
+`assertUserHasCapabilityOrServiceRole`.
+
+`manage_office_hours` covers instructor-only office hours configuration: help request templates
+(insert/update/delete), instructor CRUD on `student_help_activity`, instructor update/delete of
+moderation records, and deleting (or updating another TA's) work sessions. Day one, only the
+default instructor role holds it. Template create/edit/delete and the templates settings page
+follow `useCapability` / `useCapabilityOnceLoaded("manage_office_hours")`.
+
+Left as views or student actions: all office-hours SELECT policies; student create/update of their
+own requests; student chat, watchers, receipts and feedback; `authorizeforhelprequeststaff` and
+`can_access_help_request` (staff can still read private requests without `help_students`);
+video meeting session SELECT and service-role participation writes;
+`create_help_request_with_participants` (class membership, not staff-only).
+
+Graders could create and edit help queues and queue assignments before this capability work, so
+those writes follow `help_students` rather than `manage_office_hours` (the plan's "configure
+queues" row). The team should decide whether queue configuration should move to
+`manage_office_hours`, which would take it away from default graders. CLI `help-requests close`
+stays instructor-only for the same reason: switching it to `help_students` would give graders a
+CLI path they did not have.
