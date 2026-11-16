@@ -8,11 +8,15 @@
  * - Flashcard Decks: create / delete need manage_flashcards. The default grader role holds it; a
  *   custom role with it turned off hides the nav entry, list controls, and deck-detail add / edit /
  *   delete card controls.
+ * - Manage Surveys: create / publish / delete need manage_surveys (instructor-only by default).
+ * - Manage Polls: create / open / close / delete need run_polls. The default grader role holds it; a
+ *   custom role with it turned off hides those controls.
  *
  * Default roles only for the review and groups checks: the instructor role holds those capabilities,
  * the grader role holds neither, until the last review test gives the default grader role
  * manage_review_assignments (instructors can edit it since 20261114120000_custom_roles_copy_grader_role.sql).
- * The flashcard check uses its own custom role so it does not change the default grader role.
+ * The flashcard, survey and poll checks use their own custom roles so they do not change the default
+ * grader role.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
@@ -331,5 +335,118 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Delete flashcard/ })).toHaveCount(0);
+  });
+});
+
+test.describe("survey controls gated by manage_surveys", () => {
+  test.describe.configure({ timeout: 180_000 });
+  let course: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let graderWithout: TestingUser;
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    course = await createClass({ name: `E2E Survey Gates ${suffix}` });
+    instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
+
+    // Graders do not hold manage_surveys by default; put the grader on a custom role anyway so
+    // the check is explicit and does not rely on the default grader role staying empty.
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "No Surveys TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    const { data: row, error: rowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWithout.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+
+    expect(
+      (
+        await supabase.from("surveys").insert({
+          class_id: course.id,
+          created_by: instructor.public_profile_id,
+          assigned_to_all: true,
+          json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Q1" }] }] },
+          version: 1,
+          status: "draft",
+          title: `E2E Survey ${suffix}`
+        })
+      ).error
+    ).toBeNull();
+  });
+
+  test("a grader without manage_surveys does not see Create New Survey or Manage Series", async ({ page }) => {
+    await loginAsUser(page, graderWithout, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/manage/surveys`, "Manage Surveys");
+    await capabilities;
+
+    await expect(page.getByRole("link", { name: /Create New Survey/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /Manage Series/ })).toHaveCount(0);
+  });
+});
+
+test.describe("poll controls gated by run_polls", () => {
+  test.describe.configure({ timeout: 180_000 });
+  let course: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let graderWithout: TestingUser;
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    course = await createClass({ name: `E2E Poll Gates ${suffix}` });
+    instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
+
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "No Polls TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").delete().eq("role_id", role!.id).eq("capability", "run_polls")).error
+    ).toBeNull();
+
+    const { data: row, error: rowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWithout.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+
+    expect(
+      (
+        await supabase.from("live_polls").insert({
+          class_id: course.id,
+          created_by: instructor.public_profile_id,
+          question: { elements: [{ type: "text", name: "q1", title: "Gate poll?" }] },
+          is_live: false,
+          require_login: true
+        })
+      ).error
+    ).toBeNull();
+  });
+
+  test("a grader without run_polls does not see Create Poll or Open/Delete actions", async ({ page }) => {
+    await loginAsUser(page, graderWithout, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/manage/polls`, "Manage Polls");
+    await capabilities;
+
+    await expect(page.getByRole("link", { name: /Create Poll/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Poll actions" }).click();
+    await expect(page.getByRole("menuitem", { name: /Open Poll|Close Poll/ })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /Delete Poll/ })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /View Poll/ })).toHaveCount(1);
   });
 });
