@@ -661,6 +661,26 @@ export async function ensureTimeZonePreferenceInitialized(
   );
 }
 
+// Same key as SEEN_KEY in components/help-queue/escalation-tour.tsx. Not imported, because this
+// file runs in Node and the component pulls in React and Chakra.
+const ESCALATION_TOUR_SEEN_KEY = "pawtograder:whats-new:oh-escalation:v1";
+
+/**
+ * The escalation "What's new" walkthrough opens once per browser for course staff on the office
+ * hours page, and its dialog blocks every click behind it. Each test gets a fresh browser context,
+ * so mark the walkthrough as seen before the app loads. A test of the walkthrough itself should
+ * log in with `showWhatsNew: true`.
+ */
+export async function markWhatsNewSeen(page: Page) {
+  await page.addInitScript((key) => {
+    try {
+      localStorage.setItem(key, "seen");
+    } catch {
+      // Ignore localStorage failures in test setup.
+    }
+  }, ESCALATION_TOUR_SEEN_KEY);
+}
+
 export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 10000): Promise<boolean> {
   const timezoneDialog = page.getByRole("dialog", { name: TIMEZONE_DIALOG_TITLE });
   const isVisible = await timezoneDialog.isVisible({ timeout: timeoutMs }).catch(() => false);
@@ -821,9 +841,18 @@ export async function logMagicLink(users: (TestingUser | undefined)[]) {
   }
 }
 
-export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
+export async function loginAsUser(
+  page: Page,
+  testingUser: TestingUser,
+  course?: Course,
+  dismissTimezoneDialog = true,
+  { showWhatsNew = false }: { showWhatsNew?: boolean } = {}
+) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);
+  }
+  if (!showWhatsNew) {
+    await markWhatsNewSeen(page);
   }
 
   await page.goto("/");
