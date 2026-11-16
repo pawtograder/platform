@@ -2279,10 +2279,13 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       "creating a survey without manage_surveys"
     );
 
-    expectBlocked(
-      await client.from("surveys").update({ title: "nope" }).eq("id", existing.id).select("id"),
-      "editing a survey without manage_surveys"
-    );
+    const { data: updateData, error: updateError } = await client
+      .from("surveys")
+      .update({ title: "nope" })
+      .eq("id", existing.id)
+      .select("id");
+    expect(updateError).toBeNull();
+    expect(updateData ?? [], "editing a survey without manage_surveys").toHaveLength(0);
     const { data: unchanged } = await supabase.from("surveys").select("title").eq("id", existing.id).single();
     expect(unchanged?.title).toBe(existing.title);
 
@@ -2290,7 +2293,9 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       p_survey_id: existing.id,
       p_survey_logical_id: existing.survey_id
     });
-    expect(softDeleteError, "soft-deleting without manage_surveys").not.toBeNull();
+    expect(softDeleteError?.message ?? "", "soft-deleting without manage_surveys").toMatch(
+      /Permission denied: manage_surveys required/
+    );
     const { data: stillDraft } = await supabase.from("surveys").select("deleted_at").eq("id", existing.id).single();
     expect(stillDraft?.deleted_at).toBeNull();
   });
@@ -2354,12 +2359,322 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       }),
       "inserting a survey in another class"
     );
-    expectBlocked(
-      await client.from("surveys").update({ title: "cross" }).eq("id", otherSurvey.data!.id).select("id"),
-      "editing another class's survey"
-    );
+    const { data: crossUpdate, error: crossUpdateError } = await client
+      .from("surveys")
+      .update({ title: "cross" })
+      .eq("id", otherSurvey.data!.id)
+      .select("id");
+    expect(crossUpdateError).toBeNull();
+    expect(crossUpdate ?? [], "editing another class's survey").toHaveLength(0);
     const { data: stillThere } = await supabase.from("surveys").select("title").eq("id", otherSurvey.data!.id).single();
     expect(stillThere?.title).toBe("Other class survey");
+  });
+
+  test("a grader with manage_surveys manages assignments for a survey in the same class", async () => {
+    const survey = await surveyFor("Assignable survey", instructorS.public_profile_id);
+    const student = await createUserInClass({ role: "student", class_id: classS.id });
+    const client = await createAuthenticatedClient(withCap);
+
+    const { data: assignment, error: insertError } = await client
+      .from("survey_assignments")
+      .insert({
+        survey_id: survey.id,
+        class_id: classS.id,
+        profile_id: student.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(insertError).toBeNull();
+
+    const { data: updated, error: updateError } = await client
+      .from("survey_assignments")
+      .update({ profile_id: student.public_profile_id })
+      .eq("id", assignment!.id)
+      .select("profile_id");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ profile_id: student.public_profile_id }]);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("survey_assignments")
+      .delete()
+      .eq("id", assignment!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a dual-enrolled grader cannot point a class A assignment at a class B survey", async () => {
+    // Same user: manage_surveys in class S, ordinary grader in class B (can read B's rows).
+    const classB = await createClass({ name: "E2E Surveys Cross-Assign B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const { data: privB, error: privError } = await supabase
+      .from("profiles")
+      .insert({ name: "Cross-assign private", class_id: classB.id, is_private_profile: true })
+      .select("id")
+      .single();
+    expect(privError).toBeNull();
+    const { data: pubB, error: pubError } = await supabase
+      .from("profiles")
+      .insert({ name: "Cross-assign public", class_id: classB.id, is_private_profile: false })
+      .select("id")
+      .single();
+    expect(pubError).toBeNull();
+    expect(
+      (
+        await supabase.from("user_roles").insert({
+          user_id: withCap.user_id,
+          class_id: classB.id,
+          private_profile_id: privB!.id,
+          public_profile_id: pubB!.id,
+          role: "grader"
+        })
+      ).error
+    ).toBeNull();
+
+    const surveyA = await surveyFor("Class A survey for assign", instructorS.public_profile_id);
+    const surveyB = (
+      await supabase
+        .from("surveys")
+        .insert({
+          class_id: classB.id,
+          created_by: instructorB.public_profile_id,
+          assigned_to_all: true,
+          json: surveyJson,
+          version: 1,
+          status: "draft",
+          title: "Class B survey for assign"
+        })
+        .select("id")
+        .single()
+    ).data!;
+    expect(surveyB).toBeTruthy();
+
+    const studentA = await createUserInClass({ role: "student", class_id: classS.id });
+    const { data: assignmentA, error: seedError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyA.id,
+        class_id: classS.id,
+        profile_id: studentA.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(seedError).toBeNull();
+    const { data: assignmentB, error: seedBError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyB.id,
+        class_id: classB.id,
+        profile_id: studentB.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(seedBError).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+    expectRlsBlocked(
+      await client.from("survey_assignments").insert({
+        survey_id: surveyB.id,
+        class_id: classS.id,
+        profile_id: studentB.private_profile_id
+      }),
+      "inserting class_id=A pointing at a B survey"
+    );
+
+    // WITH CHECK can refuse with 42501, or USING/filter can return zero rows; either way the
+    // service-role readback must show the survey_id unchanged.
+    const retarget = await client
+      .from("survey_assignments")
+      .update({ survey_id: surveyB.id })
+      .eq("id", assignmentA!.id)
+      .select("id");
+    expect(
+      retarget.error !== null || (retarget.data ?? []).length === 0,
+      "retargeting an A assignment to a B survey must be refused"
+    ).toBe(true);
+    const { data: stillA } = await supabase
+      .from("survey_assignments")
+      .select("survey_id")
+      .eq("id", assignmentA!.id)
+      .single();
+    expect(stillA?.survey_id).toBe(surveyA.id);
+
+    expectRlsBlocked(
+      await client.from("survey_assignments").insert({
+        survey_id: surveyB.id,
+        class_id: classB.id,
+        profile_id: studentB.public_profile_id
+      }),
+      "writing a B assignment without manage_surveys in B"
+    );
+    const { data: updateB, error: updateBError } = await client
+      .from("survey_assignments")
+      .update({ profile_id: studentB.public_profile_id })
+      .eq("id", assignmentB!.id)
+      .select("id");
+    expect(updateBError).toBeNull();
+    expect(updateB ?? [], "updating a B assignment without manage_surveys in B").toHaveLength(0);
+    const { data: deleteB, error: deleteBError } = await client
+      .from("survey_assignments")
+      .delete()
+      .eq("id", assignmentB!.id)
+      .select("id");
+    expect(deleteBError).toBeNull();
+    expect(deleteB ?? [], "deleting a B assignment without manage_surveys in B").toHaveLength(0);
+    const { data: stillB } = await supabase.from("survey_assignments").select("id").eq("id", assignmentB!.id);
+    expect(stillB ?? []).toHaveLength(1);
+  });
+
+  test("survey templates and series follow manage_surveys; template delete stays creator-only", async () => {
+    const client = await createAuthenticatedClient(withCap);
+    const without = await createAuthenticatedClient(withoutCap);
+
+    const { data: template, error: createTemplateError } = await client
+      .from("survey_templates")
+      .insert({
+        class_id: classS.id,
+        created_by: withCap.private_profile_id,
+        title: "With-cap template",
+        description: "owned by withCap",
+        template: surveyJson
+      })
+      .select("id, title")
+      .single();
+    expect(createTemplateError).toBeNull();
+
+    const { data: updatedTemplate, error: updateTemplateError } = await client
+      .from("survey_templates")
+      .update({ title: "With-cap template edited" })
+      .eq("id", template!.id)
+      .select("title");
+    expect(updateTemplateError).toBeNull();
+    expect(updatedTemplate).toEqual([{ title: "With-cap template edited" }]);
+
+    expectRlsBlocked(
+      await without.from("survey_templates").insert({
+        class_id: classS.id,
+        created_by: withoutCap.private_profile_id,
+        title: "No-cap template",
+        description: "should fail",
+        template: surveyJson
+      }),
+      "creating a template without manage_surveys"
+    );
+    const { data: refusedUpdate, error: refusedUpdateError } = await without
+      .from("survey_templates")
+      .update({ title: "nope" })
+      .eq("id", template!.id)
+      .select("id");
+    expect(refusedUpdateError).toBeNull();
+    expect(refusedUpdate ?? [], "updating a template without manage_surveys").toHaveLength(0);
+
+    const { data: othersTemplate, error: othersError } = await supabase
+      .from("survey_templates")
+      .insert({
+        class_id: classS.id,
+        created_by: instructorS.private_profile_id,
+        title: "Instructor template",
+        description: "not owned by withCap",
+        template: surveyJson
+      })
+      .select("id")
+      .single();
+    expect(othersError).toBeNull();
+    const { data: nonCreatorDelete, error: nonCreatorDeleteError } = await client
+      .from("survey_templates")
+      .delete()
+      .eq("id", othersTemplate!.id)
+      .select("id");
+    expect(nonCreatorDeleteError).toBeNull();
+    expect(nonCreatorDelete ?? [], "deleting someone else's template with manage_surveys").toHaveLength(0);
+    const { data: stillOthers } = await supabase.from("survey_templates").select("id").eq("id", othersTemplate!.id);
+    expect(stillOthers ?? []).toHaveLength(1);
+
+    const { data: ownDelete, error: ownDeleteError } = await client
+      .from("survey_templates")
+      .delete()
+      .eq("id", template!.id)
+      .select("id");
+    expect(ownDeleteError).toBeNull();
+    expect(ownDelete).toHaveLength(1);
+
+    const { data: series, error: createSeriesError } = await client
+      .from("survey_series")
+      .insert({
+        class_id: classS.id,
+        name: "With-cap series",
+        created_by: withCap.private_profile_id
+      })
+      .select("id, name")
+      .single();
+    expect(createSeriesError).toBeNull();
+    const { data: updatedSeries, error: updateSeriesError } = await client
+      .from("survey_series")
+      .update({ name: "With-cap series edited" })
+      .eq("id", series!.id)
+      .select("name");
+    expect(updateSeriesError).toBeNull();
+    expect(updatedSeries).toEqual([{ name: "With-cap series edited" }]);
+
+    expectRlsBlocked(
+      await without.from("survey_series").insert({
+        class_id: classS.id,
+        name: "No-cap series",
+        created_by: withoutCap.private_profile_id
+      }),
+      "creating a series without manage_surveys"
+    );
+  });
+
+  test("management RPCs require manage_surveys and raise the specific error", async () => {
+    const survey = await surveyFor("RPC survey", instructorS.public_profile_id);
+    const student = await createUserInClass({ role: "student", class_id: classS.id });
+    const withClient = await createAuthenticatedClient(withCap);
+    const withoutClient = await createAuthenticatedClient(withoutCap);
+
+    const { error: assignOk } = await withClient.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [student.private_profile_id]
+    });
+    expect(assignOk).toBeNull();
+
+    const { error: assignDenied } = await withoutClient.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [student.private_profile_id]
+    });
+    expect(assignDenied?.message ?? "").toMatch(/Permission denied: manage_surveys required/);
+
+    const { data: series, error: seriesError } = await supabase
+      .from("survey_series")
+      .insert({
+        class_id: classS.id,
+        name: "RPC series",
+        created_by: instructorS.private_profile_id
+      })
+      .select("id")
+      .single();
+    expect(seriesError).toBeNull();
+    expect(
+      (await supabase.from("surveys").update({ series_id: series!.id, series_ordinal: 1 }).eq("id", survey.id)).error
+    ).toBeNull();
+
+    const { error: reorderOk } = await withClient.rpc("reorder_surveys_in_series", {
+      p_series_id: series!.id,
+      p_ordinal_updates: [{ id: survey.id, series_ordinal: 1 }]
+    });
+    expect(reorderOk).toBeNull();
+    const { error: reorderDenied } = await withoutClient.rpc("reorder_surveys_in_series", {
+      p_series_id: series!.id,
+      p_ordinal_updates: [{ id: survey.id, series_ordinal: 1 }]
+    });
+    expect(reorderDenied?.message ?? "").toMatch(/Permission denied: manage_surveys required/);
+
+    const { error: softOk } = await withClient.rpc("soft_delete_survey", {
+      p_survey_id: survey.id,
+      p_survey_logical_id: survey.survey_id
+    });
+    expect(softOk).toBeNull();
   });
 });
 
@@ -2522,17 +2837,23 @@ test.describe("live polls follow run_polls (#1010, area 11)", () => {
       "creating a poll without run_polls"
     );
 
-    expectBlocked(
-      await client.from("live_polls").update({ is_live: true }).eq("id", existing.id).select("id"),
-      "opening a poll without run_polls"
-    );
+    const { data: opened, error: openError } = await client
+      .from("live_polls")
+      .update({ is_live: true })
+      .eq("id", existing.id)
+      .select("id");
+    expect(openError).toBeNull();
+    expect(opened ?? [], "opening a poll without run_polls").toHaveLength(0);
     const { data: unchanged } = await supabase.from("live_polls").select("is_live").eq("id", existing.id).single();
     expect(unchanged?.is_live).toBe(false);
 
-    expectBlocked(
-      await client.from("live_polls").delete().eq("id", existing.id).select("id"),
-      "deleting a poll without run_polls"
-    );
+    const { data: deleted, error: deleteError } = await client
+      .from("live_polls")
+      .delete()
+      .eq("id", existing.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted ?? [], "deleting a poll without run_polls").toHaveLength(0);
     const { data: stillThere } = await supabase.from("live_polls").select("id").eq("id", existing.id);
     expect(stillThere ?? []).toHaveLength(1);
   });
@@ -2548,6 +2869,54 @@ test.describe("live polls follow run_polls (#1010, area 11)", () => {
       is_submitted: true
     });
     expect(error, "student can still answer a live poll").toBeNull();
+  });
+
+  test("a grader without run_polls can read live poll responses but cannot change them", async () => {
+    const student = await createUserInClass({ role: "student", class_id: classP.id });
+    const poll = await pollFor(instructorP.public_profile_id, true);
+    const { data: response, error: seedError } = await supabase
+      .from("live_poll_responses")
+      .insert({
+        live_poll_id: poll.id,
+        public_profile_id: student.public_profile_id,
+        response: { q1: "seed" },
+        is_submitted: true
+      })
+      .select("id, response")
+      .single();
+    expect(seedError).toBeNull();
+
+    const client = await createAuthenticatedClient(withoutCap);
+    const { data: visible, error: readError } = await client
+      .from("live_poll_responses")
+      .select("id, response")
+      .eq("id", response!.id);
+    expect(readError).toBeNull();
+    expect(visible ?? []).toHaveLength(1);
+
+    const { data: updated, error: updateError } = await client
+      .from("live_poll_responses")
+      .update({ response: { q1: "changed" } })
+      .eq("id", response!.id)
+      .select("id");
+    expect(updateError).toBeNull();
+    expect(updated ?? [], "updating a response without run_polls").toHaveLength(0);
+    const { data: unchanged } = await supabase
+      .from("live_poll_responses")
+      .select("response")
+      .eq("id", response!.id)
+      .single();
+    expect(unchanged?.response).toEqual({ q1: "seed" });
+
+    const { data: deleted, error: deleteError } = await client
+      .from("live_poll_responses")
+      .delete()
+      .eq("id", response!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted ?? [], "deleting a response without run_polls").toHaveLength(0);
+    const { data: stillThere } = await supabase.from("live_poll_responses").select("id").eq("id", response!.id);
+    expect(stillThere ?? []).toHaveLength(1);
   });
 
   test("run_polls in one class doesn't reach another class", async () => {
@@ -2577,10 +2946,13 @@ test.describe("live polls follow run_polls (#1010, area 11)", () => {
       }),
       "inserting a poll in another class"
     );
-    expectBlocked(
-      await client.from("live_polls").update({ is_live: true }).eq("id", otherPoll!.id).select("id"),
-      "editing another class's poll"
-    );
+    const { data: crossUpdate, error: crossUpdateError } = await client
+      .from("live_polls")
+      .update({ is_live: true })
+      .eq("id", otherPoll!.id)
+      .select("id");
+    expect(crossUpdateError).toBeNull();
+    expect(crossUpdate ?? [], "editing another class's poll").toHaveLength(0);
     const { data: stillThere } = await supabase.from("live_polls").select("is_live").eq("id", otherPoll!.id).single();
     expect(stillThere?.is_live).toBe(false);
   });
