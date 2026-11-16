@@ -670,7 +670,8 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
     await capabilities;
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create New Queue", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create Your First Queue", exact: true })).toHaveCount(0);
   });
 
   test("a grader without help_students does not see Start Working, End/Delete assignment, or karma writes", async ({
@@ -684,7 +685,8 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await page.goto(`/course/${course.id}/manage/office-hours`);
     await dashboardCapabilities;
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Start Working|Stop Working/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Start Working", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop Working", exact: true })).toHaveCount(0);
 
     const assignmentCapabilities = page.waitForResponse(
       (r) => r.url().includes("/rpc/user_class_capabilities") && r.ok()
@@ -699,7 +701,8 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await page.goto(`/course/${course.id}/manage/office-hours/settings/karma`);
     await karmaCapabilities;
     await expect(page.getByRole("heading", { name: "Student Karma Management" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Add Karma Entry|Create First Karma Entry/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add Karma Entry", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create First Karma Entry", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
   });
@@ -720,7 +723,8 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
     await capabilities;
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toBeVisible();
+    // Header create is always shown when capable; empty-state may also show before queues load.
+    await expect(page.getByRole("button", { name: "Create New Queue", exact: true })).toBeVisible();
   });
 
   test("a grader without manage_office_hours can open templates settings but not create", async ({ page }) => {
@@ -729,7 +733,8 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
     await capabilities;
     await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Create New Template|Create Your First Template/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create New Template", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create Your First Template", exact: true })).toHaveCount(0);
   });
 
   test("an instructor with manage_office_hours can open templates settings", async ({ page }) => {
@@ -739,6 +744,6 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await capabilities;
     await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
     // Header and empty-state both offer a create button; match the header by exact name.
-    await expect(page.getByRole("button", { name: "Create New Template" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create New Template", exact: true })).toBeVisible();
   });
 });
