@@ -7,6 +7,7 @@ import { ClassRealTimeController } from "./ClassRealTimeController";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
 import { bugReportIngest, registerRowSource, unregisterRowSource } from "@/lib/bugReport/ingestGate";
+import { refusedWriteError } from "@/lib/refusedWriteError";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 export type TablesThatHaveAnIDField = {
@@ -3387,12 +3388,51 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const { error } = await this._client.from(this._table).delete().eq("id", id);
+    const restore = () => this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+    const { error, count } = await this._client.from(this._table).delete({ count: "exact" }).eq("id", id);
     if (error) {
-      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      restore();
       throw error;
     }
-    return;
+    await this._throwIfDeleteRefused(id, count, restore);
+  }
+
+  /**
+   * After a delete (hard or soft) that RLS may have refused: throws a {@link refusedWriteError}
+   * and puts the row back when nothing was changed and the row is still there.
+   *
+   * RLS doesn't fail a write it refuses. The statement matches 0 rows and PostgREST answers with
+   * no error, so before this check a refused delete looked like a success. The delete asks only
+   * for the changed-row count (`count: "exact"`), not the rows, so the response stays empty.
+   *
+   * Asking for the count doesn't change which soft deletes work. On a table whose SELECT policy
+   * hides soft-deleted rows, Postgres rejects any `UPDATE ... WHERE id = ...` that hides the row
+   * ("new row violates row-level security policy"), with or without RETURNING. That was already
+   * true before this change.
+   *
+   * With 0 rows changed, the row was either refused or already gone (another tab, a realtime
+   * race). A follow-up select tells them apart, as `withBlockedDeleteErrors` does for refine:
+   * - **still visible:** refused. Restore the row and throw.
+   * - **not visible:** gone, or this session never could see it. Leave it removed and resolve,
+   *   which is what a delete did before. A refused delete lands here only where the table's SELECT
+   *   policy is no wider than its DELETE (or UPDATE) policy.
+   */
+  private async _throwIfDeleteRefused(
+    id: ExtractIdType<RelationName>,
+    count: number | null,
+    restore: () => void
+  ): Promise<void> {
+    // `count` is null only if PostgREST sent no count; keep the old behaviour then.
+    if (count !== 0) return;
+    const { data, error } = await this._client.from(this._table).select("id").eq("id", id).limit(1);
+    if (error) {
+      restore();
+      throw error;
+    }
+    if (data && data.length > 0) {
+      restore();
+      throw refusedWriteError("delete");
+    }
   }
 
   /**
@@ -3416,15 +3456,16 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const { error } = await this._client
+    const restore = () => this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+    const { error, count } = await this._client
       .from(this._table)
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ deleted_at: new Date().toISOString() }, { count: "exact" })
       .eq("id", id);
     if (error) {
-      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      restore();
       throw error;
     }
-    return;
+    await this._throwIfDeleteRefused(id, count, restore);
   }
   async update(id: IDType, row: Partial<ResultOne>): Promise<ResultOne> {
     if (this._closed) {
@@ -3446,6 +3487,11 @@ export default class TableController<
     const { data, error } = await this._client.from(this._table).update(row).eq("id", id).select("*").single();
     if (error) {
       this._updateRow(id, oldRow as ResultOne & { id: IDType }, false);
+      // `.single()` on an update that changed 0 rows: RLS refused it (it doesn't raise an error,
+      // the UPDATE just matches nothing), or the row is gone. Same error as the refine provider.
+      if (error.code === "PGRST116") {
+        throw refusedWriteError("update");
+      }
       throw error;
     }
     this._updateRow(id, data, false);
