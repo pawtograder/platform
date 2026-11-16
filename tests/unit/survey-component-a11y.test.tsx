@@ -122,6 +122,21 @@ describe("SurveyComponent (issue #881)", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it("becoming read-only does not change the model's data", () => {
+    // Complete sets readOnly while the submit is in flight. That temporary lock must leave
+    // typed answers in place; re-applying initialData here was wiping them back to the draft.
+    const { container, rerender } = render(
+      <SurveyComponent surveyJson={SURVEY_JSON} initialData={{ q1: "Draft A" }} />
+    );
+    const input = q1Input(container);
+    fireEvent.change(input, { target: { value: "Typed B" } });
+    expect(input.value).toBe("Typed B");
+
+    rerender(<SurveyComponent surveyJson={SURVEY_JSON} initialData={{ q1: "Draft A" }} readOnly />);
+
+    expect(q1Input(container).value).toBe("Typed B");
+  });
+
   it("applies a genuinely different draft when the user has not edited anything", () => {
     // The guard protects in-progress answers, not every later assignment: a
     // viewer swapping between saved responses must still update.

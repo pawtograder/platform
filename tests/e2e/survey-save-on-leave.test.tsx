@@ -77,6 +77,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       writes.push(entry);
     });
     await page.addInitScript(() => {
+      const pendingRecords: Promise<void>[] = [];
       const record = (kind: string, detail: unknown) => {
         let text: string;
         try {
@@ -84,10 +85,21 @@ test.describe("Survey answers survive leaving the page and losing the network", 
         } catch {
           text = String(detail);
         }
-        void (window as unknown as { __recordBrowserStorageWrite: (entry: string) => Promise<void> })
+        const done = (window as unknown as { __recordBrowserStorageWrite: (entry: string) => Promise<void> })
           .__recordBrowserStorageWrite(`${kind} ${text}`)
           .catch(() => {});
+        pendingRecords.push(done);
       };
+      const requestUrl = (request: RequestInfo | URL): string => {
+        if (typeof request === "string") return request;
+        if (request instanceof URL) return request.href;
+        if (request instanceof Request) return request.url;
+        return String(request);
+      };
+      (window as unknown as { __drainBrowserStorageWrites: () => Promise<void> }).__drainBrowserStorageWrites =
+        async () => {
+          await Promise.all([...pendingRecords]);
+        };
       const setItem = Storage.prototype.setItem;
       Storage.prototype.setItem = function (key: string, value: string) {
         record(this === window.sessionStorage ? "sessionStorage" : "localStorage", `${key}=${value}`);
@@ -115,18 +127,24 @@ test.describe("Survey answers survive leaving the page and losing the network", 
           return cacheOpen.call(this, cacheName).then((cache) => {
             const put = cache.put.bind(cache);
             cache.put = (request, response) => {
-              void response
+              const url = requestUrl(request);
+              const recording = response
                 .clone()
                 .text()
-                .then((text) => record("caches.put", text))
-                .catch(() => record("caches.put", "[unreadable]"));
+                .then((text) => record("caches.put", { url, body: text }))
+                .catch(() => record("caches.put", { url, body: "[unreadable]" }));
+              pendingRecords.push(recording);
               return put(request, response);
             };
             const add = cache.add.bind(cache);
             cache.add = async (request) => {
-              const result = await add(request);
-              record("caches.add", String(request));
-              return result;
+              record("caches.add", requestUrl(request));
+              return add(request);
+            };
+            const addAll = cache.addAll.bind(cache);
+            cache.addAll = async (requests) => {
+              for (const request of requests) record("caches.addAll", requestUrl(request));
+              return addAll(requests);
             };
             return cache;
           });
@@ -147,9 +165,14 @@ test.describe("Survey answers survive leaving the page and losing the network", 
         });
       }
     });
-    // Lets in-flight Cache API body reads reach `__recordBrowserStorageWrite` before assertions.
+    // Wait for every in-flight Cache API body read (and other async records) to reach
+    // `__recordBrowserStorageWrite` before asserting.
     const drainStorageWrites = async () => {
-      await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+      await page.evaluate(async () => {
+        const drain = (window as unknown as { __drainBrowserStorageWrites?: () => Promise<void> })
+          .__drainBrowserStorageWrites;
+        if (drain) await drain();
+      });
     };
     return { writes, drainStorageWrites };
   };
@@ -285,6 +308,46 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await expect
       .poll(() => storedResponse(survey.id))
       .toEqual({ q1: "Answer before a server error", is_submitted: true });
+  });
+
+  test("a failed Complete after editing a preloaded draft keeps and saves the typed answers", async ({ page }) => {
+    const survey = await seedSurvey("Failed Complete Keeps Typed Answers Survey");
+    // Draft A is already on the form. Typing B and failing Complete must not restore A into the
+    // model (or into the recovery save) while the submit is in flight as read-only.
+    const { error: seedError } = await supabase.from("survey_responses").insert({
+      survey_id: survey.id,
+      profile_id: student.private_profile_id,
+      response: { q1: "Preloaded draft A" },
+      is_submitted: false
+    });
+    if (seedError) throw new Error(`Failed to seed the response: ${seedError.message}`);
+    await loginAsUser(page, student, course);
+    let refusedSubmit = false;
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
+      if (route.request().method() !== "POST" || !body?.is_submitted || refusedSubmit) return route.fallback();
+      refusedSubmit = true;
+      // Delay so the form stays read-only long enough that a lock-driven re-apply would have run.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "XX000", message: "internal error", details: null, hint: null })
+      });
+    });
+
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toHaveValue("Preloaded draft A");
+    await input.fill("Typed B after draft");
+    await page.getByRole("button", { name: "Complete" }).click();
+
+    await expect(page.getByRole("alert").filter({ hasText: "Your survey wasn't submitted" })).toBeVisible();
+    await expect(input).toHaveValue("Typed B after draft");
+    await expect(input).toBeEditable();
+    await expect
+      .poll(() => storedResponse(survey.id), { timeout: 10_000 })
+      .toEqual({ q1: "Typed B after draft", is_submitted: false });
   });
 
   // Holds the first draft upsert forever: the request is sent but never gets a response.

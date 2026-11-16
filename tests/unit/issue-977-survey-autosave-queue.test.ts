@@ -267,6 +267,8 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes).toHaveLength(1);
   });
 
+  // Resolves requests oldest-first and models no stored server value, so this does not prove an
+  // older request can commit last; that case needs a server-side ordering check.
   test("a later leave sends a newer snapshot while an earlier leave request is still pending", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
