@@ -178,7 +178,7 @@ describe("useRefreshWhenShown", () => {
     expect(mockRefresh).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes once when a dashboard rendered 10 minutes ago is shown again, even right after it mounts", () => {
+  it("refreshes once when a dashboard rendered 10 minutes ago is shown again, even right after it mounts", async () => {
     // Back restores the dashboard from the router cache whatever its age, so the data on screen
     // can be much older than the component.
     renderHook(() => useRefreshWhenShown(PAGE_LOAD - 10 * 60_000));
@@ -186,6 +186,8 @@ describe("useRefreshWhenShown", () => {
     setVisibility("hidden");
     setVisibility("visible");
     expect(mockRefresh).toHaveBeenCalledTimes(1);
+    // The refresh has answered, so only the minute can hold the next show off.
+    await act(async () => {});
 
     // The refresh restarts the throttle.
     setVisibility("hidden");
@@ -230,7 +232,7 @@ describe("useRefreshWhenShown", () => {
     expect(mockRefresh).not.toHaveBeenCalled();
   });
 
-  it("costs at most one extra refresh when the browser clock is 10 minutes ahead of the server", () => {
+  it("costs at most one extra refresh when the browser clock is 10 minutes ahead of the server", async () => {
     const skew = 10 * 60_000;
     const { rerender } = renderHook(({ renderedAt }) => useRefreshWhenShown(renderedAt), {
       initialProps: { renderedAt: PAGE_LOAD - skew }
@@ -240,6 +242,8 @@ describe("useRefreshWhenShown", () => {
     setVisibility("hidden");
     setVisibility("visible");
     expect(mockRefresh).toHaveBeenCalledTimes(1);
+    // The refresh has answered, so only the minute can hold the next show off.
+    await act(async () => {});
 
     // The refresh's payload arrives a second later with the server's time, still 10 minutes behind.
     act(() => {
