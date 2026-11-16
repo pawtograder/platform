@@ -6,7 +6,8 @@
  *   manage_review_assignments. Without it those two pages send you back to the reviews page.
  * - Manage Groups: every change needs publish_groups; without it the page is read-only.
  * - Flashcard Decks: create / delete need manage_flashcards. The default grader role holds it; a
- *   custom role with it turned off hides the nav entry and the management controls.
+ *   custom role with it turned off hides the nav entry, list controls, and deck-detail add / edit /
+ *   delete card controls.
  *
  * Default roles only for the review and groups checks: the instructor role holds those capabilities,
  * the grader role holds neither, until the last review test gives the default grader role
@@ -242,6 +243,7 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
   let course: Awaited<ReturnType<typeof createClass>>;
   let instructor: TestingUser;
   let graderWithout: TestingUser;
+  let deckId: number;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -269,13 +271,27 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     expect(rowError).toBeNull();
     expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
 
+    const { data: deck, error: deckError } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: course.id,
+        creator_id: instructor.user_id,
+        name: `E2E Flashcard Deck ${suffix}`,
+        description: "for gating"
+      })
+      .select("id")
+      .single();
+    expect(deckError).toBeNull();
+    deckId = deck!.id;
     expect(
       (
-        await supabase.from("flashcard_decks").insert({
+        await supabase.from("flashcards").insert({
           class_id: course.id,
-          creator_id: instructor.user_id,
-          name: `E2E Flashcard Deck ${suffix}`,
-          description: "for gating"
+          deck_id: deckId,
+          title: "Gating card",
+          prompt: "prompt",
+          answer: "answer",
+          order: 1
         })
       ).error
     ).toBeNull();
@@ -297,5 +313,23 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     // Course Settings submenu hides the Flashcard Decks entry without the capability.
     await page.getByRole("button", { name: "Course Settings menu" }).click();
     await expect(page.getByRole("menuitem", { name: /Flashcard Decks/ })).toHaveCount(0);
+  });
+
+  test("a grader without manage_flashcards does not see add, edit or delete card controls on the deck page", async ({
+    page
+  }) => {
+    await loginAsUser(page, graderWithout, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await gotoCourseUrlWhenHeadingVisible(
+      page,
+      `/course/${course.id}/manage/course/flashcard-decks/${deckId}`,
+      "Edit Flashcard Deck"
+    );
+    await capabilities;
+
+    await expect(page.getByRole("button", { name: "Add Flashcard" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Delete flashcard/ })).toHaveCount(0);
   });
 });

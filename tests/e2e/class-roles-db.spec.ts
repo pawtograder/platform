@@ -29,7 +29,8 @@
  *
  * 20261115220000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
  * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
- * role and every custom role.
+ * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
+ * the capability (or a demoted former grader) cannot manage decks they made.
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
@@ -204,7 +205,12 @@ test.describe("class roles and capabilities", () => {
 
     const after = await defaultRoles(classA.id);
     expect(after.map((r) => r.name).sort(), "no role was added").toEqual(DEFAULT_ROLES);
-    expect(roleFor(after, "grader").role_capabilities, "grader gained no capability").toHaveLength(0);
+    expect(
+      roleFor(after, "grader")
+        .role_capabilities.map((rc) => rc.capability)
+        .sort(),
+      "grader capabilities unchanged by the attempt"
+    ).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect((await userRole(graderA)).class_role_id, "grader is still on the grader role").toBe(
       roleFor(rolesA, "grader").id
     );
@@ -1796,13 +1802,15 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
     const existingCard = await cardFor(existing.id, "Staff card");
     const client = await createAuthenticatedClient(withoutCap);
 
-    const { error: insertError } = await client.from("flashcard_decks").insert({
-      class_id: classH.id,
-      creator_id: withoutCap.user_id,
-      name: "Should fail",
-      description: "no capability"
-    });
-    expect(insertError, "creating a deck without manage_flashcards").not.toBeNull();
+    expectRlsBlocked(
+      await client.from("flashcard_decks").insert({
+        class_id: classH.id,
+        creator_id: withoutCap.user_id,
+        name: "Should fail",
+        description: "no capability"
+      }),
+      "creating a deck without manage_flashcards"
+    );
 
     expectBlocked(
       await client.from("flashcard_decks").update({ description: "nope" }).eq("id", existing.id).select("id"),
@@ -1816,19 +1824,139 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
     );
     expect(await deckExists(existing.id)).toBe(true);
 
-    const { error: cardInsertError } = await client.from("flashcards").insert({
-      class_id: classH.id,
-      deck_id: existing.id,
-      title: "Should fail",
-      prompt: "p",
-      answer: "a",
-      order: 2
-    });
-    expect(cardInsertError, "creating a card without manage_flashcards").not.toBeNull();
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: existing.id,
+        title: "Should fail",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "creating a card without manage_flashcards"
+    );
+
+    expectBlocked(
+      await client.from("flashcards").update({ title: "nope" }).eq("id", existingCard.id).select("id"),
+      "editing a card without manage_flashcards"
+    );
 
     expectBlocked(
       await client.from("flashcards").delete().eq("id", existingCard.id).select("id"),
       "deleting a card without manage_flashcards"
+    );
+  });
+
+  test("a grader without manage_flashcards cannot manage a deck they created", async () => {
+    // Service role sets creator_id; the old creator OR on UPDATE/DELETE is gone, so capability alone decides.
+    const ownDeck = await deckFor(withoutCap, "Creator without capability");
+    const ownCard = await cardFor(ownDeck.id, "Creator card");
+    const client = await createAuthenticatedClient(withoutCap);
+
+    expectBlocked(
+      await client.from("flashcard_decks").update({ description: "creator edit" }).eq("id", ownDeck.id).select("id"),
+      "updating own deck without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcard_decks").delete().eq("id", ownDeck.id).select("id"),
+      "deleting own deck without manage_flashcards"
+    );
+    expect(await deckExists(ownDeck.id)).toBe(true);
+
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: ownDeck.id,
+        title: "Creator insert",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "inserting a card on own deck without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcards").update({ title: "creator card edit" }).eq("id", ownCard.id).select("id"),
+      "updating a card on own deck without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcards").delete().eq("id", ownCard.id).select("id"),
+      "deleting a card on own deck without manage_flashcards"
+    );
+  });
+
+  test("a demoted grader loses management of decks they created but can still study them", async () => {
+    const creator = await createUserInClass({ role: "grader", class_id: classH.id });
+    const asGrader = await createAuthenticatedClient(creator);
+    const { data: deck, error: createError } = await asGrader
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: creator.user_id,
+        name: "Created before demotion",
+        description: "had capability"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+    const { data: card, error: cardError } = await asGrader
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "Study card",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(cardError).toBeNull();
+
+    const row = await userRole(creator);
+    expect((await supabase.from("user_roles").update({ role: "student" }).eq("id", row.id)).error).toBeNull();
+
+    const asStudent = await createAuthenticatedClient(creator);
+    const { data: decks, error: readError } = await asStudent.from("flashcard_decks").select("id").eq("id", deck!.id);
+    expect(readError).toBeNull();
+    expect(decks ?? [], "still reads the deck").toHaveLength(1);
+    const { data: cards, error: cardsReadError } = await asStudent.from("flashcards").select("id").eq("id", card!.id);
+    expect(cardsReadError).toBeNull();
+    expect(cards ?? [], "still reads the card").toHaveLength(1);
+
+    const { error: progressError } = await asStudent.from("student_flashcard_deck_progress").insert({
+      student_id: creator.user_id,
+      class_id: classH.id,
+      card_id: card!.id,
+      is_mastered: false
+    });
+    expect(progressError, "can still study the deck").toBeNull();
+
+    expectBlocked(
+      await asStudent.from("flashcard_decks").update({ description: "demoted" }).eq("id", deck!.id).select("id"),
+      "demoted creator cannot update deck"
+    );
+    expectBlocked(
+      await asStudent.from("flashcard_decks").delete().eq("id", deck!.id).select("id"),
+      "demoted creator cannot delete deck"
+    );
+    expectRlsBlocked(
+      await asStudent.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "demoted insert",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "demoted creator cannot insert cards"
+    );
+    expectBlocked(
+      await asStudent.from("flashcards").update({ title: "demoted" }).eq("id", card!.id).select("id"),
+      "demoted creator cannot update cards"
+    );
+    expectBlocked(
+      await asStudent.from("flashcards").delete().eq("id", card!.id).select("id"),
+      "demoted creator cannot delete cards"
     );
   });
 
@@ -1850,13 +1978,65 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
     });
     expect(progressError, "students keep writing their own progress").toBeNull();
 
-    const { error: createDeckError } = await client.from("flashcard_decks").insert({
-      class_id: classH.id,
-      creator_id: student.user_id,
-      name: "Student must not create",
-      description: "no"
-    });
-    expect(createDeckError, "students still cannot create decks").not.toBeNull();
+    expectRlsBlocked(
+      await client.from("flashcard_decks").insert({
+        class_id: classH.id,
+        creator_id: student.user_id,
+        name: "Student must not create",
+        description: "no"
+      }),
+      "students still cannot create decks"
+    );
+  });
+
+  test("a card whose class_id does not match its deck's class is refused", async () => {
+    const otherClass = await createClass({ name: "E2E Flashcards Mismatch" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const { data: otherDeck, error } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: otherClass.id,
+        creator_id: otherInstructor.user_id,
+        name: "Foreign deck",
+        description: "for mismatch"
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+
+    const client = await createAuthenticatedClient(headTa);
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: otherDeck!.id,
+        title: "Mismatched class",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      }),
+      "card class_id must match the deck's class"
+    );
+  });
+
+  test("moving a deck or card to another class without the capability there is refused", async () => {
+    const otherClass = await createClass({ name: "E2E Flashcards Move Target" });
+    await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const deck = await deckFor(instructorH, "Move source deck");
+    const card = await cardFor(deck.id, "Move source card");
+    const client = await createAuthenticatedClient(headTa);
+
+    expectBlocked(
+      await client.from("flashcard_decks").update({ class_id: otherClass.id }).eq("id", deck.id).select("id"),
+      "moving a deck to a class without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcards").update({ class_id: otherClass.id }).eq("id", card.id).select("id"),
+      "moving a card to a class without manage_flashcards"
+    );
+    const { data: deckRow } = await supabase.from("flashcard_decks").select("class_id").eq("id", deck.id).single();
+    expect(deckRow?.class_id).toBe(classH.id);
+    const { data: cardRow } = await supabase.from("flashcards").select("class_id").eq("id", card.id).single();
+    expect(cardRow?.class_id).toBe(classH.id);
   });
 
   test("manage_flashcards in one class doesn't reach another class", async () => {
@@ -1873,8 +2053,30 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
       .select("id")
       .single();
     expect(error).toBeNull();
+    const { data: otherCard, error: otherCardError } = await supabase
+      .from("flashcards")
+      .insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Other class card",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(otherCardError).toBeNull();
 
     const client = await createAuthenticatedClient(headTa);
+    expectRlsBlocked(
+      await client.from("flashcard_decks").insert({
+        class_id: otherClass.id,
+        creator_id: headTa.user_id,
+        name: "Cross-class insert",
+        description: "no"
+      }),
+      "inserting a deck in another class"
+    );
     expectBlocked(
       await client.from("flashcard_decks").update({ description: "cross-class" }).eq("id", otherDeck!.id).select("id"),
       "editing another class's deck"
@@ -1882,6 +2084,25 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
     expectBlocked(
       await client.from("flashcard_decks").delete().eq("id", otherDeck!.id).select("id"),
       "deleting another class's deck"
+    );
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Cross-class card",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "inserting a card in another class"
+    );
+    expectBlocked(
+      await client.from("flashcards").update({ title: "cross" }).eq("id", otherCard!.id).select("id"),
+      "editing another class's card"
+    );
+    expectBlocked(
+      await client.from("flashcards").delete().eq("id", otherCard!.id).select("id"),
+      "deleting another class's card"
     );
     const { data: stillThere, error: checkError } = await supabase
       .from("flashcard_decks")
