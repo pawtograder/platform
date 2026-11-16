@@ -5,7 +5,7 @@
 
 import { redactSecret } from "./SentryScrub.ts";
 
-export type ForgejoConfig = { url: string; authorization: string; authSourceId: number };
+export type ForgejoConfig = { url: string; authorization: string; authSourceId: number; fetch?: typeof fetch };
 export type ForgejoUser = { id: number; login: string; login_name: string; source_id: number };
 
 /**
@@ -24,7 +24,7 @@ export function forgejoConfig(env: { get(name: string): string | undefined } = D
 }
 
 async function forgejo(config: ForgejoConfig, method: string, path: string, body?: unknown): Promise<Response> {
-  return await fetch(`${config.url}/api/v1${path}`, {
+  return await (config.fetch ?? fetch)(`${config.url}/api/v1${path}`, {
     method,
     headers: { Authorization: config.authorization, "Content-Type": "application/json", Accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -113,9 +113,23 @@ export async function ensureAccountForUser(
 }
 
 const CODER_TOKEN_PREFIX = "pawtograder-coder-";
+/** Younger tokens than this may belong to a concurrent open that hasn't stored its token yet. */
+export const REPLACED_TOKEN_GRACE_MS = 10 * 60_000;
 
-export function coderTokenName(repositoryId: number): string {
-  return `${CODER_TOKEN_PREFIX}${repositoryId}`;
+function repoTokenPrefix(repositoryId: number): string {
+  return `${CODER_TOKEN_PREFIX}${repositoryId}-`;
+}
+
+/** Unique per mint, since Forgejo 400s a duplicate name; the mint time orders a repository's tokens. */
+export function coderTokenName(repositoryId: number, mintedAt: number): string {
+  return `${repoTokenPrefix(repositoryId)}${mintedAt}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function tokenMintedAt(name: string, repositoryId: number): number | null {
+  const prefix = repoTokenPrefix(repositoryId);
+  if (!name.startsWith(prefix)) return null;
+  const at = Number(name.slice(prefix.length).split("-")[0]);
+  return Number.isSafeInteger(at) ? at : null;
 }
 
 function ownerAndName(repository: string): { owner: string; name: string } {
@@ -124,17 +138,23 @@ function ownerAndName(repository: string): { owner: string; name: string } {
   return { owner, name };
 }
 
-/** Student-owned so forgejo-repo-webhook sees a submission, not handout sync; Forgejo 400s a duplicate name. */
+export type RepoToken = { name: string; token: string };
+
+/**
+ * Student-owned so forgejo-repo-webhook sees a submission, not handout sync. Leaves older tokens:
+ * two opens at once must not revoke each other's before it is stored (revokeReplacedTokens, after).
+ */
 export async function mintRepoToken(
   config: ForgejoConfig,
   login: string,
   repository: string,
-  repositoryId: number
-): Promise<string> {
+  repositoryId: number,
+  now: number = Date.now()
+): Promise<RepoToken> {
   const { owner, name } = ownerAndName(repository);
-  await revokeRepoToken(config, login, repositoryId);
+  const tokenName = coderTokenName(repositoryId, now);
   const res = await forgejo(config, "POST", `/users/${encodeURIComponent(login)}/tokens`, {
-    name: coderTokenName(repositoryId),
+    name: tokenName,
     scopes: ["write:repository"],
     repositories: [{ owner, name }]
   });
@@ -148,11 +168,30 @@ export async function mintRepoToken(
   }
   if (typeof sha1 !== "string" || !sha1) throw new Error("Forgejo token mint failed: the response has no token");
   redactSecret(sha1);
-  return sha1;
+  return { name: tokenName, token: sha1 };
 }
 
-export async function revokeRepoToken(config: ForgejoConfig, login: string, repositoryId: number): Promise<void> {
-  await deleteToken(config, login, coderTokenName(repositoryId));
+/** Deletes the repository's tokens minted REPLACED_TOKEN_GRACE_MS or more before `now`, except `keep`. */
+export async function revokeReplacedTokens(
+  config: ForgejoConfig,
+  login: string,
+  repositoryId: number,
+  keep: string,
+  now: number = Date.now()
+): Promise<number> {
+  const stale = (await listCoderTokenNames(config, login)).filter((n) => {
+    const at = tokenMintedAt(n, repositoryId);
+    return n !== keep && at !== null && at <= now - REPLACED_TOKEN_GRACE_MS;
+  });
+  for (const name of stale) await deleteToken(config, login, name);
+  return stale.length;
+}
+
+/** Deletes every token minted for the repository. A user that is already gone has none. */
+export async function revokeRepoToken(config: ForgejoConfig, login: string, repositoryId: number): Promise<number> {
+  const names = (await listCoderTokenNames(config, login)).filter((n) => n.startsWith(repoTokenPrefix(repositoryId)));
+  for (const name of names) await deleteToken(config, login, name);
+  return names.length;
 }
 
 async function deleteToken(config: ForgejoConfig, login: string, tokenName: string): Promise<void> {
@@ -167,20 +206,26 @@ async function deleteToken(config: ForgejoConfig, login: string, tokenName: stri
 
 const TOKEN_PAGE_SIZE = 50;
 
-export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
+/** Names of the user's workspace tokens; none when the user is gone. Tokens they made are left out. */
+async function listCoderTokenNames(config: ForgejoConfig, login: string): Promise<string[]> {
   const names: string[] = [];
   for (let page = 1; ; page++) {
     const query = new URLSearchParams({ page: String(page), limit: String(TOKEN_PAGE_SIZE) });
     const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
     if (res.status === 404) {
       await res.body?.cancel();
-      return 0;
+      return [];
     }
     if (!res.ok) throw await failure(res, "token list");
     const tokens = (await res.json()) as { name: string }[];
     names.push(...tokens.map((t) => t.name).filter((n) => n.startsWith(CODER_TOKEN_PREFIX)));
     if (tokens.length < TOKEN_PAGE_SIZE) break;
   }
+  return names;
+}
+
+export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
+  const names = await listCoderTokenNames(config, login);
   for (const name of names) await deleteToken(config, login, name);
   return names.length;
 }

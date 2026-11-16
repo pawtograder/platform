@@ -193,7 +193,7 @@ function fakeTokenSupabase(
 
 Deno.test("revoke: asks for this instance's dropped tokens with the stale window and pass size", async () => {
   const { client, rpcCalls } = fakeTokenSupabase([]);
-  assertEquals(await revokeDroppedTokens(client, config, () => Promise.resolve()), { revoked: 0, failures: [] });
+  assertEquals(await revokeDroppedTokens(client, config, () => Promise.resolve(0)), { revoked: 0, failures: [] });
   assertEquals(rpcCalls[0], {
     name: "forgejo_repo_tokens_to_revoke",
     args: { p_instance_url: config.url, p_stale_minutes: STALE_CLAIM_MINUTES, p_limit: MAX_REVOCATIONS_PER_PASS }
@@ -210,7 +210,7 @@ Deno.test(
     const revoked: [string, number][] = [];
     const result = await revokeDroppedTokens(client, config, (_cfg, login, repositoryId) => {
       revoked.push([login, repositoryId]);
-      return Promise.resolve();
+      return Promise.resolve(1);
     });
     assertEquals(result, { revoked: 2, failures: [] });
     assertEquals(revoked, [
@@ -235,7 +235,7 @@ Deno.test("revoke: a token another pass claimed, or a student who came back, is 
   let calls = 0;
   const result = await revokeDroppedTokens(client, config, () => {
     calls++;
-    return Promise.resolve();
+    return Promise.resolve(1);
   });
   assertEquals(result, { revoked: 0, failures: [] });
   assertEquals(calls, 0);
@@ -247,7 +247,7 @@ Deno.test("revoke: a row with no Forgejo login is deleted without calling Forgej
   let calls = 0;
   const result = await revokeDroppedTokens(client, config, () => {
     calls++;
-    return Promise.resolve();
+    return Promise.resolve(1);
   });
   assertEquals(result.revoked, 1);
   assertEquals(calls, 0);
@@ -264,7 +264,7 @@ Deno.test("revoke: a failed revoke keeps the row and the pass carries on", async
     { claimErrorFor: 3 }
   );
   const result = await revokeDroppedTokens(client, config, (_cfg, login) =>
-    login === "a" ? Promise.reject(new Error("Forgejo token revoke failed: 502")) : Promise.resolve()
+    login === "a" ? Promise.reject(new Error("Forgejo token revoke failed: 502")) : Promise.resolve(1)
   );
   assertEquals(result.revoked, 1);
   assertEquals(

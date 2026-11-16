@@ -4,14 +4,16 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
-import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import {
   coderTokenName,
   ensureAccountForUser,
   forgejoConfig,
   type ForgejoConfig,
   mintRepoToken,
+  REPLACED_TOKEN_GRACE_MS,
   revokeAllCoderTokens,
+  revokeReplacedTokens,
   revokeRepoToken,
   usernameFromEmail
 } from "./ForgejoWrapper.ts";
@@ -179,29 +181,31 @@ const minted = (sha1: string) =>
     201
   );
 
-Deno.test("coderTokenName: one deterministic name per repository", () => {
-  assertEquals(coderTokenName(42), "pawtograder-coder-42");
+const NOW = Date.parse("2026-11-16T12:00:00Z");
+const tokenAt = (repositoryId: number, at: number, suffix = "abcd1234") =>
+  `pawtograder-coder-${repositoryId}-${at}-${suffix}`;
+
+Deno.test("coderTokenName: the repository, the mint time, and a random suffix", () => {
+  const a = coderTokenName(42, NOW);
+  const b = coderTokenName(42, NOW);
+  assert(/^pawtograder-coder-42-\d+-[0-9a-f]{8}$/.test(a), a);
+  assert(a.startsWith(`pawtograder-coder-42-${NOW}-`), a);
+  assert(a !== b, "two mints in the same millisecond get different names");
 });
 
-Deno.test("mintRepoToken: deletes the old token, then mints one scoped to the repository for the student", async () => {
-  await withForgejo([noContent(), minted("f".repeat(40))], async (calls) => {
-    assertEquals(await mintRepoToken(config, "alex.kim", "cs3500-f26/hw1-alex", 42), "f".repeat(40));
-    assertEquals(calls[0].method, "DELETE");
-    assertEquals(calls[0].url, "https://git.example.edu/api/v1/users/alex.kim/tokens/pawtograder-coder-42");
-    assertEquals(calls[1].method, "POST");
-    assertEquals(calls[1].url, "https://git.example.edu/api/v1/users/alex.kim/tokens");
-    assertEquals(calls[1].body, {
-      name: "pawtograder-coder-42",
+Deno.test("mintRepoToken: mints a token scoped to the repository for the student, deleting nothing", async () => {
+  await withForgejo([minted("f".repeat(40))], async (calls) => {
+    const result = await mintRepoToken(config, "alex.kim", "cs3500-f26/hw1-alex", 42, NOW);
+    assertEquals(result.token, "f".repeat(40));
+    assert(result.name.startsWith(`pawtograder-coder-42-${NOW}-`), result.name);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].method, "POST");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/users/alex.kim/tokens");
+    assertEquals(calls[0].body, {
+      name: result.name,
       scopes: ["write:repository"],
       repositories: [{ owner: "cs3500-f26", name: "hw1-alex" }]
     });
-  });
-});
-
-Deno.test("mintRepoToken: a first mint, with no old token to delete, still mints", async () => {
-  await withForgejo([notFound(), minted("a".repeat(40))], async (calls) => {
-    assertEquals(await mintRepoToken(config, "alex.kim", "org/repo", 42), "a".repeat(40));
-    assertEquals(calls.length, 2);
   });
 });
 
@@ -214,19 +218,9 @@ Deno.test("mintRepoToken: a repository that isn't owner/name fails before callin
   }
 });
 
-Deno.test("mintRepoToken: a failed delete stops the mint", async () => {
-  await withForgejo([new Response("boom", { status: 500 })], async (calls) => {
-    await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42), Error, "token revoke failed: 500");
-    assertEquals(calls.length, 1);
-  });
-});
-
 Deno.test("mintRepoToken: a refused mint keeps a known reason and nothing else", async () => {
   await withForgejo(
-    [
-      noContent(),
-      new Response(JSON.stringify({ message: "access token name has been used already" }), { status: 400 })
-    ],
+    [new Response(JSON.stringify({ message: "access token name has been used already" }), { status: 400 })],
     async () => {
       await assertRejects(
         () => mintRepoToken(config, "alex.kim", "org/repo", 42),
@@ -235,30 +229,56 @@ Deno.test("mintRepoToken: a refused mint keeps a known reason and nothing else",
       );
     }
   );
-  await withForgejo([noContent(), ok({ id: 7, name: "pawtograder-coder-42" }, 201)], async () => {
+  await withForgejo([ok({ id: 7, name: "pawtograder-coder-42" }, 201)], async () => {
     await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42), Error, "the response has no token");
   });
 });
 
 Deno.test("mintRepoToken: the token never appears in an error", async () => {
-  await withForgejo([noContent(), new Response("sha1=deadbeefcafe", { status: 201 })], async () => {
+  await withForgejo([new Response("sha1=deadbeefcafe", { status: 201 })], async () => {
     const err = await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42));
     assertEquals(String(err).includes("deadbeefcafe"), false, String(err));
   });
 });
 
-Deno.test("revokeRepoToken: 204 and 404 both count as revoked; anything else is an error", async () => {
-  await withForgejo([noContent(), notFound()], async (calls) => {
-    await revokeRepoToken(config, "alex.kim", 42);
-    await revokeRepoToken(config, "alex.kim", 42);
-    assertEquals(calls.length, 2);
-  });
-  await withForgejo([new Response("<html>bad gateway alex.kim</html>", { status: 502 })], async () => {
-    await assertRejects(
-      () => revokeRepoToken(config, "alex.kim", 42),
-      Error,
-      "token revoke failed: 502 unrecognized response"
+Deno.test(
+  "revokeReplacedTokens: deletes this repository's tokens past the grace window, except the one kept",
+  async () => {
+    const keep = tokenAt(42, NOW);
+    const old = tokenAt(42, NOW - REPLACED_TOKEN_GRACE_MS);
+    const recent = tokenAt(42, NOW - REPLACED_TOKEN_GRACE_MS + 1);
+    const otherRepo = tokenAt(420, NOW - 2 * REPLACED_TOKEN_GRACE_MS);
+    const list = [keep, old, recent, otherRepo, "pawtograder-coder-42-garbage", "laptop"].map((name) => ({ name }));
+    await withForgejo([ok(list), noContent()], async (calls) => {
+      assertEquals(await revokeReplacedTokens(config, "alex.kim", 42, keep, NOW), 1);
+      assertEquals(calls[1].method, "DELETE");
+      assertEquals(decodeURIComponent(calls[1].url.split("/tokens/")[1]), old);
+      assertEquals(calls.length, 2);
+    });
+  }
+);
+
+Deno.test("revokeRepoToken: deletes every token of the repository and no other; 404 counts as revoked", async () => {
+  const list = [tokenAt(42, 1), tokenAt(42, NOW), tokenAt(420, 1), "laptop"].map((name) => ({ name }));
+  await withForgejo([ok(list), noContent(), notFound()], async (calls) => {
+    assertEquals(await revokeRepoToken(config, "alex.kim", 42), 2);
+    assertEquals(
+      calls.slice(1).map((c) => decodeURIComponent(c.url.split("/tokens/")[1])),
+      [tokenAt(42, 1), tokenAt(42, NOW)]
     );
+  });
+  await withForgejo(
+    [ok([{ name: tokenAt(42, 1) }]), new Response("<html>bad gateway alex.kim</html>", { status: 502 })],
+    async () => {
+      await assertRejects(
+        () => revokeRepoToken(config, "alex.kim", 42),
+        Error,
+        "token revoke failed: 502 unrecognized response"
+      );
+    }
+  );
+  await withForgejo([new Response(JSON.stringify({ message: "user does not exist" }), { status: 404 })], async () => {
+    assertEquals(await revokeRepoToken(config, "gone", 42), 0);
   });
 });
 
