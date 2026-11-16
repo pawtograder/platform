@@ -521,6 +521,9 @@ test.describe("poll controls gated by run_polls", () => {
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/polls/${pollId}/responses`);
     await capabilities;
+    // Header always shows Present for staff with view access; wait for it so a
+    // still-loading page cannot pass the Start/Stop absence check below.
+    await expect(page.getByRole("button", { name: "Present" })).toBeVisible();
     await expect(page.getByTestId("toggle-poll-button")).toHaveCount(0);
 
     await page.goto(`/course/${course.id}/manage/polls/new`);
