@@ -3,6 +3,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { useCapability } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import { useConnectionStatus, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { getQueueTypeColor } from "@/lib/utils";
@@ -16,13 +17,13 @@ import DiscordChannelLink from "@/components/discord/discord-channel-link";
 
 /**
  * Component for managing help queues in a course.
- * Allows instructors to create, edit, and delete help queues.
- * Uses real-time updates to show changes made by other instructors.
+ * Create / edit / delete follow help_students (graders could manage queues before #1010).
  */
 export default function HelpQueueManagement() {
   // Modal management
   const createModal = useModalManager();
   const editModal = useModalManager<HelpQueue>();
+  const canHelpStudents = useCapability("help_students");
 
   // Get help queues and connection status using individual hooks
   const queues = useHelpQueues();
@@ -74,10 +75,12 @@ export default function HelpQueueManagement() {
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Heading size="lg">Help Queue Management</Heading>
-        <Button onClick={() => createModal.openModal()}>
-          <Icon as={BsPlus} />
-          Create New Queue
-        </Button>
+        {canHelpStudents && (
+          <Button onClick={() => createModal.openModal()}>
+            <Icon as={BsPlus} />
+            Create New Queue
+          </Button>
+        )}
       </Flex>
 
       {/* Connection Status Indicator */}
@@ -90,10 +93,12 @@ export default function HelpQueueManagement() {
       {queues.length === 0 ? (
         <Box textAlign="center" py={8}>
           <Text mb={4}>No help queues have been created yet.</Text>
-          <Button onClick={() => createModal.openModal()}>
-            <Icon as={BsPlus} />
-            Create Your First Queue
-          </Button>
+          {canHelpStudents && (
+            <Button onClick={() => createModal.openModal()}>
+              <Icon as={BsPlus} />
+              Create Your First Queue
+            </Button>
+          )}
         </Box>
       ) : (
         <Stack spaceY={4}>
@@ -179,22 +184,26 @@ export default function HelpQueueManagement() {
                       variant="outline"
                       tooltipText="Open Discord Channel"
                     />
-                    <Button size="sm" variant="outline" onClick={() => editModal.openModal(queue)}>
-                      <Icon as={BsPencil} />
-                      Edit
-                    </Button>
-                    <PopConfirm
-                      triggerLabel="Delete queue"
-                      trigger={
-                        <Button size="sm" variant="outline" colorPalette="red">
-                          <Icon as={BsTrash} />
-                          Delete
+                    {canHelpStudents && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => editModal.openModal(queue)}>
+                          <Icon as={BsPencil} />
+                          Edit
                         </Button>
-                      }
-                      confirmHeader="Delete Queue"
-                      confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
-                      onConfirm={async () => await handleDeleteQueue(queue.id)}
-                    />
+                        <PopConfirm
+                          triggerLabel="Delete queue"
+                          trigger={
+                            <Button size="sm" variant="outline" colorPalette="red">
+                              <Icon as={BsTrash} />
+                              Delete
+                            </Button>
+                          }
+                          confirmHeader="Delete Queue"
+                          confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
+                          onConfirm={async () => await handleDeleteQueue(queue.id)}
+                        />
+                      </>
+                    )}
                   </HStack>
                 </Flex>
               </Box>

@@ -2,6 +2,7 @@
 
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useDelete, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { BsPlus, BsPencil, BsTrash, BsEye, BsEyeSlash, BsFileText } from "react-icons/bs";
@@ -16,11 +17,11 @@ import { useMemo } from "react";
 
 /**
  * Component for managing help request templates.
- * Allows instructors and graders to create, edit, and manage templates
- * that students can use when creating help requests.
+ * Create / edit / delete follow manage_office_hours (instructor-only before #1010).
  */
 export default function HelpRequestTemplateManagement() {
   const { course_id } = useParams();
+  const canManageOfficeHours = useCapability("manage_office_hours");
 
   // Modal management
   const createModal = useModalManager();
@@ -163,33 +164,35 @@ export default function HelpRequestTemplateManagement() {
           </HStack>
         </Box>
 
-        <HStack spaceX={2}>
-          <Button size="sm" onClick={() => editModal.openModal(template)}>
-            <Icon as={BsPencil} />
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            colorPalette={template.is_active ? "orange" : "green"}
-            onClick={() => handleToggleActive(template.id, template.is_active)}
-            title={template.is_active ? "Deactivate template" : "Activate template"}
-          >
-            <Icon as={template.is_active ? BsEyeSlash : BsEye} />
-            {template.is_active ? "Deactivate" : "Activate"}
-          </Button>
-          <PopConfirm
-            triggerLabel="Delete template"
-            trigger={
-              <Button size="sm" colorPalette="red">
-                <Icon as={BsTrash} />
-                Delete
-              </Button>
-            }
-            confirmHeader="Delete Template"
-            confirmText={`Are you sure you want to delete the template "${template.name}"? This action cannot be undone.`}
-            onConfirm={async () => await handleDeleteTemplate(template.id)}
-          />
-        </HStack>
+        {canManageOfficeHours && (
+          <HStack spaceX={2}>
+            <Button size="sm" onClick={() => editModal.openModal(template)}>
+              <Icon as={BsPencil} />
+              Edit
+            </Button>
+            <Button
+              size="sm"
+              colorPalette={template.is_active ? "orange" : "green"}
+              onClick={() => handleToggleActive(template.id, template.is_active)}
+              title={template.is_active ? "Deactivate template" : "Activate template"}
+            >
+              <Icon as={template.is_active ? BsEyeSlash : BsEye} />
+              {template.is_active ? "Deactivate" : "Activate"}
+            </Button>
+            <PopConfirm
+              triggerLabel="Delete template"
+              trigger={
+                <Button size="sm" colorPalette="red">
+                  <Icon as={BsTrash} />
+                  Delete
+                </Button>
+              }
+              confirmHeader="Delete Template"
+              confirmText={`Are you sure you want to delete the template "${template.name}"? This action cannot be undone.`}
+              onConfirm={async () => await handleDeleteTemplate(template.id)}
+            />
+          </HStack>
+        )}
       </Flex>
     </Box>
   );
@@ -198,20 +201,24 @@ export default function HelpRequestTemplateManagement() {
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Heading size="lg">Help Request Templates</Heading>
-        <Button onClick={() => createModal.openModal()}>
-          <Icon as={BsPlus} />
-          Create New Template
-        </Button>
+        {canManageOfficeHours && (
+          <Button onClick={() => createModal.openModal()}>
+            <Icon as={BsPlus} />
+            Create New Template
+          </Button>
+        )}
       </Flex>
 
       {templates.length === 0 ? (
         <Box textAlign="center" py={8}>
           <Icon as={BsFileText} boxSize={12} mb={4} />
           <Text mb={4}>No help request templates have been created yet.</Text>
-          <Button onClick={() => createModal.openModal()}>
-            <Icon as={BsPlus} />
-            Create Your First Template
-          </Button>
+          {canManageOfficeHours && (
+            <Button onClick={() => createModal.openModal()}>
+              <Icon as={BsPlus} />
+              Create Your First Template
+            </Button>
+          )}
         </Box>
       ) : (
         <Stack spaceY={6}>

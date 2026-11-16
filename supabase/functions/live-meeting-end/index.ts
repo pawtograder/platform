@@ -1,19 +1,15 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { ChimeSDKMeetings } from "npm:@aws-sdk/client-chime-sdk-meetings";
-import { assertUserIsInCourse, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserHasCapabilityOrServiceRole, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { LiveMeetingEndRequest } from "../_shared/FunctionTypes.d.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 async function handleRequest(req: Request) {
   const { courseId, helpRequestId } = (await req.json()) as LiveMeetingEndRequest;
-  const { enrollment } = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
-
-  // Verify user has permission to end meetings (instructors/graders only)
-  if (enrollment.role !== "instructor" && enrollment.role !== "grader") {
-    throw new Error("Only instructors and graders can end meetings");
-  }
+  // Ending a live meeting is a staff help action (#1010 help_students).
+  await assertUserHasCapabilityOrServiceRole(courseId, "help_students", req.headers.get("Authorization"));
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
