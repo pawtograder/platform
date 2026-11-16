@@ -27,6 +27,10 @@
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
+ * 20261115220000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
+ * role and every custom role.
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -41,7 +45,15 @@ import {
   type TestingUser
 } from "./TestingUtils";
 
-const SEEDED_CAPABILITIES = ["manage_assignments", "manage_review_assignments", "manage_roles", "publish_groups"];
+const SEEDED_CAPABILITIES = [
+  "manage_assignments",
+  "manage_flashcards",
+  "manage_review_assignments",
+  "manage_roles",
+  "publish_groups"
+];
+/** Capabilities seed_default_class_roles() puts on the default grader role (not only instructor). */
+const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards"];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
 async function defaultRoles(class_id: number) {
@@ -87,14 +99,14 @@ test.describe("class roles and capabilities", () => {
 
   const roleFor = (roles: typeof rolesA, app_role: string) => roles.find((r) => r.default_for === app_role)!;
 
-  test("a new class gets default roles, and only instructor holds the seeded capabilities", async () => {
+  test("a new class gets default roles, and instructor holds every seeded capability", async () => {
     expect(rolesA.map((r) => r.default_for).sort()).toEqual(DEFAULT_ROLES);
     const capabilitiesOf = (app_role: string) =>
       roleFor(rolesA, app_role)
         .role_capabilities.map((rc) => rc.capability)
         .sort();
     expect(capabilitiesOf("instructor")).toEqual(SEEDED_CAPABILITIES);
-    expect(capabilitiesOf("grader")).toEqual([]);
+    expect(capabilitiesOf("grader")).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect(capabilitiesOf("student")).toEqual([]);
     expect(capabilitiesOf("admin")).toEqual([]);
   });
@@ -212,7 +224,7 @@ test.describe("class roles and capabilities", () => {
       );
     expect(ownCapsError).toBeNull();
     expect(ownCaps ?? [], "a member must read their class's capability mappings").toHaveLength(
-      SEEDED_CAPABILITIES.length
+      SEEDED_CAPABILITIES.length + GRADER_SEEDED_CAPABILITIES.length
     );
 
     // RLS hides rows instead of raising, so check the error first: a null result from an error must not pass.
@@ -326,7 +338,8 @@ test.describe("custom class roles", () => {
       .from("role_capabilities")
       .insert({ role_id: roleId, capability: "manage_review_assignments" });
     expect(addError).toBeNull();
-    expect(await roleCapabilities(roleId)).toEqual(["manage_review_assignments"]);
+    // The copy trigger already put manage_flashcards on the new role from the default grader role.
+    expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "manage_review_assignments"]);
 
     const { data: removed, error: removeError } = await instructor
       .from("role_capabilities")
@@ -425,13 +438,13 @@ test.describe("custom class roles", () => {
       name: graderRole.name,
       default_for: "grader"
     });
-    expect(await roleCapabilities(graderRole.id)).toEqual([]);
+    expect(await roleCapabilities(graderRole.id)).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect(await roleCapabilities(instructorRole.id)).toEqual(SEEDED_CAPABILITIES);
     for (const app_role of ["student", "admin"]) {
       expect(await roleCapabilities(defaultC(app_role).id), `the default ${app_role} role`).toEqual([]);
     }
     expect(await classRole(customId)).toMatchObject({ class_id: classC.id, default_for: null });
-    expect(await roleCapabilities(customId)).toEqual([]);
+    expect(await roleCapabilities(customId)).toEqual(GRADER_SEEDED_CAPABILITIES);
     const { data: fakeRoles, error: fakeRolesError } = await supabase
       .from("class_roles")
       .select("id")
@@ -488,7 +501,7 @@ test.describe("custom class roles", () => {
     }
 
     expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
-    expect(await roleCapabilities(customId)).toEqual(["publish_groups"]);
+    expect(await roleCapabilities(customId)).toEqual(["manage_flashcards", "publish_groups"]);
     const { data: extra, error: extraError } = await supabase
       .from("class_roles")
       .select("id")
@@ -745,8 +758,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     expect((await supabase.from("user_roles").update({ class_role_id: role_id }).eq("id", row.id)).error).toBeNull();
   }
 
-  // The default grader role holds publish_groups, as a migration would set up. Head TA turns
-  // manage_review_assignments on; Course coordinator turns publish_groups off.
+  // The default grader role already holds manage_flashcards; this also gives it publish_groups, as
+  // a migration would. Head TA turns manage_review_assignments on; Course coordinator turns
+  // publish_groups off (and keeps manage_flashcards).
   test.beforeAll(async () => {
     classE = await createClass({ name: "E2E Grader Copy E" });
     instructorE = await createUserInClass({ role: "instructor", class_id: classE.id });
@@ -789,7 +803,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     ).toBeNull();
     try {
       const roleId = await createRoleAsInstructor("Copied TA");
-      expect(await roleCapabilities(roleId)).toEqual(["publish_groups"]);
+      expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "publish_groups"]);
     } finally {
       expect(
         (await supabase.from("role_capabilities").delete().eq("role_id", graderRoleId).eq("capability", "manage_roles"))
@@ -799,14 +813,18 @@ test.describe("custom roles start as a copy of the default grader role", () => {
   });
 
   test("a grader on a custom role holds what that role turns on", async () => {
-    expect(await roleCapabilities(headTaRoleId)).toEqual(["manage_review_assignments", "publish_groups"]);
+    expect(await roleCapabilities(headTaRoleId)).toEqual([
+      "manage_flashcards",
+      "manage_review_assignments",
+      "publish_groups"
+    ]);
     expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
     expect(await holds(headTa, "publish_groups"), "copied from the default grader role").toBe(true);
     expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
   });
 
   test("a custom role can turn a default off, so it holds less than a plain grader", async () => {
-    expect(await roleCapabilities(coordinatorRoleId)).toEqual([]);
+    expect(await roleCapabilities(coordinatorRoleId)).toEqual(["manage_flashcards"]);
     expect(await holds(coordinator, "publish_groups"), "the coordinator turned it off").toBe(false);
     expect(await holds(plainGrader, "publish_groups"), "plain graders keep it").toBe(true);
   });
@@ -872,7 +890,8 @@ test.describe("custom roles start as a copy of the default grader role", () => {
           .select("role_id"),
         `granting manage_assignments to ${which} without holding it`
       );
-      expect(await roleCapabilities(role_id), which).toEqual([]);
+      // manage_flashcards is already on the grader role and was copied onto the custom role.
+      expect(await roleCapabilities(role_id), which).toEqual(GRADER_SEEDED_CAPABILITIES);
     }
 
     // Nor through the copy: a role made from a default grader role that has it doesn't get it.
@@ -890,7 +909,10 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("id")
       .single();
     expect(copyError).toBeNull();
-    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual(["publish_groups"]);
+    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual([
+      "manage_flashcards",
+      "publish_groups"
+    ]);
   });
 });
 
@@ -950,13 +972,18 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
 
   test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
     expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
+      `${classF.id}:manage_flashcards`,
       `${classF.id}:manage_review_assignments`,
       `${classF.id}:publish_groups`
     ]);
     expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
+      `${classF.id}:manage_flashcards`,
       `${classF.id}:publish_groups`
     ]);
-    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([]);
+    // graderG holds manage_flashcards in classG (seeded there), not anything from classF.
+    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([
+      `${classG.id}:manage_flashcards`
+    ]);
     expect(await capabilitiesOf(studentF), "a student gets nothing from the grader role").toEqual([]);
   });
 
@@ -1542,5 +1569,325 @@ test.describe("review assignments follow manage_review_assignments (#1010, step 
     const { data: reviews } = await client.from("review_assignments").select("id").eq("id", review!.id);
     expect(reviews ?? [], "the other class's review assignment").toHaveLength(0);
     expect(await visibleRubricParts(headTa, review!.id), "the other class's rubric parts").toEqual([]);
+  });
+});
+
+test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () => {
+  let classH: Awaited<ReturnType<typeof createClass>>;
+  let instructorH: TestingUser;
+  let plainGrader: TestingUser;
+  let headTa: TestingUser;
+  let withoutCap: TestingUser;
+  let withCapRoleId: number;
+  let withoutCapRoleId: number;
+
+  test.beforeAll(async () => {
+    classH = await createClass({ name: "E2E Flashcards H" });
+    instructorH = await createUserInClass({ role: "instructor", class_id: classH.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classH.id });
+    headTa = await createUserInClass({ role: "grader", class_id: classH.id });
+    withoutCap = await createUserInClass({ role: "grader", class_id: classH.id });
+
+    const { data: withCapRole, error: withError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "Flashcard TA" })
+      .select("id")
+      .single();
+    expect(withError).toBeNull();
+    withCapRoleId = withCapRole!.id;
+    // Copied from the default grader role, so it already has manage_flashcards.
+    expect(await roleCapabilities(withCapRoleId)).toEqual(["manage_flashcards"]);
+    const headTaRow = await userRole(headTa);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withCapRoleId }).eq("id", headTaRow.id)).error
+    ).toBeNull();
+
+    const { data: withoutRole, error: withoutError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "No Flashcards TA" })
+      .select("id")
+      .single();
+    expect(withoutError).toBeNull();
+    withoutCapRoleId = withoutRole!.id;
+    const { data: removed, error: removeError } = await supabase
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", withoutCapRoleId)
+      .eq("capability", "manage_flashcards")
+      .select("capability");
+    expect(removeError).toBeNull();
+    expect(removed, "manage_flashcards turned off").toHaveLength(1);
+    const withoutRow = await userRole(withoutCap);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withoutCapRoleId }).eq("id", withoutRow.id)).error
+    ).toBeNull();
+  });
+
+  async function deckFor(creator: TestingUser, name: string) {
+    const { data, error } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: creator.user_id,
+        name,
+        description: "e2e deck"
+      })
+      .select("id, name")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  async function cardFor(deck_id: number, title: string) {
+    const { data, error } = await supabase
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id,
+        title,
+        prompt: "prompt",
+        answer: "answer",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  async function deckExists(id: number) {
+    const { data, error } = await supabase.from("flashcard_decks").select("id").eq("id", id);
+    expect(error).toBeNull();
+    return (data ?? []).length === 1;
+  }
+
+  test("an instructor creates, edits and deletes flashcard decks and cards", async () => {
+    const instructor = await createAuthenticatedClient(instructorH);
+    const { data: deck, error: createError } = await instructor
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: instructorH.user_id,
+        name: "Instructor deck",
+        description: "by instructor"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await instructor
+      .from("flashcard_decks")
+      .update({ description: "edited" })
+      .eq("id", deck!.id)
+      .select("description");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ description: "edited" }]);
+
+    const { data: card, error: cardError } = await instructor
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "Card 1",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(cardError).toBeNull();
+
+    const { data: deletedCard, error: deleteCardError } = await instructor
+      .from("flashcards")
+      .delete()
+      .eq("id", card!.id)
+      .select("id");
+    expect(deleteCardError).toBeNull();
+    expect(deletedCard).toHaveLength(1);
+
+    const { data: deleted, error: deleteError } = await instructor
+      .from("flashcard_decks")
+      .delete()
+      .eq("id", deck!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+    expect(await deckExists(deck!.id)).toBe(false);
+  });
+
+  test("a default grader still creates, edits and deletes flashcard decks", async () => {
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { data: deck, error: createError } = await grader
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: plainGrader.user_id,
+        name: "Default grader deck",
+        description: "unchanged day one"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await grader
+      .from("flashcard_decks")
+      .update({ description: "grader edit" })
+      .eq("id", deck!.id)
+      .select("description");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ description: "grader edit" }]);
+
+    const { data: deleted, error: deleteError } = await grader
+      .from("flashcard_decks")
+      .delete()
+      .eq("id", deck!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a grader on a custom role with manage_flashcards creates and deletes decks and cards", async () => {
+    const client = await createAuthenticatedClient(headTa);
+    const { data: deck, error: createError } = await client
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: headTa.user_id,
+        name: "Head TA deck",
+        description: "with capability"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: card, error: cardError } = await client
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "Head TA card",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(cardError).toBeNull();
+
+    const { data: deletedCard, error: deleteCardError } = await client
+      .from("flashcards")
+      .delete()
+      .eq("id", card!.id)
+      .select("id");
+    expect(deleteCardError).toBeNull();
+    expect(deletedCard).toHaveLength(1);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("flashcard_decks")
+      .delete()
+      .eq("id", deck!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a grader on a custom role with manage_flashcards turned off is refused", async () => {
+    const existing = await deckFor(instructorH, "Staff deck for refusal");
+    const existingCard = await cardFor(existing.id, "Staff card");
+    const client = await createAuthenticatedClient(withoutCap);
+
+    const { error: insertError } = await client.from("flashcard_decks").insert({
+      class_id: classH.id,
+      creator_id: withoutCap.user_id,
+      name: "Should fail",
+      description: "no capability"
+    });
+    expect(insertError, "creating a deck without manage_flashcards").not.toBeNull();
+
+    expectBlocked(
+      await client.from("flashcard_decks").update({ description: "nope" }).eq("id", existing.id).select("id"),
+      "editing a deck without manage_flashcards"
+    );
+    expect(await deckExists(existing.id), "the deck is unchanged").toBe(true);
+
+    expectBlocked(
+      await client.from("flashcard_decks").delete().eq("id", existing.id).select("id"),
+      "deleting a deck without manage_flashcards"
+    );
+    expect(await deckExists(existing.id)).toBe(true);
+
+    const { error: cardInsertError } = await client.from("flashcards").insert({
+      class_id: classH.id,
+      deck_id: existing.id,
+      title: "Should fail",
+      prompt: "p",
+      answer: "a",
+      order: 2
+    });
+    expect(cardInsertError, "creating a card without manage_flashcards").not.toBeNull();
+
+    expectBlocked(
+      await client.from("flashcards").delete().eq("id", existingCard.id).select("id"),
+      "deleting a card without manage_flashcards"
+    );
+  });
+
+  test("students still read decks and write their own progress", async () => {
+    const student = await createUserInClass({ role: "student", class_id: classH.id });
+    const deck = await deckFor(instructorH, "Student-visible deck");
+    const card = await cardFor(deck.id, "Practice card");
+    const client = await createAuthenticatedClient(student);
+
+    const { data: decks, error: readError } = await client.from("flashcard_decks").select("id").eq("id", deck.id);
+    expect(readError).toBeNull();
+    expect(decks ?? []).toHaveLength(1);
+
+    const { error: progressError } = await client.from("student_flashcard_deck_progress").insert({
+      student_id: student.user_id,
+      class_id: classH.id,
+      card_id: card.id,
+      is_mastered: false
+    });
+    expect(progressError, "students keep writing their own progress").toBeNull();
+
+    const { error: createDeckError } = await client.from("flashcard_decks").insert({
+      class_id: classH.id,
+      creator_id: student.user_id,
+      name: "Student must not create",
+      description: "no"
+    });
+    expect(createDeckError, "students still cannot create decks").not.toBeNull();
+  });
+
+  test("manage_flashcards in one class doesn't reach another class", async () => {
+    const otherClass = await createClass({ name: "E2E Flashcards Other" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const { data: otherDeck, error } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: otherClass.id,
+        creator_id: otherInstructor.user_id,
+        name: "Other class deck",
+        description: "not this class"
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+
+    const client = await createAuthenticatedClient(headTa);
+    expectBlocked(
+      await client.from("flashcard_decks").update({ description: "cross-class" }).eq("id", otherDeck!.id).select("id"),
+      "editing another class's deck"
+    );
+    expectBlocked(
+      await client.from("flashcard_decks").delete().eq("id", otherDeck!.id).select("id"),
+      "deleting another class's deck"
+    );
+    const { data: stillThere, error: checkError } = await supabase
+      .from("flashcard_decks")
+      .select("id")
+      .eq("id", otherDeck!.id);
+    expect(checkError).toBeNull();
+    expect(stillThere ?? []).toHaveLength(1);
   });
 });

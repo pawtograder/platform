@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -132,3 +132,12 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## manage_flashcards
+
+`manage_flashcards` covers creating, editing, deleting and copying flashcard decks and cards
+(area 13). It sits on the default instructor role, the default grader role and every custom role, so
+day-one access matches what graders could do before. The Course Settings "Flashcard Decks" entry and
+the create / edit / delete controls follow `useCapability("manage_flashcards")`. Left as views: class
+members reading decks and cards, students writing their own progress and interaction logs, and staff
+reading class-wide progress and logs for analytics.

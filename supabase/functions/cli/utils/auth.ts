@@ -111,6 +111,47 @@ export async function assertUserIsClassInstructor(
 }
 
 /**
+ * Throws 403 unless `userId` holds `capability` on their class role in the class
+ * (#1010, docs/capabilities.md). CLI handlers run on the service-role client, so
+ * this is the same rule RLS uses via user_class_ids_with_capability, asked of the
+ * caller's class_role_id.
+ */
+export async function assertUserHasClassCapability(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  classId: number,
+  capability: string
+): Promise<void> {
+  const { data: role, error: roleError } = await supabase
+    .from("user_roles")
+    .select("class_role_id")
+    .eq("user_id", userId)
+    .eq("class_id", classId)
+    .eq("disabled", false)
+    .in("role", CLI_CLASS_ROLES)
+    .order("id", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (roleError) throw new CLICommandError(`Failed to verify class access: ${roleError.message}`, 500);
+  if (!role) {
+    throw new CLICommandError("You do not have instructor/grader access to this class", 403);
+  }
+
+  const { data: held, error: capError } = await supabase
+    .from("role_capabilities")
+    .select("capability")
+    .eq("role_id", role.class_role_id)
+    .eq("capability", capability)
+    .maybeSingle();
+
+  if (capError) throw new CLICommandError(`Failed to verify ${capability}: ${capError.message}`, 500);
+  if (!held) {
+    throw new CLICommandError(`You do not have ${capability} for this class`, 403);
+  }
+}
+
+/**
  * The caller's private profile id in a class.
  *
  * Attribution columns (`help_requests.resolved_by`,

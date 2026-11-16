@@ -5,6 +5,7 @@ import { Field } from "@/components/ui/field";
 import Markdown from "@/components/ui/markdown";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { useCapability } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Heading, HStack, IconButton, Spinner, Text, VStack } from "@chakra-ui/react";
@@ -30,6 +31,8 @@ export default function FlashcardDeckPage() {
   const params = useParams();
   const router = useRouter();
   const deck_id = params.deck_id as string;
+  // Editing decks and cards needs manage_flashcards (#1010).
+  const canManageFlashcards = useCapability("manage_flashcards");
 
   // Modal management for adding flashcards
   const { isOpen: isAddCardModalOpen, openModal: openAddCardModal, closeModal: closeAddCardModal } = useModalManager();
@@ -187,12 +190,14 @@ export default function FlashcardDeckPage() {
           </VStack>
         </HStack>
 
-        <HStack gap={3}>
-          <Button onClick={() => openEditDeckModal()} variant="outline" size="sm">
-            <FaEdit />
-            Edit Deck (YAML)
-          </Button>
-        </HStack>
+        {canManageFlashcards && (
+          <HStack gap={3}>
+            <Button onClick={() => openEditDeckModal()} variant="outline" size="sm">
+              <FaEdit />
+              Edit Deck (YAML)
+            </Button>
+          </HStack>
+        )}
       </HStack>
 
       {/* Deck Details Section */}
@@ -219,10 +224,12 @@ export default function FlashcardDeckPage() {
               {flashcards.length} {flashcards.length === 1 ? "card" : "cards"}
             </Badge>
           </HStack>
-          <Button onClick={() => openAddCardModal()} size="sm">
-            <FaPlus />
-            Add Flashcard
-          </Button>
+          {canManageFlashcards && (
+            <Button onClick={() => openAddCardModal()} size="sm">
+              <FaPlus />
+              Add Flashcard
+            </Button>
+          )}
         </HStack>
 
         {isFlashcardsLoading ? (
@@ -235,10 +242,12 @@ export default function FlashcardDeckPage() {
             <Text mb={4} fontSize="md">
               No flashcards in this deck yet
             </Text>
-            <Button onClick={() => openAddCardModal()} variant="solid">
-              <FaPlus />
-              Add Your First Flashcard
-            </Button>
+            {canManageFlashcards && (
+              <Button onClick={() => openAddCardModal()} variant="solid">
+                <FaPlus />
+                Add Your First Flashcard
+              </Button>
+            )}
           </Box>
         ) : (
           <VStack align="stretch" gap={4}>
@@ -282,28 +291,30 @@ export default function FlashcardDeckPage() {
                     </Box>
                   </VStack>
 
-                  <HStack gap={2} flexShrink={0}>
-                    <Button size="sm" variant="outline" onClick={() => openEditCardModal(card.id)}>
-                      <FaEdit />
-                      Edit
-                    </Button>
-                    <PopConfirm
-                      triggerLabel="Delete flashcard"
-                      trigger={
-                        <IconButton
-                          size="sm"
-                          variant="outline"
-                          colorPalette="red"
-                          aria-label={`Delete flashcard: ${card.title}`}
-                        >
-                          <FaTrash />
-                        </IconButton>
-                      }
-                      confirmHeader="Delete Flashcard"
-                      confirmText="Are you sure you want to delete this flashcard? This action cannot be undone."
-                      onConfirm={async () => await handleDeleteFlashcard(card.id)}
-                    />
-                  </HStack>
+                  {canManageFlashcards && (
+                    <HStack gap={2} flexShrink={0}>
+                      <Button size="sm" variant="outline" onClick={() => openEditCardModal(card.id)}>
+                        <FaEdit />
+                        Edit
+                      </Button>
+                      <PopConfirm
+                        triggerLabel="Delete flashcard"
+                        trigger={
+                          <IconButton
+                            size="sm"
+                            variant="outline"
+                            colorPalette="red"
+                            aria-label={`Delete flashcard: ${card.title}`}
+                          >
+                            <FaTrash />
+                          </IconButton>
+                        }
+                        confirmHeader="Delete Flashcard"
+                        confirmText="Are you sure you want to delete this flashcard? This action cannot be undone."
+                        onConfirm={async () => await handleDeleteFlashcard(card.id)}
+                      />
+                    </HStack>
+                  )}
                 </HStack>
               </Box>
             ))}
@@ -311,31 +322,32 @@ export default function FlashcardDeckPage() {
         )}
       </VStack>
 
-      {/* Add Flashcard Modal */}
-      <AddFlashCardModal
-        isOpen={isAddCardModalOpen}
-        onClose={closeAddCardModal}
-        deckId={deck_id}
-        onSuccess={handleFlashcardAdded}
-      />
+      {canManageFlashcards && (
+        <>
+          <AddFlashCardModal
+            isOpen={isAddCardModalOpen}
+            onClose={closeAddCardModal}
+            deckId={deck_id}
+            onSuccess={handleFlashcardAdded}
+          />
 
-      {/* Edit Flashcard Modal */}
-      {editingCardId && (
-        <EditFlashCardModal
-          isOpen={isEditCardModalOpen}
-          onClose={closeEditCardModal}
-          flashcardId={editingCardId}
-          onSuccess={handleFlashcardUpdated}
-        />
+          {editingCardId && (
+            <EditFlashCardModal
+              isOpen={isEditCardModalOpen}
+              onClose={closeEditCardModal}
+              flashcardId={editingCardId}
+              onSuccess={handleFlashcardUpdated}
+            />
+          )}
+
+          <EditDeckModal
+            isOpen={isEditDeckModalOpen}
+            onClose={closeEditDeckModal}
+            deckId={deck_id}
+            onSuccess={handleDeckUpdated}
+          />
+        </>
       )}
-
-      {/* Edit Deck Modal */}
-      <EditDeckModal
-        isOpen={isEditDeckModalOpen}
-        onClose={closeEditDeckModal}
-        deckId={deck_id}
-        onSuccess={handleDeckUpdated}
-      />
     </VStack>
   );
 }
