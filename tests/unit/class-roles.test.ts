@@ -1,5 +1,6 @@
 import {
   capabilityLabel,
+  deleteRoleDialogCopy,
   editableRoles,
   ROLE_CHANGE_REFUSED_MESSAGE,
   ROLE_NAME_MAX_LENGTH,
@@ -63,5 +64,23 @@ describe("Staff Roles page helpers", () => {
     expect(roleChangeErrorMessage({ code: "XX000", message: "boom" })).toBe("The change wasn't saved: boom");
     expect(roleChangeErrorMessage(null)).toMatch(/Check your connection/);
     expect(ROLE_CHANGE_REFUSED_MESSAGE).toMatch(/wasn't saved/);
+  });
+
+  test("the delete dialog blocks on active people, then on removed graders only, else allows delete", () => {
+    expect(deleteRoleDialogCopy({ active: 1, disabled: 0 })).toEqual({
+      blocked: true,
+      description: "1 person is on this role. Move them to another role under People first, then delete it."
+    });
+    expect(deleteRoleDialogCopy({ active: 0, disabled: 1 })).toEqual({
+      blocked: true,
+      description:
+        "1 removed grader is still on this role. Re-enable them under Enrollments and move them to another role, then delete it."
+    });
+    expect(deleteRoleDialogCopy({ active: 0, disabled: 2 }).description).toMatch(/2 removed graders/);
+    expect(deleteRoleDialogCopy({ active: 2, disabled: 3 }).description).toMatch(/2 people are/);
+    expect(deleteRoleDialogCopy({ active: 0, disabled: 0 })).toEqual({
+      blocked: false,
+      description: "Nobody is on this role. Deleting it can't be undone."
+    });
   });
 });

@@ -82,3 +82,36 @@ export function roleChangeErrorMessage(error: { code?: string; message?: string 
 /** The message for a write the database accepted but applied to no rows (refused by a policy). */
 export const ROLE_CHANGE_REFUSED_MESSAGE =
   "The change wasn't saved. You may no longer have permission to change roles in this class.";
+
+/** Active graders shown in the People table, plus every enrollment (including disabled) that still holds the role. */
+export type RoleMembershipCounts = { active: number; disabled: number };
+
+/**
+ * Copy for the delete-role dialog. The foreign key counts every enrollment on the role, so a role
+ * whose only members are disabled graders is blocked even though the People table shows nobody.
+ */
+export function deleteRoleDialogCopy(counts: RoleMembershipCounts): { blocked: boolean; description: string } {
+  const { active, disabled } = counts;
+  if (active > 0) {
+    return {
+      blocked: true,
+      description:
+        active === 1
+          ? "1 person is on this role. Move them to another role under People first, then delete it."
+          : `${active} people are on this role. Move them to another role under People first, then delete it.`
+    };
+  }
+  if (disabled > 0) {
+    return {
+      blocked: true,
+      description:
+        disabled === 1
+          ? "1 removed grader is still on this role. Re-enable them under Enrollments and move them to another role, then delete it."
+          : `${disabled} removed graders are still on this role. Re-enable them under Enrollments and move them to another role, then delete it.`
+    };
+  }
+  return {
+    blocked: false,
+    description: "Nobody is on this role. Deleting it can't be undone."
+  };
+}
