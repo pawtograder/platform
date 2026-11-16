@@ -3867,4 +3867,250 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
     expect(ownerUpdateError).toBeNull();
     expect(ownerUpdate).toEqual([{ request: "Private owner write edited" }]);
   });
+
+  test("capability holders can repair or delete legacy mismatched office-hours rows", async () => {
+    // Production may already have class_id=A rows pointing at a B parent; nothing
+    // prevented that before. Service-role seeds such rows (no same-class CHECK).
+    const classB = await createClass({ name: "E2E OH Legacy-Mismatch B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const queueB = await insertOfficeHoursQueue({ class_id: classB.id, name: "Legacy B queue" });
+    const reqB = await insertHelpRequest({
+      class_id: classB.id,
+      student_profile_id: studentB.private_profile_id,
+      request: "Legacy mismatch B request",
+      help_queue_id: queueB.id,
+      status: "open",
+      active_staff_profile_id: instructorB.private_profile_id
+    });
+    const reqA = await seedRequest("Legacy mismatch A request");
+
+    const { data: modToDelete, error: modDeleteSeedError } = await supabase
+      .from("help_request_moderation")
+      .insert({
+        class_id: classH.id,
+        help_request_id: reqB.id,
+        student_profile_id: studentH.private_profile_id,
+        moderator_profile_id: instructorH.private_profile_id,
+        action_type: "warning",
+        reason: "legacy delete"
+      })
+      .select("id")
+      .single();
+    expect(modDeleteSeedError).toBeNull();
+
+    const { data: modToRepair, error: modRepairSeedError } = await supabase
+      .from("help_request_moderation")
+      .insert({
+        class_id: classH.id,
+        help_request_id: reqB.id,
+        student_profile_id: studentH.private_profile_id,
+        moderator_profile_id: instructorH.private_profile_id,
+        action_type: "warning",
+        reason: "legacy repair"
+      })
+      .select("id, help_request_id")
+      .single();
+    expect(modRepairSeedError).toBeNull();
+
+    const { data: modNormal, error: modNormalSeedError } = await supabase
+      .from("help_request_moderation")
+      .insert({
+        class_id: classH.id,
+        help_request_id: reqA.id,
+        student_profile_id: studentH.private_profile_id,
+        moderator_profile_id: instructorH.private_profile_id,
+        action_type: "warning",
+        reason: "legacy normal"
+      })
+      .select("id, help_request_id")
+      .single();
+    expect(modNormalSeedError).toBeNull();
+
+    const { data: assignToDelete, error: assignDeleteSeedError } = await supabase
+      .from("help_queue_assignments")
+      .insert({
+        class_id: classH.id,
+        help_queue_id: queueB.id,
+        ta_profile_id: withHelp.private_profile_id,
+        is_active: false
+      })
+      .select("id")
+      .single();
+    expect(assignDeleteSeedError).toBeNull();
+
+    const { data: assignToRepair, error: assignRepairSeedError } = await supabase
+      .from("help_queue_assignments")
+      .insert({
+        class_id: classH.id,
+        help_queue_id: queueB.id,
+        ta_profile_id: instructorH.private_profile_id,
+        is_active: false
+      })
+      .select("id, help_queue_id")
+      .single();
+    expect(assignRepairSeedError).toBeNull();
+
+    const { data: assignNormal, error: assignNormalSeedError } = await supabase
+      .from("help_queue_assignments")
+      .insert({
+        class_id: classH.id,
+        help_queue_id: queueId,
+        ta_profile_id: plainGrader.private_profile_id,
+        is_active: false
+      })
+      .select("id, help_queue_id")
+      .single();
+    expect(assignNormalSeedError).toBeNull();
+
+    const { data: activityToDelete, error: activityDeleteSeedError } = await supabase
+      .from("student_help_activity")
+      .insert({
+        class_id: classH.id,
+        help_request_id: reqB.id,
+        student_profile_id: studentH.private_profile_id,
+        activity_type: "request_created",
+        activity_description: "legacy delete"
+      })
+      .select("id")
+      .single();
+    expect(activityDeleteSeedError).toBeNull();
+
+    const { data: activityToRepair, error: activityRepairSeedError } = await supabase
+      .from("student_help_activity")
+      .insert({
+        class_id: classH.id,
+        help_request_id: reqB.id,
+        student_profile_id: studentH.private_profile_id,
+        activity_type: "request_created",
+        activity_description: "legacy repair"
+      })
+      .select("id, help_request_id")
+      .single();
+    expect(activityRepairSeedError).toBeNull();
+
+    const { data: activityNormal, error: activityNormalSeedError } = await supabase
+      .from("student_help_activity")
+      .insert({
+        class_id: classH.id,
+        help_request_id: reqA.id,
+        student_profile_id: studentH.private_profile_id,
+        activity_type: "request_created",
+        activity_description: "legacy normal"
+      })
+      .select("id, help_request_id")
+      .single();
+    expect(activityNormalSeedError).toBeNull();
+
+    const manager = await createAuthenticatedClient(withManage);
+    const helper = await createAuthenticatedClient(withHelp);
+
+    const { data: modDeleted, error: modDeleteError } = await manager
+      .from("help_request_moderation")
+      .delete()
+      .eq("id", modToDelete!.id)
+      .select("id");
+    expect(modDeleteError).toBeNull();
+    expect(modDeleted).toHaveLength(1);
+    const { data: modGone } = await supabase.from("help_request_moderation").select("id").eq("id", modToDelete!.id);
+    expect(modGone ?? []).toHaveLength(0);
+
+    const { data: modRepaired, error: modRepairError } = await manager
+      .from("help_request_moderation")
+      .update({ help_request_id: reqA.id })
+      .eq("id", modToRepair!.id)
+      .select("help_request_id");
+    expect(modRepairError).toBeNull();
+    expect(modRepaired).toEqual([{ help_request_id: reqA.id }]);
+
+    const modRetarget = await manager
+      .from("help_request_moderation")
+      .update({ help_request_id: reqB.id })
+      .eq("id", modNormal!.id)
+      .select("id");
+    expect(
+      (modRetarget.error as { code?: string } | null)?.code,
+      "retargeting an A moderation row to a B help request"
+    ).toBe("42501");
+    const { data: modStillA } = await supabase
+      .from("help_request_moderation")
+      .select("help_request_id")
+      .eq("id", modNormal!.id)
+      .single();
+    expect(modStillA?.help_request_id).toBe(reqA.id);
+
+    const { data: assignDeleted, error: assignDeleteError } = await helper
+      .from("help_queue_assignments")
+      .delete()
+      .eq("id", assignToDelete!.id)
+      .select("id");
+    expect(assignDeleteError).toBeNull();
+    expect(assignDeleted).toHaveLength(1);
+    const { data: assignGone } = await supabase
+      .from("help_queue_assignments")
+      .select("id")
+      .eq("id", assignToDelete!.id);
+    expect(assignGone ?? []).toHaveLength(0);
+
+    const { data: assignRepaired, error: assignRepairError } = await helper
+      .from("help_queue_assignments")
+      .update({ help_queue_id: queueId })
+      .eq("id", assignToRepair!.id)
+      .select("help_queue_id");
+    expect(assignRepairError).toBeNull();
+    expect(assignRepaired).toEqual([{ help_queue_id: queueId }]);
+
+    const assignRetarget = await helper
+      .from("help_queue_assignments")
+      .update({ help_queue_id: queueB.id })
+      .eq("id", assignNormal!.id)
+      .select("id");
+    expect(
+      (assignRetarget.error as { code?: string } | null)?.code,
+      "retargeting an A queue assignment to a B queue"
+    ).toBe("42501");
+    const { data: assignStillA } = await supabase
+      .from("help_queue_assignments")
+      .select("help_queue_id")
+      .eq("id", assignNormal!.id)
+      .single();
+    expect(assignStillA?.help_queue_id).toBe(queueId);
+
+    const { data: activityDeleted, error: activityDeleteError } = await manager
+      .from("student_help_activity")
+      .delete()
+      .eq("id", activityToDelete!.id)
+      .select("id");
+    expect(activityDeleteError).toBeNull();
+    expect(activityDeleted).toHaveLength(1);
+    const { data: activityGone } = await supabase
+      .from("student_help_activity")
+      .select("id")
+      .eq("id", activityToDelete!.id);
+    expect(activityGone ?? []).toHaveLength(0);
+
+    const { data: activityRepaired, error: activityRepairError } = await manager
+      .from("student_help_activity")
+      .update({ help_request_id: reqA.id })
+      .eq("id", activityToRepair!.id)
+      .select("help_request_id");
+    expect(activityRepairError).toBeNull();
+    expect(activityRepaired).toEqual([{ help_request_id: reqA.id }]);
+
+    const activityRetarget = await manager
+      .from("student_help_activity")
+      .update({ help_request_id: reqB.id })
+      .eq("id", activityNormal!.id)
+      .select("id");
+    expect(
+      (activityRetarget.error as { code?: string } | null)?.code,
+      "retargeting an A activity row to a B help request"
+    ).toBe("42501");
+    const { data: activityStillA } = await supabase
+      .from("student_help_activity")
+      .select("help_request_id")
+      .eq("id", activityNormal!.id)
+      .single();
+    expect(activityStillA?.help_request_id).toBe(reqA.id);
+  });
 });

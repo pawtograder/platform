@@ -13,8 +13,8 @@
  *   custom role with it turned off hides those controls.
  * - Office hours: Start/Stop Working, End/Delete assignment, karma create/edit/delete, and Create New
  *   Queue need help_students. Chat Moderation shows for help_students OR manage_office_hours.
- *   Templates settings need manage_office_hours. Start video call stays as on this branch
- *   (canStartCall follows help_students in the UI; the live-meeting edge functions stay role-based).
+ *   Template create/edit/delete need manage_office_hours (the settings page stays readable).
+ *   AI Help, Discord, and video Start/End stay role-based with the live-meeting edge functions.
  *
  * Default roles only for the review and groups checks: the instructor role holds those capabilities,
  * the grader role holds neither, until the last review test gives the default grader role
@@ -723,12 +723,13 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await expect(page.getByRole("button", { name: /Create New Queue|Create Your First Queue/ })).toBeVisible();
   });
 
-  test("a grader without manage_office_hours is redirected from templates settings", async ({ page }) => {
+  test("a grader without manage_office_hours can open templates settings but not create", async ({ page }) => {
     await loginAsUser(page, plainGrader, course);
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
     await capabilities;
-    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/office-hours/?$`));
+    await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Create New Template|Create Your First Template/ })).toHaveCount(0);
   });
 
   test("an instructor with manage_office_hours can open templates settings", async ({ page }) => {
