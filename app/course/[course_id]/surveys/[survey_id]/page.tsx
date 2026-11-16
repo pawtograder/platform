@@ -211,6 +211,9 @@ export default function SurveyTakingPage() {
   // only be refused.
   const submitCheckPendingRef = useRef(false);
   const checkSubmitOnReconnectRef = useRef<() => Promise<void>>(async () => {});
+  // Live SurveyJS model, for restoring answers from a freshly fetched submitted row when editing
+  // is no longer allowed. Becoming read-only does not update the model by itself.
+  const surveyModelRef = useRef<Model | null>(null);
 
   useEffect(() => {
     const queue = new SurveyAutosaveQueue<ResponseData>({
@@ -437,20 +440,28 @@ export default function SurveyTakingPage() {
 
   // The server holds a submitted response that this page took for a draft: a Complete whose reply
   // was lost, or a submit from another tab. Show it as submitted, as a reload would.
-  const showSubmittedResponse = useCallback((row: SurveyResponse) => {
-    responseStateRef.current = "submitted";
-    setSubmitError(null);
-    setSubmittedSinceLoad(true);
-    // Hand the form the submitted row. Without editing it locks and must show what was accepted,
-    // even when that JSON matches the draft already applied (Survey re-applies on lock). With
-    // editing, Survey keeps newer local answers until they save into the submission.
-    setExistingResponse(row);
-    toaster.create({
-      title: "Survey Submitted",
-      description: "Your survey has been submitted.",
-      type: "success"
-    });
-  }, []);
+  const showSubmittedResponse = useCallback(
+    (row: SurveyResponse) => {
+      responseStateRef.current = "submitted";
+      setSubmitError(null);
+      setSubmittedSinceLoad(true);
+      // Restore from this freshly fetched row only when it is submitted and this student can no
+      // longer edit. Set the live model here: becoming read-only must not re-apply initialData
+      // (that also runs while Complete is in flight and would wipe newer typed answers). With
+      // editing still allowed, keep the local answers; submittedSinceLoad marks it submitted.
+      if (row.is_submitted && !allowResponseEditing) {
+        setExistingResponse(row);
+        const model = surveyModelRef.current;
+        if (model) model.data = (row.response as ResponseData) ?? {};
+      }
+      toaster.create({
+        title: "Survey Submitted",
+        description: "Your survey has been submitted.",
+        type: "success"
+      });
+    },
+    [allowResponseEditing]
+  );
 
   const handleSurveyComplete = useCallback(
     async (surveyModel: Model, options?: CompleteEvent) => {
@@ -530,9 +541,11 @@ export default function SurveyTakingPage() {
       } finally {
         setIsSubmitting(false);
         isSubmittingRef.current = false;
-        // The answers were not submitted, so they go back to being saved as a draft. Offline, the
-        // queue holds them until the browser reconnects.
-        if (!submitted) autosaveQueue?.schedule(surveyModel.data);
+        // The answers were not submitted, so they go back to being saved as a draft. Use the
+        // snapshot captured when Complete was pressed: the live model may have been locked
+        // read-only during the request and must not be the source of this recovery write.
+        // Offline, the queue holds them until the browser reconnects.
+        if (!submitted) autosaveQueue?.schedule(surveyData);
         if (outcome === "unknown-until-online") {
           // The queue stays paused until checkSubmitOnReconnect has read the row.
           submitCheckPendingRef.current = true;
@@ -797,6 +810,7 @@ export default function SurveyTakingPage() {
             title={survey.title}
             initialData={existingResponse?.response}
             readOnly={isReadOnly || isSubmitting}
+            surveyModelRef={surveyModelRef}
             onComplete={handleSurveyComplete}
             onValueChanged={handleValueChanged}
             isPopup={false}
