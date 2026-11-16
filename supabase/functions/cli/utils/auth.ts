@@ -111,10 +111,14 @@ export async function assertUserIsClassInstructor(
 }
 
 /**
- * Throws 403 unless `userId` holds `capability` on their class role in the class
- * (#1010, docs/capabilities.md). CLI handlers run on the service-role client, so
- * this is the same rule RLS uses via user_class_ids_with_capability, asked of the
- * caller's class_role_id.
+ * Throws 403 unless the signed-in user holds `capability` in the class (#1010,
+ * docs/capabilities.md). Asks `user_class_ids_with_capability()`, the same
+ * function RLS uses, so a hand-rolled role join cannot disagree with the
+ * policies (for example a grader on a custom role with the capability turned
+ * off). Pass the caller-scoped client from `ctx.supabase` (the JWT minted for
+ * the token owner in authenticateMCPRequest); the admin client has no
+ * auth.uid() and would always fail closed. `userId` is kept for call-site
+ * symmetry with the other helpers; identity comes from the JWT.
  */
 export async function assertUserHasClassCapability(
   supabase: SupabaseClient<Database>,
@@ -122,31 +126,14 @@ export async function assertUserHasClassCapability(
   classId: number,
   capability: string
 ): Promise<void> {
-  const { data: role, error: roleError } = await supabase
-    .from("user_roles")
-    .select("class_role_id")
-    .eq("user_id", userId)
-    .eq("class_id", classId)
-    .eq("disabled", false)
-    .in("role", CLI_CLASS_ROLES)
-    .order("id", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (roleError) throw new CLICommandError(`Failed to verify class access: ${roleError.message}`, 500);
-  if (!role) {
-    throw new CLICommandError("You do not have instructor/grader access to this class", 403);
-  }
-
-  const { data: held, error: capError } = await supabase
-    .from("role_capabilities")
-    .select("capability")
-    .eq("role_id", role.class_role_id)
-    .eq("capability", capability)
-    .maybeSingle();
-
-  if (capError) throw new CLICommandError(`Failed to verify ${capability}: ${capError.message}`, 500);
-  if (!held) {
+  void userId;
+  const { data: classIds, error } = await supabase.rpc("user_class_ids_with_capability", {
+    p_capability: capability
+  });
+  // Fail closed on lookup errors (same posture as assertUserHasCapabilityOrServiceRole).
+  if (error) throw new CLICommandError(`Failed to verify ${capability}: ${error.message}`, 500);
+  // Number(): a body that sends class_id as a string still matches.
+  if (!(classIds ?? []).includes(Number(classId))) {
     throw new CLICommandError(`You do not have ${capability} for this class`, 403);
   }
 }

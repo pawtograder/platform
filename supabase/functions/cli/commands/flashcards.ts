@@ -80,10 +80,10 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
   // Copy creates decks and cards in the target, so both sides need manage_flashcards
-  // (#1010). Class membership alone would still let a grader without the capability
-  // copy content they can no longer create in the UI.
-  await assertUserHasClassCapability(supabase, ctx.userId, sourceClass.id, "manage_flashcards");
-  await assertUserHasClassCapability(supabase, ctx.userId, targetClass.id, "manage_flashcards");
+  // (#1010). Ask via ctx.supabase (caller JWT) so the check matches RLS; the admin
+  // client has no auth.uid() for user_class_ids_with_capability.
+  await assertUserHasClassCapability(ctx.supabase, ctx.userId, sourceClass.id, "manage_flashcards");
+  await assertUserHasClassCapability(ctx.supabase, ctx.userId, targetClass.id, "manage_flashcards");
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");
