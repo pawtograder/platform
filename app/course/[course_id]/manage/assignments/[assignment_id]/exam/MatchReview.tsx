@@ -2,8 +2,8 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { Badge, Button, Flex, Heading, HStack, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
-import { useCallback, useEffect, useState } from "react";
+import { Badge, Button, Flex, Heading, HStack, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Scanned = {
   id: number;
@@ -18,41 +18,91 @@ type Scanned = {
 };
 type RosterStudent = { profile_id: string; name: string | null };
 
-export default function MatchReview({ batchId, classId }: { batchId: number; classId: number }) {
+const POLL_MS = 4000;
+
+export default function MatchReview({
+  batchId,
+  classId,
+  batchStatus,
+  onBatchChanged
+}: {
+  batchId: number;
+  classId: number;
+  /** The parent's exam_scan_batches.status for this batch; rows reload whenever it changes. */
+  batchStatus: string;
+  /** Asks the parent to reload the batch, after something here changed its status. */
+  onBatchChanged: () => void;
+}) {
   const [rows, setRows] = useState<Scanned[]>([]);
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [rowsError, setRowsError] = useState<string | null>(null);
+  // Latest load wins, and nothing is written after unmount (see scans/page.tsx).
+  const loadSeq = useRef(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     const supabase = createClient();
-    const [{ data: scanned }, { data: students }] = await Promise.all([
-      supabase
-        .from("exam_scanned_submissions")
-        .select(
-          "id, exam_index, detected_name, detected_sis_id, matched_profile_id, match_confidence, match_status, submission_id, finalized_at"
-        )
-        .eq("batch_id", batchId)
-        .order("exam_index"),
-      supabase
+    const { data: scanned, error } = await supabase
+      .from("exam_scanned_submissions")
+      .select(
+        "id, exam_index, detected_name, detected_sis_id, matched_profile_id, match_confidence, match_status, submission_id, finalized_at"
+      )
+      .eq("batch_id", batchId)
+      .order("exam_index");
+    if (!mounted.current || seq !== loadSeq.current) return;
+    // A failed refresh keeps the last rows instead of emptying the table.
+    setRowsError(error ? error.message : null);
+    if (error) return;
+    setRows((scanned ?? []) as Scanned[]);
+    setLoaded(true);
+  }, [batchId]);
+
+  // The roster does not change while the page is open; load it once, not on every poll.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { data: students } = await createClient()
         .from("user_roles")
         .select("private_profile_id, profiles!user_roles_private_profile_id_fkey(name)")
         .eq("class_id", classId)
-        .eq("role", "student")
-    ]);
-    setRows((scanned ?? []) as Scanned[]);
-    setRoster(
-      (students ?? [])
-        .filter((s) => s.private_profile_id)
-        .map((s) => ({
-          profile_id: s.private_profile_id as string,
-          name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null
-        }))
-    );
-  }, [batchId, classId]);
+        .eq("role", "student");
+      if (cancelled) return;
+      setRoster(
+        (students ?? [])
+          .filter((s) => s.private_profile_id)
+          .map((s) => ({
+            profile_id: s.private_profile_id as string,
+            name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null
+          }))
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId]);
 
+  // Reload when the batch changes state, e.g. to completed while submissions were being created.
   useEffect(() => {
-    load();
-  }, [load]);
+    void load();
+  }, [load, batchStatus]);
+
+  // While the worker creates submissions, rows change one at a time; follow them.
+  useEffect(() => {
+    if (batchStatus !== "finalizing") return;
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, POLL_MS);
+    return () => clearInterval(t);
+  }, [batchStatus, load]);
 
   const setMatch = useCallback(
     async (id: number, profileId: string | null) => {
@@ -117,12 +167,16 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
       const { data, error } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
       if (error) throw error;
       toaster.success({ title: `Queued ${data ?? 0} submission(s) for creation` });
+      // The RPC moved the batch to 'finalizing'. Reload here and in the parent, so the page shows
+      // that and starts polling, instead of the review state it had before the click (#1262).
+      await load();
+      onBatchChanged();
     } catch (e) {
       toaster.error({ title: "Finalize failed", description: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
     }
-  }, [batchId]);
+  }, [batchId, load, onBatchChanged]);
 
   // Count rows that are not FINALIZED, not rows without a submission id. finalized_at is the
   // worker's single source of truth for "fully finalized" (set last, after the submission row,
@@ -131,6 +185,10 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
   // exhausted its retries, the row is still confirmed and recoverable by enqueue_exam_finalize,
   // yet it dropped out of this count and left the button disabled with no way to resume.
   const unfinalizedCount = rows.filter((r) => r.match_status === "confirmed" && !r.finalized_at).length;
+  const confirmedCount = rows.filter((r) => r.match_status === "confirmed").length;
+  // The database refuses match edits once the batch is finalizing or completed
+  // (exam_scanned_submission_freeze_match), so the page does not offer them either.
+  const matchesFrozen = batchStatus === "finalizing" || batchStatus === "completed";
 
   return (
     <VStack align="stretch" gap={3}>
@@ -141,11 +199,29 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
           colorPalette="green"
           onClick={createSubmissions}
           loading={busy}
-          disabled={unfinalizedCount === 0}
+          disabled={busy || batchStatus === "finalizing" || unfinalizedCount === 0}
         >
           Create {unfinalizedCount} submission(s)
         </Button>
       </HStack>
+      {/* Always mounted, so screen readers announce the first progress text, not only changes. */}
+      <HStack role="status" gap={2}>
+        {batchStatus === "finalizing" && (
+          <>
+            <Spinner size="xs" />
+            <Text fontSize="sm">
+              {loaded
+                ? `Creating submissions: ${confirmedCount - unfinalizedCount} of ${confirmedCount}`
+                : "Creating submissions…"}
+            </Text>
+          </>
+        )}
+      </HStack>
+      {rowsError && (
+        <Text fontSize="xs" color="fg.error">
+          Couldn&apos;t refresh the matches ({rowsError}). What you see may be out of date.
+        </Text>
+      )}
       <Table.Root size="sm" variant="outline">
         <Table.Header>
           <Table.Row>
@@ -182,7 +258,7 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
                 )}
               </Table.Cell>
               <Table.Cell>
-                <NativeSelect.Root size="xs" width="200px" disabled={!!r.submission_id}>
+                <NativeSelect.Root size="xs" width="200px" disabled={!!r.submission_id || matchesFrozen}>
                   <NativeSelect.Field
                     value={r.matched_profile_id ?? ""}
                     onChange={(e) => setMatch(r.id, e.target.value || null)}
@@ -199,10 +275,20 @@ export default function MatchReview({ batchId, classId }: { batchId: number; cla
               </Table.Cell>
               <Table.Cell>
                 <HStack gap={1}>
-                  <Button size="xs" variant="outline" onClick={() => confirm(r.id)} disabled={!!r.submission_id}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => confirm(r.id)}
+                    disabled={!!r.submission_id || matchesFrozen}
+                  >
                     Confirm
                   </Button>
-                  <Button size="xs" variant="ghost" onClick={() => skip(r.id)} disabled={!!r.submission_id}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => skip(r.id)}
+                    disabled={!!r.submission_id || matchesFrozen}
+                  >
                     Skip
                   </Button>
                 </HStack>
