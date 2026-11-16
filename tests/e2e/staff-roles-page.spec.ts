@@ -101,11 +101,20 @@ test.describe("Staff Roles page", () => {
   test("an instructor creates a role, turns a capability on, and it is saved", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await openRolesPage(page);
+    // Sibling PRs may put capabilities on the default grader role; record them so we assert
+    // this page left them alone rather than assuming the list is empty.
+    const graderCapsBefore = await roleCapabilities(graderRoleId);
+
     await page.getByRole("button", { name: "New role" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Role name").fill(roleName);
     await dialog.getByRole("button", { name: "Create role" }).click();
     await expect(page.getByRole("columnheader", { name: new RegExp(roleName) })).toBeVisible();
+
+    const roleId = await customRoleId(roleName);
+    expect(roleId).toBeDefined();
+    const capsBeforeToggle = await roleCapabilities(roleId!);
+    expect(capsBeforeToggle).not.toContain("manage_assignments");
 
     const box = page.getByRole("checkbox", { name: `${roleName}: Manage assignments` });
     await expect(box).not.toBeChecked();
@@ -113,11 +122,8 @@ test.describe("Staff Roles page", () => {
     await page.locator("label").filter({ has: box }).click();
     await expect(box).toBeChecked();
 
-    const roleId = await customRoleId(roleName);
-    expect(roleId).toBeDefined();
-    await expect.poll(() => roleCapabilities(roleId!)).toEqual(["manage_assignments"]);
-    // The Grader role is a separate list.
-    expect(await roleCapabilities(graderRoleId)).toEqual([]);
+    await expect.poll(async () => (await roleCapabilities(roleId!)).includes("manage_assignments")).toBe(true);
+    expect(await roleCapabilities(graderRoleId)).toEqual(graderCapsBefore);
 
     await page.reload();
     await openRolesPage(page);
@@ -198,39 +204,40 @@ test.describe("Staff Roles page", () => {
   // Self-contained: uses otherGrader and a fresh role so later tests still see the shared fixture.
   test("a role whose only member is a removed grader can't be deleted from the page", async ({ page }) => {
     const disabledOnlyRole = `Removed member ${Date.now().toString(36)}`;
-    await loginAsUser(page, instructor, course);
-    await openRolesPage(page);
-    await page.getByRole("button", { name: "New role" }).click();
-    const createDialog = page.getByRole("dialog");
-    await createDialog.getByLabel("Role name").fill(disabledOnlyRole);
-    await createDialog.getByRole("button", { name: "Create role" }).click();
-    await expect(page.getByRole("columnheader", { name: new RegExp(disabledOnlyRole) })).toBeVisible();
-
-    await page
-      .getByRole("combobox", { name: `Role for ${otherGrader.private_profile_name}` })
-      .selectOption({ label: disabledOnlyRole });
-    const roleId = await customRoleId(disabledOnlyRole);
-    expect(roleId).toBeDefined();
-    await expect
-      .poll(async () => {
-        const { data } = await supabase
-          .from("user_roles")
-          .select("class_role_id")
-          .eq("class_id", course.id)
-          .eq("private_profile_id", otherGrader.private_profile_id)
-          .single();
-        return data?.class_role_id;
-      })
-      .toBe(roleId);
-
-    const { error: disableError } = await supabase
-      .from("user_roles")
-      .update({ disabled: true })
-      .eq("class_id", course.id)
-      .eq("private_profile_id", otherGrader.private_profile_id);
-    expect(disableError).toBeNull();
-
+    let roleId: number | undefined;
     try {
+      await loginAsUser(page, instructor, course);
+      await openRolesPage(page);
+      await page.getByRole("button", { name: "New role" }).click();
+      const createDialog = page.getByRole("dialog");
+      await createDialog.getByLabel("Role name").fill(disabledOnlyRole);
+      await createDialog.getByRole("button", { name: "Create role" }).click();
+      await expect(page.getByRole("columnheader", { name: new RegExp(disabledOnlyRole) })).toBeVisible();
+
+      await page
+        .getByRole("combobox", { name: `Role for ${otherGrader.private_profile_name}` })
+        .selectOption({ label: disabledOnlyRole });
+      roleId = await customRoleId(disabledOnlyRole);
+      expect(roleId).toBeDefined();
+      await expect
+        .poll(async () => {
+          const { data } = await supabase
+            .from("user_roles")
+            .select("class_role_id")
+            .eq("class_id", course.id)
+            .eq("private_profile_id", otherGrader.private_profile_id)
+            .single();
+          return data?.class_role_id;
+        })
+        .toBe(roleId);
+
+      const { error: disableError } = await supabase
+        .from("user_roles")
+        .update({ disabled: true })
+        .eq("class_id", course.id)
+        .eq("private_profile_id", otherGrader.private_profile_id);
+      expect(disableError).toBeNull();
+
       await page.reload();
       await openRolesPage(page);
       await expect(page.getByRole("columnheader", { name: new RegExp(disabledOnlyRole) })).toContainText("0 people");
@@ -241,24 +248,28 @@ test.describe("Staff Roles page", () => {
       await dialog.getByRole("button", { name: "Close" }).click();
       expect(await customRoleId(disabledOnlyRole)).toBeDefined();
     } finally {
-      // Move off the role before deleting it (FK), then put the enrollment back for later tests.
-      await supabase
+      // Restore the enrollment and drop the test role so later serial tests aren't disturbed.
+      const cleanupErrors: ({ message?: string } | null)[] = [];
+      const { error: moveError } = await supabase
         .from("user_roles")
-        .update({ class_role_id: graderRoleId })
+        .update({ class_role_id: graderRoleId, disabled: false })
         .eq("class_id", course.id)
         .eq("private_profile_id", otherGrader.private_profile_id);
-      await supabase
-        .from("user_roles")
-        .update({ disabled: false })
-        .eq("class_id", course.id)
-        .eq("private_profile_id", otherGrader.private_profile_id);
-      await supabase.from("class_roles").delete().eq("id", roleId!);
+      cleanupErrors.push(moveError);
+      if (roleId != null) {
+        const { error: deleteError } = await supabase.from("class_roles").delete().eq("id", roleId);
+        cleanupErrors.push(deleteError);
+      }
+      for (const error of cleanupErrors) {
+        expect(error).toBeNull();
+      }
     }
   });
 
   test("a change the database refuses is shown as not saved, and the checkbox goes back", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await openRolesPage(page);
+    const graderCapsBefore = await roleCapabilities(graderRoleId);
     const box = page.getByRole("checkbox", { name: "Grader: Publish groups" });
     await expect(box).not.toBeChecked();
     // Stand in for a refusal (for example the instructor was demoted in another tab).
@@ -281,6 +292,8 @@ test.describe("Staff Roles page", () => {
       .filter({ hasText: "You don't have permission to change roles in this class." });
     await expect(toast).toHaveCount(1);
     await expect(box).not.toBeChecked();
-    expect(await roleCapabilities(graderRoleId)).toEqual([]);
+    const graderCapsAfter = await roleCapabilities(graderRoleId);
+    expect(graderCapsAfter).toEqual(graderCapsBefore);
+    expect(graderCapsAfter).not.toContain("publish_groups");
   });
 });
