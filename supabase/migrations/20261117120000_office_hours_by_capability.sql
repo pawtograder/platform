@@ -30,9 +30,12 @@
 --   * SECURITY DEFINER helpers that gate a staff write (can_add_profile_to_help_request,
 --     check_can_remove_from_help_request, can_follow_up_help_request,
 --     authorizeforhelprequestparticipant, enforce_help_request_update_columns,
---     forbid_help_request_privacy_downgrade) swap only the staff role check for
---     help_students. Signatures, attributes and grants stay. authorizeforhelprequeststaff
---     itself is unchanged so private-request views keep working for any staff member.
+--     forbid_help_request_privacy_downgrade) swap the staff role check for
+--     help_students OR the admin branch of authorizeforhelprequeststaff (class admin via
+--     user_privileges.role = 'admin' in that class). The admin role holds no capabilities
+--     by design, so this is the one place a role test is OR'd with a capability test.
+--     Signatures, attributes and grants stay. authorizeforhelprequeststaff itself is
+--     unchanged so private-request views keep working for any staff member.
 --   * Child-row action policies that name a parent id also require that parent to share
 --     class_id (moderation, work sessions, queue assignments).
 --
@@ -100,8 +103,11 @@ $$;
 REVOKE ALL ON FUNCTION public.seed_default_class_roles(bigint) FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- Helpers: swap only the staff role check for help_students
+-- Helpers: swap the staff role check for help_students, keep class admins
 -- ---------------------------------------------------------------------------
+-- Admin holds no capabilities by design. authorizeforhelprequeststaff admitted
+-- user_privileges.role = 'admin' in the request's class; OR that same test here
+-- so class admins keep those staff writes without putting help_students on admin.
 
 CREATE OR REPLACE FUNCTION public.authorizeforhelprequestparticipant(p_help_request_id bigint)
 RETURNS boolean
@@ -111,6 +117,11 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
   SELECT (hr.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+          OR EXISTS (
+               SELECT 1 FROM public.user_privileges up
+                WHERE up.user_id = auth.uid()
+                  AND up.class_id = hr.class_id
+                  AND up.role = 'admin')
           OR public.user_is_in_help_request(hr.id))
     FROM public.help_requests hr
    WHERE hr.id = p_help_request_id;
@@ -132,6 +143,11 @@ AS $$
               AND ur.disabled = false
               AND (ur.private_profile_id = p_profile_id OR ur.public_profile_id = p_profile_id))
      AND (hr.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+          OR EXISTS (
+               SELECT 1 FROM public.user_privileges up
+                WHERE up.user_id = auth.uid()
+                  AND up.class_id = hr.class_id
+                  AND up.role = 'admin')
           OR (public.authorizeforclass(hr.class_id)
               AND (hr.is_private = false OR public.user_is_in_help_request(hr.id))))
     FROM public.help_requests hr
@@ -168,7 +184,14 @@ BEGIN
     RETURN false;
   END IF;
 
-  IF v_class_id IN (SELECT public.user_class_ids_with_capability('help_students')) THEN
+  -- help_students, or class admin (admin holds no capabilities by design; same
+  -- admin branch as authorizeforhelprequeststaff, keyed on p_user_id).
+  IF v_class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+     OR EXISTS (
+          SELECT 1 FROM public.user_privileges up
+           WHERE up.user_id = p_user_id
+             AND up.class_id = v_class_id
+             AND up.role = 'admin') THEN
     RETURN true;
   END IF;
 
@@ -199,6 +222,11 @@ AS $$
      WHERE prev.id = p_followup_to
        AND prev.class_id = p_class_id
        AND (p_class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+            OR EXISTS (
+                 SELECT 1 FROM public.user_privileges up
+                  WHERE up.user_id = auth.uid()
+                    AND up.class_id = p_class_id
+                    AND up.role = 'admin')
             OR public.user_is_in_help_request(prev.id))
   );
 $$;
@@ -220,8 +248,15 @@ BEGIN
   END IF;
 
   -- Callers without a user JWT (service role, cron, admin edge functions) are trusted.
+  -- Class admins keep the old authorizeforhelprequeststaff exemption (admin holds no
+  -- capabilities by design).
   IF auth.uid() IS NULL
-     OR OLD.class_id IN (SELECT public.user_class_ids_with_capability('help_students')) THEN
+     OR OLD.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+     OR EXISTS (
+          SELECT 1 FROM public.user_privileges up
+           WHERE up.user_id = auth.uid()
+             AND up.class_id = OLD.class_id
+             AND up.role = 'admin') THEN
     RETURN NEW;
   END IF;
 
@@ -297,6 +332,13 @@ WITH CHECK (
   AND (followup_to IS NULL OR public.can_follow_up_help_request(followup_to, class_id))
   AND (
     class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+    -- Class admin: same admin branch as authorizeforhelprequeststaff (admin holds no
+    -- capabilities by design).
+    OR EXISTS (
+         SELECT 1 FROM public.user_privileges up
+          WHERE up.user_id = auth.uid()
+            AND up.class_id = help_requests.class_id
+            AND up.role = 'admin')
     OR (
       created_by IS NOT NULL
       AND public.authorizeforprofile_in_class(created_by, class_id)
@@ -352,6 +394,13 @@ WITH CHECK (
   AND (
     instructors_only = false
     OR class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+    -- Class admin: same admin branch as authorizeforhelprequeststaff (admin holds no
+    -- capabilities by design).
+    OR EXISTS (
+         SELECT 1 FROM public.user_privileges up
+          WHERE up.user_id = auth.uid()
+            AND up.class_id = help_request_messages.class_id
+            AND up.role = 'admin')
   )
 );
 
@@ -363,9 +412,23 @@ DROP POLICY IF EXISTS "Staff can update help request memberships" ON public.help
 
 CREATE POLICY "Staff can update help request memberships" ON public.help_request_students
 FOR UPDATE TO authenticated
-USING (class_id IN (SELECT public.user_class_ids_with_capability('help_students')))
-WITH CHECK (
+USING (
   class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+  -- Class admin: same admin branch as authorizeforhelprequeststaff (admin holds no
+  -- capabilities by design).
+  OR EXISTS (
+       SELECT 1 FROM public.user_privileges up
+        WHERE up.user_id = auth.uid()
+          AND up.class_id = help_request_students.class_id
+          AND up.role = 'admin')
+)
+WITH CHECK (
+  (class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+   OR EXISTS (
+        SELECT 1 FROM public.user_privileges up
+         WHERE up.user_id = auth.uid()
+           AND up.class_id = help_request_students.class_id
+           AND up.role = 'admin'))
   AND public.can_add_profile_to_help_request(help_request_id, profile_id)
 );
 
