@@ -318,6 +318,46 @@ test.describe("help request escalation RPCs", () => {
     ).toBeNull();
   });
 
+  test("nobody can create a ticket that already has escalation state", async () => {
+    const { help_queue_id } = await insertHelpRequest({
+      class_id: classId,
+      student_profile_id: student.private_profile_id,
+      request: `Escalation insert queue ${Date.now()}`
+    });
+    const newTicket = (request: string) => ({
+      class_id: classId,
+      help_queue: help_queue_id,
+      created_by: student.private_profile_id,
+      request
+    });
+    const inAnHour = new Date(Date.now() + 3_600_000).toISOString();
+
+    // Control: the same insert with default escalation columns is allowed, so the failures
+    // below come from the escalation guard, not from the INSERT policy.
+    expect((await studentClient.from("help_requests").insert(newTicket("plain"))).error).toBeNull();
+
+    for (const forged of [
+      { escalation_count: 1 },
+      { last_escalated_at: new Date().toISOString() },
+      { check_in_expires_at: inAnHour }
+    ]) {
+      const { error } = await studentClient.from("help_requests").insert({ ...newTicket("forged"), ...forged });
+      expect(error, JSON.stringify(forged)).not.toBeNull();
+      expect(error!.message).toContain("starts with no escalation state");
+    }
+
+    const staff = await taClient.from("help_requests").insert({ ...newTicket("staff forged"), escalation_count: 1 });
+    expect(staff.error).not.toBeNull();
+    expect(staff.error!.message).toContain("starts with no escalation state");
+
+    const { data: forgedRows } = await supabase
+      .from("help_requests")
+      .select("id")
+      .eq("class_id", classId)
+      .in("request", ["forged", "staff forged"]);
+    expect(forgedRows).toEqual([]);
+  });
+
   test("a student can still resolve their own open ticket", async () => {
     const id = await freshRequest("open");
     const { error } = await studentClient
