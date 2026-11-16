@@ -1052,8 +1052,9 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
   // Check if current user is instructor or grader (not a student)
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  // Staff help actions (assign, resolve as staff, karma, start call) follow help_students.
+  // Staff help actions (assign, resolve as staff, karma) follow help_students.
   // Moderation INSERT accepts help_students OR manage_office_hours.
+  // AI Help, Discord, and video Start/End stay role-based (isInstructorOrGrader).
   const canHelpStudents = useCapability("help_students");
   const canManageOfficeHours = useCapability("manage_office_hours");
   const canModerate = canHelpStudents || canManageOfficeHours;
@@ -1340,7 +1341,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
             {/* Video Call */}
             {!readOnly && canAccessVideoControls && request && (
-              <VideoCallControls request={request} canStartCall={canHelpStudents} size="sm" variant="full" />
+              <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
             )}
 
             {/* Watch */}
@@ -1358,7 +1359,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             {/* Staff-only actions */}
             {request && (
               <>
-                {canHelpStudents && (
+                {isInstructorOrGrader && (
                   <>
                     <AIHelpIconButton
                       contextType="help_request"
@@ -1367,18 +1368,20 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                       submissionId={request.referenced_submission_id ?? undefined}
                     />
                     <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
-                    <Tooltip content="Karma" showArrow>
-                      <IconButton
-                        aria-label="Karma"
-                        size="xs"
-                        variant="ghost"
-                        colorPalette="yellow"
-                        onClick={() => karmaModal.openModal()}
-                      >
-                        <Icon as={BsStar} boxSize={3} />
-                      </IconButton>
-                    </Tooltip>
                   </>
+                )}
+                {canHelpStudents && (
+                  <Tooltip content="Karma" showArrow>
+                    <IconButton
+                      aria-label="Karma"
+                      size="xs"
+                      variant="ghost"
+                      colorPalette="yellow"
+                      onClick={() => karmaModal.openModal()}
+                    >
+                      <Icon as={BsStar} boxSize={3} />
+                    </IconButton>
+                  </Tooltip>
                 )}
                 {canModerate && (
                   <Tooltip content="Moderation" showArrow>
