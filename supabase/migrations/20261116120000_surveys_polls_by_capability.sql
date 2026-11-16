@@ -33,12 +33,14 @@
 --   * can_respond_to_survey, analytics RPCs, broadcast triggers
 --
 -- Cross-class parent checks:
---   * survey_assignments action policies also require the survey to belong to the
---     assignment's class and the caller to hold manage_surveys there (via
---     can_manage_survey_in_class). surveys_select_students reads survey_assignments,
---     so a plain subquery on surveys from these policies would recurse; the helper
---     is SECURITY DEFINER like can_respond_to_survey, and also gates on the caller
---     so /rpc cannot answer for an unrelated signed-in user.
+--   * survey_assignments INSERT and UPDATE WITH CHECK require
+--     can_manage_survey_in_class, so a new row value can only point at a survey of
+--     the same class. UPDATE USING and DELETE USING check only manage_surveys in
+--     the row's class, so a manager there can repair or delete a legacy row whose
+--     survey_id and class_id disagree. The helper is SECURITY DEFINER because
+--     surveys_select_students reads survey_assignments (a plain subquery would
+--     recurse) and also gates on the caller so /rpc cannot answer for an
+--     unrelated signed-in user.
 --   * live_poll_responses action policies already join live_polls for the class check.
 --   * surveys may still reference a series from another class (CLI copy keeps
 --     series_id); that predates this migration and is left for a follow-up.
@@ -144,6 +146,9 @@ USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys
 WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')));
 
 -- survey_assignments --------------------------------------------------------
+-- New values (INSERT / UPDATE WITH CHECK) must point at a survey of the same
+-- class. Existing rows (UPDATE USING / DELETE USING) need only manage_surveys
+-- in the row's class so a manager can repair or delete a legacy mismatch.
 
 DROP POLICY IF EXISTS "survey_assignments_insert_instructors" ON public.survey_assignments;
 DROP POLICY IF EXISTS "Survey managers can create assignments" ON public.survey_assignments;
@@ -162,10 +167,7 @@ DROP POLICY IF EXISTS "Survey managers can update assignments" ON public.survey_
 CREATE POLICY "Survey managers can update assignments"
 ON public.survey_assignments
 FOR UPDATE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND public.can_manage_survey_in_class(survey_id, class_id)
-)
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')))
 WITH CHECK (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
   AND public.can_manage_survey_in_class(survey_id, class_id)
@@ -177,10 +179,7 @@ DROP POLICY IF EXISTS "Survey managers can delete assignments" ON public.survey_
 CREATE POLICY "Survey managers can delete assignments"
 ON public.survey_assignments
 FOR DELETE TO authenticated
-USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND public.can_manage_survey_in_class(survey_id, class_id)
-);
+USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')));
 
 -- survey_templates ----------------------------------------------------------
 

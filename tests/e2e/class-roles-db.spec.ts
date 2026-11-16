@@ -2552,6 +2552,73 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
     expect(stillB ?? []).toHaveLength(1);
   });
 
+  test("a manage_surveys holder can repair or delete a legacy mismatched assignment", async () => {
+    // Production may already have class_id=A rows pointing at a B survey; nothing
+    // prevented that before. Service-role seeds two such rows (no same-class CHECK).
+    const classB = await createClass({ name: "E2E Surveys Legacy-Mismatch B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const { data: surveyB, error: surveyBError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: classB.id,
+        created_by: instructorB.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Legacy mismatch B survey"
+      })
+      .select("id")
+      .single();
+    expect(surveyBError).toBeNull();
+
+    const surveyA = await surveyFor("Legacy mismatch A survey", instructorS.public_profile_id);
+    const studentDelete = await createUserInClass({ role: "student", class_id: classS.id });
+    const studentRepair = await createUserInClass({ role: "student", class_id: classS.id });
+
+    const { data: toDelete, error: deleteSeedError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyB!.id,
+        class_id: classS.id,
+        profile_id: studentDelete.private_profile_id
+      })
+      .select("id")
+      .single();
+    expect(deleteSeedError).toBeNull();
+
+    const { data: toRepair, error: repairSeedError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyB!.id,
+        class_id: classS.id,
+        profile_id: studentRepair.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(repairSeedError).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("survey_assignments")
+      .delete()
+      .eq("id", toDelete!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+    const { data: gone } = await supabase.from("survey_assignments").select("id").eq("id", toDelete!.id);
+    expect(gone ?? []).toHaveLength(0);
+
+    const { data: repaired, error: repairError } = await client
+      .from("survey_assignments")
+      .update({ survey_id: surveyA.id })
+      .eq("id", toRepair!.id)
+      .select("survey_id");
+    expect(repairError).toBeNull();
+    expect(repaired).toEqual([{ survey_id: surveyA.id }]);
+  });
+
   test("can_manage_survey_in_class returns true only for manage_surveys holders on matching surveys", async () => {
     const classB = await createClass({ name: "E2E Surveys Helper B" });
     const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
