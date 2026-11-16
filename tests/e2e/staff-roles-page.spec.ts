@@ -195,6 +195,67 @@ test.describe("Staff Roles page", () => {
     await expect.poll(() => customRoleId(renamedRole)).toBeUndefined();
   });
 
+  // Self-contained: uses otherGrader and a fresh role so later tests still see the shared fixture.
+  test("a role whose only member is a removed grader can't be deleted from the page", async ({ page }) => {
+    const disabledOnlyRole = `Removed member ${Date.now().toString(36)}`;
+    await loginAsUser(page, instructor, course);
+    await openRolesPage(page);
+    await page.getByRole("button", { name: "New role" }).click();
+    const createDialog = page.getByRole("dialog");
+    await createDialog.getByLabel("Role name").fill(disabledOnlyRole);
+    await createDialog.getByRole("button", { name: "Create role" }).click();
+    await expect(page.getByRole("columnheader", { name: new RegExp(disabledOnlyRole) })).toBeVisible();
+
+    await page
+      .getByRole("combobox", { name: `Role for ${otherGrader.private_profile_name}` })
+      .selectOption({ label: disabledOnlyRole });
+    const roleId = await customRoleId(disabledOnlyRole);
+    expect(roleId).toBeDefined();
+    await expect
+      .poll(async () => {
+        const { data } = await supabase
+          .from("user_roles")
+          .select("class_role_id")
+          .eq("class_id", course.id)
+          .eq("private_profile_id", otherGrader.private_profile_id)
+          .single();
+        return data?.class_role_id;
+      })
+      .toBe(roleId);
+
+    const { error: disableError } = await supabase
+      .from("user_roles")
+      .update({ disabled: true })
+      .eq("class_id", course.id)
+      .eq("private_profile_id", otherGrader.private_profile_id);
+    expect(disableError).toBeNull();
+
+    try {
+      await page.reload();
+      await openRolesPage(page);
+      await expect(page.getByRole("columnheader", { name: new RegExp(disabledOnlyRole) })).toContainText("0 people");
+      await page.getByRole("button", { name: `Delete ${disabledOnlyRole}` }).click();
+      const dialog = page.getByRole("alertdialog");
+      await expect(dialog.getByText("1 removed grader is still on this role.")).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Delete role" })).toHaveCount(0);
+      await dialog.getByRole("button", { name: "Close" }).click();
+      expect(await customRoleId(disabledOnlyRole)).toBeDefined();
+    } finally {
+      // Move off the role before deleting it (FK), then put the enrollment back for later tests.
+      await supabase
+        .from("user_roles")
+        .update({ class_role_id: graderRoleId })
+        .eq("class_id", course.id)
+        .eq("private_profile_id", otherGrader.private_profile_id);
+      await supabase
+        .from("user_roles")
+        .update({ disabled: false })
+        .eq("class_id", course.id)
+        .eq("private_profile_id", otherGrader.private_profile_id);
+      await supabase.from("class_roles").delete().eq("id", roleId!);
+    }
+  });
+
   test("a change the database refuses is shown as not saved, and the checkbox goes back", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await openRolesPage(page);
@@ -214,7 +275,11 @@ test.describe("Staff Roles page", () => {
         : route.continue()
     );
     await page.locator("label").filter({ has: box }).click();
-    await expect(page.getByText("You don't have permission to change roles in this class.")).toBeVisible();
+    // Toast and live-region both say this; scope to the toast root so the assertion is unique.
+    const toast = page
+      .locator('[data-scope="toast"][data-part="root"]')
+      .filter({ hasText: "You don't have permission to change roles in this class." });
+    await expect(toast).toHaveCount(1);
     await expect(box).not.toBeChecked();
     expect(await roleCapabilities(graderRoleId)).toEqual([]);
   });
