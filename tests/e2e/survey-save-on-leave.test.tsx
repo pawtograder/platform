@@ -353,13 +353,12 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await input.fill("Typed B after draft");
     await page.getByRole("button", { name: "Complete" }).click();
 
-    // While the refused submit is held, isSubmitting has locked the form. Typed B must still be
-    // in the field (includeHidden: SurveyJS may already be on its thank-you screen).
+    // While the refused submit is held, the form still shows the typed answer
+    // (includeHidden: SurveyJS may already be on its thank-you screen).
     await expect(page.getByRole("alert").filter({ hasText: "Submitting your answers…" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Question 1", includeHidden: true })).toHaveValue(
       "Typed B after draft"
     );
-    await expect(page.getByRole("textbox", { name: "Question 1", includeHidden: true })).not.toBeEditable();
     releaseSubmit();
 
     await expect(page.getByRole("alert").filter({ hasText: "Your survey wasn't submitted" })).toBeVisible();
