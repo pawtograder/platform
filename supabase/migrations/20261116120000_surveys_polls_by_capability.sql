@@ -33,13 +33,15 @@
 --   * can_respond_to_survey, analytics RPCs, broadcast triggers
 --
 -- Cross-class parent checks:
---   * survey_assignments action policies also require the survey's class_id to match
---     the assignment row (via survey_belongs_to_class). surveys_select_students reads
---     survey_assignments, so a plain subquery on surveys from these policies would
---     recurse; the helper is SECURITY DEFINER like can_respond_to_survey.
---   * surveys INSERT / UPDATE also require series_id (when set) to belong to the same
---     class. survey_series policies do not read surveys, so a plain subquery is fine.
+--   * survey_assignments action policies also require the survey to belong to the
+--     assignment's class and the caller to hold manage_surveys there (via
+--     can_manage_survey_in_class). surveys_select_students reads survey_assignments,
+--     so a plain subquery on surveys from these policies would recurse; the helper
+--     is SECURITY DEFINER like can_respond_to_survey, and also gates on the caller
+--     so /rpc cannot answer for an unrelated signed-in user.
 --   * live_poll_responses action policies already join live_polls for the class check.
+--   * surveys may still reference a series from another class (CLI copy keeps
+--     series_id); that predates this migration and is left for a follow-up.
 
 INSERT INTO public.capabilities (name, description) VALUES
   ('manage_surveys', 'Create, edit, publish, close, delete and assign surveys'),
@@ -94,10 +96,15 @@ REVOKE ALL ON FUNCTION public.seed_default_class_roles(bigint) FROM PUBLIC, anon
 
 -- surveys -------------------------------------------------------------------
 
--- True when p_survey_id's surveys.class_id equals p_class_id. SECURITY DEFINER so
--- survey_assignments policies can check the parent without re-entering surveys RLS
--- (surveys_select_students reads survey_assignments).
-CREATE OR REPLACE FUNCTION public.survey_belongs_to_class(p_survey_id uuid, p_class_id bigint)
+-- Exists so survey_assignments action policies can check the parent survey's
+-- class without re-entering surveys RLS (surveys_select_students reads
+-- survey_assignments, which would recurse on a plain subquery). SECURITY DEFINER
+-- bypasses that RLS. It also requires manage_surveys in p_class_id: EXECUTE is
+-- granted to authenticated, and without the capability check any signed-in user
+-- could learn via /rpc whether a survey id belongs to a class that survey
+-- visibility would otherwise hide. auth.uid() inside user_class_capabilities()
+-- still reads the request JWT, not the function owner.
+CREATE OR REPLACE FUNCTION public.can_manage_survey_in_class(p_survey_id uuid, p_class_id bigint)
 RETURNS boolean
 LANGUAGE sql
 STABLE
@@ -109,14 +116,15 @@ AS $$
     FROM public.surveys s
     WHERE s.id = p_survey_id
       AND s.class_id = p_class_id
+      AND p_class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
   );
 $$;
 
-COMMENT ON FUNCTION public.survey_belongs_to_class(uuid, bigint) IS
-  'True when the survey row exists and its class_id matches. Used by survey_assignments action policies so a capability in class A cannot point an assignment at a survey from class B.';
+COMMENT ON FUNCTION public.can_manage_survey_in_class(uuid, bigint) IS
+  'True when the survey belongs to the class and the caller holds manage_surveys there. Used by survey_assignments action policies so a capability in class A cannot point an assignment at a survey from class B, without leaking survey/class membership through /rpc.';
 
-REVOKE ALL ON FUNCTION public.survey_belongs_to_class(uuid, bigint) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.survey_belongs_to_class(uuid, bigint) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.can_manage_survey_in_class(uuid, bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.can_manage_survey_in_class(uuid, bigint) TO authenticated, service_role;
 
 DROP POLICY IF EXISTS "surveys_insert_instructors" ON public.surveys;
 DROP POLICY IF EXISTS "Survey managers can create surveys" ON public.surveys;
@@ -124,15 +132,7 @@ DROP POLICY IF EXISTS "Survey managers can create surveys" ON public.surveys;
 CREATE POLICY "Survey managers can create surveys"
 ON public.surveys
 FOR INSERT TO authenticated
-WITH CHECK (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND (
-    series_id IS NULL
-    OR series_id IN (
-      SELECT ss.id FROM public.survey_series ss WHERE ss.class_id = surveys.class_id
-    )
-  )
-);
+WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')));
 
 DROP POLICY IF EXISTS "surveys_update_instructors" ON public.surveys;
 DROP POLICY IF EXISTS "Survey managers can update surveys" ON public.surveys;
@@ -141,15 +141,7 @@ CREATE POLICY "Survey managers can update surveys"
 ON public.surveys
 FOR UPDATE TO authenticated
 USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')))
-WITH CHECK (
-  class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND (
-    series_id IS NULL
-    OR series_id IN (
-      SELECT ss.id FROM public.survey_series ss WHERE ss.class_id = surveys.class_id
-    )
-  )
-);
+WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')));
 
 -- survey_assignments --------------------------------------------------------
 
@@ -161,7 +153,7 @@ ON public.survey_assignments
 FOR INSERT TO authenticated
 WITH CHECK (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND public.survey_belongs_to_class(survey_id, class_id)
+  AND public.can_manage_survey_in_class(survey_id, class_id)
 );
 
 DROP POLICY IF EXISTS "survey_assignments_update_instructors" ON public.survey_assignments;
@@ -172,11 +164,11 @@ ON public.survey_assignments
 FOR UPDATE TO authenticated
 USING (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND public.survey_belongs_to_class(survey_id, class_id)
+  AND public.can_manage_survey_in_class(survey_id, class_id)
 )
 WITH CHECK (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND public.survey_belongs_to_class(survey_id, class_id)
+  AND public.can_manage_survey_in_class(survey_id, class_id)
 );
 
 DROP POLICY IF EXISTS "survey_assignments_delete_instructors" ON public.survey_assignments;
@@ -187,7 +179,7 @@ ON public.survey_assignments
 FOR DELETE TO authenticated
 USING (
   class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys'))
-  AND public.survey_belongs_to_class(survey_id, class_id)
+  AND public.can_manage_survey_in_class(survey_id, class_id)
 );
 
 -- survey_templates ----------------------------------------------------------
