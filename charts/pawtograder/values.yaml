@@ -2930,13 +2930,13 @@ coder:
     signInText: Sign in with Pawtograder
     # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
     allowSignups: false
-  # Run scripts/setup-coder-forgejo-auth.sh before enabling; coderd exits at startup without the client ID.
+  # Add Coder's callback to the Pawtograder GitHub App before enabling; coderd exits at startup without the client ID.
   externalAuth:
-    forgejo:
+    github:
       enabled: false
-      # Changing it unlinks every user and needs the OAuth app re-registered.
-      id: forgejo
-      displayName: Forgejo
+      # Changing it unlinks every user and changes the callback URL the App must list.
+      id: github
+      displayName: GitHub
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder

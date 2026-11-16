@@ -88,7 +88,19 @@ variable "image" {
 
 variable "forgejo_url" {
   type        = string
-  description = "Forgejo's public URL; repo_url must name a repository on it. Empty accepts any HTTPS host."
+  description = "Forgejo's public URL; repo_url must name a repository on it or on github_url. Empty drops the pin."
+  default     = ""
+}
+
+variable "github_url" {
+  type        = string
+  description = "GitHub's URL; repo_url may name a repository on it. Empty drops it from the pin."
+  default     = "https://github.com"
+}
+
+variable "github_external_auth_id" {
+  type        = string
+  description = "Coder external auth provider id for GitHub; empty declares no provider."
   default     = ""
 }
 
@@ -144,12 +156,19 @@ data "coder_parameter" "repo_url" {
   mutable      = false
   validation {
     regex = local.repo_url_regex
-    error = "Must be a clone URL like ${var.forgejo_url == "" ? "https://<host>" : trimsuffix(var.forgejo_url, "/")}/<owner>/<repository>.git, whose repository name doesn't start with a dot."
+    error = "Must be a clone URL like ${length(local.repo_url_origins) == 0 ? "https://<host>" : local.repo_url_origins[0]}/<owner>/<repository>.git, whose repository name doesn't start with a dot."
   }
 }
 
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
+
+# Optional: a Forgejo workspace must not be blocked by an unlinked GitHub account.
+data "coder_external_auth" "github" {
+  count    = var.github_external_auth_id == "" ? 0 : 1
+  id       = var.github_external_auth_id
+  optional = true
+}
 
 # Blocks login until it ends, so a failure shows as the agent's start_error rather than a ready workspace.
 resource "coder_script" "git_clone" {
@@ -157,10 +176,11 @@ resource "coder_script" "git_clone" {
   display_name = "Git Clone"
   icon         = "/icon/git.svg"
   script = templatefile("${path.module}/clone.sh", {
-    url   = data.coder_parameter.repo_url.value
-    dir   = local.repo_dir
-    limit = local.clone_timeout
-    creds = local.git_credentials
+    url     = data.coder_parameter.repo_url.value
+    dir     = local.repo_dir
+    limit   = local.clone_timeout
+    creds   = local.git_credentials
+    auth_id = local.clone_auth_id
   })
   run_on_start       = true
   start_blocks_login = true
@@ -169,13 +189,19 @@ resource "coder_script" "git_clone" {
 }
 
 locals {
+  repo_url_origins = compact([trimsuffix(var.forgejo_url, "/"), trimsuffix(var.github_url, "/")])
+  repo_url_hosts   = join("|", [for origin in local.repo_url_origins : replace(origin, "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")])
   # Owner and repository names are Forgejo's characters; a name can't start with a dot, so the clone can't land on a dotfile.
   # "" passes because template import checks the parameter without a value; clone.sh fails a workspace created with it.
-  repo_url_regex = "^(${var.forgejo_url == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : replace(trimsuffix(var.forgejo_url, "/"), "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")}/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+  repo_url_regex = "^((${local.repo_url_hosts == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : local.repo_url_hosts})/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
   repo_dir       = "/home/coder/${trimsuffix(basename(data.coder_parameter.repo_url.value), ".git")}"
+  repo_origin    = lower(try(regex("^[^:/]+://[^/]+", data.coder_parameter.repo_url.value), ""))
+  # Only Forgejo repositories get a minted token; GitHub's comes from external auth through the agent's GIT_ASKPASS.
+  on_forgejo = var.forgejo_url != "" && local.repo_origin == lower(try(regex("^[^:/]+://[^/]+", var.forgejo_url), ""))
   # Must match gitCredentialsFile in supabase/functions/_shared/CoderWorkspace.ts.
   repo_path       = try(regex("^https?://[^/]+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
-  git_credentials = "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}"
+  git_credentials = local.on_forgejo ? "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}" : ""
+  clone_auth_id   = local.on_forgejo ? "" : var.github_external_auth_id
   clone_timeout   = 300
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
   name = "coder-${data.coder_workspace.me.id}"
