@@ -26,7 +26,7 @@ function geminiBody(text: string): string {
 /** A one-connection-at-a-time HTTP stand-in that can also drop the connection without replying. */
 function startStandIn() {
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const state = { mode: "ok" as Mode, requestHeads: [] as string[], redirectTo: "" };
+  const state = { mode: "ok" as Mode, requestHeads: [] as string[], redirectTo: "", truncatedStatus: 200 };
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const respond = (status: number, reason: string, body: string) =>
@@ -74,7 +74,9 @@ function startStandIn() {
         if (state.mode === "truncated") {
           // Headers promise a body, then the connection drops part-way through it.
           await conn.write(
-            encoder.encode('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 500\r\n\r\n{"candi')
+            encoder.encode(
+              `HTTP/1.1 ${state.truncatedStatus} Status\r\nContent-Type: application/json\r\nContent-Length: 500\r\n\r\n{"candi`
+            )
           );
         }
       } finally {
@@ -184,6 +186,65 @@ Deno.test("Gemini failures are classified by the real provider", async (t) => {
         globalThis.fetch = realFetch;
       }
     });
+
+    // An error status is classified by the status alone, even when its body then fails to arrive:
+    // no error message carries the body, so a reset or timeout while reading it must not turn a
+    // permanent 400 or a 429 into a generic transient failure.
+    const bodyDrops = async (status: number, check: () => Promise<void>) => {
+      standIn.state.mode = "truncated";
+      standIn.state.truncatedStatus = status;
+      try {
+        await check();
+      } finally {
+        standIn.state.truncatedStatus = 200;
+      }
+    };
+    const bodyTimesOut = async (status: number, check: () => Promise<void>) => {
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start(c) {
+                c.error(new DOMException("Signal timed out.", "TimeoutError"));
+              }
+            }),
+            { status }
+          )
+        );
+      try {
+        await check();
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    };
+    for (const [failure, withFailingBody] of [
+      ["drops", bodyDrops],
+      ["times out", bodyTimesOut]
+    ] as const) {
+      await t.step(`a 400 whose body ${failure} stays a plain Error`, () =>
+        withFailingBody(400, async () => {
+          const err = await assertRejects(structure, Error);
+          assert(!(err instanceof ProviderTransientError), "a 400 was made retryable");
+          assert(!(err instanceof ProviderRateLimitError), "a 400 was made a rate limit");
+          assertNoKey(err);
+          assert(err.message === "Gemini failed: 400", "error message is not the bounded diagnostic");
+        })
+      );
+      await t.step(`a 429 whose body ${failure} stays a ProviderRateLimitError`, () =>
+        withFailingBody(429, async () => {
+          const err = await assertRejects(structure, ProviderRateLimitError);
+          assertNoKey(err);
+        })
+      );
+    }
+
+    await t.step("a 503 whose body drops is still a server error with its status", () =>
+      bodyDrops(503, async () => {
+        const err = await assertRejects(structure, ProviderTransientError);
+        assertDiagnostic(err, "server_error", 503);
+      })
+    );
 
     await t.step("an error that is not a transport failure is not made retryable", async () => {
       const realFetch = globalThis.fetch;

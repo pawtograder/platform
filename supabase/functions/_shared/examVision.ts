@@ -312,12 +312,13 @@ class GeminiVision {
       redirect: "error"
     });
     let res: Response;
-    let body: string;
+    let body = "";
     try {
       res = await fetch(request);
-      // Read the body here too: a connection that resets, or a timeout that fires, after the
-      // headers arrive surfaces from the body read rather than from fetch.
-      body = await res.text();
+      // Read a successful body here too: a connection that resets, or a timeout that fires, after
+      // the headers arrive surfaces from the body read rather than from fetch. An error status is
+      // classified below by the status alone, so its body is never read and cannot fail first.
+      if (res.ok) body = await res.text();
     } catch (err) {
       // The request rejects with a TypeError when the connection fails or is reset, and with a
       // TimeoutError/AbortError when the signal above fires. Those are worth retrying, unlike an
@@ -332,11 +333,17 @@ class GeminiVision {
       }
       throw err;
     }
-    if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
-    // No body in either error: an error page can reflect request material, and both messages reach
-    // the batch error, the DLQ and Sentry (see ProviderTransientError). A 4xx stays a plain Error.
-    if (res.status >= 500) throw new ProviderTransientError("gemini", "server_error", res.status);
-    if (!res.ok) throw new Error(`Gemini failed: ${res.status}`);
+    if (!res.ok) {
+      // Release the unread body. A failure here (e.g. the body already errored) must not replace
+      // the status's classification.
+      await res.body?.cancel().catch(() => {});
+      if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
+      // No body in either error: an error page can reflect request material, and both messages
+      // reach the batch error, the DLQ and Sentry (see ProviderTransientError). A 4xx stays a
+      // plain Error.
+      if (res.status >= 500) throw new ProviderTransientError("gemini", "server_error", res.status);
+      throw new Error(`Gemini failed: ${res.status}`);
+    }
     // Outside the catch: a body that is not JSON stays a SyntaxError, as before.
     const json = JSON.parse(body);
     return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
