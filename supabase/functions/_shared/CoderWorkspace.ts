@@ -1,6 +1,6 @@
 // What workspace-open and workspace-status do (#1222), with the database and Coder passed in so the
 // tests can run against fakes. Template contract: #1221 (template `kubernetes` in org `default`,
-// parameter `repo_url`, external auth `forgejo`).
+// parameter `repo_url`, git credentials in the file gitCredentialsFile names).
 //
 // Binding the Coder user to the Pawtograder login. Coder v2.37.3 binds an OIDC user by
 // `user_links.linked_id` (issuer + subject), and only its login handler writes that column. The API
@@ -14,12 +14,14 @@
 
 import type { WorkspaceOpenRequest, WorkspaceOpenResponse, WorkspaceStep } from "./FunctionTypes.d.ts";
 import {
+  apiKeyId,
   type CoderAgent,
   type CoderConfig,
   type CoderUser,
   type CoderWorkspace,
   createOidcUser,
   createWorkspace,
+  deleteUserKey,
   findUserByEmail,
   getAgentLogs,
   getAppHost,
@@ -30,9 +32,13 @@ import {
   getUser,
   getWorkspace,
   getWorkspaceByName,
-  postBuild
+  listUserKeys,
+  mintUserKey,
+  postBuild,
+  writeOwnSecret
 } from "./CoderWrapper.ts";
 import { CLOUD_WORKSPACES_FEATURE, courseFeatureEffectiveEnabled } from "./courseFeatures.ts";
+import { type ForgejoConfig, mintRepoToken, revokeReplacedTokens } from "./ForgejoWrapper.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 export const CODER_ORGANIZATION = "default";
@@ -145,12 +151,17 @@ export interface WorkspaceDb {
   /** Clears the claim if `token` still holds it. */
   releaseRestart(id: number, token: string): Promise<void>;
   deletionDate(workspaceRowId: number): Promise<string | null>;
+  getForgejoLogin(userId: string, instanceUrl: string): Promise<string | null>;
+  /** Before every mint, so the revoke sweep can find the token. */
+  recordForgejoToken(userId: string, repositoryId: number, instanceUrl: string): Promise<void>;
 }
 
 export type Deps = {
   db: WorkspaceDb;
   coder: CoderConfig;
-  forgejoUrl: string;
+  forgejo: ForgejoConfig;
+  /** Gets errors that are answered with a status instead of thrown. */
+  report?: (error: unknown) => void;
   /** The request's budget; `db` and `coder` make their calls through budgetFetch with it. */
   budget?: Budget;
   /** Tests pass a fake clock. */
@@ -224,8 +235,8 @@ export function workspaceName(repositoryId: number): string {
  * to Forgejo's authorize page. Coder keeps only the path of `redirect` (coderd/httpmw/oauth2.go,
  * v2.37.3), so the trip ends on Coder, not back on Pawtograder.
  */
-export function linkUrl(coderUrl: string, providerId: string): string {
-  const redirect = `/external-auth/${encodeURIComponent(providerId)}/callback`;
+export function linkUrl(coderUrl: string, providerId?: string): string {
+  const redirect = providerId ? `/external-auth/${encodeURIComponent(providerId)}/callback` : "/";
   return `${coderUrl}/api/v2/users/oidc/callback?${new URLSearchParams({ redirect })}`;
 }
 
@@ -240,6 +251,103 @@ export function cloneUrl(forgejoUrl: string, repository: string): string {
   const m = repository.match(CLONE_PATH);
   if (!m) throw new IllegalArgumentError("This repository can't be opened in a workspace");
   return `${forgejoUrl}/${m[1]}/${m[2]}.git`;
+}
+
+/** Must match `git_credentials` in the template's main.tf, which derives it from repo_url. */
+export function gitCredentialsFile(repository: string): string {
+  const m = repository.match(CLONE_PATH);
+  if (!m) throw new IllegalArgumentError("This repository can't be opened in a workspace");
+  return `/home/coder/.git-credentials-${m[1]}--${m[2]}`;
+}
+
+/** Per repository: Coder applies all of an owner's secrets to every workspace. */
+export function gitCredentialsSecretName(repositoryId: number): string {
+  return `git_credentials_repo_${repositoryId}`;
+}
+
+export function gitCredentialsLine(forgejoUrl: string, token: string): string {
+  const u = new URL(forgejoUrl);
+  return `${u.protocol}//x:${encodeURIComponent(token)}@${u.host}\n`;
+}
+
+/** Must match main.tf's startup script. */
+export const GIT_EMAIL_FILE = "/home/coder/.git-email";
+const GIT_EMAIL_SECRET = "git_email";
+
+export const SECRET_KEY_PREFIX = "pawtograder-secret-write-";
+/** Bounds a key whose delete failed. */
+export const SECRET_KEY_LIFETIME_MS = 60_000;
+
+function credentialsUnavailable(message: string): WorkspaceOpenResponse {
+  return { status: "credentials_unavailable", message };
+}
+
+/** POST /users/{other}/secrets is 403 for the owner, so a short-lived key acting as the student writes it. */
+async function deliverGitCredentials(
+  deps: Deps,
+  caller: Caller,
+  coderUserId: string,
+  repo: RepositoryRow
+): Promise<WorkspaceOpenResponse | null> {
+  const userId = caller.userId;
+  const { db, coder, forgejo } = deps;
+  const login = await db.getForgejoLogin(userId, forgejo.url);
+  if (!login) {
+    return credentialsUnavailable("Your Forgejo account isn't set up yet. Try again in a few minutes.");
+  }
+  const user = { id: coderUserId };
+  try {
+    await db.recordForgejoToken(userId, repo.id, forgejo.url);
+    const now = clock(deps)();
+    const minted = await mintRepoToken(forgejo, login, repo.repository, repo.id, now);
+    await deleteExpiredKeys(deps, user.id).catch((e) =>
+      console.error("[workspace-open] Expired key cleanup failed", e)
+    );
+    const key = await mintUserKey(coder, user.id, `${SECRET_KEY_PREFIX}${repo.id}`, SECRET_KEY_LIFETIME_MS);
+    const keyId = apiKeyId(key);
+    try {
+      await writeOwnSecret(
+        { ...coder, token: key },
+        {
+          name: gitCredentialsSecretName(repo.id),
+          value: gitCredentialsLine(forgejo.url, minted.token),
+          file_path: gitCredentialsFile(repo.repository)
+        }
+      );
+      // Forgejo refuses read:user on a repository-scoped token, so the workspace can't ask for the email.
+      await writeOwnSecret(
+        { ...coder, token: key },
+        { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
+      ).catch((e) => console.error("[workspace-open] Commit email secret write failed", e));
+    } finally {
+      try {
+        await deleteUserKey(coder, user.id, keyId);
+      } catch (e) {
+        console.error("[workspace-open] Coder API key delete failed; it expires on its own", e);
+      }
+    }
+    // Only once the new token is stored: the workspace may still start with an older one until then.
+    await revokeReplacedTokens(forgejo, login, repo.id, minted.name, now).catch((e) =>
+      console.error("[workspace-open] Replaced token cleanup failed; the next open retries it", e)
+    );
+    return null;
+  } catch (e) {
+    if (outOfTime(deps)) throw e;
+    deps.report?.(e);
+    return credentialsUnavailable(
+      "Pawtograder couldn't give the workspace access to your repository. Try again in a minute."
+    );
+  }
+}
+
+/** Keys left by a delete that failed. A live one may belong to a concurrent open, so it stays. */
+async function deleteExpiredKeys(deps: Deps, userId: string): Promise<void> {
+  const now = clock(deps)();
+  for (const key of await listUserKeys(deps.coder, userId)) {
+    if (key.token_name.startsWith(SECRET_KEY_PREFIX) && Date.parse(key.expires_at) < now) {
+      await deleteUserKey(deps.coder, userId, key.id);
+    }
+  }
 }
 
 /**
@@ -593,19 +701,28 @@ async function settleRestart(deps: Deps, row: WorkspaceRow, ws: CoderWorkspace):
  * leaves the workspace stopped, which reads not_started, and the next open starts it. Returns
  * restarting: true when another call posts the start, or this one has or had too little time.
  */
+type BeforeStart = () => Promise<WorkspaceOpenResponse | null>;
+type RestartResult = { ws: CoderWorkspace; restarting: boolean; refused?: WorkspaceOpenResponse };
+
 async function startRestart(
   deps: Deps,
   rowId: number,
   token: string,
   ws: CoderWorkspace,
-  deadline: number
-): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
+  deadline: number,
+  beforeStart: BeforeStart
+): Promise<RestartResult> {
   const { db, coder } = deps;
   // The claim stays as it is for a call with more time.
   if (deadline - clock(deps)() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
   try {
     const starting = await db.takeRestartStart(rowId, token);
     if (!starting) return { ws, restarting: true };
+    const refused = await beforeStart();
+    if (refused) {
+      await db.releaseRestart(rowId, starting);
+      return { ws, restarting: false, refused };
+    }
     const error = await postBuild(coder, ws.id, "start");
     await db.releaseRestart(rowId, starting);
     if (error && error.status !== 409) throw error;
@@ -627,10 +744,11 @@ async function finishRestart(
   deps: Deps,
   row: WorkspaceRow,
   ws: CoderWorkspace,
-  deadline: number
-): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
+  deadline: number,
+  beforeStart: BeforeStart
+): Promise<RestartResult> {
   if (row.restart_phase === "starting" && restartClaimed(deps, row)) return { ws, restarting: true };
-  return await startRestart(deps, row.id, row.restart_token!, ws, deadline);
+  return await startRestart(deps, row.id, row.restart_token!, ws, deadline, beforeStart);
 }
 
 /**
@@ -646,8 +764,9 @@ async function restartWorkspace(
   deps: Deps,
   row: WorkspaceRow,
   ws: CoderWorkspace,
-  deadline: number
-): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
+  deadline: number,
+  beforeStart: BeforeStart
+): Promise<RestartResult> {
   const { db, coder } = deps;
   const now = clock(deps);
   // A workspace that is stopping or stopped has no stop to post: Coder refuses a second build while
@@ -699,7 +818,7 @@ async function restartWorkspace(
     if (outOfTime(deps)) return { ws, restarting: true };
     throw e;
   }
-  return await startRestart(deps, row.id, token, ws, deadline);
+  return await startRestart(deps, row.id, token, ws, deadline, beforeStart);
 }
 
 /**
@@ -715,7 +834,7 @@ export async function openWorkspace(
   const { db, coder } = deps;
   const deadline = deps.budget?.deadline ?? clock(deps)() + OPEN_BUDGET_MS;
   const { repo, profileId, classId } = await resolveRepository(db, caller, request);
-  const repoUrl = cloneUrl(deps.forgejoUrl, repo.repository);
+  const repoUrl = cloneUrl(deps.forgejo.url, repo.repository);
   let user: CoderUser;
   try {
     user = await ensureCoderUser(deps, caller);
@@ -740,10 +859,12 @@ export async function openWorkspace(
     (e) => !e.optional && !e.authenticated
   );
   if (subject === null || missing) {
-    const authenticate_url = linkUrl(coder.url, missing?.id ?? "forgejo");
+    const authenticate_url = linkUrl(coder.url, missing?.id);
     return {
       status: "needs_linking",
-      message: `Link your ${missing?.display_name ?? "Forgejo"} account in Coder, then open the workspace again.`,
+      message: missing
+        ? `Link your ${missing.display_name} account in Coder, then open the workspace again.`
+        : "Sign in to Coder, then open the workspace again.",
       authenticate_url,
       redirect_url: authenticate_url,
       coder_user_id: user.id
@@ -781,7 +902,12 @@ export async function openWorkspace(
     row = await recordWorkspaceId(db, row, ws);
     row = await settleRestart(deps, row, ws);
   }
+  // Coder writes secrets into a workspace only as it starts, so they go in right before each start.
+  const beforeStart: BeforeStart = () => deliverGitCredentials(deps, caller, user.id, repo);
+  let refused: WorkspaceOpenResponse | null | undefined;
   if (!ws) {
+    refused = await beforeStart();
+    if (refused) return refused;
     const created = await createWorkspace(coder, user.id, {
       template_id: template.id,
       name,
@@ -794,7 +920,7 @@ export async function openWorkspace(
       const ext = (await getExternalAuth(coder, template.active_version_id, user.id)).find(
         (e) => !e.optional && !e.authenticated
       );
-      const authenticate_url = linkUrl(coder.url, ext?.id ?? "forgejo");
+      const authenticate_url = linkUrl(coder.url, ext?.id);
       return { status: "needs_linking", authenticate_url, redirect_url: authenticate_url, coder_user_id: user.id };
     } else if (created.error) {
       // A concurrent call created it first. Coder answers 409 when its name check sees that
@@ -810,7 +936,7 @@ export async function openWorkspace(
   } else if (isStopped(ws) && row.restart_token) {
     // A restart whose stop has finished: an earlier open's, or one whose holder is gone. Taken
     // through the claim like a status read does, so the two never both post its start.
-    ({ ws, restarting } = await finishRestart(deps, row, ws, deadline));
+    ({ ws, restarting, refused } = await finishRestart(deps, row, ws, deadline, beforeStart));
   } else if (needsRestart(ws) || isStopping(ws) || isStopped(ws)) {
     // Retry after a startup failure, such as a clone that timed out, or a lost agent. Or the
     // workspace is being stopped (an autostop, or a stop posted in Coder): the claim keeps this
@@ -818,9 +944,11 @@ export async function openWorkspace(
     // Or it is stopped, after an hour unused. Its start goes through the claim too: the row above
     // was read before the workspace, so it can't say that no other call has claimed a restart
     // since, and a start posted beside that call's would be a second one.
-    ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
+    ({ ws, restarting, refused } = await restartWorkspace(deps, row, ws, deadline, beforeStart));
   } else if (ws.latest_build.status === "failed" || ws.latest_build.status === "canceled") {
     // A build that failed (Retry). An abandoned claim goes too.
+    refused = await beforeStart();
+    if (refused) return refused;
     const error = await postBuild(coder, ws.id, "start");
     if (row.restart_token) await db.releaseRestart(row.id, row.restart_token);
     if (error && error.status !== 409) throw error;
@@ -828,6 +956,7 @@ export async function openWorkspace(
   } else {
     restarting = restartUnderWay(deps, row, ws);
   }
+  if (refused) return refused;
 
   // Out of time in a restart: answer with what's known, and leave the rest to status reads.
   if (outOfTime(deps)) return await describeWorkspace(coder, ws, restarting);
@@ -857,7 +986,10 @@ export async function workspaceStatus(
     // before the stop finished, or the call that held the claim is gone. Nothing else would start
     // it, so this is the one build a status read posts. A stale claim on a workspace that isn't
     // stopped is left to the next open.
-    ({ ws, restarting } = await finishRestart(deps, row, ws, deadline));
+    const beforeStart = () => deliverGitCredentials(deps, caller, row!.coder_user_id, repo);
+    let refused: WorkspaceOpenResponse | undefined;
+    ({ ws, restarting, refused } = await finishRestart(deps, row, ws, deadline, beforeStart));
+    if (refused) return refused;
   }
   return await withDeletionDate(deps, row.id, await describeWorkspace(coder, ws, restarting));
 }

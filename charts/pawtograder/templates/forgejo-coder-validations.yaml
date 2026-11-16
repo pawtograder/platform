@@ -3,6 +3,9 @@
 {{- fail (printf "forgejo/coder: the release must be named pawtograder (got %q); their subchart values reference pawtograder-* Secrets and ConfigMaps." .Release.Name) }}
 {{- end }}
 {{- end }}
+{{- if hasKey (dig "workspaces" dict .Values.coderBootstrap) "externalAuthId" }}
+{{- fail "coderBootstrap.workspaces.externalAuthId was removed: workspaces get their Forgejo token from a Coder secret that workspace-open writes, not from external auth. Remove the setting." }}
+{{- end }}
 
 {{- $es := .Values.forgejoCoderSecrets.externalSecret }}
 {{- if $es.enabled }}
@@ -53,10 +56,6 @@
 {{- end }}
 {{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" (toString .id)) }}
 {{- fail (printf "coder.externalAuth.forgejo.id must be lowercase letters, digits and single dashes (got %q); it's a path segment of Coder's callback URL" (toString .id)) }}
-{{- end }}
-{{- $tplID := dig "workspaces" "externalAuthId" "" $.Values.coderBootstrap | toString }}
-{{- if and $tplID (ne $tplID (toString .id)) }}
-{{- fail (printf "coderBootstrap.workspaces.externalAuthId=%s but coder.externalAuth.forgejo.id=%s; workspaces would ask Coder for a provider that doesn't exist" $tplID (toString .id)) }}
 {{- end }}
 {{- range $.Values.coder.coder.env }}
 {{- if hasPrefix "CODER_EXTERNAL_AUTH_0_" (toString .name) }}

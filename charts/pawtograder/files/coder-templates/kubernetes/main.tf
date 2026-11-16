@@ -86,12 +86,6 @@ variable "image" {
   default     = "ghcr.io/pawtograder/coder-workspace:latest"
 }
 
-variable "external_auth_id" {
-  type        = string
-  description = "ID of the Coder external auth provider (CODER_EXTERNAL_AUTH_<n>_ID) whose token clones and pushes the repository."
-  default     = "forgejo"
-}
-
 variable "forgejo_url" {
   type        = string
   description = "Forgejo's public URL; repo_url must name a repository on it. Empty accepts any HTTPS host."
@@ -154,11 +148,6 @@ data "coder_parameter" "repo_url" {
   }
 }
 
-# Coder refuses to create a workspace until the owner links this provider; the agent's GIT_ASKPASS then hands git its token.
-data "coder_external_auth" "git" {
-  id = var.external_auth_id
-}
-
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
@@ -171,7 +160,7 @@ resource "coder_script" "git_clone" {
     url   = data.coder_parameter.repo_url.value
     dir   = local.repo_dir
     limit = local.clone_timeout
-    auth  = var.external_auth_id
+    creds = local.git_credentials
   })
   run_on_start       = true
   start_blocks_login = true
@@ -184,7 +173,10 @@ locals {
   # "" passes because template import checks the parameter without a value; clone.sh fails a workspace created with it.
   repo_url_regex = "^(${var.forgejo_url == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : replace(trimsuffix(var.forgejo_url, "/"), "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")}/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
   repo_dir       = "/home/coder/${trimsuffix(basename(data.coder_parameter.repo_url.value), ".git")}"
-  clone_timeout  = 300
+  # Must match gitCredentialsFile in supabase/functions/_shared/CoderWorkspace.ts, which writes it as a Coder secret.
+  repo_path       = try(regex("^https?://[^/]+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
+  git_credentials = "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}"
+  clone_timeout   = 300
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
   name = "coder-${data.coder_workspace.me.id}"
   labels = {
@@ -205,22 +197,12 @@ resource "coder_agent" "main" {
     # owner's email is a placeholder (#1222), so any address in the name means there is no name.
     OWNER_GIT_NAME  = contains(["", "default"], data.coder_workspace_owner.me.full_name) || strcontains(data.coder_workspace_owner.me.full_name, "@") ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
     OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
-    # Only the Forgejo this release is set up for. The lookup below sends the owner's token, and
-    # without forgejo_url the repo_url parameter may name any host.
-    FORGEJO_API = var.forgejo_url != "" ? "${trimsuffix(var.forgejo_url, "/")}/api/v1" : ""
-    GIT_AUTH_ID = var.external_auth_id
   }
   startup_script = <<-EOT
     set -e
     git config --global user.name "$OWNER_GIT_NAME"
-    # Pawtograder gives each Coder user a placeholder email made from their login id (#1222), so
-    # commit as the Forgejo account's address, and fall back to the placeholder if Forgejo won't say.
-    # Both calls are bounded, so a stalled one can't hold up the editor.
-    EMAIL=""
-    if [ -n "$FORGEJO_API" ]; then
-      TOKEN="$(timeout 10 coder external-auth access-token "$GIT_AUTH_ID" 2>/dev/null)" || TOKEN=""
-      [ -z "$TOKEN" ] || EMAIL="$(curl -fsS -m 10 -H "Authorization: token $TOKEN" "$FORGEJO_API/user" | jq -r '.email // empty')" || EMAIL=""
-    fi
+    # The owner's Coder email is a placeholder (#1222); workspace-open stores the real one as a Coder secret.
+    EMAIL="$(head -n 1 /home/coder/.git-email 2>/dev/null || true)"
     git config --global user.email "$${EMAIL:-$OWNER_GIT_EMAIL}"
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
