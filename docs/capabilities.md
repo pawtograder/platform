@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -154,3 +154,23 @@ analytics.
 CLI `flashcards.copy` asks `user_class_ids_with_capability('manage_flashcards')` through the
 caller-scoped client (`ctx.supabase`) for both the source and the target class, matching the RLS
 policies rather than joining `role_capabilities` by hand.
+
+## manage_surveys and run_polls
+
+`manage_surveys` covers creating, editing, publishing, closing, deleting and assigning surveys,
+plus survey templates (insert/update), survey series writes, and the
+`create_survey_assignments` / `soft_delete_survey` / `reorder_surveys_in_series` RPCs (area 11).
+Day one, only the default instructor role holds it. Create / publish / close / delete / series
+controls follow `useCapability("manage_surveys")`. Left as views or student actions: staff and
+student SELECT on surveys, assignments and responses; student response writes; template SELECT;
+creator-only template DELETE; series SELECT; analytics RPCs.
+
+`run_polls` covers creating, editing, opening, closing and deleting live polls, and staff writes
+on `live_poll_responses` (area 11). Day one, the default instructor role, the default grader role
+and every existing custom role hold it. Create / open / close / delete controls follow
+`useCapability("run_polls")`. Left as views or student/anon actions: live and staff SELECT on
+`live_polls`, staff SELECT on responses, and the anon/student insert path through
+`can_access_poll_response`.
+
+CLI `surveys.copy` asks `user_class_ids_with_capability('manage_surveys')` the same way as
+`flashcards.copy`.
