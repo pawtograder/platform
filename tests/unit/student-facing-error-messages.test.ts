@@ -62,6 +62,57 @@ describe("getUserFacingErrorMessage", () => {
     }
   });
 
+  describe("refusals a database function raised (42501 with its own message)", () => {
+    // What publish_assignment_group_changes raises for a grader (#996).
+    const publishRefused = {
+      code: "42501",
+      details: null,
+      hint: null,
+      message: "Only instructors can publish group changes"
+    };
+
+    it("keep the function's message and add who to ask", () => {
+      expect(getUserFacingErrorMessage(publishRefused, { role: "grader" })).toBe(
+        "Only instructors can publish group changes. If you need access, ask an instructor for this course."
+      );
+      expect(getUserFacingErrorMessage(publishRefused, { role: "instructor" })).toBe(
+        "Only instructors can publish group changes. If you think you should, let the Pawtograder team know so we can look into it."
+      );
+      expect(getUserFacingErrorMessage(publishRefused)).toBe(
+        "Only instructors can publish group changes. If you need access, contact your instructor."
+      );
+    });
+
+    it("don't add a second period", () => {
+      expect(
+        getUserFacingErrorMessage({ code: "42501", message: "Only admins can do this." }, { role: "grader" })
+      ).toBe("Only admins can do this. If you need access, ask an instructor for this course.");
+    });
+
+    it("use the generic wording for a bare 'Access denied'", () => {
+      expect(getUserFacingErrorMessage({ code: "42501", message: "Access denied" }, { role: "grader" })).toBe(
+        "You don't have permission to do that. If you need access, ask an instructor for this course."
+      );
+    });
+
+    it("use the generic wording for Postgres's own RLS and GRANT messages", () => {
+      for (const message of [
+        "permission denied for table assignments",
+        'new row violates row-level security policy for table "assignment_self_review_settings"'
+      ]) {
+        expect(getUserFacingErrorMessage({ code: "42501", message }, { role: "grader" })).toBe(
+          "You don't have permission to do that. If you need access, ask an instructor for this course."
+        );
+      }
+    });
+
+    it("are not sent to Sentry", () => {
+      jest.mocked(Sentry.captureException).mockClear();
+      expect(reportUnexpectedError(publishRefused, { operation: "publish" })).toBeUndefined();
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+  });
+
   describe("refused writes (refine data provider or TableController)", () => {
     const refused = refusedWriteError("update");
     const refusedMessage = refused.message;
@@ -102,10 +153,23 @@ describe("isExpectedUserError", () => {
     expect(isExpectedUserError(refusedWriteError("delete"))).toBe(true);
   });
 
-  it("is false by default for permission, no-row and foreign-key errors", () => {
-    for (const code of ["42501", "PGRST116", "23503"]) {
+  it("is false by default for no-row and foreign-key errors, and for Postgres's own permission errors", () => {
+    for (const code of ["PGRST116", "23503"]) {
       expect(isExpectedUserError({ code, message: "x" })).toBe(false);
     }
+    for (const message of [
+      "permission denied for table assignments",
+      "permission denied for function publish_assignment_group_changes",
+      'new row violates row-level security policy for table "assignment_self_review_settings"',
+      "must be owner of table assignments"
+    ]) {
+      expect(isExpectedUserError({ code: "42501", message })).toBe(false);
+    }
+  });
+
+  it("is true for a 42501 a database function raised on purpose", () => {
+    expect(isExpectedUserError({ code: "42501", message: "Only instructors can publish group changes" })).toBe(true);
+    expect(isExpectedUserError({ code: "42501", message: "Access denied" })).toBe(true);
   });
 
   it("is true for codes the caller expects", () => {

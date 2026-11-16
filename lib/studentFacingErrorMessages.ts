@@ -126,6 +126,11 @@ function mapPostgrestOrPostgresCode(
     case "PGRST116":
       return "Nothing was found for this request. It may have been removed or you may not have access.";
     case "42501":
+      // A function's own refusal ("Only instructors can publish group changes") says what was
+      // refused, so keep it. Postgres's RLS and GRANT messages name tables and policies instead.
+      if (isRaisedRefusal(message) && !UNINFORMATIVE_REFUSAL.test(message.trim())) {
+        return `${withFinalPeriod(message.trim())} ${permissionHelp(role)}`;
+      }
       return permissionDeniedMessage(role);
     case "23505":
       return "This was already saved or conflicts with existing data. Refresh the page and try again.";
@@ -168,15 +173,44 @@ function looksLikeInternalNoise(text: string): boolean {
 }
 
 function permissionDeniedMessage(role: ErrorAudienceRole | undefined): string {
+  return `You don't have permission to do that. ${permissionHelp(role)}`;
+}
+
+/** Who to ask when a permission error blocks you. */
+function permissionHelp(role: ErrorAudienceRole | undefined): string {
   switch (role) {
     case "grader":
-      return "You don't have permission to do that. If you need access, ask an instructor for this course.";
+      return "If you need access, ask an instructor for this course.";
     case "instructor":
     case "admin":
-      return "You don't have permission to do that. If you think you should, let the Pawtograder team know so we can look into it.";
+      return "If you think you should, let the Pawtograder team know so we can look into it.";
     default:
-      return "You don't have permission to do that. If you need access, contact your instructor.";
+      return "If you need access, contact your instructor.";
   }
+}
+
+/**
+ * True when a 42501 message was raised on purpose by one of our database functions
+ * (`raise exception '...' using errcode = 'insufficient_privilege'`), not written by Postgres when
+ * RLS or a GRANT refused a statement. Postgres's own messages start "permission denied for/to",
+ * mention a "row-level security policy", or start "must be owner of".
+ */
+function isRaisedRefusal(message: string | undefined): message is string {
+  const t = message?.trim().toLowerCase();
+  if (!t) return false;
+  return !(
+    t.startsWith("permission denied for ") ||
+    t.startsWith("permission denied to ") ||
+    t.includes("row-level security policy") ||
+    t.startsWith("must be owner of ")
+  );
+}
+
+/** Refusals that say nothing beyond "no". The generic wording is clearer than these. */
+const UNINFORMATIVE_REFUSAL = /^(access|permission) denied\.?$/i;
+
+function withFinalPeriod(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 /**
@@ -186,7 +220,8 @@ function permissionDeniedMessage(role: ErrorAudienceRole | undefined): string {
  *
  * 42501, PGRST116 and 23503 are not here. On a read they usually mean our bug (a missing GRANT,
  * `.single()` matching several rows, an ID for a row that is gone), so a caller that expects them,
- * such as a save handler blocked by RLS, passes them in `expected`.
+ * such as a save handler blocked by RLS, passes them in `expected`. The exception is a 42501 that
+ * a database function raised on purpose (see `isRaisedRefusal`): like P0001, it is always expected.
  */
 const DEFAULT_EXPECTED_ERROR_CODES: readonly string[] = ["PGRST301", "23505", "23514", "P0001"];
 
@@ -203,6 +238,7 @@ export function isExpectedUserError(error: unknown, options?: ExpectedErrorOptio
   if (isRefusedWriteError(error)) return true;
   const code = getErrorCode(error);
   if (code === undefined) return false;
+  if (code === "42501" && isRaisedRefusal(getErrorProperty(error, "message"))) return true;
   return DEFAULT_EXPECTED_ERROR_CODES.includes(code) || (options?.expected?.includes(code) ?? false);
 }
 

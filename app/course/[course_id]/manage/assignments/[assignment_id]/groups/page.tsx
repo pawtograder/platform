@@ -46,7 +46,7 @@ import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
-import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { getUserFacingErrorMessage, reportUnexpectedError } from "@/lib/studentFacingErrorMessages";
 import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const UTF8_BOM = "\uFEFF";
@@ -389,7 +389,8 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       }
     } catch (e) {
       console.error(e);
-      Sentry.captureException(e);
+      // A refusal from the publish function (42501) is expected, not a bug: keep it out of Sentry.
+      reportUnexpectedError(e, { operation: "publish_assignment_group_changes", assignment_id: assignment.id });
       toaster.create({
         title: "Error publishing changes",
         description: getUserFacingErrorMessage(e, { role: errorRole }),
