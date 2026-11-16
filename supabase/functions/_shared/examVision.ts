@@ -129,7 +129,11 @@ function rpmToInterval(rpm: number): number {
 // Fake provider — deterministic, offline. Used by tests.
 // Scan page names are expected to encode the student's SIS id, e.g.
 //   "...__sis-12345__page-0.png"  ->  readIdentity returns { sisId: "12345" }
+// A page name containing FAKE_TRANSIENT_FAULT_MARKER makes structureAnswer fail the way a 5xx,
+// timeout or reset from Gemini does (tests/e2e/exam-finalize-provider-retry.spec.ts).
 // ---------------------------------------------------------------------------
+const FAKE_TRANSIENT_FAULT_MARKER = "__fault-transient__";
+
 export class FakeExamVisionProvider implements ExamVisionProvider {
   ocrImage(page: PageImage): Promise<{ text: string; words: WordBox[] }> {
     const sis = page.name.match(/sis-([A-Za-z0-9]+)/)?.[1] ?? "unknown";
@@ -175,10 +179,13 @@ export class FakeExamVisionProvider implements ExamVisionProvider {
   }
   structureAnswer(
     _answerType: string | null,
-    _page: PageImage,
+    page: PageImage,
     _region: NormRect,
     ocrText: string
   ): Promise<StructuredAnswer> {
+    if (page.name.includes(FAKE_TRANSIENT_FAULT_MARKER)) {
+      return Promise.reject(new ProviderTransientError("fake", "server_error", 503));
+    }
     return Promise.resolve({ value: ocrText, text: ocrText });
   }
 }
@@ -475,11 +482,12 @@ function buildExamVisionProvider(): ExamVisionProvider {
 }
 
 // Hosts EXAM_GEMINI_BASE_URL may name. The override exists only to point the real adapter at a
-// local fault-injecting stand-in (tests/e2e/exam-provider-faults.spec.ts), and every request
-// carries GOOGLE_API_KEY, so it must not be configurable to any other destination.
+// local fault-injecting stand-in (_shared/examVision.provider.test.ts), and every request carries
+// GOOGLE_API_KEY, so it must not be configurable to any other destination.
 // host.docker.internal is here because the edge runtime runs in a container, where loopback is
-// the container itself, not the machine running the stand-in. This bounds what the variable can
-// name; where these names resolve is still up to the host's resolver and Docker configuration.
+// the container itself, so functions served locally can only reach a stand-in on the machine
+// through it. This bounds what the variable can name; where these names resolve is still up to
+// the host's resolver and Docker configuration.
 const GEMINI_TEST_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "host.docker.internal"]);
 
 function geminiBaseUrl(raw: string | undefined): string {

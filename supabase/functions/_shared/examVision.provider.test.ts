@@ -4,8 +4,9 @@
  * The provider is pointed (EXAM_GEMINI_BASE_URL) at a raw TCP stand-in on localhost, so these go
  * through the real fetch and GeminiVision.generate: an actual 503, 429 and 400, an actual dropped
  * connection, and actual malformed/valid bodies. Only the 60s timeout is simulated, by a fetch that
- * rejects the way AbortSignal.timeout does. The worker-side behaviour (retry, no premature
- * finalization) is covered end to end by tests/e2e/exam-provider-faults.spec.ts.
+ * rejects the way AbortSignal.timeout does. That the worker retries a ProviderTransientError
+ * instead of finalizing with the raw OCR text is covered by
+ * tests/e2e/exam-finalize-provider-retry.spec.ts, through the fake provider.
  *
  * Run from supabase/functions:  deno test --no-check --allow-net --allow-env _shared/examVision.provider.test.ts
  */
