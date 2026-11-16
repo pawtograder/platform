@@ -84,7 +84,6 @@ function redactDeep(value: unknown, depth = 0): unknown {
   return out;
 }
 
-/** Applies scrubEdgeBreadcrumb to the event's breadcrumbs and redacts credentials. Never drops the event. */
 export function scrubEdgeEvent<E extends Event>(event: E): E {
   if (event.breadcrumbs) {
     event.breadcrumbs = event.breadcrumbs.map(scrubEdgeBreadcrumb).filter((b): b is Breadcrumb => b !== null);

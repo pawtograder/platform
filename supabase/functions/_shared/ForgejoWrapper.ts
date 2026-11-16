@@ -120,7 +120,7 @@ function repoTokenPrefix(repositoryId: number): string {
   return `${CODER_TOKEN_PREFIX}${repositoryId}-`;
 }
 
-/** Unique per mint, since Forgejo 400s a duplicate name; the mint time orders a repository's tokens. */
+/** Forgejo 400s a duplicate token name. */
 export function coderTokenName(repositoryId: number, mintedAt: number): string {
   return `${repoTokenPrefix(repositoryId)}${mintedAt}-${crypto.randomUUID().slice(0, 8)}`;
 }
@@ -140,10 +140,6 @@ function ownerAndName(repository: string): { owner: string; name: string } {
 
 export type RepoToken = { name: string; token: string };
 
-/**
- * Student-owned so forgejo-repo-webhook sees a submission, not handout sync. Leaves older tokens:
- * two opens at once must not revoke each other's before it is stored (revokeReplacedTokens, after).
- */
 export async function mintRepoToken(
   config: ForgejoConfig,
   login: string,
@@ -171,7 +167,6 @@ export async function mintRepoToken(
   return { name: tokenName, token: sha1 };
 }
 
-/** Deletes the repository's tokens minted REPLACED_TOKEN_GRACE_MS or more before `now`, except `keep`. */
 export async function revokeReplacedTokens(
   config: ForgejoConfig,
   login: string,
@@ -187,7 +182,6 @@ export async function revokeReplacedTokens(
   return stale.length;
 }
 
-/** Deletes every token minted for the repository. A user that is already gone has none. */
 export async function revokeRepoToken(config: ForgejoConfig, login: string, repositoryId: number): Promise<number> {
   const names = (await listCoderTokenNames(config, login)).filter((n) => n.startsWith(repoTokenPrefix(repositoryId)));
   for (const name of names) await deleteToken(config, login, name);
@@ -206,7 +200,6 @@ async function deleteToken(config: ForgejoConfig, login: string, tokenName: stri
 
 const TOKEN_PAGE_SIZE = 50;
 
-/** Names of the user's workspace tokens; none when the user is gone. Tokens they made are left out. */
 async function listCoderTokenNames(config: ForgejoConfig, login: string): Promise<string[]> {
   const names: string[] = [];
   for (let page = 1; ; page++) {

@@ -72,7 +72,6 @@ Deno.serve(async (req) => {
   try {
     const { provisioned, failures } = await reconcileForgejoAccounts(supabase, config);
     console.log(`[forgejo-reconciler] Provisioned ${provisioned}, failed ${failures.length}`);
-    // One event per pass and step, not per user: an outage or a bad credential fails everyone at once.
     reportFailures(scope, "provision-failed", failures);
 
     const revocation = await revokeDroppedTokens(supabase, config);
