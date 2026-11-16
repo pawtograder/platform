@@ -97,7 +97,7 @@ test.describe("Student dashboard survey countdown", () => {
   // page goes quiet for longer than that before its client code fetches anything. Otherwise what a test
   // does next races that fetch, so a survey it seeds may be in the list, and an outage it starts may fail
   // it. The wait matches on URL, so the login page goes first: its own list could answer it instead.
-  async function openDashboard(page: Page, title: string, origin = "") {
+  async function openDashboard(page: Page, title: string) {
     await loginAsUser(page, student, course);
     const dueAt = Date.now() + 30 * 60_000;
     await seedPublishedSurvey(title, dueAt);
@@ -105,7 +105,7 @@ test.describe("Student dashboard survey countdown", () => {
     const refreshes = recordDashboardRefreshes(page, course.id);
     await page.goto("about:blank");
     const listAnswered = page.waitForResponse((response) => isSurveysList(response.url()));
-    await page.goto(`${origin}/course/${course.id}`);
+    await page.goto(`/course/${course.id}`);
     const surveys = surveysToComplete(page);
     await expect(surveys.getByText(title)).toBeVisible();
     await page.waitForLoadState("networkidle");
