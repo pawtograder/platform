@@ -1889,6 +1889,40 @@ Deno.test("an open short of time still keeps its claim on a stop under way, whic
   assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start"], null]);
 });
 
+Deno.test("a claim cut off as it is taken: open answers restarting, whether or not the claim was written", async () => {
+  // The budget's cut-off lands on the claim's database call. The update may have been written with
+  // only its reply lost, so the answer has to keep the card polling instead of a 504 that stops it.
+  for (const written of [true, false]) {
+    const { clock, coder, db, deps } = await stoppingWorkspace();
+    const cutOff = new AbortController();
+    const budget = { deadline: clock.t + OPEN_BUDGET_MS, signal: cutOff.signal };
+    const claim = db.claimRestart.bind(db);
+    db.claimRestart = async (id, staleBefore) => {
+      if (written) await claim(id, staleBefore);
+      cutOff.abort(new DOMException("The operation timed out.", "TimeoutError"));
+      throw cutOff.signal.reason;
+    };
+    const res = await withinBudget(budget, () => openWorkspace({ ...deps, budget }, ALEX, { assignment_id: 41 }));
+    assertEquals([res.status, db.rows[0].restart_phase], ["restarting", written ? "stopping" : null]);
+    db.claimRestart = claim;
+
+    if (written) {
+      // Status reads find the claim and post the start once the stop finishes.
+      assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "restarting");
+      coder.workspaces[0].latest_build.status = "stopped";
+      assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
+      assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start"], null]);
+    } else {
+      // Nothing was kept: the next status read says so, and the next open takes the claim.
+      assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "not_started");
+      coder.autoBuild = true;
+      coder.workspaces[0].latest_build.status = "pending";
+      assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "ready");
+      assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start"], null]);
+    }
+  }
+});
+
 Deno.test("ready needs a connected agent: a lost agent is failed, and open restarts it", async () => {
   for (const status of ["disconnected", "timeout"]) {
     const { coder, deps } = setup();

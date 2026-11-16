@@ -652,10 +652,13 @@ async function restartWorkspace(
   // Too little time to post the stop: the workspace stays as it is for the next open. A stop under
   // way needs no post, so its claim is taken whatever time is left, and a status read finishes it.
   if (!isStopping(ws) && deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
-  const token = await db.claimRestart(row.id, new Date(now() - RESTART_CLAIM_MS).toISOString());
-  if (!token) return { ws, restarting: true };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let token: string | null;
   try {
+    // Inside the cut-off handling: a claim whose reply the budget cut off may have been written, and
+    // `restarting` keeps the card polling, so a status read finds it and posts the start.
+    token = await db.claimRestart(row.id, new Date(now() - RESTART_CLAIM_MS).toISOString());
+    if (!token) return { ws, restarting: true };
     // Read again now that the claim is held, and act on that. The caller's read may be older than a
     // restart another call has finished since, and a stop posted on it would take the recovered
     // workspace down.
@@ -684,9 +687,9 @@ async function restartWorkspace(
       ws = (await getWorkspace(coder, ws.id)) ?? ws;
     }
   } catch (e) {
-    // The claim stays `stopping`, and a status read starts the workspace once the stop finishes. A
-    // call cut off before its stop leaves a claim nothing acts on, like a stop that never reached
-    // Coder: it goes stale, and the next open retakes it.
+    // The claim, if it was written, stays `stopping`, and a status read starts the workspace once
+    // the stop finishes. A call cut off before its stop leaves a claim nothing acts on, like a stop
+    // that never reached Coder: it goes stale, and the next open retakes it.
     if (outOfTime(deps)) return { ws, restarting: true };
     throw e;
   }
