@@ -309,7 +309,7 @@ export default function ModerationManagement() {
               ? "No moderation actions have been taken yet."
               : `No ${filterStatus} moderation actions found.`}
           </Text>
-          {filterStatus === "all" && (
+          {filterStatus === "all" && (canHelpStudents || canManageOfficeHours) && (
             <Button onClick={() => createModal.openModal()}>
               <Icon as={BsPlus} />
               Create First Moderation Action

@@ -1052,8 +1052,11 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
   // Check if current user is instructor or grader (not a student)
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  // Staff help actions (assign, resolve as staff, moderate, karma, start call) follow help_students.
+  // Staff help actions (assign, resolve as staff, karma, start call) follow help_students.
+  // Moderation INSERT accepts help_students OR manage_office_hours.
   const canHelpStudents = useCapability("help_students");
+  const canManageOfficeHours = useCapability("manage_office_hours");
+  const canModerate = canHelpStudents || canManageOfficeHours;
 
   // Check if notification permission warning should be shown
   const showNotificationWarning = useShowNotificationWarning();
@@ -1353,37 +1356,43 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             )}
 
             {/* Staff-only actions */}
-            {canHelpStudents && request && (
+            {request && (
               <>
-                <AIHelpIconButton
-                  contextType="help_request"
-                  resourceId={request.id}
-                  classId={request.class_id}
-                  submissionId={request.referenced_submission_id ?? undefined}
-                />
-                <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
-                <Tooltip content="Moderation" showArrow>
-                  <IconButton
-                    aria-label="Moderation"
-                    size="xs"
-                    variant="ghost"
-                    colorPalette="orange"
-                    onClick={() => moderationModal.openModal()}
-                  >
-                    <Icon as={BsShield} boxSize={3} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip content="Karma" showArrow>
-                  <IconButton
-                    aria-label="Karma"
-                    size="xs"
-                    variant="ghost"
-                    colorPalette="yellow"
-                    onClick={() => karmaModal.openModal()}
-                  >
-                    <Icon as={BsStar} boxSize={3} />
-                  </IconButton>
-                </Tooltip>
+                {canHelpStudents && (
+                  <>
+                    <AIHelpIconButton
+                      contextType="help_request"
+                      resourceId={request.id}
+                      classId={request.class_id}
+                      submissionId={request.referenced_submission_id ?? undefined}
+                    />
+                    <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
+                    <Tooltip content="Karma" showArrow>
+                      <IconButton
+                        aria-label="Karma"
+                        size="xs"
+                        variant="ghost"
+                        colorPalette="yellow"
+                        onClick={() => karmaModal.openModal()}
+                      >
+                        <Icon as={BsStar} boxSize={3} />
+                      </IconButton>
+                    </Tooltip>
+                  </>
+                )}
+                {canModerate && (
+                  <Tooltip content="Moderation" showArrow>
+                    <IconButton
+                      aria-label="Moderation"
+                      size="xs"
+                      variant="ghost"
+                      colorPalette="orange"
+                      onClick={() => moderationModal.openModal()}
+                    >
+                      <Icon as={BsShield} boxSize={3} />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </>
             )}
           </HStack>
@@ -1456,19 +1465,19 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       </Flex>
 
       {/* Modals */}
+      {canModerate && (
+        <CreateModerationActionModal
+          isOpen={moderationModal.isOpen}
+          onClose={moderationModal.closeModal}
+          onSuccess={handleModerationSuccess}
+        />
+      )}
       {canHelpStudents && (
-        <>
-          <CreateModerationActionModal
-            isOpen={moderationModal.isOpen}
-            onClose={moderationModal.closeModal}
-            onSuccess={handleModerationSuccess}
-          />
-          <CreateKarmaEntryModal
-            isOpen={karmaModal.isOpen}
-            onClose={karmaModal.closeModal}
-            onSuccess={handleKarmaSuccess}
-          />
-        </>
+        <CreateKarmaEntryModal
+          isOpen={karmaModal.isOpen}
+          onClose={karmaModal.closeModal}
+          onSuccess={handleKarmaSuccess}
+        />
       )}
 
       {isStudent && (

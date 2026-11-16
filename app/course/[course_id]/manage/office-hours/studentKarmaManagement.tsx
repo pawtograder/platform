@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useStudentRoster } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { useConnectionStatus, useStudentKarmaNotes } from "@/hooks/useOfficeHoursRealtime";
@@ -29,6 +30,8 @@ type KarmaEntryWithDetails = StudentKarmaNotes & {
  */
 export default function StudentKarmaManagement() {
   const [searchTerm, setSearchTerm] = useState("");
+  // Karma note create / edit / delete follow help_students.
+  const canHelpStudents = useCapability("help_students");
 
   // Modal management
   const createModal = useModalManager();
@@ -189,26 +192,28 @@ export default function StudentKarmaManagement() {
           </HStack>
         </Box>
 
-        <HStack spaceX={2}>
-          <Button size="sm" onClick={() => editModal.openModal(entry)}>
-            <Icon as={BsPencil} />
-            Edit
-          </Button>
-          <PopConfirm
-            triggerLabel="Delete karma entry"
-            trigger={
-              <Button size="sm" colorPalette="red">
-                <Icon as={BsTrash} />
-                Delete
-              </Button>
-            }
-            confirmHeader="Delete Karma Entry"
-            confirmText={`Are you sure you want to delete the karma entry for ${entry.student_profile?.name || "this student"}? This action cannot be undone.`}
-            onConfirm={async () =>
-              await handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")
-            }
-          />
-        </HStack>
+        {canHelpStudents && (
+          <HStack spaceX={2}>
+            <Button size="sm" onClick={() => editModal.openModal(entry)}>
+              <Icon as={BsPencil} />
+              Edit
+            </Button>
+            <PopConfirm
+              triggerLabel="Delete karma entry"
+              trigger={
+                <Button size="sm" colorPalette="red">
+                  <Icon as={BsTrash} />
+                  Delete
+                </Button>
+              }
+              confirmHeader="Delete Karma Entry"
+              confirmText={`Are you sure you want to delete the karma entry for ${entry.student_profile?.name || "this student"}? This action cannot be undone.`}
+              onConfirm={async () =>
+                await handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")
+              }
+            />
+          </HStack>
+        )}
       </Flex>
     </Box>
   );
@@ -224,10 +229,12 @@ export default function StudentKarmaManagement() {
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Heading size="lg">Student Karma Management</Heading>
-        <Button onClick={() => createModal.openModal()}>
-          <Icon as={BsPlus} />
-          Add Karma Entry
-        </Button>
+        {canHelpStudents && (
+          <Button onClick={() => createModal.openModal()}>
+            <Icon as={BsPlus} />
+            Add Karma Entry
+          </Button>
+        )}
       </Flex>
 
       {/* Connection Status Indicator */}
@@ -289,7 +296,7 @@ export default function StudentKarmaManagement() {
               ? "No karma entries match your search criteria."
               : "No student karma entries have been created yet."}
           </Text>
-          {!searchTerm.trim() && (
+          {!searchTerm.trim() && canHelpStudents && (
             <Button onClick={() => createModal.openModal()}>
               <Icon as={BsPlus} />
               Create First Karma Entry
@@ -307,18 +314,22 @@ export default function StudentKarmaManagement() {
       )}
 
       {/* Modals */}
-      <CreateKarmaEntryModal
-        isOpen={createModal.isOpen}
-        onClose={createModal.closeModal}
-        onSuccess={handleCreateSuccess}
-      />
+      {canHelpStudents && (
+        <>
+          <CreateKarmaEntryModal
+            isOpen={createModal.isOpen}
+            onClose={createModal.closeModal}
+            onSuccess={handleCreateSuccess}
+          />
 
-      <EditKarmaEntryModal
-        isOpen={editModal.isOpen}
-        onClose={editModal.closeModal}
-        onSuccess={handleEditSuccess}
-        karmaEntry={editModal.modalData}
-      />
+          <EditKarmaEntryModal
+            isOpen={editModal.isOpen}
+            onClose={editModal.closeModal}
+            onSuccess={handleEditSuccess}
+            karmaEntry={editModal.modalData}
+          />
+        </>
+      )}
     </Box>
   );
 }

@@ -4,7 +4,7 @@ import { Box, Flex, Heading, HStack, Stack, Text, VStack } from "@chakra-ui/reac
 import { Button } from "@/components/ui/button";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useMemo } from "react";
@@ -39,6 +39,8 @@ export default function HelpQueuesDashboard() {
   const { course } = useCourseController();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
+  // Start / stop working writes help_queue_assignments (help_students).
+  const canHelpStudents = useCapability("help_students");
 
   // Check if any calendar is configured
   const hasCalendar = !!(course?.office_hours_ics_url || course?.events_ics_url);
@@ -357,17 +359,19 @@ export default function HelpQueuesDashboard() {
                 )}
               </VStack>
             </Box>
-            <Box ml={4}>
-              {myAssignment ? (
-                <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
-                  Stop Working
-                </Button>
-              ) : (
-                <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
-                  Start Working
-                </Button>
-              )}
-            </Box>
+            {canHelpStudents && (
+              <Box ml={4}>
+                {myAssignment ? (
+                  <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
+                    Stop Working
+                  </Button>
+                ) : (
+                  <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
+                    Start Working
+                  </Button>
+                )}
+              </Box>
+            )}
           </Flex>
         );
       })}
