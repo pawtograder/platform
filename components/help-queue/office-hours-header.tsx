@@ -13,7 +13,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsInstructor } from "@/hooks/useClassProfiles";
 
 export type OfficeHoursViewMode = "my-requests" | "browse" | "working" | "all-requests" | "dashboard" | "settings";
 
@@ -62,6 +62,8 @@ export function OfficeHoursHeader({
   const pathname = usePathname();
   const { private_profile_id } = useClassProfiles();
   const isInstructor = useIsInstructor();
+  // Stop Working updates help_queue_assignments (help_students).
+  const canHelpStudents = useCapability("help_students");
   // Use the specialized hook that subscribes to individual item changes
   // This ensures the header updates when staff starts/stops working
   const activeQueueAssignments = useActiveHelpQueueAssignments();
@@ -317,7 +319,7 @@ export function OfficeHoursHeader({
 
           <HStack gap={2} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
             <HelpRequestSearch isManageMode={true} />
-            {workingQueues.length > 0 && (
+            {canHelpStudents && workingQueues.length > 0 && (
               <Button
                 colorPalette="red"
                 size="xs"

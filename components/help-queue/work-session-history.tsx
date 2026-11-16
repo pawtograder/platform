@@ -3,7 +3,7 @@
 import PersonAvatar from "@/components/ui/person-avatar";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import { useOfficeHoursController, useWorkSessionsForRequest } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Collapsible, HStack, Icon, IconButton, Separator, Stack, Text } from "@chakra-ui/react";
@@ -20,7 +20,9 @@ interface WorkSessionHistoryProps {
 export default function WorkSessionHistory({ help_request_id }: WorkSessionHistoryProps) {
   const sessions = useWorkSessionsForRequest(help_request_id);
   const profiles = useAllProfilesForClass();
-  const isInstructor = useIsInstructor();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  // UPDATE: own session OR manage_office_hours; DELETE: manage_office_hours only.
+  const canManageOfficeHours = useCapability("manage_office_hours");
   const controller = useOfficeHoursController();
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
 
@@ -102,6 +104,9 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
         <Stack spaceY={3} mt={2}>
           {sessionsWithDuration.map((session, index) => {
             const isActive = !session.ended_at;
+            const isOwnSession =
+              session.ta_profile_id === private_profile_id || session.ta_profile_id === public_profile_id;
+            const canEditSession = isOwnSession || canManageOfficeHours;
 
             return (
               <Box
@@ -169,43 +174,47 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
                     )}
                   </Stack>
 
-                  {isInstructor && (
+                  {(canEditSession || canManageOfficeHours) && (
                     <HStack gap={1}>
-                      <IconButton
-                        aria-label="Edit session"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          // TODO: Implement edit modal
-                          toaster.info({
-                            title: "Edit session",
-                            description: "Edit functionality coming soon"
-                          });
-                        }}
-                      >
-                        <Icon as={BsPencil} />
-                      </IconButton>
-                      <PopConfirm
-                        triggerLabel="Delete session"
-                        trigger={
-                          <IconButton
-                            aria-label="Delete session"
-                            size="sm"
-                            variant="ghost"
-                            colorPalette="red"
-                            disabled={deletingSessionId === session.id}
-                            loading={deletingSessionId === session.id}
-                          >
-                            <Icon as={BsTrash} />
-                          </IconButton>
-                        }
-                        confirmHeader="Delete Work Session"
-                        confirmText="Are you sure you want to delete this work session? This action cannot be undone."
-                        onConfirm={async () => {
-                          await handleDelete(session.id);
-                        }}
-                        placement="bottom-end"
-                      />
+                      {canEditSession && (
+                        <IconButton
+                          aria-label="Edit session"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            // TODO: Implement edit modal
+                            toaster.info({
+                              title: "Edit session",
+                              description: "Edit functionality coming soon"
+                            });
+                          }}
+                        >
+                          <Icon as={BsPencil} />
+                        </IconButton>
+                      )}
+                      {canManageOfficeHours && (
+                        <PopConfirm
+                          triggerLabel="Delete session"
+                          trigger={
+                            <IconButton
+                              aria-label="Delete session"
+                              size="sm"
+                              variant="ghost"
+                              colorPalette="red"
+                              disabled={deletingSessionId === session.id}
+                              loading={deletingSessionId === session.id}
+                            >
+                              <Icon as={BsTrash} />
+                            </IconButton>
+                          }
+                          confirmHeader="Delete Work Session"
+                          confirmText="Are you sure you want to delete this work session? This action cannot be undone."
+                          onConfirm={async () => {
+                            await handleDelete(session.id);
+                          }}
+                          placement="bottom-end"
+                        />
+                      )}
                     </HStack>
                   )}
                 </HStack>

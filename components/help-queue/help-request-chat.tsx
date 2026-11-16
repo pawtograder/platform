@@ -30,7 +30,7 @@ import { RealtimeChat } from "@/components/realtime-chat";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
@@ -1052,6 +1052,12 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
   // Check if current user is instructor or grader (not a student)
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  // Staff help actions (assign, resolve as staff, karma) follow help_students.
+  // Moderation INSERT accepts help_students OR manage_office_hours.
+  // AI Help, Discord, and video Start/End stay role-based (isInstructorOrGrader).
+  const canHelpStudents = useCapability("help_students");
+  const canManageOfficeHours = useCapability("manage_office_hours");
+  const canModerate = canHelpStudents || canManageOfficeHours;
 
   // Check if notification permission warning should be shown
   const showNotificationWarning = useShowNotificationWarning();
@@ -1085,8 +1091,8 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
   // Check if current user can access request management controls (resolve/close)
   const canAccessRequestControls = useMemo(() => {
-    return isInstructorOrGrader || studentIds.includes(private_profile_id!);
-  }, [isInstructorOrGrader, studentIds, private_profile_id]);
+    return canHelpStudents || studentIds.includes(private_profile_id!);
+  }, [canHelpStudents, studentIds, private_profile_id]);
 
   // Modal management for moderation, karma, feedback, and resolution actions
   const moderationModal = useModalManager();
@@ -1289,7 +1295,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
           {/* Right: Actions */}
           <HStack gap={1} flexShrink={0}>
             {/* Start Helping - Most prominent */}
-            {isInstructorOrGrader &&
+            {canHelpStudents &&
               !readOnly &&
               request &&
               !request.assignee &&
@@ -1298,9 +1304,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
               )}
 
             {/* Assignment status when already assigned */}
-            {isInstructorOrGrader && !readOnly && request && request.assignee && (
-              <HelpRequestAssignment request={request} />
-            )}
+            {canHelpStudents && !readOnly && request && request.assignee && <HelpRequestAssignment request={request} />}
 
             {/* Resolve */}
             {!readOnly &&
@@ -1353,37 +1357,45 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             )}
 
             {/* Staff-only actions */}
-            {isInstructorOrGrader && request && (
+            {request && (
               <>
-                <AIHelpIconButton
-                  contextType="help_request"
-                  resourceId={request.id}
-                  classId={request.class_id}
-                  submissionId={request.referenced_submission_id ?? undefined}
-                />
-                <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
-                <Tooltip content="Moderation" showArrow>
-                  <IconButton
-                    aria-label="Moderation"
-                    size="xs"
-                    variant="ghost"
-                    colorPalette="orange"
-                    onClick={() => moderationModal.openModal()}
-                  >
-                    <Icon as={BsShield} boxSize={3} />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip content="Karma" showArrow>
-                  <IconButton
-                    aria-label="Karma"
-                    size="xs"
-                    variant="ghost"
-                    colorPalette="yellow"
-                    onClick={() => karmaModal.openModal()}
-                  >
-                    <Icon as={BsStar} boxSize={3} />
-                  </IconButton>
-                </Tooltip>
+                {isInstructorOrGrader && (
+                  <>
+                    <AIHelpIconButton
+                      contextType="help_request"
+                      resourceId={request.id}
+                      classId={request.class_id}
+                      submissionId={request.referenced_submission_id ?? undefined}
+                    />
+                    <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
+                  </>
+                )}
+                {canHelpStudents && (
+                  <Tooltip content="Karma" showArrow>
+                    <IconButton
+                      aria-label="Karma"
+                      size="xs"
+                      variant="ghost"
+                      colorPalette="yellow"
+                      onClick={() => karmaModal.openModal()}
+                    >
+                      <Icon as={BsStar} boxSize={3} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                {canModerate && (
+                  <Tooltip content="Moderation" showArrow>
+                    <IconButton
+                      aria-label="Moderation"
+                      size="xs"
+                      variant="ghost"
+                      colorPalette="orange"
+                      onClick={() => moderationModal.openModal()}
+                    >
+                      <Icon as={BsShield} boxSize={3} />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </>
             )}
           </HStack>
@@ -1398,7 +1410,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 <Text>
                   {students.length} student{students.length !== 1 ? "s" : ""}
                 </Text>
-                {isInstructorOrGrader && request && (
+                {canHelpStudents && request && (
                   <>
                     <Text>•</Text>
                     <HelpRequestAssignment request={request} compact />
@@ -1456,19 +1468,19 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       </Flex>
 
       {/* Modals */}
-      {isInstructorOrGrader && (
-        <>
-          <CreateModerationActionModal
-            isOpen={moderationModal.isOpen}
-            onClose={moderationModal.closeModal}
-            onSuccess={handleModerationSuccess}
-          />
-          <CreateKarmaEntryModal
-            isOpen={karmaModal.isOpen}
-            onClose={karmaModal.closeModal}
-            onSuccess={handleKarmaSuccess}
-          />
-        </>
+      {canModerate && (
+        <CreateModerationActionModal
+          isOpen={moderationModal.isOpen}
+          onClose={moderationModal.closeModal}
+          onSuccess={handleModerationSuccess}
+        />
+      )}
+      {canHelpStudents && (
+        <CreateKarmaEntryModal
+          isOpen={karmaModal.isOpen}
+          onClose={karmaModal.closeModal}
+          onSuccess={handleKarmaSuccess}
+        />
       )}
 
       {isStudent && (

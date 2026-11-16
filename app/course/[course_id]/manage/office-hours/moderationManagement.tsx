@@ -5,7 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { useHelpRequestModeration, useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
@@ -38,7 +38,8 @@ type ModerationActionWithDetails = HelpRequestModeration & {
 export default function ModerationManagement() {
   const { course_id } = useParams();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
-  const isInstructor = useIsInstructor();
+  const canHelpStudents = useCapability("help_students");
+  const canManageOfficeHours = useCapability("manage_office_hours");
   const profiles = useAllProfilesForClass();
 
   // Modal management
@@ -239,7 +240,7 @@ export default function ModerationManagement() {
         </Box>
 
         {/* Delete Button */}
-        {isInstructor && (
+        {canManageOfficeHours && (
           <PopConfirm
             triggerLabel="Delete moderation action"
             trigger={
@@ -260,10 +261,12 @@ export default function ModerationManagement() {
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Heading size="lg">Moderation Management</Heading>
-        <Button onClick={() => createModal.openModal()}>
-          <Icon as={BsPlus} />
-          Create Moderation Action
-        </Button>
+        {(canHelpStudents || canManageOfficeHours) && (
+          <Button onClick={() => createModal.openModal()}>
+            <Icon as={BsPlus} />
+            Create Moderation Action
+          </Button>
+        )}
       </Flex>
 
       {/* Connection Status Indicator */}
@@ -306,7 +309,7 @@ export default function ModerationManagement() {
               ? "No moderation actions have been taken yet."
               : `No ${filterStatus} moderation actions found.`}
           </Text>
-          {filterStatus === "all" && (
+          {filterStatus === "all" && (canHelpStudents || canManageOfficeHours) && (
             <Button onClick={() => createModal.openModal()}>
               <Icon as={BsPlus} />
               Create First Moderation Action
