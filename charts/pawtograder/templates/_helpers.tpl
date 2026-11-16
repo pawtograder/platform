@@ -126,6 +126,13 @@ Usage: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.web.image) }
 {{- end -}}
 
 {{/*
+The Coder workspace image: coderBootstrap.workspaces.image, or ghcr.io/pawtograder/coder-workspace at the chart appVersion.
+*/}}
+{{- define "pawtograder.coderWorkspaceImage" -}}
+{{- .Values.coderBootstrap.workspaces.image | default (printf "ghcr.io/pawtograder/coder-workspace:%s" .Chart.AppVersion) -}}
+{{- end -}}
+
+{{/*
 Merge global pod placement with per-component overrides.
 Usage: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres) }}
 */}}

@@ -3066,15 +3066,19 @@ coderBootstrap:
   workspaceNamespace: ""
   # Reapplied on every install and upgrade, resetting changes made in Coder's UI.
   schedule:
-    defaultTTL: 2h
+    defaultTTL: 1h
     activityBump: 1h
     # Need a Coder Premium license; with either set non-zero on an unlicensed Coder the hook fails.
     dormancyThreshold: "0"
     dormancyAutoDeletion: "0" # deletes the workspace and its home volume
   workspaces:
-    image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    # "" uses ghcr.io/pawtograder/coder-workspace:<chart appVersion>, built from images/coder-workspace by release-images.yml.
+    # A source checkout's appVersion (0.0.1) isn't published, so set a published tag, e.g. ghcr.io/pawtograder/coder-workspace:staging-latest.
+    image: ""
     # "" uses the image's code-server.
     codeServerVersion: 4.143.1
+    # Workspaces clone and push with this Coder external auth provider's token. Must equal coder.externalAuth.forgejo.id.
+    externalAuthId: forgejo
     arch: amd64
     priorityClassName: ""
     imagePullPolicy: IfNotPresent

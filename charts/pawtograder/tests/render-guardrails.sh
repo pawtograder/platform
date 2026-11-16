@@ -3122,6 +3122,41 @@ echo
 
 echo "== Coder template schedule =="
 
+apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'" \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
+  --set coderBootstrap.workspaces.externalAuthId=git-school --set coder.externalAuth.forgejo.id=git-school \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: workspaces default to the chart's coder-workspace image" yes \
+  "image: \"ghcr.io/pawtograder/coder-workspace:$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART/Chart.yaml")\"" \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: a workspace image override is passed through" yes 'image: "registry.school.edu/ws:1"' \
+  --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 --show-only templates/coder-bootstrap.yaml
+APPS_PROD=("${BASE[@]}" --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast)
+apps_has "template: production takes the default workspace image's appVersion tag" yes \
+  'image: "ghcr.io/pawtograder/coder-workspace:' "${APPS_PROD[@]}" --show-only templates/coder-bootstrap.yaml
+apps_refused "template: production refuses an untagged workspace image" \
+  "coderBootstrap.workspaces.image's tag=\"\"" "${APPS_PROD[@]}" --set coderBootstrap.workspaces.image=registry.school.edu/ws
+apps_refused "template: arm64 workspaces need their own image" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64
+apps_refused "template: arm64 refuses our amd64 image at an explicit tag" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64 \
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:staging-latest
+apps_refused "template: arm64 refuses our amd64 image by digest" \
+  "coderBootstrap.workspaces.arch=arm64 needs coderBootstrap.workspaces.image" --set coderBootstrap.workspaces.arch=arm64 \
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:1.2.3@sha256:0000000000000000000000000000000000000000000000000000000000000000
+apps_has "template: arm64 renders with its own image" yes 'arch: "arm64"' \
+  --set coderBootstrap.workspaces.arch=arm64 --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: repo_url is pinned to Forgejo's public URL" yes 'forgejo_url: "https://git.example.com"' \
+  --show-only templates/coder-bootstrap.yaml
+apps_has "template: the pin follows Forgejo's ROOT_URL" yes 'forgejo_url: "https://code.school.edu/git"' \
+  --set forgejo.gitea.config.server.ROOT_URL=https://code.school.edu/git/ --show-only templates/coder-bootstrap.yaml
+apps_has "template: the clone script ships with the template" yes "path: kubernetes/clone.sh" \
+  --show-only templates/coder-bootstrap.yaml
+
 apps_has "schedule: a fractional duration renders" yes "--default-ttl '1.5h'" \
   --set coderBootstrap.schedule.defaultTTL=1.5h --show-only templates/coder-bootstrap.yaml
 apps_has "schedule: Go's largest whole-hour duration renders" yes "--default-ttl '2562047h'" \
@@ -3173,7 +3208,8 @@ apps_has "external auth: scopes are spelled out, without Coder's stray space" ye
   'CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"' "${EA[@]}" \
   --show-only templates/app-databases.yaml
 apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: "git-school"' "${EA[@]}" \
-  --set coder.externalAuth.forgejo.id=git-school --show-only templates/app-databases.yaml
+  --set coder.externalAuth.forgejo.id=git-school --set coderBootstrap.workspaces.externalAuthId=git-school \
+  --show-only templates/app-databases.yaml
 apps_has "external auth: the ExternalSecret maps OpenBao's client to Coder's env" yes \
   "secretKey: CODER_EXTERNAL_AUTH_0_CLIENT_SECRET" "${EA[@]}" "${EA_ES[@]}" \
   --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=apps/pawtograder/coder-external-auth-test \
