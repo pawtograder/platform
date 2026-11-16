@@ -9,6 +9,9 @@
 {{- if or (contains "*" $host) (contains "?" $host) (contains "[" $host) (contains "," $host) (has (lower $host) (list "private" "loopback")) }}
 {{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: anyone who can add a webhook to a repository could then send requests into the cluster" (toString .)) }}
 {{- end }}
+{{- if and (contains "/" $host) (ne (include "pawtograder.forgejo.webhookCidrAllowed" $host) "true") }}
+{{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: use a CIDR that does not include restricted addresses" (toString .)) }}
+{{- end }}
 {{- end }}
 {{- $ref := dict }}
 {{- range .Values.forgejo.gitea.additionalConfigFromEnvs }}{{ if eq .name "FORGEJO__WEBHOOK__ALLOWED_HOST_LIST" }}{{ $ref = dig "valueFrom" "configMapKeyRef" dict . }}{{ end }}{{ end }}

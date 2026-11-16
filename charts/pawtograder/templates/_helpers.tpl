@@ -755,3 +755,40 @@ fails at render time regardless of whether monitoring is on.
 {{- end -}}
 {{- $bytes -}}
 {{- end -}}
+
+{{/* Check IPv4 overlap by comparing each pair at its shorter prefix. For IPv6,
+     accept only ranges wholly inside the global unicast block, 2000::/3. */}}
+{{- define "pawtograder.forgejo.webhookCidrAllowed" -}}
+{{- $parts := splitList "/" . -}}
+{{- if and (eq (len $parts) 2) (regexMatch "^(0|[1-9][0-9]{0,2})$" (last $parts)) -}}
+  {{- $address := first $parts -}}
+  {{- $prefix := atoi (last $parts) -}}
+  {{- if and (ge $prefix 3) (le $prefix 128) (regexMatch "(?i)^[23][0-9a-f]{3}:[0-9a-f:]*$" $address) -}}
+    true
+  {{- else if and (le $prefix 32) (regexMatch "^((0|[1-9][0-9]{0,2})[.]){3}(0|[1-9][0-9]{0,2})$" $address) -}}
+    {{- $number := 0 -}}
+    {{- $allowed := true -}}
+    {{- range (splitList "." $address) -}}
+      {{- $octet := atoi . -}}
+      {{- if gt $octet 255 -}}{{- $allowed = false -}}{{- end -}}
+      {{- $number = add (mul $number 256) $octet -}}
+    {{- end -}}
+    {{- range (list "0.0.0.0/8" "10.0.0.0/8" "100.64.0.0/10" "127.0.0.0/8"
+      "169.254.0.0/16" "172.16.0.0/12" "192.168.0.0/16" "224.0.0.0/3") -}}
+      {{- $network := splitList "/" . -}}
+      {{- $networkNumber := 0 -}}
+      {{- range (splitList "." (first $network)) -}}
+        {{- $networkNumber = add (mul $networkNumber 256) (atoi .) -}}
+      {{- end -}}
+      {{- $blockSize := 1 -}}
+      {{- range until (int (sub 32 (min $prefix (atoi (last $network))))) -}}
+        {{- $blockSize = mul $blockSize 2 -}}
+      {{- end -}}
+      {{- if eq (div $number $blockSize) (div $networkNumber $blockSize) -}}
+        {{- $allowed = false -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if $allowed -}}true{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
