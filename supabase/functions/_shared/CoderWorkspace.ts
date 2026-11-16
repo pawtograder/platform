@@ -407,8 +407,9 @@ export function needsRestart(ws: CoderWorkspace): boolean {
 
 /**
  * Maps Coder's build and agent state onto #1170's steps, with the failing script's last log lines.
- * `restarting` says a restart claim is held: a workspace-open is stopping the workspace, or its stop
- * has finished and the start is being posted. That reads `restarting` until a start build exists.
+ * `restarting` says a restart claim is held: a workspace-open is stopping the workspace or waiting
+ * for a stop that was already under way, or the stop has finished and the start is being posted.
+ * That reads `restarting` until a start build exists.
  */
 export async function describeWorkspace(
   coder: CoderConfig,
@@ -559,6 +560,12 @@ function isStopped(ws: CoderWorkspace): boolean {
   return ws.latest_build.transition === "stop" && ws.latest_build.status === "stopped";
 }
 
+/** A stop build that is queued or running: Coder's autostop, a stop posted in Coder, or a restart's. */
+function isStopping(ws: CoderWorkspace): boolean {
+  const build = ws.latest_build;
+  return build.transition === "stop" && (build.status === "pending" || build.status === "stopping");
+}
+
 /**
  * A `starting` claim whose start build exists. While a claim is `starting` only its holder posts a
  * start, so the build is the holder's, which didn't get to give the claim up (it ran out of time or
@@ -618,11 +625,12 @@ async function finishRestart(
 }
 
 /**
- * Stops the workspace and, if the stop finishes in time, starts it again. The home volume outlives
- * the stop (#1221's PVC has no count), so the clone and any work on it are kept. Only one call
- * restarts a workspace at a time: the row's restart claim decides which. Returns the workspace and
- * whether the restart is still under way without a start build (another call holds the claim, or
- * time ran short; the claim then stays `stopping`, and a status read posts the start).
+ * Stops the workspace, or waits for a stop already under way, and starts it again if the stop
+ * finishes in time. The home volume outlives the stop (#1221's PVC has no count), so the clone and
+ * any work on it are kept. Only one call restarts a workspace at a time: the row's restart claim
+ * decides which. Returns the workspace and whether the restart is still under way without a start
+ * build (another call holds the claim, or time ran short; the claim then stays `stopping`, and a
+ * status read posts the start).
  */
 async function restartWorkspace(
   deps: Deps,
@@ -632,16 +640,21 @@ async function restartWorkspace(
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
   const { db, coder } = deps;
   const now = clock(deps);
-  // Too little time to post the stop: the workspace stays as it is for the next open.
-  if (deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
+  // Coder refuses a second build while one is active, so a stop under way is the restart's stop.
+  const alreadyStopping = isStopping(ws);
+  // Too little time to post the stop: the workspace stays as it is for the next open. A stop under
+  // way needs no post, so its claim is taken whatever time is left, and a status read finishes it.
+  if (!alreadyStopping && deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
   const token = await db.claimRestart(row.id, new Date(now() - RESTART_CLAIM_MS).toISOString());
   if (!token) return { ws, restarting: true };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   try {
-    const stopError = await postBuild(coder, ws.id, "stop");
-    if (stopError && stopError.status !== 409) {
-      await db.releaseRestart(row.id, token);
-      throw stopError;
+    if (!alreadyStopping) {
+      const stopError = await postBuild(coder, ws.id, "stop");
+      if (stopError && stopError.status !== 409) {
+        await db.releaseRestart(row.id, token);
+        throw stopError;
+      }
     }
     for (;;) {
       ws = (await getWorkspace(coder, ws.id)) ?? ws;
@@ -667,7 +680,8 @@ async function restartWorkspace(
 
 /**
  * Creates the caller's Coder user and workspace if they're missing, starts the workspace if it's
- * stopped, restarts it if its agent failed, and says where to send the student.
+ * stopped, restarts it if its agent failed or it is being stopped, and says where to send the
+ * student.
  */
 export async function openWorkspace(
   deps: Deps,
@@ -769,8 +783,10 @@ export async function openWorkspace(
     }
     if (!ws) throw new Error(`Coder workspace ${name} was neither created nor found`);
     row = await recordWorkspaceId(db, row, ws);
-  } else if (needsRestart(ws)) {
-    // Retry after a startup failure, such as a clone that timed out, or a lost agent.
+  } else if (needsRestart(ws) || isStopping(ws)) {
+    // Retry after a startup failure, such as a clone that timed out, or a lost agent. Or the
+    // workspace is being stopped (an autostop, or a stop posted in Coder): the claim keeps this
+    // open, so the workspace starts once the stop finishes instead of the student asking again.
     ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
   } else if (isStopped(ws) && row.restart_token) {
     // A restart whose stop has finished: an earlier open's, or one whose holder is gone. Taken
@@ -810,9 +826,10 @@ export async function workspaceStatus(
   row = await settleRestart(deps, row, ws);
   let restarting = restartUnderWay(deps, row, ws);
   if (row.restart_token && isStopped(ws)) {
-    // workspace-open stopped the workspace to restart it and answered before the stop finished, or
-    // the call that held the claim is gone. Nothing else would start it, so this is the one build a
-    // status read posts. A stale claim on a workspace that isn't stopped is left to the next open.
+    // workspace-open stopped the workspace to restart it, or found it being stopped, and answered
+    // before the stop finished, or the call that held the claim is gone. Nothing else would start
+    // it, so this is the one build a status read posts. A stale claim on a workspace that isn't
+    // stopped is left to the next open.
     ({ ws, restarting } = await finishRestart(deps, row, ws, deadline));
   }
   return await withDeletionDate(deps, row.id, await describeWorkspace(coder, ws, restarting));
