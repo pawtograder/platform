@@ -3084,6 +3084,7 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
       (await supabase.from("user_roles").update({ class_role_id: withoutHelpRoleId }).eq("id", withoutHelpRow.id)).error
     ).toBeNull();
 
+    // manage_office_hours alone (not help_students): prove manager writes without the help capability.
     const { data: withManageRole, error: withManageError } = await supabase
       .from("class_roles")
       .insert({ class_id: classH.id, name: "OH Manager TA" })
@@ -3097,6 +3098,14 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
           .insert({ role_id: withManageRole!.id, capability: "manage_office_hours" })
       ).error
     ).toBeNull();
+    const { data: removedManageHelp, error: removeManageHelpError } = await supabase
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", withManageRole!.id)
+      .eq("capability", "help_students")
+      .select("capability");
+    expect(removeManageHelpError).toBeNull();
+    expect(removedManageHelp, "help_students off for manage-only role").toHaveLength(1);
     const withManageRow = await userRole(withManage);
     expect(
       (await supabase.from("user_roles").update({ class_role_id: withManageRole!.id }).eq("id", withManageRow.id)).error
@@ -3453,7 +3462,7 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
     expect(opened).toEqual([{ is_private: false }]);
   });
 
-  test("manage_office_hours gates templates; default graders stay refused", async () => {
+  test("manage_office_hours alone gates templates, moderation and work sessions; taking a request is refused", async () => {
     const instructor = await createAuthenticatedClient(instructorH);
     const { data: template, error: createError } = await instructor
       .from("help_request_templates")
@@ -3502,6 +3511,14 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
     expect(updateError).toBeNull();
     expect(updated).toEqual([{ name: "Manager template edited" }]);
 
+    const { data: deletedTemplate, error: deleteTemplateError } = await manager
+      .from("help_request_templates")
+      .delete()
+      .eq("id", managed!.id)
+      .select("id");
+    expect(deleteTemplateError).toBeNull();
+    expect(deletedTemplate ?? []).toHaveLength(1);
+
     const helper = await createAuthenticatedClient(withHelp);
     const { data: helperUpdate, error: helperUpdateError } = await helper
       .from("help_request_templates")
@@ -3510,5 +3527,277 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
       .select("id");
     expect(helperUpdateError).toBeNull();
     expect(helperUpdate ?? [], "editing a template with only help_students").toHaveLength(0);
+
+    const req = await seedRequest("Manage-only moderation");
+    const { data: moderation, error: moderationSeedError } = await supabase
+      .from("help_request_moderation")
+      .insert({
+        class_id: classH.id,
+        help_request_id: req.id,
+        student_profile_id: studentH.private_profile_id,
+        moderator_profile_id: instructorH.private_profile_id,
+        action_type: "warning",
+        reason: "seed"
+      })
+      .select("id, reason")
+      .single();
+    expect(moderationSeedError).toBeNull();
+
+    const { data: modUpdated, error: modUpdateError } = await manager
+      .from("help_request_moderation")
+      .update({ reason: "manager edited" })
+      .eq("id", moderation!.id)
+      .select("reason");
+    expect(modUpdateError).toBeNull();
+    expect(modUpdated).toEqual([{ reason: "manager edited" }]);
+
+    const { data: modDeleted, error: modDeleteError } = await manager
+      .from("help_request_moderation")
+      .delete()
+      .eq("id", moderation!.id)
+      .select("id");
+    expect(modDeleteError).toBeNull();
+    expect(modDeleted ?? []).toHaveLength(1);
+
+    const { data: session, error: sessionSeedError } = await supabase
+      .from("help_request_work_sessions")
+      .insert({
+        class_id: classH.id,
+        help_request_id: req.id,
+        ta_profile_id: plainGrader.private_profile_id,
+        started_at: new Date().toISOString()
+      })
+      .select("id")
+      .single();
+    expect(sessionSeedError).toBeNull();
+
+    const { data: sessionDeleted, error: sessionDeleteError } = await manager
+      .from("help_request_work_sessions")
+      .delete()
+      .eq("id", session!.id)
+      .select("id");
+    expect(sessionDeleteError).toBeNull();
+    expect(sessionDeleted ?? [], "deleting someone else's work session with manage_office_hours").toHaveLength(1);
+
+    const { data: takeAttempt, error: takeError } = await manager
+      .from("help_requests")
+      .update({ status: "in_progress", assignee: withManage.private_profile_id })
+      .eq("id", req.id)
+      .select("id");
+    expect(takeError).toBeNull();
+    expect(takeAttempt ?? [], "taking a help request without help_students").toHaveLength(0);
+    const { data: stillOpen } = await supabase
+      .from("help_requests")
+      .select("status, assignee")
+      .eq("id", req.id)
+      .single();
+    expect(stillOpen).toEqual({ status: "open", assignee: null });
+  });
+
+  test("a class admin keeps staff chat and private membership writes, not templates", async () => {
+    const admin = await createUserInClass({ role: "admin", class_id: classH.id });
+    const otherStudent = await createUserInClass({ role: "student", class_id: classH.id });
+    const { data: privateReq, error: privateError } = await supabase
+      .from("help_requests")
+      .insert({
+        class_id: classH.id,
+        help_queue: queueId,
+        request: "Admin private request",
+        created_by: studentH.private_profile_id,
+        status: "open",
+        is_private: true
+      })
+      .select("id")
+      .single();
+    expect(privateError).toBeNull();
+    expect(
+      (
+        await supabase.from("help_request_students").insert({
+          help_request_id: privateReq!.id,
+          class_id: classH.id,
+          profile_id: studentH.private_profile_id
+        })
+      ).error
+    ).toBeNull();
+
+    const client = await createAuthenticatedClient(admin);
+    const { error: chatError } = await client.from("help_request_messages").insert({
+      help_request_id: privateReq!.id,
+      class_id: classH.id,
+      author: admin.private_profile_id,
+      message: "admin staff note",
+      instructors_only: true
+    });
+    expect(chatError, "class admin can post staff chat").toBeNull();
+
+    const { error: memberError } = await client.from("help_request_students").insert({
+      help_request_id: privateReq!.id,
+      class_id: classH.id,
+      profile_id: otherStudent.private_profile_id
+    });
+    expect(memberError, "class admin can add a member to a private request").toBeNull();
+
+    expectRlsBlocked(
+      await client.from("help_request_templates").insert({
+        class_id: classH.id,
+        name: "Admin should fail",
+        category: "general",
+        template_content: "no",
+        created_by_id: admin.private_profile_id
+      }),
+      "class admin creating a template"
+    );
+  });
+
+  test("help_students in A cannot write B messages or attach an A row to a B request", async () => {
+    const otherClass = await createClass({ name: "E2E OH Cross-Message B" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const otherStudent = await createUserInClass({ role: "student", class_id: otherClass.id });
+    const otherQueue = await insertOfficeHoursQueue({ class_id: otherClass.id, name: "B message queue" });
+    const otherReq = await insertHelpRequest({
+      class_id: otherClass.id,
+      student_profile_id: otherStudent.private_profile_id,
+      request: "B request for cross write",
+      help_queue_id: otherQueue.id,
+      status: "open",
+      active_staff_profile_id: otherInstructor.private_profile_id
+    });
+
+    const { data: noHelpRoleB, error: roleBError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: otherClass.id, name: "No Help Cross Msg" })
+      .select("id")
+      .single();
+    expect(roleBError).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .delete()
+          .eq("role_id", noHelpRoleB!.id)
+          .eq("capability", "help_students")
+      ).error
+    ).toBeNull();
+
+    const { data: privB, error: privError } = await supabase
+      .from("profiles")
+      .insert({ name: "OH msg private", class_id: otherClass.id, is_private_profile: true })
+      .select("id")
+      .single();
+    expect(privError).toBeNull();
+    const { data: pubB, error: pubError } = await supabase
+      .from("profiles")
+      .insert({ name: "OH msg public", class_id: otherClass.id, is_private_profile: false })
+      .select("id")
+      .single();
+    expect(pubError).toBeNull();
+    expect(
+      (
+        await supabase.from("user_roles").insert({
+          user_id: withHelp.user_id,
+          class_id: otherClass.id,
+          private_profile_id: privB!.id,
+          public_profile_id: pubB!.id,
+          role: "grader"
+        })
+      ).error
+    ).toBeNull();
+    const { data: dualRow, error: dualRowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", withHelp.user_id)
+      .eq("class_id", otherClass.id)
+      .single();
+    expect(dualRowError).toBeNull();
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: noHelpRoleB!.id }).eq("id", dualRow!.id)).error
+    ).toBeNull();
+
+    const client = await createAuthenticatedClient(withHelp);
+    expectRlsBlocked(
+      await client.from("help_request_messages").insert({
+        help_request_id: otherReq.id,
+        class_id: otherClass.id,
+        author: privB!.id,
+        message: "cross-class staff chat",
+        instructors_only: true
+      }),
+      "staff chat in another class without help_students there"
+    );
+
+    // Visible A capability, B help request: WITH CHECK must refuse attaching A class_id to B's id.
+    expectRlsBlocked(
+      await client.from("help_request_moderation").insert({
+        class_id: classH.id,
+        help_request_id: otherReq.id,
+        student_profile_id: studentH.private_profile_id,
+        moderator_profile_id: withHelp.private_profile_id,
+        action_type: "warning",
+        reason: "cross attach"
+      }),
+      "attaching a class A moderation row to a class B help request"
+    );
+  });
+
+  test("private help requests: non-members stay out; owners can still write; staff read needs no help_students", async () => {
+    const outsider = await createUserInClass({ role: "student", class_id: classH.id });
+    const { data: privateReq, error } = await supabase
+      .from("help_requests")
+      .insert({
+        class_id: classH.id,
+        help_queue: queueId,
+        request: "Private owner write",
+        created_by: studentH.private_profile_id,
+        status: "open",
+        is_private: true
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (
+        await supabase.from("help_request_students").insert({
+          help_request_id: privateReq!.id,
+          class_id: classH.id,
+          profile_id: studentH.private_profile_id
+        })
+      ).error
+    ).toBeNull();
+
+    // Unchanged: a non-member student cannot read a private request.
+    const outsiderClient = await createAuthenticatedClient(outsider);
+    const { data: hidden, error: hiddenError } = await outsiderClient
+      .from("help_requests")
+      .select("id")
+      .eq("id", privateReq!.id);
+    expect(hiddenError).toBeNull();
+    expect(hidden ?? [], "non-member student cannot read a private request").toHaveLength(0);
+
+    // Unchanged: authorizeforhelprequeststaff still admits graders without help_students.
+    const noHelp = await createAuthenticatedClient(withoutHelp);
+    const { data: staffVisible, error: staffVisibleError } = await noHelp
+      .from("help_requests")
+      .select("id")
+      .eq("id", privateReq!.id);
+    expect(staffVisibleError).toBeNull();
+    expect(staffVisible ?? [], "grader without help_students can still read private requests").toHaveLength(1);
+
+    const owner = await createAuthenticatedClient(studentH);
+    const { error: postError } = await owner.from("help_request_messages").insert({
+      help_request_id: privateReq!.id,
+      class_id: classH.id,
+      author: studentH.private_profile_id,
+      message: "owner note",
+      instructors_only: false
+    });
+    expect(postError, "owner can post in their private request").toBeNull();
+
+    const { data: ownerUpdate, error: ownerUpdateError } = await owner
+      .from("help_requests")
+      .update({ request: "Private owner write edited" })
+      .eq("id", privateReq!.id)
+      .select("request");
+    expect(ownerUpdateError).toBeNull();
+    expect(ownerUpdate).toEqual([{ request: "Private owner write edited" }]);
   });
 });

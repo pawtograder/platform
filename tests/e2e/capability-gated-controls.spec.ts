@@ -605,6 +605,7 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
     await capabilities;
     await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Create New Template|Create Your First Template/ })).toBeVisible();
+    // Header and empty-state both offer a create button; match the header by exact name.
+    await expect(page.getByRole("button", { name: "Create New Template" })).toBeVisible();
   });
 });
