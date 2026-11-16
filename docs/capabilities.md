@@ -195,14 +195,17 @@ membership updates, creating moderation records, karma note writes, work-session
 and leaving queues (`help_queue_assignments` writes), and creating/editing/deleting help queues.
 Day one, the default instructor role, the default grader role and every existing custom role hold
 it. Assign / resolve / moderate / karma / start-call controls and queue create/edit/delete follow
-`useCapability("help_students")`. `live-meeting-end` asks the same capability through
-`assertUserHasCapabilityOrServiceRole`.
+`useCapability("help_students")`. Helpers and policies that used to call
+`authorizeforhelprequeststaff` also keep class admins (the admin role holds no capabilities by
+design, so those checks OR the same `user_privileges.role = 'admin'` test the old helper used).
 
 `manage_office_hours` covers instructor-only office hours configuration: help request templates
 (insert/update/delete), instructor CRUD on `student_help_activity`, instructor update/delete of
 moderation records, and deleting (or updating another TA's) work sessions. Day one, only the
 default instructor role holds it. Template create/edit/delete and the templates settings page
-follow `useCapability` / `useCapabilityOnceLoaded("manage_office_hours")`.
+follow `useCapability` / `useCapabilityOnceLoaded("manage_office_hours")`. Creating a moderation
+action is allowed with either capability (matching the INSERT policies), and delete/update of
+moderation and work sessions follow `manage_office_hours`.
 
 Left as views or student actions: all office-hours SELECT policies; student create/update of their
 own requests; student chat, watchers, receipts and feedback; `authorizeforhelprequeststaff` and
@@ -215,4 +218,6 @@ those writes follow `help_students` rather than `manage_office_hours` (the plan'
 queues" row). The team should decide whether queue configuration should move to
 `manage_office_hours`, which would take it away from default graders. CLI `help-requests close`
 stays instructor-only for the same reason: switching it to `help_students` would give graders a
-CLI path they did not have.
+CLI path they did not have. Starting and ending a video meeting is still authorized by role in the
+edge functions, so turning `help_students` off does not stop it; moving those functions to the
+capability is left for a follow-up.
