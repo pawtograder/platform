@@ -3278,7 +3278,7 @@ apps_has "webhook: an extra exact host and a CIDR are kept" yes \
   --set-json 'forgejo.webhookAllowedHosts=["external","hooks.example.org","203.0.113.0/24"]' "${WH[@]}"
 apps_has "webhook: Forgejo reads it from the ConfigMap" yes "name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST" \
   --show-only charts/forgejo/templates/gitea/deployment.yaml
-for host in private Private '*' '*.example.com'; do
+for host in private Private '*' '*.example.com' 'external,private'; do
   apps_refused "webhook: $host in webhookAllowedHosts is refused" \
     "forgejo.webhookAllowedHosts can't contain \"$host\"" --set-json "forgejo.webhookAllowedHosts=[\"external\",\"$host\"]"
 done

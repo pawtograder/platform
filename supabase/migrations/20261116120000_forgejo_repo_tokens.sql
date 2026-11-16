@@ -2,7 +2,8 @@
 
 CREATE TABLE public.forgejo_repo_tokens (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  user_id uuid NOT NULL REFERENCES public.users (user_id) ON DELETE CASCADE,
+  -- Keep the user until the reconciler has revoked every token.
+  user_id uuid NOT NULL REFERENCES public.users (user_id) ON DELETE NO ACTION,
   -- No FK: the row must outlive the repository until the token is revoked.
   repository_id bigint NOT NULL,
   instance_url text NOT NULL,

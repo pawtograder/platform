@@ -5,7 +5,7 @@
 {{- fail (printf "forgejo.gitea.config.webhook.ALLOWED_HOST_LIST=%q would be overridden: the chart sets it from forgejo.webhookAllowedHosts plus the API host" .) }}
 {{- end }}
 {{- range (.Values.forgejo.webhookAllowedHosts | default list) }}
-{{- if or (contains "*" (toString .)) (eq (lower (toString .)) "private") }}
+{{- if or (contains "*" (toString .)) (contains "," (toString .)) (eq (lower (toString .)) "private") }}
 {{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: anyone who can add a webhook to a repository could then send requests into the cluster" (toString .)) }}
 {{- end }}
 {{- end }}
