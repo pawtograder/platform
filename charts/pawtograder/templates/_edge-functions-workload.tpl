@@ -418,11 +418,7 @@ spec:
             {{- if $ctx.Values.forgejo.enabled }}
             - name: FORGEJO_URL
               value: {{ include "pawtograder.forgejo.url" $ctx | quote }}
-            # Admin Basic auth for _shared/ForgejoWrapper.ts, from the Secret the Forgejo subchart
-            # creates its admin account from. optional: true for the reason JWT_SECRET's is: a
-            # missing required secretKeyRef stops the whole edge tier, while a missing optional
-            # one leaves forgejoConfig() null and only the Forgejo features off. A pod started
-            # before the Secret existed keeps running without them until it is restarted.
+            # optional: a missing required secretKeyRef would stop the whole edge tier.
             - name: FORGEJO_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:

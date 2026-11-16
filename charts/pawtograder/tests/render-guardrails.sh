@@ -3213,8 +3213,6 @@ echo
 
 echo "== Forgejo admin API settings for the edge functions =="
 EF=(--show-only templates/edge-functions.yaml)
-# The admin Secret ref must name the Secret the subchart creates the admin from, with its keys, and
-# stay optional so a missing Secret can't stop the whole edge tier.
 for pair in FORGEJO_ADMIN_USERNAME:username FORGEJO_ADMIN_PASSWORD:password; do
   var="${pair%%:*}" key="${pair#*:}"
   label="forgejo env: $var comes from pawtograder-forgejo-admin key $key, optional"

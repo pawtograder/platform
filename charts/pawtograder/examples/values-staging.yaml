@@ -531,9 +531,7 @@ networkPolicy:
 
 forgejo:
   enabled: true
-  # FORGEJO_AUTH_SOURCE_ID. Staging has no gitea.ldap entries and pawtograder is its only gitea.oauth
-  # source, so the init container's add-oauth made it source 1. Not yet read back from staging; confirm
-  # with `kubectl -n pawtograder-staging exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list`.
+  # Inferred, not yet confirmed with `forgejo admin auth list` on staging.
   authSourceId: 1
   # global.nodeSelector/tolerations don't reach subcharts.
   nodeSelector: { tier: prod-staging }

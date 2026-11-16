@@ -1,11 +1,4 @@
-{{- /*
-Forgejo's [webhook] ALLOWED_HOST_LIST, which the subchart can't template from this chart's values, so
-Forgejo reads it from this ConfigMap through additionalConfigFromEnvs, as it does DEFAULT_ACTIONS_URL.
-
-Forgejo matches a host-name entry on the name in the hook URL and skips the address check for it, so
-only names this release serves go in. A wildcard such as api.* would let a student's hook name a
-domain they control and point it at any address in the cluster.
-*/}}
+{{- /* Forgejo skips the address check for host-name entries, so a wildcard lets a student's hook reach any in-cluster address. */}}
 {{- if .Values.forgejo.enabled }}
 {{- $cmName := printf "%s-forgejo-webhook" .Release.Name }}
 {{- with dig "gitea" "config" "webhook" "ALLOWED_HOST_LIST" "" .Values.forgejo }}
@@ -29,6 +22,6 @@ metadata:
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo") | nindent 4 }}
 data:
-  # Forgejo reads this at startup, so a change takes a restart of the Forgejo pod.
+  # Read at startup: a change needs a Forgejo pod restart.
   ALLOWED_HOST_LIST: {{ include "pawtograder.forgejo.webhookAllowedHostList" . | quote }}
 {{- end }}

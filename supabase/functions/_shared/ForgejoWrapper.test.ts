@@ -170,7 +170,7 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
   });
 });
 
-// Workspace tokens. Status codes and bodies are the ones Forgejo 15.0.9 returned in the Phase 0 spike.
+// Status codes and bodies are what Forgejo 15.0.9 returned in the Phase 0 spike.
 const noContent = () => new Response(null, { status: 204 });
 const notFound = () => new Response(JSON.stringify({ message: "access token does not exist" }), { status: 404 });
 const minted = (sha1: string) =>
@@ -241,7 +241,6 @@ Deno.test("mintRepoToken: a refused mint keeps a known reason and nothing else",
 });
 
 Deno.test("mintRepoToken: the token never appears in an error", async () => {
-  // A 201 whose body is not JSON shouldn't leak whatever it held.
   await withForgejo([noContent(), new Response("sha1=deadbeefcafe", { status: 201 })], async () => {
     const err = await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42));
     assertEquals(String(err).includes("deadbeefcafe"), false, String(err));

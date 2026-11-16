@@ -5,7 +5,7 @@
 
 import { redactSecret } from "./SentryScrub.ts";
 
-export type ForgejoConfig ={ url: string; authorization: string; authSourceId: number };
+export type ForgejoConfig = { url: string; authorization: string; authSourceId: number };
 export type ForgejoUser = { id: number; login: string; login_name: string; source_id: number };
 
 /**
@@ -114,10 +114,6 @@ export async function ensureAccountForUser(
 
 const CODER_TOKEN_PREFIX = "pawtograder-coder-";
 
-/**
- * The name of the token a Coder workspace clones and pushes with. One per repository, so minting again
- * replaces it, and the name alone is enough to revoke it. Pawtograder never stores the token itself.
- */
 export function coderTokenName(repositoryId: number): string {
   return `${CODER_TOKEN_PREFIX}${repositoryId}`;
 }
@@ -128,13 +124,7 @@ function ownerAndName(repository: string): { owner: string; name: string } {
   return { owner, name };
 }
 
-/**
- * Creates a token that belongs to the student and can read and write this one repository, and returns
- * its secret. A push made with it reports the student as the pusher, so forgejo-repo-webhook records a
- * submission, where a bot's push would be taken for handout sync. Any earlier token for the repository
- * is deleted first: Forgejo answers a duplicate name with a 400, and shows a token's secret only once,
- * in the response that creates it.
- */
+/** Student-owned so forgejo-repo-webhook sees a submission, not handout sync; Forgejo 400s a duplicate name. */
 export async function mintRepoToken(
   config: ForgejoConfig,
   login: string,
@@ -149,7 +139,7 @@ export async function mintRepoToken(
     repositories: [{ owner, name }]
   });
   if (!res.ok) throw await failure(res, "token mint");
-  // Not res.json(): its SyntaxError quotes the body, which holds the token, and errors go to Sentry.
+  // Not res.json(): its SyntaxError quotes the body, which holds the token.
   let sha1: unknown;
   try {
     sha1 = (JSON.parse(await res.text()) as { sha1?: unknown })?.sha1;
@@ -161,7 +151,6 @@ export async function mintRepoToken(
   return sha1;
 }
 
-/** Deletes the repository's workspace token. A token or user that is already gone counts as revoked. */
 export async function revokeRepoToken(config: ForgejoConfig, login: string, repositoryId: number): Promise<void> {
   await deleteToken(config, login, coderTokenName(repositoryId));
 }
@@ -178,10 +167,6 @@ async function deleteToken(config: ForgejoConfig, login: string, tokenName: stri
 
 const TOKEN_PAGE_SIZE = 50;
 
-/**
- * Deletes every workspace token the student holds, for any repository, and returns how many it
- * deleted. Tokens the student created themselves keep working. A user that is already gone has none.
- */
 export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
   const names: string[] = [];
   for (let page = 1; ; page++) {

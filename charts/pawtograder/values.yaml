@@ -2781,23 +2781,9 @@ forgejo:
     hosts: []
   # true: /user/login goes straight to the Pawtograder login source. /user/login?password_login=1 keeps the password form.
   signInRedirect: true
-  # The id of the `pawtograder` login source, rendered as the edge functions' FORGEJO_AUTH_SOURCE_ID; they
-  # create students' accounts on it. Required with coder.enabled. Forgejo's API can't list login sources,
-  # so read the ID column of the pawtograder row from
-  #   kubectl exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list
-  # On a fresh install with no gitea.ldap entries and pawtograder first in gitea.oauth it is 1, but ids
-  # are serial and never reused, so check rather than assume. The init container updates the source in
-  # place on later starts, so the id stays put.
+  # ID of the pawtograder row in `forgejo admin auth list` (Forgejo's API can't list sources).
   authSourceId: ""
-  # Forgejo's webhook.ALLOWED_HOST_LIST, before the chart appends the API host (pawtograder.api.url, the
-  # edge functions' SUPABASE_PUBLIC_URL). Hooks for forgejo-repo-webhook go to
-  # <api url>/functions/v1/forgejo-repo-webhook. Where the API host resolves to a private address inside
-  # the cluster, Forgejo's default, external, refuses that delivery, and the error shows only in the
-  # hook's deliveries and Forgejo's log. Listing the API host by name lets the hook through either way,
-  # and reaches only what the ingress already serves to the internet. Students can add webhooks to their
-  # repositories, so the render refuses private, * and wildcard names here: each would let a hook reach
-  # in-cluster Services. For the same reason hooks to the in-cluster Kong (SUPABASE_URL) stay refused.
-  # [] allows the API host alone, which also refuses hooks to outside services such as chat webhooks.
+  # The chart appends the API host: "external" alone refuses it when it resolves to an in-cluster address.
   webhookAllowedHosts: [external]
   # Subchart values aren't templated: the ConfigMap name is <release>-forgejo-templates.
   extraVolumes:
@@ -2826,7 +2812,6 @@ forgejo:
       - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
-      # From forgejo.webhookAllowedHosts and the API host (templates/forgejo-webhook.yaml).
       - name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-webhook, key: ALLOWED_HOST_LIST }
@@ -2859,9 +2844,6 @@ forgejo:
         # GitHub's cap. forgejo-repo-webhook records only the commits a push payload lists, and
         # Forgejo's default of 15 would drop the rest of a larger push from the commit history.
         PAYLOAD_COMMIT_LIMIT: 2048
-        # ALLOWED_HOST_LIST isn't set here: the subchart can't template it from the API host, so it
-        # comes from forgejo.webhookAllowedHosts through additionalConfigFromEnvs, and the render
-        # fails when it's set here too.
 
 forgejo-db:
   enabled: false

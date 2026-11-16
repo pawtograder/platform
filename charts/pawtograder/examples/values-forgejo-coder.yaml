@@ -16,7 +16,6 @@ kong:
 forgejo:
   enabled: true
   database: pawtograder
-  # The ID of the pawtograder row in `forgejo admin auth list`; 1 on a fresh install of these values.
   authSourceId: 1
   ingress:
     hosts:

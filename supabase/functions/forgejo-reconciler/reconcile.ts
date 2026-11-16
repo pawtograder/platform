@@ -60,16 +60,10 @@ export async function reconcileForgejoAccounts(
   return result;
 }
 
-/** Tokens per pass, at one Forgejo call each. */
 export const MAX_REVOCATIONS_PER_PASS = 100;
 
 export type RevokeResult = { revoked: number; failures: { userId: string; error: unknown }[] };
 
-/**
- * Revokes the workspace tokens of students who have left the repository's class (forgejo_repo_tokens,
- * 20261116120000_forgejo_repo_tokens.sql). Claims each row, deletes the token in Forgejo, then deletes
- * the row. On failure the claim stays, and once it is stale the next pass tries again.
- */
 export async function revokeDroppedTokens(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
@@ -94,10 +88,9 @@ export async function revokeDroppedTokens(
       if (claimError) throw claimError;
       if (!claimed) continue;
 
-      // Without a finished Forgejo account no token could have been minted, so only the row goes.
       if (token.login) await revoke(config, token.login, token.repository_id);
 
-      // A mint since the claim clears it (record_forgejo_repo_token), and that row must stay.
+      // A re-mint clears the claim (record_forgejo_repo_token); that row must stay.
       const { error: deleteError } = await supabase
         .from("forgejo_repo_tokens")
         .delete()

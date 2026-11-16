@@ -323,8 +323,6 @@
 {{- fail (printf "forgejo.gitea.config.database.%s must stay forgejo: the app-databases Job provisions that role and database" $k) }}
 {{- end }}
 {{- end }}
-{{- /* Login source ids are serial and the subchart's init container adds LDAP sources before OAuth ones,
-     so the pawtograder source is 1 only on some installs; the chart can't tell which. */}}
 {{- $sourceID := include "pawtograder.forgejo.authSourceId" . }}
 {{- if $sourceID }}
 {{- if not (regexMatch "^[1-9][0-9]*$" $sourceID) }}
