@@ -19,10 +19,9 @@ normalize() {
 # repo_url's validation lets "" through for template import, and Coder then accepts it at creation.
 [ -n "$URL" ] || fail "the workspace's repo_url is empty; recreate it with the repository's clone URL."
 
-# Coder writes this file from the owner's secret at each start, so it is the only check that the token is there.
 [ -s "$CREDS" ] || fail "no Git credentials at $CREDS. Open the workspace from Pawtograder, which restarts it with them."
 ORIGIN="$(printf '%s\n' "$URL" | awk 'match($0, /^[^:\/]+:\/\/[^\/]*/) { print substr($0, 1, RLENGTH) }')"
-# Scoped to the host, so other hosts keep Coder's GIT_ASKPASS. One string: `store --file X` unquoted is "no action specified".
+# One string: unquoted `store --file X` fails with "no action specified".
 git config --global --replace-all "credential.$ORIGIN.helper" "store --file=$CREDS" || fail "couldn't set git's credential helper"
 
 if [ -e "$DIR" ] || [ -L "$DIR" ]; then

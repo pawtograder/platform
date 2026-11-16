@@ -160,7 +160,6 @@ export type Deps = {
   db: WorkspaceDb;
   coder: CoderConfig;
   forgejo: ForgejoConfig;
-  /** Gets errors that are answered with a status instead of thrown. */
   report?: (error: unknown) => void;
   /** The request's budget; `db` and `coder` make their calls through budgetFetch with it. */
   budget?: Budget;
@@ -253,7 +252,7 @@ export function cloneUrl(forgejoUrl: string, repository: string): string {
   return `${forgejoUrl}/${m[1]}/${m[2]}.git`;
 }
 
-/** Must match `git_credentials` in the template's main.tf, which derives it from repo_url. */
+/** Must match `git_credentials` in the template's main.tf. */
 export function gitCredentialsFile(repository: string): string {
   const m = repository.match(CLONE_PATH);
   if (!m) throw new IllegalArgumentError("This repository can't be opened in a workspace");
@@ -275,7 +274,6 @@ export const GIT_EMAIL_FILE = "/home/coder/.git-email";
 const GIT_EMAIL_SECRET = "git_email";
 
 export const SECRET_KEY_PREFIX = "pawtograder-secret-write-";
-/** Bounds a key whose delete failed. */
 export const SECRET_KEY_LIFETIME_MS = 60_000;
 
 function credentialsUnavailable(message: string): WorkspaceOpenResponse {
@@ -340,7 +338,7 @@ async function deliverGitCredentials(
   }
 }
 
-/** Keys left by a delete that failed. A live one may belong to a concurrent open, so it stays. */
+/** An unexpired key may belong to a concurrent open. */
 async function deleteExpiredKeys(deps: Deps, userId: string): Promise<void> {
   const now = clock(deps)();
   for (const key of await listUserKeys(deps.coder, userId)) {

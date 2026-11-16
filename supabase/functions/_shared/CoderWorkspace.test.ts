@@ -130,11 +130,9 @@ class FakeCoder {
   slow?: (method: string, path: string) => number;
   private seq = 0;
   keys: { key: string; id: string; userId: string; name: string; expiresAt: number; deleted: boolean }[] = [];
-  /** user id -> secret name -> secret. */
   secrets: Record<string, Record<string, { value: string; file_path: string }>> = {};
   failSecretWrite = false;
   failKeyDelete = false;
-  /** The template declares no external auth providers, as it does once Forgejo tokens come from secrets. */
   noProviders = false;
 
   constructor(private clock: Clock) {}
@@ -218,7 +216,6 @@ class FakeCoder {
     let m: RegExpMatchArray | null;
 
     if (token !== "owner-token") {
-      // A key minted for a student: only its own secrets, as the owner token can't write them.
       const key = this.keys.find((k) => k.key === token && !k.deleted && k.expiresAt > this.clock.now());
       if (!key) return json(401, { message: "API key expired or deleted." });
       assert(path.startsWith("/users/me/secrets"), `a student key used for ${method} ${path}`);
@@ -391,7 +388,6 @@ class FakeCoder {
 // ---- fake Forgejo ---------------------------------------------------------
 
 class FakeForgejo {
-  /** login -> live token names, each with its secret. */
   tokens: Record<string, { name: string; sha1: string; repo: string }[]> = {};
   calls: Call[] = [];
   failMint = false;
@@ -1315,7 +1311,6 @@ Deno.test("a restart's start is posted once, by whichever call swaps the claim f
       // claim to post the start.
       assertEquals(new Set([a.status, b.status]), new Set(["starting", "restarting"]));
     } else {
-      // The open sees the start the read posted, or the read's claim while it stores the credentials.
       assertEquals(a.status, "starting");
       assert(["starting", "restarting"].includes(b.status), b.status);
     }
@@ -2202,7 +2197,6 @@ Deno.test("database calls end with the budget: no PostgREST retry after the cut-
 const ALEX_FILE = "/home/coder/.git-credentials-cs3500--hw1-alex";
 const SECRET = "git_credentials_repo_501";
 
-/** A signed-in student whose workspace exists and runs, on a template with no external auth. */
 async function runningWorkspace() {
   const t = setup();
   t.coder.noProviders = true;
@@ -2329,7 +2323,6 @@ Deno.test("credentials: a failed mint or secret write is reported, builds nothin
       coder.keys.every((k) => k.deleted),
       fail
     );
-    // Neither the Forgejo token nor the Coder key reaches the response or the reported error.
     const text = JSON.stringify(res) + String(reported[0]);
     for (const t of Object.values(forgejo.tokens).flat()) assert(!text.includes(t.sha1), fail);
     for (const k of coder.keys) assert(!text.includes(k.key), fail);

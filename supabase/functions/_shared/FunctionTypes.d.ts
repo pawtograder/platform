@@ -384,8 +384,7 @@ export type WorkspaceOpenResponse = {
    * being stopped; a status read starts it once the stop finishes, and it reads `starting` from then
    * on. Keep polling workspace-status while it reads `restarting`. `account_conflict`: the student's
    * Coder account can't be signed in to and staff have to remove it; `message` says so.
-   * `credentials_unavailable`: the workspace couldn't be given a token for the repository, so it
-   * wasn't started; `message` says whether to wait or retry.
+   * `credentials_unavailable`: the workspace couldn't be given a token for the repository, so it wasn't started; `message` says whether to wait or retry.
    */
   status:
     | "not_started"

@@ -328,7 +328,6 @@ export async function deleteUserKey(config: CoderConfig, userId: string, keyId: 
   if (error && status !== 404) throw error;
 }
 
-/** A second POST of a name is 409, so PATCH first. */
 export async function writeOwnSecret(
   config: CoderConfig,
   secret: { name: string; value: string; file_path: string }
