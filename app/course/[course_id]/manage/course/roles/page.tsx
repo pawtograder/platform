@@ -29,7 +29,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiEdit2, FiPlus, FiTrash2 } from "react-icons/fi";
 import { DeleteRoleDialog, RoleNameDialog } from "./roleDialogs";
 import { heldKey, useClassRolesData, type ClassRole, type ClassRolesData } from "./useClassRolesData";
@@ -59,15 +59,29 @@ export default function StaffRolesPage() {
   const { course_id } = useParams();
   const classId = Number.parseInt(course_id as string, 10);
   const canManageRoles = useCapabilityOnceLoaded("manage_roles");
-  const { data, setData, loadError, reload } = useClassRolesData(classId);
+  const { data, setData, loadError, reload, invalidateInFlightReloads } = useClassRolesData(classId);
   const announce = useAnnouncer();
+  const mountedRef = useRef(true);
   const [saving, setSaving] = useState<Set<string>>(new Set());
   // Intended checkbox values while a save is in flight; wins over loaded data so a late reload
-  // can't uncheck a box the instructor just turned on.
+  // can't uncheck a box the instructor just turned on. Cleared only by this control's write path.
   const [pendingHeld, setPendingHeld] = useState<Map<string, boolean>>(new Map());
   const [movingUserRoleIds, setMovingUserRoleIds] = useState<Set<number>>(new Set());
   const [pendingMoves, setPendingMoves] = useState<Map<number, number>>(new Map());
   const [dialog, setDialog] = useState<OpenDialog | undefined>();
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  /** Drop in-flight reloads that may have read pre-write data, then fetch again. */
+  const reloadAfterWrite = useCallback(async () => {
+    invalidateInFlightReloads();
+    await reload();
+  }, [invalidateInFlightReloads, reload]);
 
   const roles = useMemo(() => editableRoles(data?.roles ?? []), [data]);
   const capabilities = useMemo(
@@ -114,6 +128,12 @@ export default function StaffRolesPage() {
             .eq("capability", capability)
             .select("role_id");
 
+      if (!mountedRef.current) {
+        invalidateInFlightReloads();
+        return;
+      }
+
+      // Pending/saving for this cell clear only here — not when some other reload finishes.
       setSaving((prev) => {
         const next = new Set(prev);
         next.delete(key);
@@ -130,11 +150,10 @@ export default function StaffRolesPage() {
         showRefused(message);
         announce(`${roleName}, ${capabilityLabel(capability)}: not saved. ${message}`, { priority: "assertive" });
         // The page may be out of date (another instructor changed the same role).
-        reload();
+        void reloadAfterWrite();
         return;
       }
-      // Re-apply into loaded data before clearing pending, so a reload that lands in between
-      // still loses to the pending overlay until this write is committed locally.
+      // Commit locally, then drop any reload that may have started before this write finished.
       setHeld(role.id, capability, turnOn);
       setPendingHeld((prev) => {
         const next = new Map(prev);
@@ -142,8 +161,9 @@ export default function StaffRolesPage() {
         return next;
       });
       announce(`${roleName}: ${capabilityLabel(capability)} turned ${turnOn ? "on" : "off"}. Saved.`);
+      void reloadAfterWrite();
     },
-    [announce, reload, setHeld]
+    [announce, invalidateInFlightReloads, reloadAfterWrite, setHeld]
   );
 
   const createRole = useCallback(
@@ -152,11 +172,12 @@ export default function StaffRolesPage() {
       // .select() is unnecessary (and would need a broader grant).
       const { error } = await createClient().from("class_roles").insert({ class_id: classId, name });
       if (error) return roleChangeErrorMessage(error);
-      await reload();
+      await reloadAfterWrite();
+      if (!mountedRef.current) return undefined;
       toaster.success({ title: `${name} created`, description: "It starts with everything a Grader can do." });
       return undefined;
     },
-    [classId, reload]
+    [classId, reloadAfterWrite]
   );
 
   const renameRole = useCallback(
@@ -168,24 +189,27 @@ export default function StaffRolesPage() {
         .select("id");
       if (error) return roleChangeErrorMessage(error);
       if (!written || written.length === 0) return ROLE_CHANGE_REFUSED_MESSAGE;
-      await reload();
+      await reloadAfterWrite();
+      if (!mountedRef.current) return undefined;
       toaster.success({ title: `Renamed to ${name}` });
       return undefined;
     },
-    [reload]
+    [reloadAfterWrite]
   );
 
   const deleteRole = useCallback(
     async (role: ClassRole) => {
       const { data: written, error } = await createClient().from("class_roles").delete().eq("id", role.id).select("id");
-      if (error || !written || written.length === 0) {
-        showRefused(error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE);
-      } else {
-        toaster.success({ title: `${role.name} deleted` });
+      if (mountedRef.current) {
+        if (error || !written || written.length === 0) {
+          showRefused(error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE);
+        } else {
+          toaster.success({ title: `${role.name} deleted` });
+        }
       }
-      await reload();
+      await reloadAfterWrite();
     },
-    [reload]
+    [reloadAfterWrite]
   );
 
   const moveGrader = useCallback(
@@ -199,14 +223,29 @@ export default function StaffRolesPage() {
         .update({ class_role_id: classRoleId })
         .eq("id", userRoleId)
         .select("id");
-      if (error || !written || written.length === 0) {
+      if (!mountedRef.current) {
+        invalidateInFlightReloads();
+        return;
+      }
+      const writeOk = !error && written && written.length > 0;
+      if (!writeOk) {
         const message = error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE;
         showRefused(message);
         announce(`${graderName}'s role was not changed. ${message}`, { priority: "assertive" });
       } else {
+        // Keep the People row on the chosen role once pending clears (before the fresh reload lands).
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            graders: prev.graders.map((grader) =>
+              grader.userRoleId === userRoleId ? { ...grader, classRoleId } : grader
+            )
+          };
+        });
         announce(`${graderName} is now on ${roleDisplayName(target)}. Saved.`);
       }
-      await reload();
+      // Clear this control's pending from its own write path (not from whichever reload finishes).
       setMovingUserRoleIds((prev) => {
         const next = new Set(prev);
         next.delete(userRoleId);
@@ -217,8 +256,9 @@ export default function StaffRolesPage() {
         next.delete(userRoleId);
         return next;
       });
+      await reloadAfterWrite();
     },
-    [announce, reload, roles]
+    [announce, invalidateInFlightReloads, reloadAfterWrite, roles, setData]
   );
 
   if (canManageRoles === undefined || (!data && !loadError)) {

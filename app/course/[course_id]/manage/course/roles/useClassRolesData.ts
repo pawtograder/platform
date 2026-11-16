@@ -17,7 +17,7 @@ export type ClassRolesData = {
   /** `${roleId}:${capability}` for every capability a role holds. */
   held: Set<string>;
   graders: GraderOnRole[];
-  /** All class enrollments on a grader or custom role (active and disabled), for delete-dialog counts. */
+  /** Enrollments on custom roles (active and disabled), for delete-dialog counts. */
   roleEnrollments: RoleEnrollment[];
 };
 
@@ -26,31 +26,73 @@ export const heldKey = (roleId: number, capability: string) => `${roleId}:${capa
 /** Other people's changes arrive as staff channel notes; a burst gives one reload. */
 const RELOAD_DEBOUNCE_MS = 500;
 
+/** PostgREST silently caps each response at max_rows (supabase/config.toml). */
+const PAGE_SIZE = 1000;
+
+type GraderRow = {
+  id: number;
+  class_role_id: number | null;
+  privateProfile: { name: string | null } | null;
+};
+
+type EnrollmentRow = { class_role_id: number | null; disabled: boolean };
+
+/**
+ * Walk `.range()` pages until a short page comes back. Always order by `id` so pages don't
+ * skip or duplicate rows when the server has no stable default order.
+ */
+async function fetchAllPages<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message?: string } | null }>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await fetchPage(offset, offset + PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return rows;
+}
+
 async function fetchClassRolesData(classId: number): Promise<ClassRolesData> {
   const supabase = createClient();
-  const [rolesResult, capabilitiesResult, gradersResult, enrollmentsResult] = await Promise.all([
+  const [rolesResult, capabilitiesResult] = await Promise.all([
     supabase.from("class_roles").select("id, name, default_for").eq("class_id", classId),
-    supabase.from("capabilities").select("name, description").order("name"),
-    supabase
-      .from("user_roles")
-      .select("id, class_role_id, privateProfile:profiles!private_profile_id(name)")
-      .eq("class_id", classId)
-      .eq("role", "grader")
-      .eq("disabled", false),
-    // Active and disabled: the delete FK counts every enrollment on the role, not only active graders.
-    supabase
-      .from("user_roles")
-      .select("class_role_id, disabled")
-      .eq("class_id", classId)
-      .not("class_role_id", "is", null)
+    supabase.from("capabilities").select("name, description").order("name")
   ]);
   if (rolesResult.error) throw rolesResult.error;
   if (capabilitiesResult.error) throw capabilitiesResult.error;
-  if (gradersResult.error) throw gradersResult.error;
-  if (enrollmentsResult.error) throw enrollmentsResult.error;
 
   const roles = rolesResult.data ?? [];
   const roleIds = new Set(roles.map((role) => role.id));
+  // Only custom roles can be deleted, and only graders sit on them — enough for the delete dialog.
+  const customRoleIds = roles.filter((role) => role.default_for === null).map((role) => role.id);
+
+  const [graderRows, enrollmentRows] = await Promise.all([
+    fetchAllPages<GraderRow>((from, to) =>
+      supabase
+        .from("user_roles")
+        .select("id, class_role_id, privateProfile:profiles!private_profile_id(name)")
+        .eq("class_id", classId)
+        .eq("role", "grader")
+        .eq("disabled", false)
+        .order("id", { ascending: true })
+        .range(from, to)
+    ),
+    customRoleIds.length === 0
+      ? Promise.resolve([] as EnrollmentRow[])
+      : fetchAllPages<EnrollmentRow>((from, to) =>
+          supabase
+            .from("user_roles")
+            .select("class_role_id, disabled")
+            .eq("class_id", classId)
+            .in("class_role_id", customRoleIds)
+            .order("id", { ascending: true })
+            .range(from, to)
+        )
+  ]);
+
   const held = new Set<string>();
   if (roleIds.size > 0) {
     const { data, error } = await supabase
@@ -63,17 +105,16 @@ async function fetchClassRolesData(classId: number): Promise<ClassRolesData> {
     }
   }
 
-  const graders = (gradersResult.data ?? [])
+  const graders = graderRows
     .map((row) => ({
       userRoleId: row.id,
-      classRoleId: row.class_role_id,
+      classRoleId: row.class_role_id as number,
       name: row.privateProfile?.name ?? "Unnamed grader"
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Only enrollments that sit on a role of this class (grader default or custom).
   const roleEnrollments: RoleEnrollment[] = [];
-  for (const row of enrollmentsResult.data ?? []) {
+  for (const row of enrollmentRows) {
     if (row.class_role_id == null || !roleIds.has(row.class_role_id)) continue;
     roleEnrollments.push({ classRoleId: row.class_role_id, disabled: row.disabled });
   }
@@ -86,6 +127,8 @@ async function fetchClassRolesData(classId: number): Promise<ClassRolesData> {
  * moving between roles arrive live on the staff channel; a role another instructor creates,
  * renames or deletes is not broadcast, so it appears on the next reload (including when the staff
  * channel rejoins after a gap). `setData` is for optimistic updates; `reload` asks the database again.
+ * After a local write succeeds, call `invalidateInFlightReloads` then `reload` so an older in-flight
+ * fetch can't overwrite the saved value with data read before the write.
  */
 export function useClassRolesData(classId: number) {
   const controller = useCourseController();
@@ -93,11 +136,15 @@ export function useClassRolesData(classId: number) {
   const [loadError, setLoadError] = useState<string | undefined>();
   const requestRef = useRef(0);
 
+  const invalidateInFlightReloads = useCallback(() => {
+    requestRef.current += 1;
+  }, []);
+
   const reload = useCallback(async () => {
     const request = ++requestRef.current;
     try {
       const next = await fetchClassRolesData(classId);
-      // A slower, older answer must not replace a newer one.
+      // A slower, older answer must not replace a newer one (or land after unmount).
       if (request !== requestRef.current) return;
       setData(next);
       setLoadError(undefined);
@@ -109,6 +156,10 @@ export function useClassRolesData(classId: number) {
 
   useEffect(() => {
     reload();
+    return () => {
+      // Drop any in-flight fetch so it can't setState after unmount.
+      requestRef.current += 1;
+    };
   }, [reload]);
 
   useEffect(() => {
@@ -138,5 +189,5 @@ export function useClassRolesData(classId: number) {
     };
   }, [controller, classId, reload]);
 
-  return { data, setData, loadError, reload };
+  return { data, setData, loadError, reload, invalidateInFlightReloads };
 }
