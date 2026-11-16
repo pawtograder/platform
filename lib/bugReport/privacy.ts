@@ -885,6 +885,12 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_repo_tokens.id": "none",
+  "forgejo_repo_tokens.instance_url": "none",
+  "forgejo_repo_tokens.recorded_at": "none",
+  "forgejo_repo_tokens.repository_id": "none",
+  "forgejo_repo_tokens.revoke_claimed_at": "none",
+  "forgejo_repo_tokens.user_id": "none",
   "git_accounts.claimed_at": "none",
   "git_accounts.created_at": "none",
   "git_accounts.id": "none",
@@ -2351,6 +2357,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
   cloud_workspaces_enabled: "none",
@@ -2463,6 +2470,13 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  forgejo_repo_token_revocable: "none",
+  forgejo_repo_tokens_to_revoke: {
+    "$[*].id": "none",
+    "$[*].login": "handle",
+    "$[*].repository_id": "none",
+    "$[*].user_id": "none"
+  },
   generate_anon_name: "name",
   get_all_class_metrics: "none",
   // UNCERTAIN: Returns a vault secret (hashing pepper), not personal data; no 'secret' kind exists, so marked free_text so it is always redacted
@@ -2886,6 +2900,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   record_bug_report_retention_purge: "none",
   record_discord_async_error: "none",
   record_discord_membership_status: "none",
+  record_forgejo_repo_token: "none",
   record_github_async_error: "none",
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",
