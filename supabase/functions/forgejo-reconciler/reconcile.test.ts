@@ -242,16 +242,20 @@ Deno.test("revoke: a token another pass claimed, or a student who came back, is 
   assertEquals(deleted.length, 0);
 });
 
-Deno.test("revoke: a row with no Forgejo login is deleted without calling Forgejo", async () => {
+Deno.test("revoke: a missing Forgejo login is reported and the cleanup record is kept", async () => {
   const { client, deleted } = fakeTokenSupabase([{ id: 5, user_id: "u5", repository_id: 42, login: null }]);
   let calls = 0;
   const result = await revokeDroppedTokens(client, config, () => {
     calls++;
     return Promise.resolve(1);
   });
-  assertEquals(result.revoked, 1);
+  assertEquals(result.revoked, 0);
+  assertEquals(
+    result.failures.map((failure) => failure.userId),
+    ["u5"]
+  );
   assertEquals(calls, 0);
-  assertEquals(deleted.length, 1);
+  assertEquals(deleted.length, 0);
 });
 
 Deno.test("revoke: a failed revoke keeps the row and the pass carries on", async () => {
