@@ -25,11 +25,18 @@ const PGMQ_MAX_READ_CT = 8;
 const MAX_RATE_LIMIT_RETRIES = 20;
 // `match` must not run until every process_page message for the batch has finished OCR (they
 // are separate queue messages and may be handled by concurrent worker invocations). When OCR
-// is still outstanding the match message re-queues itself with this delay, bounded by
-// MAX_OCR_WAIT_RETRIES -- ~15 min, comfortably longer than OCR of a large batch, after which
-// it is treated as a real failure so the batch surfaces an error instead of waiting forever.
-const OCR_WAIT_SECONDS = 30;
-const MAX_OCR_WAIT_RETRIES = 30;
+// is still outstanding the match message re-queues itself with this delay. The delay is short
+// because runBatch claims one message at a time, so overlapping invocations often get `match`
+// while its own pages are still in OCR (#1158), and the batch reaches review one delay later.
+//
+// The limit is wall time since the first wait, not a count of waits. One wait lasts until a
+// reader next picks the message up: about OCR_WAIT_SECONDS while other invocations are still
+// draining the batch, up to a cron tick (60s) once they have exited. A count of 5s waits would
+// therefore give a large batch's OCR anything from minutes to hours. 15 min is comfortably longer
+// than OCR of a large batch; after it the wait is treated as a real failure so the batch surfaces
+// an error instead of waiting forever.
+const OCR_WAIT_SECONDS = 5;
+const MAX_OCR_WAIT_MS = 15 * 60 * 1000;
 
 type QueueMessage = {
   msg_id: number;
@@ -56,7 +63,11 @@ async function requeue(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: numbe
 
 // Park a message without spending its transient-error budget: bumps ocr_waits, not retry_count.
 async function requeueWaitingForOcr(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
-  const next = { ...env, ocr_waits: (env.ocr_waits ?? 0) + 1 };
+  const next = {
+    ...env,
+    ocr_waits: (env.ocr_waits ?? 0) + 1,
+    ocr_wait_started_ms: env.ocr_wait_started_ms ?? Date.now()
+  };
   await sendEnvelope(admin, next, delaySeconds);
 }
 
@@ -298,9 +309,11 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   if (pendingErr) throw new Error(`count pending OCR for batch ${batch.id} failed: ${pendingErr.message}`);
   if ((pendingOcr ?? 0) > 0) {
     const waits = env.ocr_waits ?? 0;
-    if (waits >= MAX_OCR_WAIT_RETRIES) {
+    const waitedMs = env.ocr_wait_started_ms === undefined ? 0 : Date.now() - env.ocr_wait_started_ms;
+    if (waitedMs >= MAX_OCR_WAIT_MS) {
       throw new Error(
-        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits; not advancing to review`
+        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits over ` +
+          `${Math.round(waitedMs / 1000)}s; not advancing to review`
       );
     }
     // Fresh message, then the dispatcher archives this copy on our normal return. Leave the
