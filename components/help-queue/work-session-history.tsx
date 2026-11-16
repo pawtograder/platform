@@ -3,7 +3,7 @@
 import PersonAvatar from "@/components/ui/person-avatar";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import { useOfficeHoursController, useWorkSessionsForRequest } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Collapsible, HStack, Icon, IconButton, Separator, Stack, Text } from "@chakra-ui/react";
@@ -20,7 +20,7 @@ interface WorkSessionHistoryProps {
 export default function WorkSessionHistory({ help_request_id }: WorkSessionHistoryProps) {
   const sessions = useWorkSessionsForRequest(help_request_id);
   const profiles = useAllProfilesForClass();
-  const isInstructor = useIsInstructor();
+  const canManageOfficeHours = useCapability("manage_office_hours");
   const controller = useOfficeHoursController();
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
 
@@ -169,7 +169,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
                     )}
                   </Stack>
 
-                  {isInstructor && (
+                  {canManageOfficeHours && (
                     <HStack gap={1}>
                       <IconButton
                         aria-label="Edit session"

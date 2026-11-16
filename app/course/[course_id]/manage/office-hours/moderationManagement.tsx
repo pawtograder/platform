@@ -261,7 +261,7 @@ export default function ModerationManagement() {
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Heading size="lg">Moderation Management</Heading>
-        {canHelpStudents && (
+        {(canHelpStudents || canManageOfficeHours) && (
           <Button onClick={() => createModal.openModal()}>
             <Icon as={BsPlus} />
             Create Moderation Action
