@@ -15,9 +15,9 @@
  * A snapshot whose request failed is kept and retried with capped exponential backoff, a few times. Then the queue
  * waits for the next edit or for {@link SurveyAutosaveQueue.retryNow} (the page calls it on the
  * browser's `online` event). While the browser is offline it does not count down retries at all:
- * it waits for `online`. A save that throws {@link SaveRefusedError} is not retried: the server will
- * refuse those answers however often they are sent. The answers are only ever kept in memory and in
- * the database.
+ * it waits for `online`. A save that throws {@link SaveRefusedError} is not auto-retried: the server
+ * will refuse those answers on the same path. The snapshot stays so a leave flush can try again if
+ * the survey later accepts writes. The answers are only ever kept in memory and in the database.
  */
 
 export type SaveAttempt = {
@@ -36,8 +36,8 @@ export type SaveAttempt = {
  * - `retrying`: a save failed and another attempt is scheduled or running.
  * - `offline`: a save failed while the browser is offline; the next attempt goes out on `online`.
  * - `failed`: the retries are used up; the next edit or {@link SurveyAutosaveQueue.retryNow} tries again.
- * - `refused`: the server refused the newest answers for good ({@link SaveRefusedError}); the next edit
- *   tries again.
+ * - `refused`: the server refused the newest answers ({@link SaveRefusedError}); the next edit or a
+ *   leave flush tries again.
  */
 export type AutosaveStatus = "idle" | "saving" | "saved" | "retrying" | "offline" | "failed" | "refused";
 
@@ -75,8 +75,8 @@ export class SaveTimeoutError extends Error {
 }
 
 /**
- * Thrown by `save` when the server refused the answers and would refuse them again however often
- * they are sent. The queue drops that snapshot instead of retrying it.
+ * Thrown by `save` when the server refused the answers and would refuse them again on the same
+ * path. The queue keeps that snapshot for a leave flush, but does not auto-retry it.
  */
 export class SaveRefusedError extends Error {
   /** The error the server returned. */
@@ -125,16 +125,22 @@ export class SurveyAutosaveQueue<T> {
   private version = 0;
   private inFlight: SaveRequest | null = null;
   /**
-   * A request {@link flush} sent on leave while `inFlight` was still running. Nothing else starts
-   * until both are done, and its success does not count as saved: see {@link sendAheadOnLeave}.
+   * Requests {@link flush} sent on leave while another write was still running (or a later leave
+   * with a newer snapshot). Nothing else starts until they are all done, and their success does
+   * not count as saved: see {@link sendAheadOnLeave}.
    */
-  private sentOnLeave: SaveRequest | null = null;
+  private leavePending: SaveRequest[] = [];
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** Failed attempts in a row since the last success, edit or retryNow(): what the backoff counts. */
   private failures = 0;
   /** A save failed and none has succeeded since. Keeps the warning up across new edits. */
   private unresolvedFailure = false;
+  /**
+   * Version of a snapshot the server refused. Blocks auto-retry and {@link retryNow} until a new
+   * edit or a leave flush clears it; the snapshot stays in {@link latest} for that leave flush.
+   */
+  private refusedVersion: number | null = null;
   private status: AutosaveStatus = "idle";
   private paused = false;
   private disposed = false;
@@ -154,6 +160,7 @@ export class SurveyAutosaveQueue<T> {
     if (this.disposed) return;
     this.version += 1;
     this.latest = { value, version: this.version };
+    this.refusedVersion = null;
     this.clearTimers();
     this.failures = 0;
     this.setStatus(this.pendingStatus());
@@ -169,9 +176,13 @@ export class SurveyAutosaveQueue<T> {
    * and it goes out even if a request is already in flight: see {@link sendAheadOnLeave}.
    */
   flush(options: { keepalive?: boolean } = {}): void {
-    if (options.keepalive && this.latest) this.keepaliveRequested = true;
+    if (options.keepalive && this.latest) {
+      this.keepaliveRequested = true;
+      // A refused snapshot stays for leave: clear the hold so this flush can send it.
+      this.refusedVersion = null;
+    }
     this.clearTimers();
-    if (options.keepalive && (this.inFlight || this.sentOnLeave)) this.sendAheadOnLeave();
+    if (options.keepalive && (this.inFlight || this.leavePending.length > 0)) this.sendAheadOnLeave();
     else this.run();
   }
 
@@ -204,6 +215,7 @@ export class SurveyAutosaveQueue<T> {
   discardPending(): void {
     this.latest = null;
     this.keepaliveRequested = false;
+    this.refusedVersion = null;
     this.failures = 0;
     this.unresolvedFailure = false;
     this.clearTimers();
@@ -229,7 +241,11 @@ export class SurveyAutosaveQueue<T> {
    * Call {@link pause} first if nothing new may start afterwards.
    */
   async whenIdle(): Promise<void> {
-    while (this.inFlight || this.sentOnLeave) await (this.inFlight ?? this.sentOnLeave)?.done;
+    while (true) {
+      const pending = [this.inFlight, ...this.leavePending].filter((request): request is SaveRequest => !!request);
+      if (pending.length === 0) return;
+      await Promise.all(pending.map((request) => request.done));
+    }
   }
 
   private isOnline(): boolean {
@@ -265,17 +281,18 @@ export class SurveyAutosaveQueue<T> {
   /**
    * The page is being hidden or unloaded while a request is in flight. An unloading page never
    * sees that request finish, so the snapshot waiting behind it would never be sent. Send it now,
-   * with keepalive, unless a keepalive request in flight already carries it.
+   * with keepalive, unless a leave or keepalive request already carries this or a newer version.
+   * A later leave with a newer edit may send again while an earlier leave request is still pending.
    *
-   * The two requests may reach the database in either order, so this one does not count as
-   * saved. If the page stays open, the snapshot stays pending and goes out once more after both
-   * are done, which keeps the newest answers last.
+   * The requests may reach the database in either order, so these do not count as saved. If the
+   * page stays open, the snapshot stays pending and goes out once more after they are done, which
+   * keeps the newest answers last.
    */
   private sendAheadOnLeave(): void {
     const snapshot = this.latest;
-    if (this.paused || this.sentOnLeave || !snapshot) return;
-    if (this.inFlight?.keepalive && this.inFlight.version === snapshot.version) return;
-    // A refused snapshot is dropped by run() once nothing is in flight.
+    if (this.paused || !snapshot) return;
+    if (this.inFlight?.keepalive && this.inFlight.version >= snapshot.version) return;
+    if (this.leavePending.some((request) => request.version >= snapshot.version)) return;
     if (!this.options.canSave()) return;
     const done = runWithTimeout(
       (signal) => this.options.save(snapshot.value, { signal, keepalive: true }),
@@ -284,21 +301,24 @@ export class SurveyAutosaveQueue<T> {
       () => {},
       (error) => this.options.onError?.(error)
     );
-    this.sentOnLeave = {
+    const request: SaveRequest = {
       version: snapshot.version,
       keepalive: true,
       done: done.finally(() => {
-        this.sentOnLeave = null;
+        this.leavePending = this.leavePending.filter((pending) => pending !== request);
         this.afterWrite();
       })
     };
+    this.leavePending.push(request);
   }
 
   private run(): void {
-    if (this.paused || this.inFlight || this.sentOnLeave || !this.latest) return;
+    if (this.paused || this.inFlight || this.leavePending.length > 0 || !this.latest) return;
+    if (this.refusedVersion !== null && this.latest.version === this.refusedVersion) return;
     if (!this.options.canSave()) {
       this.latest = null;
       this.keepaliveRequested = false;
+      this.refusedVersion = null;
       this.failures = 0;
       this.unresolvedFailure = false;
       this.setStatus("idle");
@@ -331,6 +351,7 @@ export class SurveyAutosaveQueue<T> {
     if (this.latest?.version === version) {
       this.latest = null;
       this.keepaliveRequested = false;
+      this.refusedVersion = null;
       this.setStatus("saved");
     } else {
       this.setStatus("saving");
@@ -340,14 +361,17 @@ export class SurveyAutosaveQueue<T> {
   private failed(error: unknown, version: number): void {
     this.options.onError?.(error);
     if (error instanceof SaveRefusedError) {
-      // Sending this snapshot again would be refused again. A newer one, if any, still goes out.
-      if (this.latest?.version === version) {
-        this.latest = null;
-        this.keepaliveRequested = false;
-      }
+      // Do not auto-retry this snapshot. Keep it so a leave flush can try again if the survey
+      // later accepts writes. A newer snapshot, if any, still goes out.
       this.failures = 0;
       this.unresolvedFailure = false;
-      this.setStatus("refused");
+      if (this.latest?.version === version) {
+        this.refusedVersion = version;
+        this.setStatus("refused");
+      } else {
+        this.refusedVersion = null;
+        this.setStatus("saving");
+      }
       return;
     }
     // The snapshot stays in `latest` (or a newer one has replaced it), so a retry sends the newest.
@@ -357,10 +381,11 @@ export class SurveyAutosaveQueue<T> {
   }
 
   private afterWrite(): void {
-    // Called as each request finishes. Nothing new starts until both slots are free.
-    if (this.inFlight || this.sentOnLeave) return;
+    // Called as each request finishes. Nothing new starts until ordinary and leave slots are free.
+    if (this.inFlight || this.leavePending.length > 0) return;
     if (this.paused || (this.disposed && this.unresolvedFailure)) return;
     if (!this.latest || this.debounceTimer) return;
+    if (this.refusedVersion !== null && this.latest.version === this.refusedVersion) return;
     if (!this.unresolvedFailure) {
       // A newer snapshot arrived while this request was on the wire: it goes next.
       this.run();

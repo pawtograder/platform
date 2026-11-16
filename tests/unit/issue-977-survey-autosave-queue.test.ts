@@ -267,6 +267,30 @@ describe("SurveyAutosaveQueue", () => {
     expect(server.writes).toHaveLength(1);
   });
 
+  test("a later leave sends a newer snapshot while an earlier leave request is still pending", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("first leave");
+    queue.flush({ keepalive: true });
+    expect(server.writes.map((write) => write.value)).toEqual(["first leave"]);
+
+    // The student returned, edited, and left again before the first leave request finished.
+    queue.schedule("second leave");
+    queue.flush({ keepalive: true });
+    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([
+      ["first leave", true],
+      ["second leave", true]
+    ]);
+
+    server.writes[0].done.resolve();
+    await settle();
+    expect(server.writes).toHaveLength(2);
+    server.writes[1].done.resolve();
+    await settle();
+    expect(server.writes.map((write) => write.value)).toEqual(["first leave", "second leave", "second leave"]);
+  });
+
   test("whenIdle also waits for the request sent on leave", async () => {
     const server = fakeServer();
     const queue = makeQueue(server.save);
@@ -372,7 +396,8 @@ describe("SurveyAutosaveQueue", () => {
     server.writes[0].done.reject(new SaveRefusedError({ code: "42501" }));
     await settle();
     expect(queue.getStatus()).toBe("refused");
-    expect(queue.hasUnsavedChanges()).toBe(false);
+    // The refused snapshot stays so a leave flush can try again if the survey reopens.
+    expect(queue.hasUnsavedChanges()).toBe(true);
     jest.advanceTimersByTime(60_000);
     queue.retryNow();
     expect(server.writes).toHaveLength(1);
@@ -383,6 +408,23 @@ describe("SurveyAutosaveQueue", () => {
     server.writes[1].done.resolve();
     await settle();
     expect(statuses).toEqual(["saving", "refused", "saving", "saved"]);
+  });
+
+  test("a leave flush after a refused save sends the refused snapshot again", async () => {
+    const server = fakeServer();
+    const queue = makeQueue(server.save);
+
+    queue.schedule("refused answer");
+    jest.advanceTimersByTime(1_000);
+    server.writes[0].done.reject(new SaveRefusedError({ code: "42501" }));
+    await settle();
+    expect(queue.getStatus()).toBe("refused");
+
+    queue.flush({ keepalive: true });
+    expect(server.writes.map((write) => [write.value, write.keepalive])).toEqual([
+      ["refused answer", false],
+      ["refused answer", true]
+    ]);
   });
 
   test("a newer edit waiting behind a refused save still goes out", async () => {
