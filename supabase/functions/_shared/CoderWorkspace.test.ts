@@ -1889,6 +1889,38 @@ Deno.test("an open short of time still keeps its claim on a stop under way, whic
   assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start"], null]);
 });
 
+Deno.test(
+  "an open kept on a stop under way never posts a stop, even when the start a status read posted fails",
+  async () => {
+    // The open holds its claim and its read of the workspace is held on the way to Coder.
+    const { coder, db, deps } = await stoppingWorkspace();
+    const openRead = holdFirst(coder.fetch, isWorkspaceRead);
+    const open = openWorkspace(holding(deps, openRead.fetch), ALEX, { assignment_id: 41 });
+    await openRead.reached;
+    assertEquals(db.rows[0].restart_phase, "stopping");
+
+    // Coder's stop finishes. A status read takes the open's claim, posts the start and gives the claim
+    // up, and the start's clone fails.
+    coder.workspaces[0].latest_build.status = "stopped";
+    coder.nextAgent = failedClone();
+    coder.autoBuild = true;
+    assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "failed");
+    assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start"], null]);
+
+    // The open reads a workspace that needs a restart, but its claim is spent: a stop posted now would
+    // have no start after it. It reports the failure, and restarting is the next open's to do.
+    openRead.release();
+    const res = await open;
+    assertEquals([res.status, res.step], ["failed", "clone"]);
+    assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start"], null]);
+    assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "failed");
+
+    coder.nextAgent = readyAgent();
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "ready");
+    assertEquals([buildPosts(coder), db.rows[0].restart_token], [["start", "stop", "start"], null]);
+  }
+);
+
 Deno.test("a claim cut off as it is taken: open answers restarting, whether or not the claim was written", async () => {
   // The budget's cut-off lands on the claim's database call. The update may have been written with
   // only its reply lost, so the answer has to keep the card polling instead of a 504 that stops it.

@@ -649,9 +649,11 @@ async function restartWorkspace(
 ): Promise<{ ws: CoderWorkspace; restarting: boolean }> {
   const { db, coder } = deps;
   const now = clock(deps);
+  // Coder refuses a second build while one is active, so a stop under way is the restart's stop.
+  const alreadyStopping = isStopping(ws);
   // Too little time to post the stop: the workspace stays as it is for the next open. A stop under
   // way needs no post, so its claim is taken whatever time is left, and a status read finishes it.
-  if (!isStopping(ws) && deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
+  if (!alreadyStopping && deadline - now() < CLAIM_MIN_LEFT_MS) return { ws, restarting: true };
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let token: string | null;
   try {
@@ -661,9 +663,11 @@ async function restartWorkspace(
     if (!token) return { ws, restarting: true };
     // Read again now that the claim is held, and act on that. The caller's read may be older than a
     // restart another call has finished since, and a stop posted on it would take the recovered
-    // workspace down.
+    // workspace down. A call that found a stop under way never posts one: once that stop finishes, a
+    // status read may take this claim and start the workspace, and a stop posted after that would
+    // have no claim left to start it again.
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
-    if (needsRestart(ws)) {
+    if (!alreadyStopping && needsRestart(ws)) {
       const stopError = await postBuild(coder, ws.id, "stop");
       if (stopError && stopError.status !== 409) {
         await db.releaseRestart(row.id, token);
