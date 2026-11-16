@@ -4,6 +4,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useCourseController, useLivePolls } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Button, HStack, IconButton, Table, Text } from "@chakra-ui/react";
@@ -24,6 +25,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
   const router = useRouter();
   const polls = useLivePolls();
   const { livePolls } = useCourseController();
+  const canRunPolls = useCapability("run_polls");
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   const filteredPolls = useMemo(() => {
@@ -188,22 +190,26 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                         </IconButton>
                       </MenuTrigger>
                       <MenuContent>
-                        <MenuItem
-                          value={poll.is_live ? "close" : "open"}
-                          onClick={() => handleToggleLive(poll.id, !poll.is_live)}
-                        >
-                          {poll.is_live ? "Close Poll" : "Open Poll"}
-                        </MenuItem>
+                        {canRunPolls && (
+                          <MenuItem
+                            value={poll.is_live ? "close" : "open"}
+                            onClick={() => handleToggleLive(poll.id, !poll.is_live)}
+                          >
+                            {poll.is_live ? "Close Poll" : "Open Poll"}
+                          </MenuItem>
+                        )}
                         <MenuItem
                           value="view"
                           onClick={() => router.push(`/course/${courseId}/manage/polls/${poll.id}/responses`)}
                         >
                           View Poll
                         </MenuItem>
-                        <MenuItem value="delete" onClick={() => handleDelete(poll.id)} colorPalette="red">
-                          <FaTrash />
-                          Delete Poll
-                        </MenuItem>
+                        {canRunPolls && (
+                          <MenuItem value="delete" onClick={() => handleDelete(poll.id)} colorPalette="red">
+                            <FaTrash />
+                            Delete Poll
+                          </MenuItem>
+                        )}
                       </MenuContent>
                     </MenuRoot>
                   </HStack>

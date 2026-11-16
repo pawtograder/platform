@@ -2,14 +2,14 @@
 
 import { Container, Heading, Box, Text, VStack, Button, HStack } from "@chakra-ui/react";
 import NextLink from "next/link";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability } from "@/hooks/useClassProfiles";
 
 type EmptySurveysStateProps = {
   courseId: string;
 };
 
 export default function EmptySurveysState({ courseId }: EmptySurveysStateProps) {
-  const isInstructor = useIsInstructor();
+  const canManageSurveys = useCapability("manage_surveys");
 
   return (
     <Container py={8} maxW="1200px" my={2}>
@@ -17,7 +17,7 @@ export default function EmptySurveysState({ courseId }: EmptySurveysStateProps) 
         <Heading size="2xl" color="fg.default">
           Manage Surveys
         </Heading>
-        {isInstructor && (
+        {canManageSurveys && (
           <Button size="sm" asChild variant="solid" colorPalette="green">
             <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create New Survey</NextLink>
           </Button>
@@ -42,11 +42,11 @@ export default function EmptySurveysState({ courseId }: EmptySurveysStateProps) 
             No surveys yet
           </Heading>
           <Text fontSize="md" color="fg.muted" mb={8}>
-            {isInstructor
+            {canManageSurveys
               ? "Create your first survey to gather feedback from students."
               : "No surveys have been created yet."}
           </Text>
-          {isInstructor && (
+          {canManageSurveys && (
             <VStack p={2}>
               <Button size="xs" asChild variant="solid" colorPalette="green">
                 <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create a New Survey</NextLink>
