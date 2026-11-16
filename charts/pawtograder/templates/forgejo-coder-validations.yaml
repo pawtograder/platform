@@ -323,6 +323,22 @@
 {{- fail (printf "forgejo.gitea.config.database.%s must stay forgejo: the app-databases Job provisions that role and database" $k) }}
 {{- end }}
 {{- end }}
+{{- /* Login source ids are serial and the subchart's init container adds LDAP sources before OAuth ones,
+     so the pawtograder source is 1 only on some installs; the chart can't tell which. */}}
+{{- $sourceID := include "pawtograder.forgejo.authSourceId" . }}
+{{- if $sourceID }}
+{{- if not (regexMatch "^[1-9][0-9]*$" $sourceID) }}
+{{- fail (printf "forgejo.authSourceId=%q must be a positive integer: the ID of the pawtograder row in `forgejo admin auth list`, run in the Forgejo pod" $sourceID) }}
+{{- end }}
+{{- else if .Values.coder.enabled }}
+{{- fail "forgejo.authSourceId is required with forgejo.enabled and coder.enabled: the edge functions create students' Forgejo accounts on the pawtograder login source, and Forgejo's API can't list sources. Set it to the ID of the pawtograder row in `kubectl exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list`" }}
+{{- end }}
+{{- $chartEnv := list "FORGEJO_URL" "FORGEJO_ADMIN_USERNAME" "FORGEJO_ADMIN_PASSWORD" "FORGEJO_AUTH_SOURCE_ID" }}
+{{- range .Values.edgeFunctions.extraEnv }}
+{{- if has .name $chartEnv }}
+{{- fail (printf "edgeFunctions.extraEnv sets %s, which the chart sets itself with forgejo.enabled; the later entry would win and hide the chart's, so remove it (FORGEJO_AUTH_SOURCE_ID comes from forgejo.authSourceId)" .name) }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- if or .Values.forgejoRunner.enabled .Values.coder.enabled }}

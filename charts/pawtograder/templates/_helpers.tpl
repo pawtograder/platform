@@ -356,6 +356,24 @@ Internal service hostnames.
 {{- printf "%s-forgejo-http" .Release.Name -}}
 {{- end -}}
 
+{{/* The Secret the subchart reads the admin account from: existingSecret, else the one it generates. */}}
+{{- define "pawtograder.forgejo.adminSecret" -}}
+{{- .Values.forgejo.gitea.admin.existingSecret | default (printf "%s-forgejo-admin" .Release.Name) -}}
+{{- end -}}
+
+{{/* forgejo.authSourceId as a string, "" when unset. Not `default`: that would read 0 as unset. */}}
+{{- define "pawtograder.forgejo.authSourceId" -}}
+{{- $id := .Values.forgejo.authSourceId -}}
+{{- if not (kindIs "invalid" $id) -}}{{- toString $id -}}{{- end -}}
+{{- end -}}
+
+{{/* Forgejo's [webhook] ALLOWED_HOST_LIST: forgejo.webhookAllowedHosts plus the API host. */}}
+{{- define "pawtograder.forgejo.webhookAllowedHostList" -}}
+{{- $apiHost := include "pawtograder.api.url" . | trimPrefix "https://" -}}
+{{- $hosts := concat (.Values.forgejo.webhookAllowedHosts | default list) (list $apiHost) -}}
+{{- join "," (uniq $hosts) -}}
+{{- end -}}
+
 {{- define "pawtograder.appDatabase.host" -}}
 {{- if eq (index .ctx.Values .app).database "pawtograder" -}}
 {{- include "pawtograder.postgres.host" .ctx -}}

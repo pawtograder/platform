@@ -1,0 +1,34 @@
+{{- /*
+Forgejo's [webhook] ALLOWED_HOST_LIST, which the subchart can't template from this chart's values, so
+Forgejo reads it from this ConfigMap through additionalConfigFromEnvs, as it does DEFAULT_ACTIONS_URL.
+
+Forgejo matches a host-name entry on the name in the hook URL and skips the address check for it, so
+only names this release serves go in. A wildcard such as api.* would let a student's hook name a
+domain they control and point it at any address in the cluster.
+*/}}
+{{- if .Values.forgejo.enabled }}
+{{- $cmName := printf "%s-forgejo-webhook" .Release.Name }}
+{{- with dig "gitea" "config" "webhook" "ALLOWED_HOST_LIST" "" .Values.forgejo }}
+{{- fail (printf "forgejo.gitea.config.webhook.ALLOWED_HOST_LIST=%q would be overridden: the chart sets it from forgejo.webhookAllowedHosts plus the API host" .) }}
+{{- end }}
+{{- range (.Values.forgejo.webhookAllowedHosts | default list) }}
+{{- if or (contains "*" (toString .)) (eq (lower (toString .)) "private") }}
+{{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: anyone who can add a webhook to a repository could then send requests into the cluster" (toString .)) }}
+{{- end }}
+{{- end }}
+{{- $ref := dict }}
+{{- range .Values.forgejo.gitea.additionalConfigFromEnvs }}{{ if eq .name "FORGEJO__WEBHOOK__ALLOWED_HOST_LIST" }}{{ $ref = dig "valueFrom" "configMapKeyRef" dict . }}{{ end }}{{ end }}
+{{- if not (and (eq (toString $ref.name) $cmName) (eq (toString $ref.key) "ALLOWED_HOST_LIST")) }}
+{{- fail (printf "forgejo.gitea.additionalConfigFromEnvs must keep the chart's FORGEJO__WEBHOOK__ALLOWED_HOST_LIST entry (valueFrom.configMapKeyRef %s, key ALLOWED_HOST_LIST); an overlay that sets the list must include it" $cmName) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo") | nindent 4 }}
+data:
+  # Forgejo reads this at startup, so a change takes a restart of the Forgejo pod.
+  ALLOWED_HOST_LIST: {{ include "pawtograder.forgejo.webhookAllowedHostList" . | quote }}
+{{- end }}

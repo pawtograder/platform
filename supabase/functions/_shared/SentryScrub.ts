@@ -56,12 +56,51 @@ export function scrubEdgeBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
   return scrubbed;
 }
 
-/** Applies scrubEdgeBreadcrumb to the event's breadcrumbs. Never drops the event. */
+// Credentials the isolate has handled: the Forgejo tokens it minted for workspaces and the short-lived
+// Coder keys that write them into Coder. Error text and request URLs can carry them, so every event
+// has them replaced wherever they appear. Bounded, since an isolate serves many requests.
+const SECRETS: string[] = [];
+const MAX_SECRETS = 200;
+const REDACTED = "[redacted]";
+// A Coder API key: a 10-character id, a hyphen, a 22-character secret.
+const CODER_API_KEY = /\b[0-9A-Za-z]{10}-[0-9A-Za-z]{22}\b/g;
+
+/**
+ * Keeps this value out of every later Sentry event from the isolate. Call it as soon as a credential
+ * is in hand, before anything that could throw.
+ */
+export function redactSecret(value: string): void {
+  // Short values would redact ordinary text, and no credential here is that short.
+  if (value.length < 16 || SECRETS.includes(value)) return;
+  SECRETS.push(value);
+  if (SECRETS.length > MAX_SECRETS) SECRETS.shift();
+}
+
+export function redactSecretsInText(text: string): string {
+  let out = text;
+  for (const secret of SECRETS) out = out.split(secret).join(REDACTED);
+  return out.replace(CODER_API_KEY, REDACTED);
+}
+
+/** A copy with every string redacted. Copies, because the event shares objects with the scopes. */
+function redactDeep(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return redactSecretsInText(value);
+  if (depth > 20 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value)) out[key] = redactDeep(v, depth + 1);
+  return out;
+}
+
+/**
+ * Applies scrubEdgeBreadcrumb to the event's breadcrumbs and redacts credentials everywhere in it.
+ * Never drops the event.
+ */
 export function scrubEdgeEvent<E extends Event>(event: E): E {
   if (event.breadcrumbs) {
     event.breadcrumbs = event.breadcrumbs.map(scrubEdgeBreadcrumb).filter((b): b is Breadcrumb => b !== null);
   }
-  return event;
+  return redactDeep(event) as E;
 }
 
 Sentry.getGlobalScope().addEventProcessor((event) => scrubEdgeEvent(event));

@@ -3,7 +3,9 @@
 // Admin Basic auth, not an admin token: a token can't act on other users' behalf (Forgejo answers
 // 401 "auth method not allowed"), which repo provisioning (#1093) needs.
 
-export type ForgejoConfig = { url: string; authorization: string; authSourceId: number };
+import { redactSecret } from "./SentryScrub.ts";
+
+export type ForgejoConfig ={ url: string; authorization: string; authSourceId: number };
 export type ForgejoUser = { id: number; login: string; login_name: string; source_id: number };
 
 /**
@@ -38,7 +40,10 @@ const KNOWN_REASONS = [
   "user already exists",
   "name is reserved",
   "this is not a template repo",
-  "the repository with the same name already exists"
+  "the repository with the same name already exists",
+  "access token name has been used already",
+  "user does not exist",
+  "repository does not exist"
 ];
 
 function reason(text: string): string {
@@ -105,4 +110,92 @@ export async function ensureAccountForUser(
     throw new Error(`Forgejo user create failed: ${res.status} ${reason(message)}`);
   }
   throw new Error("No free Forgejo username after 20 attempts");
+}
+
+const CODER_TOKEN_PREFIX = "pawtograder-coder-";
+
+/**
+ * The name of the token a Coder workspace clones and pushes with. One per repository, so minting again
+ * replaces it, and the name alone is enough to revoke it. Pawtograder never stores the token itself.
+ */
+export function coderTokenName(repositoryId: number): string {
+  return `${CODER_TOKEN_PREFIX}${repositoryId}`;
+}
+
+function ownerAndName(repository: string): { owner: string; name: string } {
+  const [owner, name, ...rest] = repository.split("/");
+  if (!owner || !name || rest.length > 0) throw new Error("Forgejo token mint failed: repository is not owner/name");
+  return { owner, name };
+}
+
+/**
+ * Creates a token that belongs to the student and can read and write this one repository, and returns
+ * its secret. A push made with it reports the student as the pusher, so forgejo-repo-webhook records a
+ * submission, where a bot's push would be taken for handout sync. Any earlier token for the repository
+ * is deleted first: Forgejo answers a duplicate name with a 400, and shows a token's secret only once,
+ * in the response that creates it.
+ */
+export async function mintRepoToken(
+  config: ForgejoConfig,
+  login: string,
+  repository: string,
+  repositoryId: number
+): Promise<string> {
+  const { owner, name } = ownerAndName(repository);
+  await revokeRepoToken(config, login, repositoryId);
+  const res = await forgejo(config, "POST", `/users/${encodeURIComponent(login)}/tokens`, {
+    name: coderTokenName(repositoryId),
+    scopes: ["write:repository"],
+    repositories: [{ owner, name }]
+  });
+  if (!res.ok) throw await failure(res, "token mint");
+  // Not res.json(): its SyntaxError quotes the body, which holds the token, and errors go to Sentry.
+  let sha1: unknown;
+  try {
+    sha1 = (JSON.parse(await res.text()) as { sha1?: unknown })?.sha1;
+  } catch {
+    sha1 = undefined;
+  }
+  if (typeof sha1 !== "string" || !sha1) throw new Error("Forgejo token mint failed: the response has no token");
+  redactSecret(sha1);
+  return sha1;
+}
+
+/** Deletes the repository's workspace token. A token or user that is already gone counts as revoked. */
+export async function revokeRepoToken(config: ForgejoConfig, login: string, repositoryId: number): Promise<void> {
+  await deleteToken(config, login, coderTokenName(repositoryId));
+}
+
+async function deleteToken(config: ForgejoConfig, login: string, tokenName: string): Promise<void> {
+  const path = `/users/${encodeURIComponent(login)}/tokens/${encodeURIComponent(tokenName)}`;
+  const res = await forgejo(config, "DELETE", path);
+  if (res.ok || res.status === 404) {
+    await res.body?.cancel();
+    return;
+  }
+  throw await failure(res, "token revoke");
+}
+
+const TOKEN_PAGE_SIZE = 50;
+
+/**
+ * Deletes every workspace token the student holds, for any repository, and returns how many it
+ * deleted. Tokens the student created themselves keep working. A user that is already gone has none.
+ */
+export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
+  const names: string[] = [];
+  for (let page = 1; ; page++) {
+    const query = new URLSearchParams({ page: String(page), limit: String(TOKEN_PAGE_SIZE) });
+    const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return 0;
+    }
+    if (!res.ok) throw await failure(res, "token list");
+    const tokens = (await res.json()) as { name: string }[];
+    names.push(...tokens.map((t) => t.name).filter((n) => n.startsWith(CODER_TOKEN_PREFIX)));
+    if (tokens.length < TOKEN_PAGE_SIZE) break;
+  }
+  for (const name of names) await deleteToken(config, login, name);
+  return names.length;
 }
