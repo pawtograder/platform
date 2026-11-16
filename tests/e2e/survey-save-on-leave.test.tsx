@@ -78,7 +78,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     });
     await page.addInitScript(() => {
       const pendingRecords: Promise<void>[] = [];
-      const record = (kind: string, detail: unknown) => {
+      const record = (kind: string, detail: unknown): Promise<void> => {
         let text: string;
         try {
           text = typeof detail === "string" ? detail : JSON.stringify(detail);
@@ -89,6 +89,7 @@ test.describe("Survey answers survive leaving the page and losing the network", 
           .__recordBrowserStorageWrite(`${kind} ${text}`)
           .catch(() => {});
         pendingRecords.push(done);
+        return done;
       };
       const requestUrl = (request: RequestInfo | URL): string => {
         if (typeof request === "string") return request;
@@ -98,7 +99,13 @@ test.describe("Survey answers survive leaving the page and losing the network", 
       };
       (window as unknown as { __drainBrowserStorageWrites: () => Promise<void> }).__drainBrowserStorageWrites =
         async () => {
-          await Promise.all([...pendingRecords]);
+          // Nested Cache API recordings may append after a snapshot is taken, so keep
+          // draining until a full wait adds nothing new.
+          for (;;) {
+            const snapshot = pendingRecords.length;
+            await Promise.all(pendingRecords.slice());
+            if (pendingRecords.length === snapshot) return;
+          }
         };
       const setItem = Storage.prototype.setItem;
       Storage.prototype.setItem = function (key: string, value: string) {
@@ -322,13 +329,17 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     });
     if (seedError) throw new Error(`Failed to seed the response: ${seedError.message}`);
     await loginAsUser(page, student, course);
+    let releaseSubmit = () => {};
+    const submitReleased = new Promise<void>((resolve) => {
+      releaseSubmit = () => resolve();
+    });
     let refusedSubmit = false;
     await page.route("**/rest/v1/survey_responses*", async (route) => {
       const body = route.request().postDataJSON() as { is_submitted?: boolean } | null;
       if (route.request().method() !== "POST" || !body?.is_submitted || refusedSubmit) return route.fallback();
       refusedSubmit = true;
-      // Delay so the form stays read-only long enough that a lock-driven re-apply would have run.
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Hold the 500 until the test has checked the form under the submit lock.
+      await submitReleased;
       await route.fulfill({
         status: 500,
         contentType: "application/json",
@@ -341,6 +352,15 @@ test.describe("Survey answers survive leaving the page and losing the network", 
     await expect(input).toHaveValue("Preloaded draft A");
     await input.fill("Typed B after draft");
     await page.getByRole("button", { name: "Complete" }).click();
+
+    // While the refused submit is held, isSubmitting has locked the form. Typed B must still be
+    // in the field (includeHidden: SurveyJS may already be on its thank-you screen).
+    await expect(page.getByRole("alert").filter({ hasText: "Submitting your answers…" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Question 1", includeHidden: true })).toHaveValue(
+      "Typed B after draft"
+    );
+    await expect(page.getByRole("textbox", { name: "Question 1", includeHidden: true })).not.toBeEditable();
+    releaseSubmit();
 
     await expect(page.getByRole("alert").filter({ hasText: "Your survey wasn't submitted" })).toBeVisible();
     await expect(input).toHaveValue("Typed B after draft");
