@@ -3538,7 +3538,7 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
         name: "Instructor template",
         category: "general",
         template_content: "hello",
-        created_by_id: instructorH.private_profile_id
+        created_by_id: instructorH.user_id
       })
       .select("id, name")
       .single();
@@ -3551,7 +3551,7 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
         name: "Grader should fail",
         category: "general",
         template_content: "no",
-        created_by_id: plainGrader.private_profile_id
+        created_by_id: plainGrader.user_id
       }),
       "default grader creating a template"
     );
@@ -3564,7 +3564,7 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
         name: "Manager template",
         category: "general",
         template_content: "yes",
-        created_by_id: withManage.private_profile_id
+        created_by_id: withManage.user_id
       })
       .select("id")
       .single();
@@ -3710,7 +3710,7 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
         name: "Admin should fail",
         category: "general",
         template_content: "no",
-        created_by_id: admin.private_profile_id
+        created_by_id: admin.user_id
       }),
       "class admin creating a template"
     );
