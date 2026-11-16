@@ -137,6 +137,22 @@ describe("SurveyComponent (issue #881)", () => {
     expect(q1Input(container).value).toBe("Typed B");
   });
 
+  it("keeps typed answers when a different stale draft arrives read-only", () => {
+    // The previous case re-renders with the same draft key, so the value-equal
+    // early-return fires and never reaches hasLocalEditsRef. A different draft
+    // under readOnly is what actually exercises that guard.
+    const { container, rerender } = render(
+      <SurveyComponent surveyJson={SURVEY_JSON} initialData={{ q1: "Draft A" }} />
+    );
+    const input = q1Input(container);
+    fireEvent.change(input, { target: { value: "Typed B" } });
+    expect(input.value).toBe("Typed B");
+
+    rerender(<SurveyComponent surveyJson={SURVEY_JSON} initialData={{ q1: "Draft C" }} readOnly />);
+
+    expect(q1Input(container).value).toBe("Typed B");
+  });
+
   it("applies a genuinely different draft when the user has not edited anything", () => {
     // The guard protects in-progress answers, not every later assignment: a
     // viewer swapping between saved responses must still update.
