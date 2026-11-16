@@ -187,7 +187,8 @@ FOR EACH ROW EXECUTE FUNCTION public.broadcast_help_request_staff_data_change();
 --   * a closed ticket (staff "End ticket") keeps its status for every user-JWT caller,
 --     staff included, so End ticket stays final; service-role tooling is still trusted;
 --   * escalation_count, last_escalated_at and check_in_expires_at change only
---     through the RPCs in this migration, for every user-JWT caller, staff included;
+--     through the RPCs in this migration, for every user-JWT caller, staff included
+--     (INSERT is covered by enforce_help_request_insert_escalation_defaults_tr below);
 -- and one check for non-staff callers:
 --   * status may only move from open/in_progress to resolved (a student resolving
 --     their own ticket). Without this, a student could PATCH a ticket staff ended
@@ -266,6 +267,48 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Column guard on INSERT: a new ticket starts with no escalation state
+-- ---------------------------------------------------------------------------
+--
+-- enforce_help_request_update_columns_tr fires on UPDATE only, and neither INSERT policy on
+-- help_requests checks the escalation columns. Without this trigger a student could create a
+-- ticket that already has escalation_count = 1, which sorts it above everyone who waited longer
+-- and shows staff an "escalated" flag nobody raised, or one with check_in_expires_at set,
+-- which opens a check-in on a ticket nobody helped. The rule is the same as the UPDATE guard:
+-- every user-JWT caller, staff included, gets the column defaults, and service-role tooling
+-- (seeds, admin functions) is trusted. create_help_request_with_participants doesn't name
+-- these columns, so it always passes.
+
+CREATE OR REPLACE FUNCTION public.enforce_help_request_insert_escalation_defaults()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.escalation_count <> 0
+     OR NEW.last_escalated_at IS NOT NULL
+     OR NEW.check_in_expires_at IS NOT NULL THEN
+    RAISE EXCEPTION 'a new help request starts with no escalation state; it changes only through the escalation functions'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Only the trigger calls it.
+REVOKE ALL ON FUNCTION public.enforce_help_request_insert_escalation_defaults() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS enforce_help_request_insert_escalation_defaults_tr ON public.help_requests;
+CREATE TRIGGER enforce_help_request_insert_escalation_defaults_tr
+BEFORE INSERT ON public.help_requests
+FOR EACH ROW EXECUTE FUNCTION public.enforce_help_request_insert_escalation_defaults();
 
 -- ---------------------------------------------------------------------------
 -- Helpers
