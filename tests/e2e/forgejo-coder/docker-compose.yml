@@ -65,6 +65,14 @@ services:
       CODER_OIDC_ISSUER_URL: "${SB_ISSUER:?}"
       CODER_OIDC_CLIENT_ID: "${CODER_OIDC_CLIENT_ID:?}"
       CODER_OIDC_CLIENT_SECRET: "${CODER_OIDC_CLIENT_SECRET:?}"
-      CODER_OIDC_ALLOW_SIGNUPS: "true"
+      # The chart's Coder OIDC settings (charts/pawtograder/templates/app-databases.yaml): sign-ups
+      # off, since Pawtograder creates each Coder user, and the email read from the access token's
+      # coder_email claim, so a sign-in is matched by the Pawtograder user id, never a real email.
+      CODER_OIDC_ALLOW_SIGNUPS: "false"
       CODER_OIDC_SCOPES: "openid,profile,email"
       CODER_OIDC_SIGN_IN_TEXT: "Sign in with Pawtograder"
+      CODER_OIDC_EMAIL_FIELD: "coder_email"
+      CODER_OIDC_EMAIL_DOMAIN: "coder.pawtograder.invalid"
+      CODER_OIDC_IGNORE_USERINFO: "true"
+      CODER_OIDC_ACCESS_TOKEN_CLAIMS: "true"
+      CODER_OIDC_USERNAME_FIELD: "sub"

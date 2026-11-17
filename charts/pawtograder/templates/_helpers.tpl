@@ -126,6 +126,13 @@ Usage: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.web.image) }
 {{- end -}}
 
 {{/*
+The Coder workspace image: coderBootstrap.workspaces.image, or ghcr.io/pawtograder/coder-workspace at the chart appVersion.
+*/}}
+{{- define "pawtograder.coderWorkspaceImage" -}}
+{{- .Values.coderBootstrap.workspaces.image | default (printf "ghcr.io/pawtograder/coder-workspace:%s" .Chart.AppVersion) -}}
+{{- end -}}
+
+{{/*
 Merge global pod placement with per-component overrides.
 Usage: {{ include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres) }}
 */}}
@@ -341,6 +348,13 @@ Internal service hostnames.
 {{- end -}}
 {{- join "," $uris -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Coder's public URL, CODER_ACCESS_URL from coder.coder.env (forgejo-coder-validations requires it). */}}
+{{- define "pawtograder.coder.url" -}}
+{{- $url := "" -}}
+{{- range .Values.coder.coder.env }}{{ if eq .name "CODER_ACCESS_URL" }}{{ $url = .value | default "" }}{{ end }}{{ end -}}
+{{- trimSuffix "/" $url -}}
 {{- end -}}
 
 {{- define "pawtograder.forgejo.servicePort" -}}
