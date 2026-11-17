@@ -6,7 +6,8 @@
 --   psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f tests/manual/forgejo_repos.sql
 --
 -- Scenarios:
---   1. a student with a Forgejo login in a released Forgejo assignment is listed, as <org>/<slug>-<login>
+--   1. a student with a Forgejo login in a released Forgejo assignment is listed, as
+--      <org>/<class slug>-<assignment slug>-<login>, lowercased
 --   2. the org is classes.forgejo_org, or the class slug when that is unset
 --   3. not listed: no login yet, a disabled role, staff, another instance, a future release, a GitHub
 --      assignment, a group assignment, a fork mode, no template, the flag turned off
@@ -96,7 +97,8 @@ create temp table needed as select * from public.forgejo_repos_needed('https://g
 -- 1, 2
 select pg_temp.check('1 the student with a login is listed for the released assignment',
   exists (select 1 from needed where assignment_id = (select id from fx_a where name = 'released')
-          and profile_id = pg_temp.priv('u1', 'orgless') and login = 'alex' and name = 'hw1-alex'
+          and profile_id = pg_temp.priv('u1', 'orgless') and login = 'alex'
+          and name = (select slug from fx_class where name = 'orgless') || '-hw1-alex'
           and template_repo = 'staff/handout'));
 select pg_temp.check('2a with no forgejo_org the org is the class slug',
   (select owner from needed where assignment_id = (select id from fx_a where name = 'released')) =

@@ -63,6 +63,8 @@ test.describe.configure({ mode: "serial" });
 
 let student: TestingUser;
 let assignmentSlug: string;
+// <org>/<class slug>-<assignment slug>, the start of every student repo name in this assignment.
+let repoPrefix: string;
 
 test.beforeAll(async () => {
   const klass = await createClass({ name: "Forgejo provisioning E2E" });
@@ -101,6 +103,7 @@ test.beforeAll(async () => {
     .single();
   if (settingsError) throw settingsError;
   assignmentSlug = `hw-${klass.id}`;
+  repoPrefix = `${classOrg}/${klass.slug}-${assignmentSlug}`.toLowerCase();
   const { error } = await supabase.from("assignments").insert({
     class_id: klass.id,
     title: "Forgejo provisioning",
@@ -136,7 +139,7 @@ test("a pass creates the student's account and repo, and a second pass changes n
     .eq("profile_id", student.private_profile_id)
     .single();
   expect(repo).toEqual({
-    repository: expect.stringMatching(new RegExp(`/${assignmentSlug}-${account.login}$`)),
+    repository: `${repoPrefix}-${account.login}`.toLowerCase(),
     git_provider: "forgejo",
     is_github_ready: true
   });

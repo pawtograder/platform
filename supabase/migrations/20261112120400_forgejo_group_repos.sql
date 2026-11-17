@@ -25,9 +25,10 @@ VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+  -- Lowercase with the class slug first, for the reasons in forgejo_repos_needed below.
   SELECT a.id, a.class_id, g.id,
-         coalesce(nullif(c.forgejo_org, ''), c.slug),
-         a.slug || '-group-' || public.sanitize_repo_name_component(g.name),
+         lower(coalesce(nullif(c.forgejo_org, ''), c.slug)),
+         lower(c.slug || '-' || a.slug || '-group-' || public.sanitize_repo_name_component(g.name)),
          a.template_repo,
          coalesce(array_agg(ga.login ORDER BY ga.login) FILTER (WHERE ga.login IS NOT NULL), '{}'),
          bool_and(ga.login IS NOT NULL)
@@ -74,8 +75,12 @@ VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+  -- Lowercase, because Forgejo matches org and repo names case-insensitively, so two names that differ
+  -- only in case are one repo there. The class slug comes first, as in GitHub's names, so sections that
+  -- share a forgejo_org and an assignment slug get different repos.
   SELECT a.id, a.class_id, ur.private_profile_id, ga.login,
-         coalesce(nullif(c.forgejo_org, ''), c.slug), a.slug || '-' || ga.login, a.template_repo
+         lower(coalesce(nullif(c.forgejo_org, ''), c.slug)), lower(c.slug || '-' || a.slug || '-' || ga.login),
+         a.template_repo
   FROM public.assignments a
   JOIN public.classes c ON c.id = a.class_id
   JOIN public.user_roles ur ON ur.class_id = a.class_id AND ur.role = 'student' AND NOT ur.disabled
