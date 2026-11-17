@@ -29,6 +29,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BsCalendar, BsChatText } from "react-icons/bs";
 import { FaPlus } from "react-icons/fa";
 import Markdown from "@/components/ui/markdown";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 
 interface HelpDrawerProps {
   isOpen: boolean;
@@ -355,7 +356,9 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
                     const openRequestCount = activeHelpRequests.filter((r) => r.help_queue === queue.id).length;
                     const isSelected = selectedQueueId === queue.id;
                     const queueRequests = activeHelpRequests.filter((r) => r.help_queue === queue.id);
-                    const publicRequests = queueRequests.filter((r) => !r.is_private);
+                    const publicRequests = queueRequests
+                      .filter((r) => !r.is_private)
+                      .sort(compareHelpRequestQueueOrder);
                     const staffingInfo = queueStaffingInfo[queue.id] || {
                       currentStaffUntil: null,
                       nextScheduledStart: null,
