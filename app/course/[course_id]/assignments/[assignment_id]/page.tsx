@@ -183,7 +183,8 @@ export default function AssignmentPage() {
     enrollment?.role === "student" &&
     assignment?.git_provider === "forgejo" &&
     cloudWorkspacesEnabled((course as CourseWithFeatures | undefined)?.features) &&
-    (repositories ?? []).some((r) => r.git_provider === "forgejo");
+    // Wait for Forgejo to finish creating the repo, or the clone step fails.
+    (repositories ?? []).some((r) => r.git_provider === "forgejo" && r.is_github_ready);
 
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
