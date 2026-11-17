@@ -131,6 +131,10 @@ export default function RequestDetailPage() {
     if (private_profile_id == null || !Number.isFinite(requestIdNum)) return;
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    // A recheck starts from unknown rather than from the last answer. Someone was added to or
+    // removed from the request, so the stored answer may be wrong, and if the read fails it would
+    // otherwise stand: a student removed from a request would keep getting its alerts.
+    setMemberCheck(null);
     const read = async (attempt: number) => {
       const { data, error } = await createClient()
         .from("help_request_students")
@@ -156,6 +160,9 @@ export default function RequestDetailPage() {
   }, [private_profile_id, requestIdNum, realtimeSaysMember]);
   const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
   const turnMessage = useTurnAlert({
+    // The help drawer moves between requests without remounting this page, so the alert needs to
+    // know when it is looking at a different one.
+    subject: `${private_profile_id ?? "unknown"}:${requestIdNum}`,
     status: request?.status,
     assignee: request?.assignee,
     position: turnPosition,

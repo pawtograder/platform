@@ -213,7 +213,7 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     name: COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH,
     title: "Office hours: queue health on staff cards",
     description:
-      "Staff cards show students waiting, the oldest wait, and an Unstaffed badge, and queues sort so the ones that need attention come first. Instructors also get a browser alert when a queue turns red. When off, the cards look as they did before.",
+      "Staff cards show requests waiting, the oldest wait, and an Unstaffed badge, and queues sort so the ones that need attention come first. Instructors also get a browser alert when a queue turns red. When off, the cards look as they did before.",
     defaultWhenMissing: false,
     switchLabel: "Show queue health on staff office hours cards",
     ariaLabel: "Show queue health on staff office hours cards"

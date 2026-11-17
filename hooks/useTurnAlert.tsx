@@ -5,6 +5,13 @@ import { useEffect, useRef, useState } from "react";
 import { getNotificationManager } from "@/lib/notifications/NotificationManager";
 
 type TurnAlertInput = {
+  /**
+   * Who and what the alert is tracking, as one string. The page that uses this hook stays mounted
+   * when the student opens a different request from the help drawer, so the remembered state has
+   * to be thrown away when this changes. Otherwise request A's "open" would be compared against
+   * request B's "in_progress" and the student would be told a TA picked up a request nobody did.
+   */
+  subject: string;
   /** The student's request status, or undefined while it loads. */
   status: string | undefined;
   /** The TA working on the request, if any. */
@@ -22,8 +29,10 @@ type TurnAlertInput = {
  * Nothing fires on the first render, so a page that loads with the request already picked up
  * or already next does not alert.
  */
-export function useTurnAlert({ status, assignee, position, enabled }: TurnAlertInput): string | null {
-  const previous = useRef<{ status?: string; assignee?: string | null; position: number } | null>(null);
+export function useTurnAlert({ subject, status, assignee, position, enabled }: TurnAlertInput): string | null {
+  const previous = useRef<{ subject: string; status?: string; assignee?: string | null; position: number } | null>(
+    null
+  );
   const originalTitle = useRef<string | null>(null);
   const [inPageMessage, setInPageMessage] = useState<string | null>(null);
 
@@ -51,14 +60,16 @@ export function useTurnAlert({ status, assignee, position, enabled }: TurnAlertI
 
   useEffect(() => {
     if (status === undefined) return;
-    const before = previous.current;
+    // State remembered for a different request, or a different student, says nothing about this
+    // one, so it counts as no state at all and this render becomes the new starting point.
+    const before = previous.current?.subject === subject ? previous.current : null;
     // While alerts are off, which on this page means the membership check hasn't come back yet,
     // record the first state seen and then leave it alone. Overwriting it would swallow a pickup
     // that happened during that window: once alerts switch on, the request would already look
     // in_progress and read as the state the page started in. Not recording anything would lose
     // the starting state instead, and a request that was picked up before the page opened would
     // alert. With alerts on, every render moves it forward as usual.
-    if (enabled || before === null) previous.current = { status, assignee, position };
+    if (enabled || before === null) previous.current = { subject, status, assignee, position };
     if (!enabled || !before) return;
 
     const pickedUp = before.status === "open" && status === "in_progress" && Boolean(assignee);
@@ -82,7 +93,10 @@ export function useTurnAlert({ status, assignee, position, enabled }: TurnAlertI
     } else {
       setInPageMessage(message);
     }
-  }, [enabled, status, assignee, position]);
+  }, [enabled, subject, status, assignee, position]);
+
+  // A message about the request the student just left doesn't belong on the one they opened.
+  useEffect(() => setInPageMessage(null), [subject]);
 
   return inPageMessage;
 }

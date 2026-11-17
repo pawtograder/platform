@@ -11,6 +11,10 @@ import { getNotificationManager } from "@/lib/notifications/NotificationManager"
 
 type Notes = { title: string; body?: string }[];
 
+// The subject the hook uses to tell one student's request from another.
+const REQUEST_A = "student-1:101";
+const REQUEST_B = "student-1:102";
+
 function setHidden(hidden: boolean) {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
   Object.defineProperty(document, "visibilityState", {
@@ -55,14 +59,17 @@ describe("useTurnAlert", () => {
   });
 
   it("does not alert on the first render, even if the request is already picked up", () => {
-    renderHook(() => useTurnAlert({ status: "in_progress", assignee: "ta-1", position: 0, enabled: true }));
+    renderHook(() =>
+      useTurnAlert({ subject: REQUEST_A, status: "in_progress", assignee: "ta-1", position: 0, enabled: true })
+    );
     expect(notes).toEqual([]);
     expect(document.title).toBe("Office Hours");
   });
 
   it("alerts when a TA picks up the request while the tab is hidden", () => {
     const { rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number }) => useTurnAlert({ ...p, enabled: true }),
+      (p: { status: string; assignee: string | null; position: number }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A, enabled: true }),
       { initialProps: { status: "open", assignee: null as string | null, position: 2 } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0 });
@@ -72,7 +79,8 @@ describe("useTurnAlert", () => {
 
   it("alerts when the student becomes next in line", () => {
     const { rerender } = renderHook(
-      (p: { status: string; position: number }) => useTurnAlert({ ...p, assignee: null, enabled: true }),
+      (p: { status: string; position: number }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A, assignee: null, enabled: true }),
       { initialProps: { status: "open", position: 2 } }
     );
     rerender({ status: "open", position: 1 });
@@ -84,7 +92,8 @@ describe("useTurnAlert", () => {
     // Earlier tests can leave a title marker behind; this test checks the in-page message, not the title.
     document.title = "Office Hours";
     const { result, rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number }) => useTurnAlert({ ...p, enabled: true }),
+      (p: { status: string; assignee: string | null; position: number }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A, enabled: true }),
       { initialProps: { status: "open", assignee: null as string | null, position: 2 } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0 });
@@ -97,7 +106,8 @@ describe("useTurnAlert", () => {
     setHidden(false);
     jest.spyOn(document, "hasFocus").mockReturnValue(false);
     const { rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number }) => useTurnAlert({ ...p, enabled: true }),
+      (p: { status: string; assignee: string | null; position: number }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A, enabled: true }),
       { initialProps: { status: "open", assignee: null as string | null, position: 2 } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0 });
@@ -107,7 +117,8 @@ describe("useTurnAlert", () => {
 
   it("does nothing when the course has the feature off", () => {
     const { rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number }) => useTurnAlert({ ...p, enabled: false }),
+      (p: { status: string; assignee: string | null; position: number }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A, enabled: false }),
       { initialProps: { status: "open", assignee: null as string | null, position: 2 } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0 });
@@ -119,7 +130,8 @@ describe("useTurnAlert", () => {
     // enabled is false until the page knows the viewer is on the request. A TA picking it up in
     // that window used to look like the state the page started in, and nothing fired.
     const { rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number; enabled: boolean }) => useTurnAlert(p),
+      (p: { status: string; assignee: string | null; position: number; enabled: boolean }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A }),
       { initialProps: { status: "open", assignee: null as string | null, position: 2, enabled: false } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0, enabled: false });
@@ -131,7 +143,8 @@ describe("useTurnAlert", () => {
 
   it("stays quiet for a request that was already picked up before the membership check finished", () => {
     const { rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number; enabled: boolean }) => useTurnAlert(p),
+      (p: { status: string; assignee: string | null; position: number; enabled: boolean }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A }),
       { initialProps: { status: "in_progress", assignee: "ta-1" as string | null, position: 0, enabled: false } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0, enabled: true });
@@ -139,9 +152,28 @@ describe("useTurnAlert", () => {
     expect(document.title).toBe("Office Hours");
   });
 
+  it("does not treat a different request's state as this one's history", () => {
+    // The help drawer moves between requests without remounting the page, so the hook keeps
+    // running. Request A's "open" must not be compared against request B's "in_progress".
+    const { rerender } = renderHook(
+      (p: { subject: string; status: string; assignee: string | null; position: number }) =>
+        useTurnAlert({ ...p, enabled: true }),
+      { initialProps: { subject: REQUEST_A, status: "open", assignee: null as string | null, position: 2 } }
+    );
+    rerender({ subject: REQUEST_B, status: "in_progress", assignee: "ta-1", position: 0 });
+    expect(notes).toEqual([]);
+    expect(document.title).toBe("Office Hours");
+
+    // The new request is now the one being tracked, so its own pickup still alerts.
+    rerender({ subject: REQUEST_B, status: "open", assignee: null, position: 2 });
+    rerender({ subject: REQUEST_B, status: "in_progress", assignee: "ta-2", position: 0 });
+    expect(notes).toEqual([{ title: "Office hours", body: "A TA picked up your request." }]);
+  });
+
   it("restores the title when the student comes back to the tab", () => {
     const { rerender } = renderHook(
-      (p: { status: string; assignee: string | null; position: number }) => useTurnAlert({ ...p, enabled: true }),
+      (p: { status: string; assignee: string | null; position: number }) =>
+        useTurnAlert({ ...p, subject: REQUEST_A, enabled: true }),
       { initialProps: { status: "open", assignee: null as string | null, position: 2 } }
     );
     rerender({ status: "in_progress", assignee: "ta-1", position: 0 });
