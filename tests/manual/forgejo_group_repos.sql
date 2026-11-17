@@ -18,6 +18,9 @@
 --      creates the row the first time; the pass's first save claims the name, so a second group can't
 --   6. publish and copy don't re-permission a GitHub repo that shares a Forgejo group repo's name,
 --      once the class has a GitHub org; copy into a Forgejo assignment needs no GitHub org
+--   8. moving a member into a group with a ready repo, or re-enabling a disabled member, marks it not
+--      ready and kicks the reconciler
+--   (Backlog calls pass a NULL limit: the limit is global, so a busy database could drop these fixtures.)
 --   7. names that Forgejo would treat as one repo: groups Team1 and team1 in two sections that share
 --      a forgejo_org get different names, and a group Blue and a student with login group-blue in the
 --      same class get the same lowercase name, so the second claim fails
@@ -88,7 +91,7 @@ $$;
 select pg_temp.join('complete', 'u1', 'groups'), pg_temp.join('complete', 'u2', 'groups'),
        pg_temp.join('waiting', 'u3', 'groups'), pg_temp.join('lab', 'u1', 'both');
 
-create temp table needed as select * from public.forgejo_group_repos_needed('https://git.test', 100)
+create temp table needed as select * from public.forgejo_group_repos_needed('https://git.test', NULL)
   where class_id = pg_temp.cls();
 
 -- 1
@@ -110,7 +113,7 @@ create temp table orders(o bigint[]);
 do $$ begin
   for i in 1..20 loop
     insert into orders select array_agg(assignment_group_id)
-    from public.forgejo_group_repos_needed('https://git.test', 100) where class_id = pg_temp.cls();
+    from public.forgejo_group_repos_needed('https://git.test', NULL) where class_id = pg_temp.cls();
   end loop;
 end $$;
 select pg_temp.check('1e the list is sampled, not in a fixed order', (select count(distinct o) from orders) > 1);
@@ -119,7 +122,7 @@ select pg_temp.check('1e the list is sampled, not in a fixed order', (select cou
 insert into public.repositories (assignment_id, class_id, assignment_group_id, repository, git_provider, is_github_ready)
 values (pg_temp.a('groups'), pg_temp.cls(), pg_temp.g('complete'), 'grp-org/proj-group-Team-One', 'forgejo', true);
 select pg_temp.check('2 a ready group repo takes the group off the list',
-  not exists (select 1 from public.forgejo_group_repos_needed('https://git.test', 100)
+  not exists (select 1 from public.forgejo_group_repos_needed('https://git.test', NULL)
               where assignment_group_id = pg_temp.g('complete')));
 
 -- 3
@@ -128,7 +131,7 @@ select pg_temp.join('complete', 'u4', 'groups');
 select pg_temp.check('3a adding a member marks the group repo not ready',
   not (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete')));
 select pg_temp.check('3b and lists the group again with the new member',
-  exists (select 1 from public.forgejo_group_repos_needed('https://git.test', 100)
+  exists (select 1 from public.forgejo_group_repos_needed('https://git.test', NULL)
           where assignment_group_id = pg_temp.g('complete') and 'login-u4' = any (logins)));
 select pg_temp.check('3c and kicks the reconciler once', pg_temp.kicks() = (select v from k) + 1,
   'kicks: ' || (pg_temp.kicks() - (select v from k)));
@@ -139,10 +142,10 @@ select pg_temp.check('3d adding a member to a group with no repo yet kicks too, 
 
 -- 4
 select pg_temp.check('4a in a ''both'' assignment, a grouped student gets no individual repo',
-  not exists (select 1 from public.forgejo_repos_needed('https://git.test', 100)
+  not exists (select 1 from public.forgejo_repos_needed('https://git.test', NULL)
               where assignment_id = pg_temp.a('both') and profile_id = pg_temp.priv('u1')));
 select pg_temp.check('4b and a student in no group does',
-  exists (select 1 from public.forgejo_repos_needed('https://git.test', 100)
+  exists (select 1 from public.forgejo_repos_needed('https://git.test', NULL)
           where assignment_id = pg_temp.a('both') and profile_id = pg_temp.priv('u2')));
 
 -- 5: 'complete' now has u1, u2 and u4. Each save runs on its own: a check written as `save() and
@@ -300,7 +303,7 @@ insert into public.assignment_groups_members (assignment_group_id, assignment_id
 select f.g, ag.assignment_id, f.class_id, f.priv, f.priv
 from fx7 f join public.assignment_groups ag on ag.id = f.g where f.name in ('s2', 'a9', 'blue');
 create temp table needed7 as
-  select assignment_group_id, owner, name from public.forgejo_group_repos_needed('https://git.test', 100)
+  select assignment_group_id, owner, name from public.forgejo_group_repos_needed('https://git.test', NULL)
   where assignment_group_id in (select g from fx7 where g is not null);
 select pg_temp.check('7a Team1 and team1 in two sections that share an org get different names',
   (select count(distinct owner || '/' || name) from needed7
@@ -309,7 +312,7 @@ select pg_temp.check('7a Team1 and team1 in two sections that share an org get d
   (select string_agg(owner || '/' || name, ', ') from needed7));
 create temp table blue7 as
   select (select owner || '/' || name from needed7 where assignment_group_id = (select g from fx7 where name = 'blue')) as grp,
-         (select owner || '/' || name from public.forgejo_repos_needed('https://git.test', 100)
+         (select owner || '/' || name from public.forgejo_repos_needed('https://git.test', NULL)
           where profile_id = (select priv from fx7 where name = 'loner') and assignment_id = pg_temp.a('both')) as solo;
 select pg_temp.check('7b a group Blue and a student with login group-blue derive the same lowercase name',
   (select grp is not null and grp = solo from blue7), (select grp || ' vs ' || coalesce(solo, 'null') from blue7));
@@ -321,6 +324,27 @@ do $$ begin
 exception when unique_violation then
   perform pg_temp.check('7c the student''s claim fails once the group holds the name', true);
 end $$;
+
+-- 8: 'complete' still has u1 and u2; u3 is in 'waiting'
+update public.repositories set is_github_ready = true where assignment_group_id = pg_temp.g('complete');
+update k set v = pg_temp.kicks();
+update public.assignment_groups_members set assignment_group_id = pg_temp.g('complete')
+where assignment_group_id = pg_temp.g('waiting') and profile_id = pg_temp.priv('u3');
+select pg_temp.check('8a moving a member into a group with a ready repo marks it not ready and kicks',
+  not (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete'))
+  and pg_temp.kicks() = (select v from k) + 1, 'kicks: ' || (pg_temp.kicks() - (select v from k)));
+update public.repositories set is_github_ready = true where assignment_group_id = pg_temp.g('complete');
+update public.assignment_groups_members set added_by = added_by where assignment_group_id = pg_temp.g('complete');
+select pg_temp.check('8b an update that keeps the group leaves the repo ready',
+  (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete')));
+update public.user_roles set disabled = true where private_profile_id = pg_temp.priv('u1');
+select pg_temp.check('8c disabling a member leaves the repo ready',
+  (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete')));
+update k set v = pg_temp.kicks();
+update public.user_roles set disabled = false where private_profile_id = pg_temp.priv('u1');
+select pg_temp.check('8d re-enabling them marks it not ready and kicks, so the next pass grants them',
+  not (select is_github_ready from public.repositories where assignment_group_id = pg_temp.g('complete'))
+  and pg_temp.kicks() = (select v from k) + 1, 'kicks: ' || (pg_temp.kicks() - (select v from k)));
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;
