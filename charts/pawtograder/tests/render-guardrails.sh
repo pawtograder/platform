@@ -2956,14 +2956,35 @@ apps_has "backups: Forgejo's backup takes Forgejo's tolerations" yes "key: forge
   --set 'forgejo.tolerations[0].key=forgejo-only' --set 'forgejo.tolerations[0].operator=Exists' "${BK_ONLY[@]}"
 apps_has "backups: Forgejo's backup follows persistence.claimName" yes "claimName: repos" "${BK[@]}" \
   --set forgejo.persistence.claimName=repos "${BK_ONLY[@]}"
-apps_has "backups: the archive is taken after the database dump" yes \
-  "find /data -mindepth 1 -maxdepth 1" "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo's repositories are copied with git, not as files" yes \
+  'git clone --quiet --mirror --no-local "$1" "$2"' "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the repository copy keeps Forgejo's config, HEAD and hooks" yes \
+  "for f in config HEAD description hooks; do" "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the repository copy runs on Forgejo's image" yes \
+  "image: ghcr.io/pawtograder/mirror/forgejo/forgejo:15.0.9-rootless" "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the archive takes the repositories from the git copies" yes \
+  '--transform "s,^scratch/repositories,./$ROOT,S"' "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the archive follows repository.ROOT" yes "ROOT=repos" "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/data/repos "${BK_ONLY[@]}"
+apps_has "backups: the archive leaves out Forgejo's live queues by name" yes "-path /data/queues" \
+  "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: no tar exit status is accepted" no 'RC=$?' "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the dump waits for its database server first" yes 'pg_isready -q -t 2 && break' \
+  "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: a repository git can't read is left out, and fails the run after the upload" yes \
+  'DEFERRED_FAILURE="repositories git could not read were left out of the set:' "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: a set missing a repository gets no monthly copy" yes 'incomplete set: no monthly copy from it' \
+  "${BK[@]}" "${BK_NO_CODER[@]}" --set backup.retention.monthlyDays=90 "${BK_ONLY[@]}"
+apps_has "backups: Coder's backup has no repository step" no "broken-repositories" "${BK[@]}" "${BK_NO_FORGEJO[@]}" \
+  "${BK_ONLY[@]}"
 if apps "${BK[@]}" "${BK_ONLY[@]}" >"$OUTFILE"; then
-  label="backups: Forgejo's pg_dump runs before its tar"
+  label="backups: Forgejo's pg_dump runs before the repository copy, and that before the archive"
   dump_line=$(grep -n 'pg_dump -Fc > /scratch/forgejo.dump' "$OUTFILE" | head -1 | cut -d: -f1)
-  tar_line=$(grep -n 'tar -C /data' "$OUTFILE" | head -1 | cut -d: -f1)
-  if [ -n "$dump_line" ] && [ -n "$tar_line" ] && [ "$dump_line" -lt "$tar_line" ]; then echo "ok   [$label]"
-  else echo "FAIL [$label]: pg_dump at line ${dump_line:-none}, tar at ${tar_line:-none}"; FAILED=1; fi
+  git_line=$(grep -n 'git clone --quiet --mirror' "$OUTFILE" | head -1 | cut -d: -f1)
+  tar_line=$(grep -n 'tar -C / --no-recursion' "$OUTFILE" | head -1 | cut -d: -f1)
+  if [ -n "$dump_line" ] && [ -n "$git_line" ] && [ -n "$tar_line" ] \
+    && [ "$dump_line" -lt "$git_line" ] && [ "$git_line" -lt "$tar_line" ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: pg_dump at line ${dump_line:-none}, git at ${git_line:-none}, tar at ${tar_line:-none}"; FAILED=1; fi
 fi
 apps_has "backups: verify checks Forgejo's newest dump" yes 'daily/forgejo-${APP_TS}.dump' "${BK[@]}" \
   --show-only templates/backup-verify.yaml
@@ -2984,7 +3005,15 @@ apps_has "backups: the drill fails on any app restore error" yes "pg_restore --e
   "${BK[@]}" "${DRILL[@]}"
 apps_has "backups: the drill matches Forgejo's repositories against the archive" yes \
   "is in the database but not in the archive" "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill reports repositories only in the archive" yes \
+  "is in the archive but not in the database" "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill runs git fsck on every repository in the archive" yes \
+  'GIT_DIR="$repo" git fsck --connectivity-only --no-dangling --no-progress' "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill extracts the repositories under repository.ROOT" yes \
+  'ROOT=/scratch/forgejo-data/repos' "${BK[@]}" --set forgejo.gitea.config.repository.ROOT=/data/repos "${DRILL[@]}"
 apps_has "backups: the drill has no Forgejo step with Forgejo off" no "restore-drill-forgejo" "${BK[@]}" \
+  "${BK_NO_FORGEJO[@]}" "${DRILL[@]}"
+apps_has "backups: the drill fetches no archive with Forgejo off" no "forgejo.tar.gz" "${BK[@]}" \
   "${BK_NO_FORGEJO[@]}" "${DRILL[@]}"
 apps_has "backups: the drill restores on own-mode's image" yes "image: ghcr.io/pawtograder/mirror/postgres:18.6" \
   "${BK[@]}" "${BK_OWN_CODER[@]}" "${DRILL[@]}"
@@ -3007,10 +3036,12 @@ apps_refused "backups: a dump image outside global.imageRegistry is refused" \
   "global.imageRegistry=reg.example.com doesn't reach the forgejo backup's image" "${BK[@]}" "${BK_NO_CODER[@]}" \
   --set forgejoRunner.enabled=false --set global.imageRegistry=reg.example.com
 
-# Production: Forgejo or Coder on without these backups is refused.
+# Production: Forgejo or Coder on without these backups is refused. The overlay keeps
+# Forgejo's files in object storage; BK_LOCAL puts them back on the volume.
 BK_PROD=("${BASE[@]}" -n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml"
   --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast
   --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:v1.0.0)
+BK_LOCAL=(--set forgejo.gitea.config.storage.STORAGE_TYPE=local)
 bk_prod() {
   local label="$1" want="$2"; shift 2
   if helm template pawtograder "$CHART" "${BK_PROD[@]}" "$@" >/dev/null 2>"$ERRFILE"; then
@@ -3036,10 +3067,33 @@ bk_prod "backups: production with Forgejo on own and no backups is refused" \
 bk_prod "backups: production with backups but no verify is refused" \
   "backup.verify.enabled=false" "${BK[@]}" --set backup.verify.enabled=false
 bk_prod "backups: production with a floating dump image is refused" \
-  'forgejo-db.image.tag="latest": the forgejo backup dumps with this image' "${BK[@]}" --set forgejo-db.image.tag=latest
-bk_prod "backups: production with backups on renders" "" "${BK[@]}"
-bk_prod "backups: production with both apps on own and backups on renders" "" "${BK[@]}" "${BK_OWN_FORGEJO[@]}" \
-  "${BK_OWN_CODER[@]}" --set forgejo-db.storage.className=fast --set coder-db.storage.className=fast
+  'forgejo-db.image.tag="latest": the forgejo backup dumps with this image' "${BK[@]}" "${BK_LOCAL[@]}" \
+  --set forgejo-db.image.tag=latest
+bk_prod "backups: production with backups on renders" "" "${BK[@]}" "${BK_LOCAL[@]}"
+bk_prod "backups: production with both apps on own and backups on renders" "" "${BK[@]}" "${BK_LOCAL[@]}" \
+  "${BK_OWN_FORGEJO[@]}" "${BK_OWN_CODER[@]}" --set forgejo-db.storage.className=fast --set coder-db.storage.className=fast
+# Forgejo data outside /data, which the backup doesn't copy.
+BK_OUTSIDE="keeps Forgejo data outside its /data volume"
+bk_prod "backups: production with Forgejo on object storage is refused" "$BK_OUTSIDE (storage.STORAGE_TYPE=minio)" \
+  "${BK[@]}"
+bk_prod "backups: production with Forgejo's LFS alone on object storage is refused" "$BK_OUTSIDE (lfs.STORAGE_TYPE=minio)" \
+  "${BK[@]}" "${BK_LOCAL[@]}" --set forgejo.gitea.config.lfs.STORAGE_TYPE=minio
+bk_prod "backups: production with attachments on a named storage section is refused" \
+  "$BK_OUTSIDE (storage.attachments.STORAGE_TYPE=azureblob)" "${BK[@]}" "${BK_LOCAL[@]}" \
+  --set 'forgejo.gitea.config.storage\.attachments.STORAGE_TYPE=azureblob'
+bk_prod "backups: production with avatars on object storage is refused" "$BK_OUTSIDE (picture.AVATAR_STORAGE_TYPE=minio)" \
+  "${BK[@]}" "${BK_LOCAL[@]}" --set forgejo.gitea.config.picture.AVATAR_STORAGE_TYPE=minio
+bk_prod "backups: production with packages on another local path is refused" "$BK_OUTSIDE (packages.PATH=/packages)" \
+  "${BK[@]}" "${BK_LOCAL[@]}" --set forgejo.gitea.config.packages.PATH=/packages
+bk_prod "backups: production with APP_DATA_PATH off the volume is refused" "$BK_OUTSIDE (server.APP_DATA_PATH=/var/lib/forgejo)" \
+  "${BK[@]}" "${BK_LOCAL[@]}" --set forgejo.gitea.config.server.APP_DATA_PATH=/var/lib/forgejo
+bk_prod "backups: production with object storage renders once it's confirmed backed up" "" "${BK[@]}" \
+  --set backup.forgejoExternalStorageBackedUp=true
+bk_prod "backups: production with local storage under /data renders" "" "${BK[@]}" "${BK_LOCAL[@]}" \
+  --set forgejo.gitea.config.lfs.PATH=/data/lfs --set forgejo.gitea.config.lfs.STORAGE_TYPE=local
+bk_prod "backups: production with Forgejo off ignores its storage settings" "" "${BK[@]}" "${BK_NO_FORGEJO[@]}"
+apps_has "backups: outside production, Forgejo on object storage still renders" yes "pawtograder-backup-forgejo" \
+  "${BK[@]}" "${BK_ONLY[@]}"
 assert_renders "backups: production with neither app needs no app backup" --set backup.enabled=false
 apps_has "backups: outside production, no backups is still allowed" yes "kind: Deployment" --set backup.enabled=false
 echo
@@ -3284,7 +3338,8 @@ apps_has "template: workspaces default to the chart's coder-workspace image" yes
 apps_has "template: a workspace image override is passed through" yes 'image: "registry.school.edu/ws:1"' \
   --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 --show-only templates/coder-bootstrap.yaml
 APPS_PROD=("${BASE[@]}" --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast
-  --set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com)
+  --set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com
+  --set forgejo.gitea.config.storage.STORAGE_TYPE=local)
 apps_has "template: production takes the default workspace image's appVersion tag" yes \
   'image: "ghcr.io/pawtograder/coder-workspace:' "${APPS_PROD[@]}" --show-only templates/coder-bootstrap.yaml
 apps_refused "template: production refuses an untagged workspace image" \
