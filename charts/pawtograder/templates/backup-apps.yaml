@@ -9,10 +9,15 @@ them the same retention. Objects:
   daily/forgejo-<TS>.tar.gz      Forgejo's /data volume: repositories, app.ini,
                                  avatars, attachments and LFS kept on disk
 
-The two Forgejo objects share <TS> and form one restore point. The dump is taken
-first and the volume archived right after it, so the archive is never older
-than the database: a restore never has a repository row without its
-repository. README "Databases" (under "Forgejo and Coder") has the restore steps.
+The two Forgejo objects share <TS> and form one restore point. Forgejo keeps
+running. The dump is taken first, then each repository is copied with git (a
+consistent copy even while pushes and git gc run), then the rest of the volume
+is archived. So the archive holds every repository the dump names, unless one
+is deleted or renamed during the run, which the restore drill reports. README
+"Databases" (under "Forgejo and Coder") has the restore steps.
+
+The dump and the archive run on <app>-db.image (GNU tar and find), the
+repository copy on Forgejo's own image (git).
 
 Separate CronJobs rather than steps in backup.yaml: Forgejo's volume is
 ReadWriteOnce, so its job has to run on the node where Forgejo's pod runs, and
@@ -20,7 +25,8 @@ a broken or unschedulable app backup must not cost Pawtograder its nightly dump.
 
 The dump runs in an init container on <app>-db.image (see
 pawtograder.backupApps.image), the upload in the main container on
-backup.image, which has mc.
+backup.image, which has mc. A failed run is retried in a new pod
+(backoffLimit) with a fresh scratch volume.
 */ -}}
 {{- if and .Values.postgres.enabled .Values.backup.enabled }}
 {{- range $app := splitList " " (include "pawtograder.backupApps.enabled" $) }}
@@ -95,48 +101,146 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
+                  # Wait for the server: it may be restarting, and some CNIs drop a
+                  # new pod's first packets until its NetworkPolicy rules land.
+                  for i in $(seq 1 30); do pg_isready -q -t 2 && break; sleep 2; done
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   pg_dump -Fc > /scratch/{{ $app }}.dump
                   pg_restore --list /scratch/{{ $app }}.dump > /dev/null
                   echo "[backup-{{ $app }}] database dump OK: $(stat -c%s /scratch/{{ $app }}.dump) bytes"
                   {{- if $forgejo }}
-                  # After the dump, so the archive holds every repository the
-                  # dump names. Skipped: queues (a copy of a live LevelDB queue
-                  # can be torn), the issue indexer (Forgejo rebuilds it),
-                  # generated repository archives and temporary files.
-                  # GNU tar exits 1 when a file changed while it was read (a push
-                  # landing mid-archive): that file's copy may be torn, the rest
-                  # is good, and the next night's run catches it. 2 is fatal.
-                  # The top-level entries rather than ".": the volume's root
-                  # belongs to whoever provisioned it, so a restore running as
-                  # Forgejo's uid can't set its mode or times.
-                  RC=0
-                  find /data -mindepth 1 -maxdepth 1 -printf './%P\0' \
-                    | tar -C /data --exclude=./queues --exclude=./indexers \
-                        --exclude=./repo-archive --exclude=./tmp \
-                        -czf /scratch/forgejo.tar.gz --null -T - || RC=$?
-                  if [ "$RC" -gt 1 ]; then
-                    echo "[backup-forgejo] FATAL: tar exited $RC archiving /data"; exit 1
-                  fi
-                  [ "$RC" -eq 0 ] || echo "[backup-forgejo] tar: some files changed while being archived (see above)"
-                  tar -tzf /scratch/forgejo.tar.gz > /scratch/forgejo.list
-                  echo "[backup-forgejo] volume archive OK: $(stat -c%s /scratch/forgejo.tar.gz) bytes, $(wc -l < /scratch/forgejo.list) entries"
-                  rm -f /scratch/forgejo.list
-                  {{- end }}
+                  # The volume is copied after this, by the next two containers.
+                  echo "$TS" > /scratch/dump-ts
+                  {{- else }}
                   # Written last: the uploader reads it as "every file is complete".
                   echo "$TS" > /scratch/ts
+                  {{- end }}
               env:
                 {{- include "pawtograder.backupApps.pgEnv" (dict "ctx" $ "app" $app) | nindent 16 }}
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
-                {{- if $forgejo }}
+            {{- if $forgejo }}
+            {{- $root := trimPrefix "./" (include "pawtograder.backupApps.forgejoRepoRoot" $) }}
+            # A git-level copy of every repository, wikis included, taken after
+            # the dump so it holds every repository the dump names. A clone over
+            # git's own transport (--no-local) reads one snapshot of the refs and
+            # packs the objects they reach, so a push or a git gc running at the
+            # same time can't leave it with a ref whose objects are missing, as a
+            # file copy of the repository can. Forgejo's config, HEAD,
+            # description and hooks are then copied over the clone's, so the
+            # restored repository is laid out the way Forgejo created it.
+            - name: repositories
+              image: {{ include "gitea.image" $.Subcharts.forgejo }}
+              imagePullPolicy: {{ $.Values.forgejo.image.pullPolicy | default "IfNotPresent" }}
+              {{- with $.Values.forgejo.containerSecurityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export HOME=/tmp GIT_CONFIG_NOSYSTEM=1
+                  # The repositories belong to Forgejo's uid; this is the same uid,
+                  # but git's ownership check shouldn't depend on it.
+                  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+                  SRC=/data/{{ $root }}
+                  DST=/scratch/repositories
+                  rm -rf "$DST" /scratch/broken-repositories
+                  mkdir -p "$DST"
+                  copy() {
+                    git clone --quiet --mirror --no-local "$1" "$2" || return 1
+                    rm -rf "$2/hooks"
+                    local f
+                    for f in config HEAD description hooks; do
+                      if [ -e "$1/$f" ]; then cp -pR "$1/$f" "$2/" || return 1; fi
+                    done
+                  }
+                  COPIED=0
+                  GONE=0
+                  BROKEN=0
+                  for src in "$SRC"/*/*.git; do
+                    [ -d "$src" ] || continue
+                    rel=${src#"$SRC"/}
+                    for attempt in 1 2 3; do
+                      rm -rf "${DST:?}/$rel"
+                      if copy "$src" "$DST/$rel"; then COPIED=$((COPIED + 1)); continue 2; fi
+                      [ -d "$src" ] || break
+                      echo "[backup-forgejo] copying $rel failed (attempt $attempt)"
+                      sleep 5
+                    done
+                    rm -rf "${DST:?}/$rel"
+                    if [ -d "$src" ]; then
+                      # git can't read it (a corrupt repository). The rest of the
+                      # set is still uploaded; the upload container then fails the
+                      # run with this list, and the set gets no monthly copy.
+                      echo "[backup-forgejo] could not copy repository $rel: left out of this set"
+                      echo "$rel" >> /scratch/broken-repositories
+                      BROKEN=$((BROKEN + 1))
+                    else
+                      # Deleted or renamed after the dump: the drill reports the
+                      # repository the dump still names.
+                      echo "[backup-forgejo] $rel was deleted or renamed during the backup: not in this set"
+                      GONE=$((GONE + 1))
+                    fi
+                  done
+                  echo "[backup-forgejo] repositories copied: ${COPIED}, gone during the backup: ${GONE}, unreadable: ${BROKEN}"
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
                 - name: data
                   mountPath: /data
                   readOnly: true
                   {{- with $.Values.forgejo.persistence.subPath }}
                   subPath: {{ . }}
                   {{- end }}
-                {{- end }}
+            # The rest of /data, with the repository root taken from the copies
+            # above. Any tar or find error fails the run. Left out, because
+            # Forgejo rewrites them while it runs and needs none of them back:
+            # queues (live LevelDB), the issue indexer (rebuilt), generated
+            # repository archives, temporary files, file sessions and logs.
+            # lost+found belongs to root. README "Databases" lists the same paths.
+            - name: archive
+              image: {{ include "pawtograder.backupApps.image" (dict "ctx" $ "app" $app) }}
+              imagePullPolicy: {{ (index $.Values (printf "%s-db" $app)).image.pullPolicy | default "IfNotPresent" }}
+              securityContext:
+                runAsUser: {{ dig "containerSecurityContext" "runAsUser" 1000 $.Values.forgejo }}
+                runAsGroup: {{ dig "containerSecurityContext" "runAsGroup" 1000 $.Values.forgejo }}
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  ROOT={{ $root }}
+                  # Member names are relative to the volume's root (./gitea/...),
+                  # never "." itself: the root belongs to whoever provisioned the
+                  # volume, so a restore running as Forgejo's uid can't set its
+                  # mode or times. The repository root comes from the copies, so
+                  # it's in the archive even before Forgejo creates it on /data.
+                  {
+                    find /data -mindepth 1 \( -path "/data/$ROOT" -o -path /data/queues -o -path /data/indexers \
+                      -o -path /data/repo-archive -o -path /data/tmp -o -path /data/sessions -o -path /data/log \
+                      -o -path /data/lost+found \) -prune -o -printf 'data/%P\0'
+                    printf 'scratch/repositories\0'
+                    find /scratch/repositories -mindepth 1 -printf 'scratch/repositories/%P\0'
+                  } | tar -C / --no-recursion --null \
+                        --transform 's,^data/,./,S' --transform "s,^scratch/repositories,./$ROOT,S" \
+                        -czf /scratch/forgejo.tar.gz -T -
+                  rm -rf /scratch/repositories
+                  tar -tzf /scratch/forgejo.tar.gz > /scratch/forgejo.list
+                  echo "[backup-forgejo] volume archive OK: $(stat -c%s /scratch/forgejo.tar.gz) bytes, $(wc -l < /scratch/forgejo.list) entries, $(grep -c "^\./$ROOT/[^/]*/[^/]*\.git/$" /scratch/forgejo.list || true) repositories"
+                  rm -f /scratch/forgejo.list
+                  # Written last: the uploader reads it as "every file is complete".
+                  mv /scratch/dump-ts /scratch/ts
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                  {{- with $.Values.forgejo.persistence.subPath }}
+                  subPath: {{ . }}
+                  {{- end }}
+            {{- end }}
           containers:
             - name: upload
               image: {{ include "pawtograder.image" (dict "ctx" $ "image" $.Values.backup.image) }}
@@ -170,12 +274,19 @@ spec:
                     for f in $FILES; do upload "/scratch/${f%%:*}" "s3/${S3_BUCKET}/$1/{{ $app }}-${TS}.${f#*:}"; done
                   }
                   DEFERRED_FAILURE=""
+                  {{- if $forgejo }}
+                  if [ -s /scratch/broken-repositories ]; then
+                    DEFERRED_FAILURE="repositories git could not read were left out of the set: $(tr '\n' ' ' < /scratch/broken-repositories)"
+                  fi
+                  {{- end }}
                   upload_all daily
                   {{- if gt (int $.Values.backup.retention.monthlyDays) 0 }}
                   # Monthly tier, as in backup.yaml: the first good run of each
                   # UTC month keeps a second copy, marked {{ $app }}-<TS>.verified
                   # once every file of the set passed its size check.
-                  if MONTH_LISTING=$(mc ls "s3/${S3_BUCKET}/monthly/{{ $app }}-${TS:0:6}"); then
+                  if [ -n "$DEFERRED_FAILURE" ]; then
+                    echo "[backup-{{ $app }}] incomplete set: no monthly copy from it"
+                  elif MONTH_LISTING=$(mc ls "s3/${S3_BUCKET}/monthly/{{ $app }}-${TS:0:6}"); then
                     if grep -q '\.verified$' <<<"$MONTH_LISTING"; then
                       echo "[backup-{{ $app }}] monthly/ already holds a verified ${TS:0:6} set"
                     else
@@ -190,7 +301,7 @@ spec:
                   {{- end }}
                   rm -f /scratch/{{ $app }}.dump /scratch/forgejo.tar.gz
                   if [ -n "$DEFERRED_FAILURE" ]; then
-                    echo "[backup-{{ $app }}] FATAL: $DEFERRED_FAILURE (the daily set itself landed and was verified)"
+                    echo "[backup-{{ $app }}] FATAL: $DEFERRED_FAILURE (the daily set itself was uploaded and size-checked)"
                     exit 1
                   fi
               volumeMounts:
@@ -199,7 +310,7 @@ spec:
                 {{- include "pawtograder.backupApps.s3Env" $ | nindent 16 }}
           volumes:
             # Per-pod ephemeral PVC, as in backup.yaml. For Forgejo it holds the
-            # dump and the volume archive together.
+            # dump, the repository copies and the volume archive together.
             - name: scratch
               ephemeral:
                 volumeClaimTemplate:

@@ -2249,8 +2249,9 @@ backup:
   # local-path PVC is not charged to the pod's ephemeral storage, so kubelet
   # will not evict the pod before the node fills.
   # With Forgejo on, its backup (templates/backup-apps.yaml) stages Forgejo's
-  # dump and its /data archive here together, so size for the larger of that
-  # and Pawtograder's dump. Coder's backup stages only its dump.
+  # dump, a git copy of every repository and the /data archive here together
+  # (about twice the volume's size plus the dump), so size for the larger of
+  # that and Pawtograder's dump. Coder's backup stages only its dump.
   scratchSize: 30Gi
   scratchStorageClass: ""
   # Retained Jobs each keep their pod, and each pod keeps its scratch PVC, so
