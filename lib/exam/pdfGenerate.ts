@@ -41,7 +41,17 @@ export type GenerateExamPdfOptions = {
   pageSize?: [number, number];
   /** Draw Name / Student ID capture boxes on page 1 (default true). */
   includeIdentity?: boolean;
+  /**
+   * Called with every text run and rectangle as it is drawn, in PDF points with a
+   * bottom-left origin. Lets a caller without a PDF rasterizer (the Node seeder) render
+   * page images that match the PDF exactly.
+   */
+  onDraw?: (op: ExamPdfDrawOp) => void;
 };
+
+export type ExamPdfDrawOp =
+  | { kind: "text"; page_number: number; text: string; x: number; y: number; size: number; bold: boolean }
+  | { kind: "rect"; page_number: number; x: number; y: number; width: number; height: number };
 
 const MARGIN = 54; // 0.75"
 const LINE_GAP = 4;
@@ -181,6 +191,16 @@ export async function generateExamPdf(
     cursorY = pageHeight - MARGIN;
   };
 
+  const drawText = (text: string, x: number, y: number, size: number, useFont: PDFFont) => {
+    page.drawText(text, { x, y, size, font: useFont, color: rgb(0, 0, 0) });
+    opts.onDraw?.({ kind: "text", page_number: pageNumber, text, x, y, size, bold: useFont === bold });
+  };
+
+  const drawBox = (x: number, y: number, width: number, height: number) => {
+    page.drawRectangle({ x, y, width, height, borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 1 });
+    opts.onDraw?.({ kind: "rect", page_number: pageNumber, x, y, width, height });
+  };
+
   // ensure `needed` vertical points are available below the cursor; page-break otherwise
   const ensureSpace = (needed: number) => {
     if (cursorY - needed < contentBottom) newPage();
@@ -192,7 +212,7 @@ export async function generateExamPdf(
     for (const line of lines) {
       ensureSpace(size + LINE_GAP);
       cursorY -= size;
-      page.drawText(line, { x: MARGIN + indent, y: cursorY, size, font: useFont, color: rgb(0, 0, 0) });
+      drawText(line, MARGIN + indent, cursorY, size, useFont);
       cursorY -= LINE_GAP;
     }
   };
@@ -217,29 +237,16 @@ export async function generateExamPdf(
     ensureSpace(boxH + BLOCK_GAP);
     const boxTopY = cursorY;
     const boxBottomY = boxTopY - boxH;
-    page.drawRectangle({
-      x: MARGIN,
-      y: boxBottomY,
-      width: usableWidth,
-      height: boxH,
-      borderColor: rgb(0.6, 0.6, 0.6),
-      borderWidth: 1
-    });
+    drawBox(MARGIN, boxBottomY, usableWidth, boxH);
     if (answerType === "multiple_choice" && choices.length) {
       let optY = boxTopY - 14;
       choices.forEach((choice, i) => {
         const letter = String.fromCharCode(65 + i); // A, B, C ...
-        page.drawText(`(${letter})  ${choice}`, { x: MARGIN + 8, y: optY, size: 11, font, color: rgb(0, 0, 0) });
+        drawText(`(${letter})  ${choice}`, MARGIN + 8, optY, 11, font);
         optY -= 18;
       });
     } else if (answerType === "true_false") {
-      page.drawText("(   ) True        (   ) False", {
-        x: MARGIN + 8,
-        y: boxBottomY + 6,
-        size: 11,
-        font,
-        color: rgb(0, 0, 0)
-      });
+      drawText("(   ) True        (   ) False", MARGIN + 8, boxBottomY + 6, 11, font);
     }
     regions.push({
       question_client_id: qClientId,
@@ -262,17 +269,10 @@ export async function generateExamPdf(
     const labelSize = 11;
     // Name
     ensureSpace(fieldH + BLOCK_GAP);
-    page.drawText("Name:", { x: MARGIN, y: cursorY - 15, size: labelSize, font: bold, color: rgb(0, 0, 0) });
+    drawText("Name:", MARGIN, cursorY - 15, labelSize, bold);
     const nameBoxX = MARGIN + 44;
     const nameBoxW = usableWidth - 44;
-    page.drawRectangle({
-      x: nameBoxX,
-      y: cursorY - fieldH,
-      width: nameBoxW,
-      height: fieldH,
-      borderColor: rgb(0.6, 0.6, 0.6),
-      borderWidth: 1
-    });
+    drawBox(nameBoxX, cursorY - fieldH, nameBoxW, fieldH);
     regions.push({
       question_client_id: null,
       kind: "name",
@@ -282,17 +282,10 @@ export async function generateExamPdf(
     cursorY -= fieldH + BLOCK_GAP;
     // Student ID
     ensureSpace(fieldH + BLOCK_GAP);
-    page.drawText("Student ID:", { x: MARGIN, y: cursorY - 15, size: labelSize, font: bold, color: rgb(0, 0, 0) });
+    drawText("Student ID:", MARGIN, cursorY - 15, labelSize, bold);
     const idBoxX = MARGIN + 70;
     const idBoxW = usableWidth - 70;
-    page.drawRectangle({
-      x: idBoxX,
-      y: cursorY - fieldH,
-      width: idBoxW,
-      height: fieldH,
-      borderColor: rgb(0.6, 0.6, 0.6),
-      borderWidth: 1
-    });
+    drawBox(idBoxX, cursorY - fieldH, idBoxW, fieldH);
     regions.push({
       question_client_id: null,
       kind: "student_id",

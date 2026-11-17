@@ -1,12 +1,14 @@
 "use client";
 
+import { ExamFeatureGate } from "./ExamFeatureGate";
+
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-export default function ExamOverviewPage() {
+function ExamOverviewPageContent() {
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -62,5 +64,13 @@ export default function ExamOverviewPage() {
         </Button>
       </HStack>
     </VStack>
+  );
+}
+
+export default function ExamOverviewPage() {
+  return (
+    <ExamFeatureGate>
+      <ExamOverviewPageContent />
+    </ExamFeatureGate>
   );
 }

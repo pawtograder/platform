@@ -11,7 +11,7 @@
  * 2. TableController: `initialData`, `_addRow`, `_updateRow` through `bugReportIngest.sink`, plus
  *    the rows every live controller already holds when the ingest starts.
  * 3. Realtime: broadcasts routed by RealtimeChannelManager (including `classes_update`, which
- *    carries the classes row) and the meeting-windows `postgres_changes` listener. ID-only
+ *    carries the classes row). ID-only
  *    broadcasts make the controller refetch, which comes back through the fetch hook.
  * 4. The taint block, read by the recorder at start and on each navigation (`readTaintBlocks`).
  * 5. The auth session: the user's own email, `user_metadata`, and identity data.

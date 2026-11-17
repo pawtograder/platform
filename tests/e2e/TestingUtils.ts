@@ -2947,6 +2947,23 @@ export async function gradeSubmission(
  * @param options Configuration options for creating assignments and gradebook columns
  * @returns Object containing created assignments, gradebook columns, and other relevant data
  */
+/**
+ * Group a class's gradebook columns the way the slug heuristic used to show them. New classes
+ * store their own column groups (the gradebook-column-groups feature defaults on) and start with
+ * every column ungrouped, so fixtures that expect grouped headers call this once their columns exist.
+ */
+export async function autoGroupClassGradebook(class_id: number): Promise<void> {
+  const { data: classRow, error: classError } = await supabase
+    .from("classes")
+    .select("gradebook_id")
+    .eq("id", class_id)
+    .single();
+  if (classError) throw new Error(`Failed to read gradebook for class ${class_id}: ${classError.message}`);
+  if (!classRow?.gradebook_id) return;
+  const { error } = await supabase.rpc("gradebook_columns_auto_group", { p_gradebook_id: classRow.gradebook_id });
+  if (error) throw new Error(`Failed to auto-group gradebook columns for class ${class_id}: ${error.message}`);
+}
+
 export async function createAssignmentsAndGradebookColumns({
   class_id,
   numAssignments = 5,
@@ -3743,6 +3760,7 @@ export async function createAssignmentsAndGradebookColumns({
   });
 
   gradebookColumns.push(participationColumn, averageAssignmentsColumn, finalGradeColumn);
+  await autoGroupClassGradebook(class_id);
 
   // Get students for manual grading
   const { data: students } = await supabase

@@ -183,7 +183,8 @@ render() {
     echo "templates/$tpl does not exist in this chart (renamed or deleted? update TEMPLATES in this script)" >"$TMP/err"
     return 1
   fi
-  if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
+  # Named pawtograder: an environment with Forgejo or Coder on refuses any other release name.
+  if helm template pawtograder "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
     extract template <"$out.yaml" >"$out.tpl"
     extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
     extract updateStrategy <"$out.yaml" >"$out.strat"

@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: $0 --env <env> --coder-email <email> [--rotate] [--bao-mount <mount>] [--prefix <path>]
+
+  --env <env>            preview|staging|prod.
+  --coder-email <email>  Email for Coder's first owner (Coder requires one).
+  --rotate               Overwrite paths that already exist. Rotating db_password needs a
+                         helm upgrade (the app-databases Job re-sets the role's password).
+  --bao-mount <mount>    KV mount name (default: kv).
+  --prefix <path>        Path within the mount (default: apps/pawtograder).
+
+Prints nothing secret; read values back with \`bao kv get\`.
+EOF
+}
+
+ENV_NAME=""
+CODER_EMAIL=""
+ROTATE=0
+BAO_MOUNT="kv"
+PREFIX="apps/pawtograder"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env)          ENV_NAME="${2:?--env requires a value}"; shift 2 ;;
+    --coder-email)  CODER_EMAIL="${2:?--coder-email requires a value}"; shift 2 ;;
+    --rotate)       ROTATE=1; shift ;;
+    --bao-mount)    BAO_MOUNT="${2:?--bao-mount requires a value}"; shift 2 ;;
+    --prefix)       PREFIX="${2:?--prefix requires a value}"; shift 2 ;;
+    -h|--help)      usage; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+case "$ENV_NAME" in
+  preview|staging|prod) ;;
+  *) echo "ERROR: --env must be preview, staging or prod (got '${ENV_NAME}')" >&2; usage >&2; exit 2 ;;
+esac
+[ -n "$CODER_EMAIL" ] || { usage >&2; exit 2; }
+
+CLI=""
+if command -v bao >/dev/null 2>&1; then
+  CLI=bao
+elif command -v vault >/dev/null 2>&1; then
+  CLI=vault
+  : "${VAULT_ADDR:=${BAO_ADDR:-}}"
+  : "${VAULT_TOKEN:=${BAO_TOKEN:-}}"
+  export VAULT_ADDR VAULT_TOKEN
+else
+  echo "ERROR: neither 'bao' nor 'vault' found on PATH" >&2
+  exit 2
+fi
+command -v jq >/dev/null 2>&1 || { echo "ERROR: 'jq' is required" >&2; exit 2; }
+command -v openssl >/dev/null 2>&1 || { echo "ERROR: 'openssl' is required" >&2; exit 2; }
+
+$CLI status >/dev/null 2>&1 || {
+  echo "ERROR: $CLI status failed — set BAO_ADDR/BAO_TOKEN (or VAULT_*) and log in" >&2
+  exit 1
+}
+
+# Alphanumeric: Coder's connection settings don't escape passwords.
+pw() {
+  local v
+  v="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32)"
+  [[ "$v" =~ ^[A-Za-z0-9]{32}$ ]] || { echo "ERROR: password generation failed" >&2; return 1; }
+  printf '%s' "$v"
+}
+
+for app in forgejo coder; do
+  path="$PREFIX/$app-$ENV_NAME"
+  if out="$($CLI kv get -mount="$BAO_MOUNT" "$path" 2>&1 >/dev/null)"; then
+    if [ "$ROTATE" -ne 1 ]; then
+      echo "ERROR: ${BAO_MOUNT}/${path} already exists. Pass --rotate to overwrite." >&2
+      exit 1
+    fi
+  elif ! grep -q 'No value found' <<<"$out"; then
+    echo "ERROR: could not read ${BAO_MOUNT}/${path}: $out" >&2
+    exit 1
+  fi
+done
+
+FORGEJO_ADMIN_PW="$(pw)"
+FORGEJO_DB_PW="$(pw)"
+CODER_ADMIN_PW="$(pw)"
+CODER_DB_PW="$(pw)"
+
+CAS=()
+[ "$ROTATE" -eq 1 ] || CAS=(-cas=0)
+
+# Passwords reach jq through its environment, not argv, so `ps` can't show them.
+PW_ADMIN="$FORGEJO_ADMIN_PW" PW_DB="$FORGEJO_DB_PW" jq -n \
+  '{admin_username: "forgejo-admin", admin_password: $ENV.PW_ADMIN, db_password: $ENV.PW_DB}' \
+  | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$PREFIX/forgejo-$ENV_NAME" - >/dev/null
+if ! PW_ADMIN="$CODER_ADMIN_PW" PW_DB="$CODER_DB_PW" jq -n --arg e "$CODER_EMAIL" \
+  '{admin_email: $e, admin_username: "coder-admin", admin_password: $ENV.PW_ADMIN, db_password: $ENV.PW_DB}' \
+  | $CLI kv put -mount="$BAO_MOUNT" ${CAS[@]+"${CAS[@]}"} "$PREFIX/coder-$ENV_NAME" - >/dev/null; then
+  {
+    echo "ERROR: wrote ${BAO_MOUNT}/${PREFIX}/forgejo-${ENV_NAME} but not ${BAO_MOUNT}/${PREFIX}/coder-${ENV_NAME}."
+    echo "If Forgejo is already deployed, its db_password just changed: finish the rotation in"
+    echo "charts/pawtograder/README.md (helm upgrade --wait --wait-for-jobs, then restart Forgejo)."
+    echo "Rerun with --rotate to write the Coder path; that rotates Forgejo's passwords again."
+  } >&2
+  exit 1
+fi
+
+{
+  echo "Wrote ${BAO_MOUNT}/${PREFIX}/forgejo-${ENV_NAME} and ${BAO_MOUNT}/${PREFIX}/coder-${ENV_NAME}."
+  echo "Point the chart at them:"
+  echo "  forgejoCoderSecrets.externalSecret.enabled: true"
+  echo "  forgejoCoderSecrets.externalSecret.forgejoPath: ${PREFIX}/forgejo-${ENV_NAME}"
+  echo "  forgejoCoderSecrets.externalSecret.coderPath: ${PREFIX}/coder-${ENV_NAME}"
+} >&2

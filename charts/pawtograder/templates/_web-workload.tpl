@@ -228,6 +228,10 @@ spec:
               value: {{ .ssoProviders | toJson | quote }}
             {{- end }}
             {{- end }}
+            {{- with include "pawtograder.oauth.firstPartyRedirectURIs" $ctx }}
+            - name: OAUTH_FIRST_PARTY_REDIRECT_URIS
+              value: {{ . | quote }}
+            {{- end }}
             {{- with $cfg.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

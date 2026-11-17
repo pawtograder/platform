@@ -319,6 +319,46 @@
     "calledFromBrowser": false,
     "note": "text: lower-cased, non-alphanumerics replaced by '-', trimmed."
   },
+  "gradebook_column_family_display_name": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "Internal SQL helper (EXECUTE revoked from anon and authenticated). Text: a display name derived from a column-slug family, e.g. 'Quizzes'. Course structure written by staff."
+  },
+  "gradebook_column_slug_family": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "Internal SQL helper (EXECUTE revoked from anon and authenticated). Text: the family prefix of a gradebook column slug."
+  },
+  "gradebook_columns_auto_group_plan": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "Json {groups:[{name, family, column_ids}], changes:[{column_id, slug, reason, before, after, before_size, after_size}], null_sort_order_column_ids}. Column and group names and slugs only; course structure written by staff, no student data."
+  },
+  "gradebook_columns_auto_group_preview": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "Json: the auto-group plan (see gradebook_columns_auto_group_plan) for the instructor's preview dialog. Column and group names and slugs only."
+  },
+  "gradebook_common_name_prefix": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "Internal SQL helper (EXECUTE revoked from anon and authenticated). Text: the common prefix of gradebook column names."
+  },
+  "gradebook_pluralize": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "Internal SQL helper (EXECUTE revoked from anon and authenticated). Text: an English plural of a group name."
+  },
+  "gradebook_topic_standing_expression": {
+    "kind": "none",
+    "calledFromBrowser": false,
+    "note": "Internal SQL helper (EXECUTE revoked from anon and authenticated). Text: a generated gradebook score expression referencing column slugs."
+  },
+  "gradebook_topics_suggest": {
+    "kind": "none",
+    "calledFromBrowser": true,
+    "note": "Json {topics:[{topic, standing_column_id, attempts:[{column_id, attempt_number, source}]}], conflicts:[{column_ids, ...}]}. Column ids and topic names inferred from column names; no student data."
+  },
   "preview_error_pin_matches": {
     "kind": {
       "$": "none",

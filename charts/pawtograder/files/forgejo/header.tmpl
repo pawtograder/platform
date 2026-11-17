@@ -1,0 +1,11 @@
+<script>
+  if (location.pathname === "{{AppSubUrl}}/user/login" && !new URLSearchParams(location.search).has("password_login")) {
+    document.addEventListener("DOMContentLoaded", function () {
+      // Forgejo lands here with a flash after a denied consent, a failed token exchange or a wrong password.
+      var flash = document.getElementById("flash-message");
+      if (flash && flash.textContent.trim()) return;
+      var links = document.querySelectorAll('a[href*="/user/oauth2/"]');
+      if (links.length === 1) location.replace(links[0].href);
+    });
+  }
+</script>

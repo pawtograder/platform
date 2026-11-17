@@ -1,16 +1,19 @@
 "use client";
 
+import { ExamFeatureGate } from "../ExamFeatureGate";
+
 import { toaster } from "@/components/ui/toaster";
 import { uploadExamScanBatch } from "@/lib/exam/examClient";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Button, Heading, HStack, Input, Spinner, Text, VStack } from "@chakra-ui/react";
+import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import MatchReview from "../MatchReview";
 
 type Batch = { id: number; status: string; total_pages: number; pages_per_exam: number; error: string | null };
 
-export default function ExamScansPage() {
+function ExamScansPageContent() {
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -106,9 +109,14 @@ export default function ExamScansPage() {
   if (loading) return <Spinner />;
   if (!examId) {
     return (
-      <Text color="fg.muted" pt={2}>
-        No exam template yet — configure the template first.
-      </Text>
+      <VStack align="start" gap={3} pt={2}>
+        <Text color="fg.muted">No exam template yet. Upload one before scanning student exams.</Text>
+        <Button asChild colorPalette="green" size="sm">
+          <NextLink href={`/course/${courseId}/manage/assignments/${assignmentId}/exam/template`}>
+            Go to Template &amp; Regions
+          </NextLink>
+        </Button>
+      </VStack>
     );
   }
 
@@ -168,5 +176,13 @@ export default function ExamScansPage() {
         {batches.length === 0 && <Text color="fg.muted">No scan batches yet.</Text>}
       </VStack>
     </VStack>
+  );
+}
+
+export default function ExamScansPage() {
+  return (
+    <ExamFeatureGate>
+      <ExamScansPageContent />
+    </ExamFeatureGate>
   );
 }

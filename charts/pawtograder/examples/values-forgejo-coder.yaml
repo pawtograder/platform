@@ -3,6 +3,7 @@
 auth:
   oauthServer:
     enabled: true
+    autoApproveFirstParty: true
 
 # The render refuses job pods and workspaces alongside meta, Studio or Kong's admin API unless networkPolicy.cilium.enabled.
 meta:
@@ -78,6 +79,10 @@ coder:
     enabled: true
     # Uncomment to create a Coder account, with workspace compute, on first sign-in for anyone who can sign in to Pawtograder.
     # allowSignups: true
+  # Run scripts/setup-coder-forgejo-auth.sh first; coderd exits at startup without the client ID.
+  externalAuth:
+    forgejo:
+      enabled: true
   coder:
     env:
       - name: CODER_PG_CONNECTION_URL

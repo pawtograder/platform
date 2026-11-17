@@ -50,6 +50,14 @@ export function isAutoApproved(d: OAuthAuthorizationDetails | OAuthAutoApproved)
   return "redirect_url" in d && !("authorization_id" in d);
 }
 
+export function isFirstPartyRedirect(redirectUri: string) {
+  return (process.env.OAUTH_FIRST_PARTY_REDIRECT_URIS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(redirectUri);
+}
+
 export function getAuthorizationDetails(accessToken: string, authorizationId: string) {
   return call<OAuthAuthorizationDetails | OAuthAutoApproved>(
     `/oauth/authorizations/${encodeURIComponent(authorizationId)}`,
