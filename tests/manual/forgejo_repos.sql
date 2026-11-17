@@ -91,7 +91,7 @@ insert into fx_a values
   ('forks', pg_temp.assignment('orgless', 'hw5', 'forgejo', now() - interval '1 hour', 'individual', 'template_with_student_forks')),
   ('untemplated', pg_temp.assignment('orgless', 'hw6', 'forgejo', now() - interval '1 hour', 'individual', 'template_only_staff', null));
 
-create temp table needed as select * from public.forgejo_repos_needed('https://git.test', 100)
+create temp table needed as select * from public.forgejo_repos_needed('https://git.test', NULL)
   where class_id in (select id from fx_class);
 
 -- 1, 2
@@ -114,18 +114,18 @@ select pg_temp.check('3b future, GitHub, group, fork-mode and untemplated assign
     (select id from fx_a where name in ('future', 'github', 'groups', 'forks', 'untemplated'))));
 update public.classes set features = '[]' where id = pg_temp.cls('named');
 select pg_temp.check('3c turning the flag off takes the class off the list',
-  not exists (select 1 from public.forgejo_repos_needed('https://git.test', 100) where class_id = pg_temp.cls('named')));
+  not exists (select 1 from public.forgejo_repos_needed('https://git.test', NULL) where class_id = pg_temp.cls('named')));
 
 -- 4
 insert into public.repositories (assignment_id, class_id, profile_id, repository, git_provider, is_github_ready)
 values ((select id from fx_a where name = 'released'), pg_temp.cls('orgless'), pg_temp.priv('u1', 'orgless'),
         'repos-a/hw1-alex-' || left(gen_random_uuid()::text, 8), 'forgejo', false);
 select pg_temp.check('4a a row that is not ready keeps the student listed',
-  exists (select 1 from public.forgejo_repos_needed('https://git.test', 100)
+  exists (select 1 from public.forgejo_repos_needed('https://git.test', NULL)
           where assignment_id = (select id from fx_a where name = 'released')));
 update public.repositories set is_github_ready = true where assignment_id = (select id from fx_a where name = 'released');
 select pg_temp.check('4b a ready row takes the student off the list',
-  not exists (select 1 from public.forgejo_repos_needed('https://git.test', 100)
+  not exists (select 1 from public.forgejo_repos_needed('https://git.test', NULL)
               where assignment_id = (select id from fx_a where name = 'released')));
 
 -- 5

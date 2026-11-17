@@ -105,6 +105,37 @@ AS $$
   LIMIT p_limit;
 $$;
 
+-- Marks these groups' Forgejo repos not ready, so the next pass grants everyone now in them, and starts that
+-- pass when any of them is on a released Forgejo assignment. Also when a group has no repo yet: a group
+-- formed after release gets its repo now, not at the next hourly run. Called when members are added, moved
+-- in, or re-enabled.
+CREATE OR REPLACE FUNCTION public.forgejo_groups_need_grants(p_group_ids bigint[])
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  -- save_forgejo_group_repo takes the same lock, so a pass either counts the new members or has
+  -- already saved, and this clears what it saved. NO KEY UPDATE, not UPDATE: each member insert already
+  -- holds the foreign key's KEY SHARE on its group, and two inserts upgrading to UPDATE would deadlock.
+  PERFORM 1 FROM public.assignment_groups g
+  JOIN public.assignments a ON a.id = g.assignment_id AND a.git_provider = 'forgejo'
+  WHERE g.id = ANY (p_group_ids)
+  ORDER BY g.id FOR NO KEY UPDATE OF g;
+  UPDATE public.repositories r SET is_github_ready = false
+  WHERE r.git_provider = 'forgejo' AND r.is_github_ready AND r.assignment_group_id = ANY (p_group_ids);
+  IF EXISTS (
+    SELECT 1 FROM public.assignment_groups g JOIN public.assignments a ON a.id = g.assignment_id
+    WHERE g.id = ANY (p_group_ids) AND a.git_provider = 'forgejo' AND a.release_date <= now()
+  ) THEN
+    PERFORM public.kick_forgejo_reconciler();
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.forgejo_groups_need_grants(bigint[]) FROM public, anon, authenticated;
+
 -- Statement-level, so adding a whole roster to groups kicks once. Only Forgejo repos are touched; a
 -- GitHub group's access is synced by the existing GitHub triggers.
 CREATE OR REPLACE FUNCTION public.forgejo_group_member_added()
@@ -114,34 +145,56 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  -- save_forgejo_group_repo takes the same lock, so a pass either counts the new members or has
-  -- already saved, and this clears what it saved. NO KEY UPDATE, not UPDATE: each insert already
-  -- holds the foreign key's KEY SHARE on its group, and two inserts upgrading to UPDATE would deadlock.
-  PERFORM 1 FROM public.assignment_groups g
-  JOIN public.assignments a ON a.id = g.assignment_id AND a.git_provider = 'forgejo'
-  WHERE g.id IN (SELECT DISTINCT assignment_group_id FROM new_members)
-  ORDER BY g.id FOR NO KEY UPDATE OF g;
-  UPDATE public.repositories r SET is_github_ready = false
-  WHERE r.git_provider = 'forgejo' AND r.is_github_ready
-    AND r.assignment_group_id IN (SELECT DISTINCT assignment_group_id FROM new_members);
-  -- Also when the group has no repo yet: a group formed after release gets its repo now, not at
-  -- the next hourly run.
-  IF EXISTS (
-    SELECT 1 FROM new_members nm JOIN public.assignments a ON a.id = nm.assignment_id
-    WHERE a.git_provider = 'forgejo' AND a.release_date <= now()
-  ) THEN
-    PERFORM public.kick_forgejo_reconciler();
-  END IF;
+  PERFORM public.forgejo_groups_need_grants(ARRAY(SELECT DISTINCT assignment_group_id FROM new_members));
   RETURN NULL;
 END;
 $$;
 
 REVOKE ALL ON FUNCTION public.forgejo_group_member_added() FROM public, anon, authenticated;
 
+-- copy_groups_from_assignment moves a student who already has a membership by updating its group. A
+-- transition table can't go on a trigger with a column list, so this fires on any update and keeps only
+-- the rows whose group changed.
+CREATE OR REPLACE FUNCTION public.forgejo_group_member_moved()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  PERFORM public.forgejo_groups_need_grants(ARRAY(
+    SELECT DISTINCT n.assignment_group_id FROM new_members n JOIN old_members o ON o.id = n.id
+    WHERE n.assignment_group_id IS DISTINCT FROM o.assignment_group_id
+  ));
+  RETURN NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.forgejo_group_member_moved() FROM public, anon, authenticated;
+
+-- A member who was disabled when the repo was saved wasn't counted (save_forgejo_group_repo skips disabled
+-- roles), so re-enabling them makes their groups' repos not ready again.
+CREATE OR REPLACE FUNCTION public.forgejo_group_member_reenabled()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  PERFORM public.forgejo_groups_need_grants(ARRAY(
+    SELECT DISTINCT m.assignment_group_id FROM public.assignment_groups_members m
+    WHERE m.profile_id = NEW.private_profile_id AND m.class_id = NEW.class_id
+  ));
+  RETURN NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.forgejo_group_member_reenabled() FROM public, anon, authenticated;
+
 -- Records a group's Forgejo repo once `p_granted` have write access. It is ready only if every current
 -- member has a login on this instance and was granted: a member added after the pass read the roster
 -- makes it not ready, so the next pass grants them. The group row lock orders this against
--- forgejo_group_member_added.
+-- forgejo_groups_need_grants.
 CREATE OR REPLACE FUNCTION public.save_forgejo_group_repo(
   p_assignment_group_id bigint,
   p_repository text,
@@ -188,6 +241,16 @@ CREATE TRIGGER forgejo_group_member_added
   AFTER INSERT ON public.assignment_groups_members
   REFERENCING NEW TABLE AS new_members
   FOR EACH STATEMENT EXECUTE FUNCTION public.forgejo_group_member_added();
+
+CREATE TRIGGER forgejo_group_member_moved
+  AFTER UPDATE ON public.assignment_groups_members
+  REFERENCING OLD TABLE AS old_members NEW TABLE AS new_members
+  FOR EACH STATEMENT EXECUTE FUNCTION public.forgejo_group_member_moved();
+
+CREATE TRIGGER forgejo_group_member_reenabled
+  AFTER UPDATE OF disabled ON public.user_roles
+  FOR EACH ROW WHEN (OLD.disabled AND NOT NEW.disabled)
+  EXECUTE FUNCTION public.forgejo_group_member_reenabled();
 
 -- sync_repos_after_assignment_group_change(): latest body from 20260605120000_fix_group_publish_timeout.sql,
 -- returning early for a Forgejo assignment.
