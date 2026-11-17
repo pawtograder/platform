@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { ESCALATION_NOTE_MAX_LENGTH } from "@/lib/helpRequestEscalation";
 import { Badge, Box, Dialog, HStack, Icon, Stack, Table, Text } from "@chakra-ui/react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { BsArrowUpCircle, BsCheck, BsCheckCircle, BsClock, BsStars, BsX, BsXCircle, BsXOctagon } from "react-icons/bs";
 import { EscalationBadge } from "./escalation-badge";
 
@@ -16,13 +16,19 @@ import { EscalationBadge } from "./escalation-badge";
  */
 
 const SEEN_KEY = "pawtograder:whats-new:oh-escalation:v1";
+const PROBE_KEY = `${SEEN_KEY}:probe`;
 
 function hasSeenTour(): boolean {
   try {
-    return window.localStorage.getItem(SEEN_KEY) === "seen";
+    if (window.localStorage.getItem(SEEN_KEY) === "seen") return true;
+    // Only open on our own if closing can be remembered. When writes fail (storage full, or
+    // blocked for writes only), the prompt would otherwise come back on every page load.
+    window.localStorage.setItem(PROBE_KEY, "1");
+    window.localStorage.removeItem(PROBE_KEY);
+    return false;
   } catch {
-    // Storage blocked (private window, site data disabled): treat as seen so the popup
-    // doesn't reappear on every page load. The header button still opens it.
+    // Storage blocked (private window, site data disabled) or not writable: treat as seen so the
+    // popup doesn't reappear on every page load. The header button still opens it.
     return true;
   }
 }
@@ -35,10 +41,20 @@ function markTourSeen() {
   }
 }
 
-/** Non-interactive frame around a preview of the real UI. */
+/**
+ * Non-interactive frame around a preview of the real UI. aria-hidden hides it from screen
+ * readers, and inert takes its buttons out of the tab order, so a keyboard user can't land on a
+ * control nobody announces.
+ */
 function Preview({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // React 18 has no `inert` prop (same approach as components/bugReport/ReplayPreview.tsx).
+  useEffect(() => {
+    ref.current?.setAttribute("inert", "");
+  }, []);
   return (
     <Box
+      ref={ref}
       aria-hidden
       pointerEvents="none"
       userSelect="none"

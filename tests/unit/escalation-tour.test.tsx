@@ -117,4 +117,33 @@ describe("EscalationTour", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
   });
+
+  it("stays closed when storage can be read but not written", async () => {
+    // Storage full, or blocked for writes only: Close couldn't remember the dismissal, so an
+    // automatic prompt would come back on every page load.
+    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    renderTour();
+    // The prompt opens after mount, so wait as long as the first-visit test would.
+    await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
+    expect(screen.getByRole("button", { name: "What's new" })).toBeInTheDocument();
+  });
+
+  it("keeps every control inside a step's preview out of the tab order", async () => {
+    renderTour();
+    fireEvent.click(await screen.findByRole("button", { name: "Show me" }));
+    for (let i = 0; i < STEP_TITLES.length; i++) {
+      await screen.findByText(STEP_TITLES[i]);
+      const previews = Array.from(document.querySelectorAll("[aria-hidden='true']")).filter((el) =>
+        el.querySelector("button, a[href], input, select, textarea, [tabindex]")
+      );
+      for (const preview of previews) {
+        // aria-hidden hides the preview from screen readers; inert also takes its buttons out of
+        // the tab order, so a keyboard user can't land on a control nobody announces.
+        expect(preview.closest("[inert]")).not.toBeNull();
+      }
+      if (i < STEP_TITLES.length - 1) fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    }
+  });
 });
