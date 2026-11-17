@@ -590,9 +590,13 @@ async function finalize(admin: Admin, classId: number, args: FinalizeArgs): Prom
 
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
-  // row already exists, so a retried finalize reuses the same submission.
+  // row already exists, so a retried finalize reuses the same submission. Everything below
+  // (storage keys, file rows, the artifact) is written under profileId, so the RPC is told
+  // which student this read found and refuses if the match changed since (#1270); the
+  // retry then reads the row again.
   const { data: subId, error: rpcErr } = await admin.rpc("exam_create_submission", {
-    p_scanned_submission_id: scanned.id
+    p_scanned_submission_id: scanned.id,
+    p_expected_profile_id: profileId
   });
   if (rpcErr || !subId) throw new Error(`exam_create_submission failed: ${rpcErr?.message}`);
   const submissionId = subId as number;
