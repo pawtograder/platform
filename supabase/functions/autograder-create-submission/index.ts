@@ -536,14 +536,15 @@ async function handleGitHubApiCall<T>(
   }
 }
 
-async function handleRequest(req: Request, scope: Sentry.Scope) {
+export async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-submission");
   const token = req.headers.get("Authorization");
   if (!token) {
     throw new UserVisibleError("No token provided", 400);
   }
   // Check if this is part of an
-  const decoded = await validateOIDCTokenOrAllowE2E(token);
+  // Either host. assertJobTokenMatchesRepository below ties the token to a repository on its own host.
+  const decoded = await validateOIDCTokenOrAllowE2E(token, ["github", "forgejo"]);
   const { repository, sha, workflow_ref, run_id, run_attempt } = decoded;
   const isE2ERun = repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
   const isPawtograderTriggered = decoded.actor === "pawtograder[bot]" || decoded.actor === "pawtograder-next[bot]";
@@ -1922,9 +1923,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw err;
   }
 }
-Deno.serve(async (req) => {
-  return await wrapRequestHandler(req, handleRequest, {
-    recordUserVisibleErrors: false,
-    recordSecurityErrors: false
+// Imported by tests, which call handleRequest directly.
+if (import.meta.main) {
+  Deno.serve(async (req) => {
+    return await wrapRequestHandler(req, handleRequest, {
+      recordUserVisibleErrors: false,
+      recordSecurityErrors: false
+    });
   });
-});
+}
