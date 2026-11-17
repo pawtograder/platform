@@ -3565,9 +3565,10 @@ export async function processEnvelope(
             if (tripCount) {
               Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
               scope.setTag("circuit_trip_count", String(tripCount));
-              // open_github_circuit opens a 24h window from the third trip within its 24h decay window.
+              // A third trip within the 24h decay window usually means a 24h window, but not always: an
+              // error_threshold trip counts too and keeps its 8h window. The RPC returns only the count.
               if (tripCount >= 3) {
-                Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
+                Sentry.captureMessage(`Repeated circuit trips for ${org} (trip count ${tripCount})`, {
                   level: "error"
                 });
               }
