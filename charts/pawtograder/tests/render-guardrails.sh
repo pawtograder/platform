@@ -2985,7 +2985,32 @@ if apps "${BK[@]}" "${BK_ONLY[@]}" >"$OUTFILE"; then
   if [ -n "$dump_line" ] && [ -n "$git_line" ] && [ -n "$tar_line" ] \
     && [ "$dump_line" -lt "$git_line" ] && [ "$git_line" -lt "$tar_line" ]; then echo "ok   [$label]"
   else echo "FAIL [$label]: pg_dump at line ${dump_line:-none}, git at ${git_line:-none}, tar at ${tar_line:-none}"; FAILED=1; fi
+  label="backups: an incomplete set's marker is uploaded before the set itself"
+  marker_line=$(grep -nF 'upload /scratch/broken-repositories "s3/${S3_BUCKET}/daily/forgejo-${TS}.incomplete"' "$OUTFILE" | head -1 | cut -d: -f1)
+  daily_line=$(grep -n '^ *upload_all daily$' "$OUTFILE" | head -1 | cut -d: -f1)
+  if [ -n "$marker_line" ] && [ -n "$daily_line" ] && [ "$marker_line" -lt "$daily_line" ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: marker upload at line ${marker_line:-none}, daily upload at ${daily_line:-none}"; FAILED=1; fi
 fi
+apps_has "backups: Coder's backup uploads no incomplete marker" no ".incomplete" "${BK[@]}" "${BK_NO_FORGEJO[@]}" \
+  "${BK_ONLY[@]}"
+if apps "${BK[@]}" --show-only templates/backup.yaml >"$OUTFILE"; then
+  label="backups: Pawtograder's own dump waits for its database server first"
+  wait_line=$(grep -n 'pg_isready -q -t 2 && break' "$OUTFILE" | head -1 | cut -d: -f1)
+  dump_line=$(grep -n 'pg_dump -Fc > "$FILE"' "$OUTFILE" | head -1 | cut -d: -f1)
+  if [ -n "$wait_line" ] && [ -n "$dump_line" ] && [ "$wait_line" -lt "$dump_line" ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: pg_isready at line ${wait_line:-none}, pg_dump at ${dump_line:-none}"; FAILED=1; fi
+fi
+apps_has "backups: Pawtograder's dump waits a bounded number of times" yes 'for i in $(seq 1 30); do pg_isready' \
+  "${BK[@]}" --show-only templates/backup.yaml
+apps_has "backups: Pawtograder's dump waits with backups on and the apps off" yes 'pg_isready -q -t 2 && break' \
+  "${BK[@]}" "${BK_NO_FORGEJO[@]}" "${BK_NO_CODER[@]}" --show-only templates/backup.yaml
+apps_has "backups: verify fails on an incomplete Forgejo set, naming its repositories" yes \
+  'forgejo-${APP_TS} is incomplete: its backup left out these repositories:' "${BK[@]}" \
+  --show-only templates/backup-verify.yaml
+apps_has "backups: verify prints the incomplete set's list" yes \
+  'mc cat "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.incomplete"' "${BK[@]}" --show-only templates/backup-verify.yaml
+apps_has "backups: verify has no incomplete check with Forgejo off" no ".incomplete" "${BK[@]}" "${BK_NO_FORGEJO[@]}" \
+  --show-only templates/backup-verify.yaml
 apps_has "backups: verify checks Forgejo's newest dump" yes 'daily/forgejo-${APP_TS}.dump' "${BK[@]}" \
   --show-only templates/backup-verify.yaml
 apps_has "backups: verify requires Forgejo's archive beside its dump" yes 'has no forgejo-${APP_TS}.tar.gz beside it' \
@@ -3015,6 +3040,17 @@ apps_has "backups: the drill has no Forgejo step with Forgejo off" no "restore-d
   "${BK_NO_FORGEJO[@]}" "${DRILL[@]}"
 apps_has "backups: the drill fetches no archive with Forgejo off" no "forgejo.tar.gz" "${BK[@]}" \
   "${BK_NO_FORGEJO[@]}" "${DRILL[@]}"
+apps_has "backups: the drill fails on an incomplete Forgejo set, naming its repositories" yes \
+  'forgejo-${APP_TS} is incomplete: its backup left out these repositories:' "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill has no incomplete check with Forgejo off" no ".incomplete" "${BK[@]}" \
+  "${BK_NO_FORGEJO[@]}" "${DRILL[@]}"
+if apps "${BK[@]}" "${DRILL[@]}" >"$OUTFILE"; then
+  label="backups: the drill rejects an incomplete set before fetching its archive"
+  marker_line=$(grep -nF 'grep -qxF "forgejo-${APP_TS}.incomplete"' "$OUTFILE" | head -1 | cut -d: -f1)
+  fetch_line=$(grep -nF 'mc cp "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.tar.gz"' "$OUTFILE" | head -1 | cut -d: -f1)
+  if [ -n "$marker_line" ] && [ -n "$fetch_line" ] && [ "$marker_line" -lt "$fetch_line" ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: marker check at line ${marker_line:-none}, archive fetch at ${fetch_line:-none}"; FAILED=1; fi
+fi
 apps_has "backups: the drill restores on own-mode's image" yes "image: ghcr.io/pawtograder/mirror/postgres:18.6" \
   "${BK[@]}" "${BK_OWN_CODER[@]}" "${DRILL[@]}"
 apps_has "backups: a failed app backup pages like Pawtograder's" yes \
