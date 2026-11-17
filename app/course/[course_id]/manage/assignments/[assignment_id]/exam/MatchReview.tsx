@@ -11,7 +11,7 @@ import {
 import { toaster } from "@/components/ui/toaster";
 import { namesEquivalent } from "@/lib/exam/nameAgreement";
 import { createClient } from "@/utils/supabase/client";
-import { Select } from "chakra-react-select";
+import { createFilter, Select } from "chakra-react-select";
 import { Badge, Box, Button, Flex, Heading, HStack, Image, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -29,6 +29,9 @@ type Scanned = {
 };
 type RosterStudent = { profile_id: string; name: string | null; sortable_name: string | null };
 type StudentOption = { value: string; label: string };
+// Search the student's name only. react-select's default also searches the option's value, which
+// here is the profile UUID, so "ed" would match every student whose id contains "ed".
+const filterByName = createFilter<StudentOption>({ stringify: (option) => option.label });
 
 const POLL_MS = 4000;
 
@@ -411,6 +414,7 @@ export default function MatchReview({
                     isClearable
                     isDisabled={!!r.submission_id || matchesFrozen}
                     options={studentOptions}
+                    filterOption={filterByName}
                     value={
                       studentOptions.find((o) => o.value === r.matched_profile_id) ??
                       // Matched to someone not (or not yet) in the roster list: say so, don't look empty.

@@ -268,7 +268,7 @@ function ExamScansPageContent() {
                 <Text fontSize="sm" mb={2}>
                   {isIncompleteUpload(b)
                     ? "Some pages of this scan were not uploaded. Upload the PDF again as a new batch."
-                    : "Retry processing reads the scans again and returns the batch to review. Confirmed matches are kept; picks you have not confirmed may change. If exams below are confirmed but have no submission yet, Create submissions finishes them without retrying."}
+                    : "Retry processing reads any pages that were not read, matches names again and returns the batch to review. Confirmed matches are kept; picks you have not confirmed may change. If exams below are confirmed but not finished, Create submissions finishes them without retrying."}
                 </Text>
               )}
               {/* An errored batch keeps its matches visible, read-only (#1270). */}

@@ -160,3 +160,22 @@ test("a row matched to someone missing from the roster says so instead of lookin
   render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
   expect(await screen.findByText("Student not on the roster")).toBeInTheDocument();
 });
+
+test("search matches names only, not the profile ids behind them", async () => {
+  // Real profile ids are UUIDs; hex fragments like "ed" or "abe" appear in many of them.
+  const uuid = (i: number) => `${i.toString(16).padStart(8, "0")}-0000-4000-8000-0000000000ed`;
+  mockResults.user_roles = () => ({
+    data: Array.from({ length: 199 }, (_, i) => ({
+      private_profile_id: uuid(i),
+      profiles: { name: `Student ${i}`, sortable_name: `${i}, Student` }
+    })).concat([{ private_profile_id: uuid(999), profiles: { name: "Ed Park", sortable_name: "Park, Ed" } }]),
+    error: null
+  });
+  render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
+  const picker = await screen.findByLabelText("Student for exam #1");
+  await waitFor(() => expect(picker).not.toBeDisabled());
+  fireEvent.focus(picker);
+  fireEvent.change(picker, { target: { value: "ed" } });
+  const options = await screen.findAllByRole("option");
+  expect(options.map((o) => o.textContent)).toEqual(["Ed Park"]);
+});
