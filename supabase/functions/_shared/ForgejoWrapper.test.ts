@@ -4,7 +4,7 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
-import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
+import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
   downloadArchive,
   ensureAccountForUser,
@@ -372,24 +372,22 @@ Deno.test("getCommit: resolves a short sha to the full commit, and a missing one
   });
 });
 
-Deno.test("startGrading: tags the commit and dispatches grade.yml at the tag, reusing an existing tag", async () => {
+Deno.test("startGrading: tags the commit and dispatches grade.yml at the tag", async () => {
   const sha = "27d062d99f8551af7be5e9ff7812241574198a0b";
-  for (const tagStatus of [201, 409]) {
-    await withForgejo([status(tagStatus), new Response(null, { status: 204 })], async (calls) => {
-      await startGrading(config, "cs4535/hw1-alex.kim", sha);
-      assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags");
-      assertEquals(calls[0].body, {
-        tag_name: `pawtograder-submit/${sha}`,
-        target: sha,
-        message: "pawtograder submission"
-      });
-      assertEquals(
-        calls[1].url,
-        "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/actions/workflows/grade.yml/dispatches"
-      );
-      assertEquals(calls[1].body, { ref: `pawtograder-submit/${sha}` });
+  await withForgejo([status(201), new Response(null, { status: 204 })], async (calls) => {
+    await startGrading(config, "cs4535/hw1-alex.kim", sha);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags");
+    assertEquals(calls[0].body, {
+      tag_name: `pawtograder-submit/${sha}`,
+      target: sha,
+      message: "pawtograder submission"
     });
-  }
+    assertEquals(
+      calls[1].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/actions/workflows/grade.yml/dispatches"
+    );
+    assertEquals(calls[1].body, { ref: `pawtograder-submit/${sha}` });
+  });
   await withForgejo([status(403)], async (calls) => {
     await assertRejects(() => startGrading(config, "cs4535/hw1-alex.kim", sha), Error, "submission tag failed: 403");
     assertEquals(calls.length, 1);
@@ -397,4 +395,64 @@ Deno.test("startGrading: tags the commit and dispatches grade.yml at the tag, re
   await withForgejo([status(201), status(404)], async () => {
     await assertRejects(() => startGrading(config, "cs4535/hw1-alex.kim", sha), Error, "workflow dispatch failed: 404");
   });
+});
+
+Deno.test("startGrading: reuses an existing tag at the commit, and replaces one at another commit", async () => {
+  const sha = "27d062d99f8551af7be5e9ff7812241574198a0b";
+  const tagUrl = `https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags/pawtograder-submit/${sha}`;
+  // From an earlier run of the same commit.
+  await withForgejo([status(409), ok({ commit: { sha } }), new Response(null, { status: 204 })], async (calls) => {
+    await startGrading(config, "cs4535/hw1-alex.kim", sha);
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      [
+        "POST https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags",
+        `GET ${tagUrl}`,
+        "POST https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/actions/workflows/grade.yml/dispatches"
+      ]
+    );
+  });
+  // A student pushed pawtograder-submit/<sha> at their own commit first.
+  await withForgejo(
+    [
+      status(409),
+      ok({ commit: { sha: "1111111111111111111111111111111111111111" } }),
+      new Response(null, { status: 204 }),
+      status(201),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await startGrading(config, "cs4535/hw1-alex.kim", sha);
+      assertEquals(
+        calls.map((c) => c.method),
+        ["POST", "GET", "DELETE", "POST", "POST"]
+      );
+      assertEquals(calls[2].url, tagUrl);
+      assertEquals(calls[3].body, {
+        tag_name: `pawtograder-submit/${sha}`,
+        target: sha,
+        message: "pawtograder submission"
+      });
+    }
+  );
+  // Pushed again right after the replacement: refuse rather than dispatch at the student's commit.
+  const other = { commit: { sha: "1111111111111111111111111111111111111111" } };
+  await withForgejo(
+    [
+      status(409),
+      ok(other),
+      new Response(null, { status: 204 }),
+      status(409),
+      ok(other),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await assertRejects(
+        () => startGrading(config, "cs4535/hw1-alex.kim", sha),
+        Error,
+        "The submission tag points at another commit"
+      );
+      assert(!calls.some((c) => c.url.endsWith("/dispatches")), "dispatched at the wrong commit");
+    }
+  );
 });

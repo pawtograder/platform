@@ -232,20 +232,40 @@ export async function getCommit(config: ForgejoConfig, repository: string, ref: 
 
 /**
  * Runs grade.yml at `sha`, as GitHub's triggerWorkflow does: tag the commit pawtograder-submit/<sha>
- * and dispatch the workflow at that tag. The tag may already exist from an earlier run.
+ * and dispatch the workflow at that tag.
  */
 export async function startGrading(config: ForgejoConfig, repository: string, sha: string): Promise<void> {
   const tag = `pawtograder-submit/${sha}`;
-  const tagged = await forgejo(config, "POST", `/repos/${repoPath(repository)}/tags`, {
-    tag_name: tag,
-    target: sha,
-    message: "pawtograder submission"
-  });
-  if (!tagged.ok && tagged.status !== 409) throw await failure(tagged, "submission tag");
+  await tagCommit(config, repository, tag, sha);
   const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/actions/workflows/grade.yml/dispatches`, {
     ref: tag
   });
   if (!res.ok) throw await failure(res, "workflow dispatch");
+}
+
+/**
+ * Points `tag` at `sha`. An existing tag at `sha` is reused. One at another commit is replaced, since a
+ * student with write access can push the tag first, and a dispatch at it would then build their commit.
+ * Forgejo's tag routes take the name unencoded, slash included (checked on 15.0.9).
+ */
+async function tagCommit(config: ForgejoConfig, repository: string, tag: string, sha: string): Promise<void> {
+  const tags = `/repos/${repoPath(repository)}/tags`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const created = await forgejo(config, "POST", tags, {
+      tag_name: tag,
+      target: sha,
+      message: "pawtograder submission"
+    });
+    if (created.ok) return;
+    if (created.status !== 409) throw await failure(created, "submission tag");
+    const existing = await forgejo(config, "GET", `${tags}/${tag}`);
+    if (!existing.ok) throw await failure(existing, "submission tag lookup");
+    const { commit } = (await existing.json()) as { commit?: { sha?: string } };
+    if (commit?.sha?.toLowerCase() === sha.toLowerCase()) return;
+    const deleted = await forgejo(config, "DELETE", `${tags}/${tag}`);
+    if (!deleted.ok && deleted.status !== 404) throw await failure(deleted, "submission tag delete");
+  }
+  throw new Error("The submission tag points at another commit, and was pushed again after Pawtograder replaced it");
 }
 
 /** Gives login write access, then reports whether Forgejo says they have it. */
