@@ -3051,6 +3051,68 @@ if apps "${BK[@]}" "${DRILL[@]}" >"$OUTFILE"; then
   if [ -n "$marker_line" ] && [ -n "$fetch_line" ] && [ "$marker_line" -lt "$fetch_line" ]; then echo "ok   [$label]"
   else echo "FAIL [$label]: marker check at line ${marker_line:-none}, archive fetch at ${fetch_line:-none}"; FAILED=1; fi
 fi
+# An incomplete Forgejo set fails its Job once (podFailurePolicy on the upload
+# container's exit code); other failures keep exit 1 and backoffLimit's retries.
+apps_has "backups: an incomplete Forgejo set fails the Job without a retry" yes "action: FailJob" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the no-retry rule matches the upload container only" yes "containerName: upload" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_ONLY[@]}"
+apps_has "backups: other upload failures still exit 1, which is retried" yes "DEFERRED_EXIT=1" \
+  "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the upload exits with the code it chose" yes 'exit "$DEFERRED_EXIT"' "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Coder's backup has no podFailurePolicy" no "podFailurePolicy" "${BK[@]}" "${BK_NO_FORGEJO[@]}" \
+  "${BK_ONLY[@]}"
+if apps "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_ONLY[@]}" >"$OUTFILE"; then
+  label="backups: the incomplete set's exit code is the one podFailurePolicy fails on, and not 1"
+  policy_code=$(grep -A6 'podFailurePolicy:' "$OUTFILE" | sed -n 's/^ *values: \[\([0-9]*\)\]$/\1/p' | head -1)
+  script_code=$(grep -A6 'if \[ -s /scratch/broken-repositories \]; then' "$OUTFILE" \
+    | sed -n 's/^ *DEFERRED_EXIT=\([0-9]*\)$/\1/p' | head -1)
+  if [ -n "$policy_code" ] && [ "$policy_code" = "$script_code" ] && [ "$policy_code" != 1 ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: podFailurePolicy ${policy_code:-none}, script ${script_code:-none}"; FAILED=1; fi
+  label="backups: the Job with podFailurePolicy keeps restartPolicy Never"
+  if grep -q '^ *restartPolicy: Never$' "$OUTFILE"; then echo "ok   [$label]"
+  else echo "FAIL [$label]: no restartPolicy: Never"; FAILED=1; fi
+fi
+label="backups: the chart's kubeVersion has podFailurePolicy on by default (1.26 and later)"
+kube_min=$(sed -n 's/^kubeVersion: ">=1\.\([0-9]*\)\..*/\1/p' "$CHART/Chart.yaml")
+if [ -n "$kube_min" ] && [ "$kube_min" -ge 26 ]; then echo "ok   [$label]"
+else echo "FAIL [$label]: kubeVersion minimum 1.${kube_min:-unknown}"; FAILED=1; fi
+# repository.ROOT is matched as a plain string. With /data/git/repos[1].v2,
+# "[1]" read as a pattern matches "1", and "." matches any character.
+ODD_ROOT=(--set 'forgejo.gitea.config.repository.ROOT=/data/git/repos[1].v2')
+apps_has "backups: the drill lists the archive's repositories without sed on the root" no 'sed -n "s,^${ROOT}' \
+  "${BK[@]}" "${DRILL[@]}"
+if apps "${BK[@]}" "${ODD_ROOT[@]}" "${DRILL[@]}" >"$OUTFILE"; then
+  label="backups: the drill matches a repository root with [ and . literally"
+  ODD_DIR=$(mktemp -d)
+  printf '%s\n' ./ ./git/ './git/repos[1].v2/' './git/repos[1].v2/alice/' './git/repos[1].v2/alice/course.git/' \
+    './git/repos[1].v2/alice/course.git/HEAD' './git/repos[1].v2/alice/course.wiki.git/' './git/repos[1].v2/bob/a.b.git/' \
+    './git/repos1xv2/eve/decoy.git/' ./gitea/conf/app.ini >"$ODD_DIR/forgejo.list"
+  # The drill's own two lines, run on that list.
+  {
+    grep -m1 '^ *ROOT="\./git/repos\[1\]\.v2"$' "$OUTFILE"
+    grep -A1 -m1 '^ *REPO_ROOT="$ROOT" ' "$OUTFILE"
+  } | sed -e "s,/work/forgejo.list,$ODD_DIR/forgejo.list," -e "s,/tmp/archive-repos,$ODD_DIR/out," >"$ODD_DIR/run.sh"
+  got=$(bash "$ODD_DIR/run.sh" && tr '\n' ' ' <"$ODD_DIR/out")
+  if [ "$got" = "alice/course bob/a.b " ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: got '${got}', want 'alice/course bob/a.b '"; FAILED=1; fi
+  rm -rf "$ODD_DIR"
+fi
+if apps "${BK[@]}" "${ODD_ROOT[@]}" "${BK_ONLY[@]}" >"$OUTFILE"; then
+  label="backups: the archive leaves out a repository root with [ and . by its own name only"
+  ODD_DIR=$(mktemp -d)
+  mkdir -p "$ODD_DIR/data/git/repos[1].v2/alice" "$ODD_DIR/data/git/repos1xv2" "$ODD_DIR/data/gitea"
+  # The backup's ROOT and ROOT_PATTERN lines, then the same -path test it runs.
+  {
+    grep -m1 '^ *ROOT=git/repos\[1\]\.v2$' "$OUTFILE"
+    grep -m1 '^ *ROOT_PATTERN=' "$OUTFILE"
+    echo "cd '$ODD_DIR' && find data -mindepth 1 -path \"data/\$ROOT_PATTERN\" -prune -o -print | sort"
+  } >"$ODD_DIR/run.sh"
+  got=$(bash "$ODD_DIR/run.sh" | tr '\n' ' ')
+  if [ "$got" = "data/git data/git/repos1xv2 data/gitea " ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: got '${got}'"; FAILED=1; fi
+  rm -rf "$ODD_DIR"
+fi
 apps_has "backups: the drill restores on own-mode's image" yes "image: ghcr.io/pawtograder/mirror/postgres:18.6" \
   "${BK[@]}" "${BK_OWN_CODER[@]}" "${DRILL[@]}"
 apps_has "backups: a failed app backup pages like Pawtograder's" yes \
