@@ -99,22 +99,36 @@ export const FORGEJO_UNSUPPORTED_SUBMISSION_MODES: Readonly<Record<string, strin
   pr: "Pull-request submissions are only read from GitHub."
 };
 
-/** Checkbox settings that Forgejo can't use yet. The form shows them off and disabled. */
+/**
+ * Checkbox settings that Forgejo can't use yet. The form shows them off and disabled. The
+ * autograder is not here: Forgejo grading (#1239) only grades assignments with has_autograder on.
+ */
 export const FORGEJO_UNSUPPORTED_SETTINGS = {
-  // forgejo-repo-webhook records pushes but starts no grading (#1110); grader setup and workflow
-  // sync reject Forgejo assignments.
-  has_autograder: "Forgejo pushes aren't graded yet, and grader setup only works on GitHub.",
   // Branch rules are applied by GitHub repository creation; nothing creates Forgejo repositories here.
   branch_protection: "Branch protection is only applied to GitHub repositories.",
   // fetch_repo_analytics in github-async-worker reads the GitHub API.
   enable_repo_analytics: "Repository analytics are only collected from GitHub."
 } as const;
 
+/**
+ * Switching to a no-repository mode detaches the handout, and the edit page first removes the
+ * grading workflow from it through assignment-sync-autograder-workflow, which rejects Forgejo.
+ */
+export const FORGEJO_DETACH_REASON = "Removing a Forgejo handout from an assignment isn't supported yet.";
+
+/**
+ * The Autograder page validates the grader repository and syncs grade.yml through
+ * github-repo-configure-webhook and assignment-sync-autograder-workflow. Both reject Forgejo.
+ */
+export const FORGEJO_GRADER_SETUP_REASON =
+  "This page sets up the grader through GitHub, which doesn't work for Forgejo assignments yet. Turn the autograder on or off from Edit Assignment.";
+
 /** The saved row an edit form was loaded with, or undefined on the create form. */
 export type SavedHostValues = {
   git_provider?: string | null;
   repo_mode?: string | null;
   submission_mode?: string | null;
+  template_repo?: string | null;
 };
 
 /**
@@ -133,6 +147,7 @@ export function repoModeUnavailableReason(
 ): string | null {
   if (provider !== "forgejo") return null;
   if (keepsSavedForgejoValue(saved) && saved?.repo_mode === mode) return null;
+  if (saved?.template_repo && (mode === "none" || mode === "no_submission")) return FORGEJO_DETACH_REASON;
   return FORGEJO_UNSUPPORTED_REPO_MODES[mode] ?? null;
 }
 

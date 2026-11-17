@@ -632,14 +632,15 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   // so PR mode cannot have an autograder either. Both save paths coerce the persisted
   // value; mirroring it here keeps the checkbox and the fork-agreement warning below
   // agreeing with what will actually be written.
-  const autograderDisabledByMode = noRepoMode || watch("submission_mode") === "pr";
-  const autograderDisabled = autograderDisabledByMode || forgejoSetting.disabled;
+  const autograderDisabled = noRepoMode || watch("submission_mode") === "pr";
   // Shown as unchecked while a no-repo or PR mode is selected, WITHOUT writing the form
   // value. Forcing the value to false in an effect was a one-way door: flipping repo_mode
   // to 'none' and back left it false with the checkbox re-enabled and unchecked, silently
   // turning a mode experiment into a repo-only assignment. Both save paths already coerce
   // the persisted value, so display is all that is needed here.
-  const autograderChecked = !autograderDisabledByMode && !forgejoSetting.forceOff && watch("has_autograder") !== false;
+  const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
+  // Forgejo runs grade.yml in Forgejo Actions (#1239), so the GitHub wording below doesn't apply.
+  const isForgejo = provider === "forgejo";
   // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
   // student's source-assignment repo, so the two assignments share one handout
   // and cannot disagree about the autograder. Surface the clash here rather than
@@ -674,10 +675,11 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                   "Template repo (visible to students) — students fork it"
                 )}
                 {repoModeOption("fork_from_prior_assignment", "Fork from prior assignment — multi-checkpoint workflow")}
-                <option value="none">No repository — students upload submission files directly</option>
-                <option value="no_submission">
-                  No submission — graded manually, no artifact (e.g. presentations, oral exams)
-                </option>
+                {repoModeOption("none", "No repository — students upload submission files directly")}
+                {repoModeOption(
+                  "no_submission",
+                  "No submission — graded manually, no artifact (e.g. presentations, oral exams)"
+                )}
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
@@ -718,16 +720,16 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
           <Text fontSize="sm" color="fg.muted" mb={3}>
             {noRepoMode
               ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
-              : autograderDisabledByMode
+              : autograderDisabled
                 ? "Pull-request submissions are graded without GitHub Actions, so the autograder is unavailable in pull-request mode."
-                : forgejoSetting.disabled
-                  ? FORGEJO_UNSUPPORTED_SETTINGS.has_autograder
+                : isForgejo
+                  ? "Whether student pushes are graded automatically."
                   : "Whether student pushes are graded automatically by GitHub Actions."}
           </Text>
           <Fieldset.Content>
             <Field
               helperText={
-                autograderDisabled
+                autograderDisabled || isForgejo
                   ? undefined
                   : autograderChecked
                     ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
@@ -757,7 +759,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                     <Checkbox.Control>
                       <LuCheck />
                     </Checkbox.Control>
-                    <Checkbox.Label>Enable autograder (GitHub Actions)</Checkbox.Label>
+                    <Checkbox.Label>
+                      {isForgejo ? "Enable autograder" : "Enable autograder (GitHub Actions)"}
+                    </Checkbox.Label>
                   </Checkbox.Root>
                 )}
               />

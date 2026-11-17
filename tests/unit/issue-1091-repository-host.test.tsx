@@ -11,6 +11,8 @@ import type { UseFormReturnType } from "@refinedev/react-hook-form";
 import RepositoryHostPicker from "@/app/course/[course_id]/manage/assignments/new/repositoryHostPicker";
 import {
   cloudWorkspacesEnabled,
+  FORGEJO_DETACH_REASON,
+  FORGEJO_UNSUPPORTED_SETTINGS,
   forgejoChoiceUnavailableReason,
   forgejoConflicts,
   forgejoSettingState,
@@ -127,6 +129,22 @@ describe("options Forgejo can't use yet", () => {
     expect(
       forgejoConflicts("forgejo", { repo_mode: "template_only_staff", submission_mode: "push" }, undefined)
     ).toEqual([]);
+  });
+
+  it("doesn't offer to detach a saved Forgejo handout", () => {
+    const saved = { git_provider: "forgejo", repo_mode: "template_only_staff", template_repo: "org/handout" };
+    expect(repoModeUnavailableReason("forgejo", "none", saved)).toBe(FORGEJO_DETACH_REASON);
+    expect(repoModeUnavailableReason("forgejo", "no_submission", saved)).toBe(FORGEJO_DETACH_REASON);
+    expect(repoModeUnavailableReason("forgejo", "template_only_staff", saved)).toBeNull();
+    // Without a handout there is nothing to clean up.
+    expect(repoModeUnavailableReason("forgejo", "none", { ...saved, template_repo: null })).toBeNull();
+    // GitHub keeps its own detach cleanup.
+    expect(repoModeUnavailableReason("github", "none", { ...saved, git_provider: "github" })).toBeNull();
+    expect(forgejoConflicts("forgejo", { repo_mode: "none" }, saved)[0]).toMatch(/Removing a Forgejo handout/);
+  });
+
+  it("leaves the autograder available on Forgejo, which grades only assignments that have it on", () => {
+    expect(Object.keys(FORGEJO_UNSUPPORTED_SETTINGS)).not.toContain("has_autograder");
   });
 
   it("shows checkbox settings off on Forgejo, but keeps a saved Forgejo assignment's values", () => {

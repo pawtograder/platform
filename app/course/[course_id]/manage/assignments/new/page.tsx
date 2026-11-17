@@ -218,8 +218,7 @@ export default function NewAssignmentPage() {
               // it's the instructor's choice: unchecking it gives a "repo only" assignment (#895),
               // where the handout is created without grade.yml so no Actions ever run. Instructors
               // can still toggle this later on the autograder config page.
-              // Forgejo is excluded too: its pushes aren't graded yet and grader setup rejects it.
-              has_autograder: !isNoRepo && !isPr && !isForgejo && getValues("has_autograder") !== false,
+              has_autograder: !isNoRepo && !isPr && getValues("has_autograder") !== false,
               has_handgrader: true,
               class_id: Number.parseInt(course_id as string),
               // Pinned to individual for quiz/exam/survey, for the same reason repo_mode is
