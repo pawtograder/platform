@@ -13992,7 +13992,10 @@ export type Database = {
         Returns: number;
       };
       exam_create_submission: {
-        Args: { p_scanned_submission_id: number };
+        Args: {
+          p_expected_profile_id?: string;
+          p_scanned_submission_id: number;
+        };
         Returns: number;
       };
       exam_sync_rubric_from_questions: {
