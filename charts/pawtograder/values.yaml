@@ -2254,6 +2254,12 @@ backup:
   # that and Pawtograder's dump. Coder's backup stages only its dump.
   scratchSize: 30Gi
   scratchStorageClass: ""
+  # With global.environment: production, the render fails when Forgejo keeps
+  # data outside its /data volume (forgejo.gitea.config: a STORAGE_TYPE other
+  # than local, or a storage PATH off the volume), because the Forgejo backup
+  # copies only that volume. true confirms that storage is backed up some other
+  # way, such as a versioned and replicated bucket.
+  forgejoExternalStorageBackedUp: false
   # Retained Jobs each keep their pod, and each pod keeps its scratch PVC, so
   # these are the retained-storage lever as well as the log-retention one.
   # Worst case is (successful + failed x attempts) x scratchSize of REQUESTED

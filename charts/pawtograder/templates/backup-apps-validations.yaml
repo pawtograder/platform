@@ -8,6 +8,29 @@
 {{- if not .Values.backup.verify.enabled -}}
 {{- fail (printf "%s on with backup.verify.enabled=false: nothing would notice a missing or empty app backup. Production keeps backup-verify on." (join " and " $apps)) -}}
 {{- end -}}
+{{- /* The Forgejo backup copies only Forgejo's /data volume. Storage elsewhere
+     (object storage, or a local PATH off the volume) has no backup unless one
+     is set up outside the chart, which backup.forgejoExternalStorageBackedUp
+     confirms. */ -}}
+{{- if and .Values.forgejo.enabled (not .Values.backup.forgejoExternalStorageBackedUp) -}}
+{{- $outside := list -}}
+{{- $pathKeys := list "PATH" "APP_DATA_PATH" "LFS_CONTENT_PATH" "AVATAR_UPLOAD_PATH" "REPOSITORY_AVATAR_UPLOAD_PATH" -}}
+{{- range $section, $keys := (dig "gitea" "config" dict .Values.forgejo) -}}
+{{- if kindIs "map" $keys -}}
+{{- range $key, $value := $keys -}}
+{{- $v := toString $value -}}
+{{- if and (hasSuffix "STORAGE_TYPE" $key) (ne (lower $v) "local") -}}
+{{- $outside = append $outside (printf "%s.%s=%s" $section $key $v) -}}
+{{- else if and (has $key $pathKeys) (hasPrefix "/" $v) (not (hasPrefix "/data/" (printf "%s/" (trimSuffix "/" $v)))) -}}
+{{- $outside = append $outside (printf "%s.%s=%s" $section $key $v) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $outside -}}
+{{- fail (printf "forgejo.gitea.config keeps Forgejo data outside its /data volume (%s), and the Forgejo backup copies only that volume: losing that storage would leave repositories whose LFS objects, attachments or packages can't be recovered. Keep that storage on the volume, or back it up separately and set backup.forgejoExternalStorageBackedUp=true to confirm. See README \"Databases\" under \"Forgejo and Coder\"." (join ", " $outside)) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if $backups -}}
 {{- if and .Values.forgejo.enabled (not (include "pawtograder.backupApps.forgejoClaim" .)) -}}
