@@ -158,7 +158,9 @@ test.describe("The rubric line above a paper exam (#1269)", () => {
     expect(await sawWrongLine()).toBeUndefined();
   });
 
-  test("staff see that the rubric has no checks yet, and the student sees no rubric line", async ({ page }) => {
+  test("staff see that the rubric has no checks yet, and the student sees no rubric line after release", async ({
+    page
+  }) => {
     const { course, instructor, assignment } = await examAssignment("Exam no rubric line E2E");
     // New assignments come with a template grading rubric that has checks; empty it.
     const { error: delErr } = await supabase
@@ -174,11 +176,28 @@ test.describe("The rubric line above a paper exam (#1269)", () => {
     await expect(page.getByText("Another answer")).toBeVisible();
     await expect(page.getByText("This review's rubric has no checks yet.")).toBeVisible();
 
-    // The student's own view of the same submission: staff guidance is not for them.
+    // The student's own view of the same submission once grades are released: the review and its
+    // rubric load for them, so the role check is the only thing keeping staff guidance off the page.
+    const { data: released, error: relErr } = await supabase
+      .from("submission_reviews")
+      .update({ released: true })
+      .eq("submission_id", id)
+      .select("id");
+    expect(relErr).toBeNull();
+    expect(released?.length).toBeGreaterThan(0);
     await page.context().clearCookies();
     await loginAsUser(page, student, course);
+    const sawStaffLine = await watchFor(page, [
+      "No rubric checks available for this artifact.",
+      "This review has no rubric.",
+      "This review's rubric has no checks yet.",
+      "Grade this exam's questions in the rubric panel.",
+      "None of this rubric's checks apply to artifacts."
+    ]);
     await page.goto(filesUrl(course.id, assignment.id, id));
     await expect(page.getByText("Another answer")).toBeVisible();
-    await expect(page.getByText(/rubric checks|rubric panel|apply to artifacts/)).toHaveCount(0);
+    // Let the review and rubric finish loading before judging that nothing appeared.
+    await page.waitForLoadState("networkidle");
+    expect(await sawStaffLine()).toBeUndefined();
   });
 });
