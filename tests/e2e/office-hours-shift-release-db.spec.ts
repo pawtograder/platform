@@ -11,11 +11,12 @@ import {
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 /**
- * The shift-end release trigger from 20261111120000_office_hours_release_on_shift_end.sql.
+ * The shift-end release trigger from 20261117174000_office_hours_release_on_shift_end.sql.
  *
- * Its scoping is the part worth pinning down: it must release only the ending TA's in_progress
- * requests, and only on the queue whose shift ended. Dropping either filter still passes a test
- * that checks one request in isolation, so each case below has a request that must NOT move.
+ * Its scoping is the part worth pinning down. It releases only the ending TA's in_progress
+ * requests; on the queue whose shift ended always, and on other queues only once that TA has no
+ * shift still running. Dropping any one of those conditions still passes a test that checks one
+ * request in isolation, so each case below has a request that must NOT move.
  */
 test.describe("office hours shift-end release", () => {
   test.describe.configure({ timeout: 120_000 });
@@ -25,6 +26,7 @@ test.describe("office hours shift-end release", () => {
   let otherQueueId: number;
   let ta: TestingUser;
   let otherTa: TestingUser;
+  let soloTa: TestingUser;
   let student: TestingUser;
 
   test.beforeAll(async () => {
@@ -43,6 +45,13 @@ test.describe("office hours shift-end release", () => {
       class_id: classId,
       name: `E2E Shift Release Other TA ${suffix}`,
       email: `e2e-shift-release-other-ta-${suffix}@pawtograder.net`
+    });
+    // Kept clear of the other cases, so this TA's only shift is the one its own test ends.
+    soloTa = await createUserInClass({
+      role: "grader",
+      class_id: classId,
+      name: `E2E Shift Release Solo TA ${suffix}`,
+      email: `e2e-shift-release-solo-ta-${suffix}@pawtograder.net`
     });
     student = await createUserInClass({
       role: "student",
@@ -111,7 +120,8 @@ test.describe("office hours shift-end release", () => {
     const released = await inProgressRequest(queueId, ta.private_profile_id);
     // Same queue, a different TA. Dropping the assignee filter would release this one too.
     const otherTaRequest = await inProgressRequest(queueId, otherTa.private_profile_id);
-    // Same TA, a different queue. Dropping the queue filter would release this one too.
+    // Same TA, a different queue, and the TA keeps a shift there. Releasing other queues without
+    // checking for a shift still running would release this one too.
     const otherQueueRequest = await inProgressRequest(otherQueueId, ta.private_profile_id);
     // The other TA is on duty on both queues, so neither shift ends when this one does.
     await insertHelpQueueAssignment({
@@ -138,6 +148,27 @@ test.describe("office hours shift-end release", () => {
     const untouchedOtherQueue = await readRequest(otherQueueRequest);
     expect(untouchedOtherQueue.status).toBe("in_progress");
     expect(untouchedOtherQueue.assignee).toBe(ta.private_profile_id);
+  });
+
+  test("with the feature on, the TA's last shift ending releases their requests on other queues", async () => {
+    await setCourseFeature(classId, "office-hours-shift-release", true);
+
+    // Nothing requires a TA to be on shift in a queue to help in it, so this is the stranded
+    // request the feature exists to prevent: the TA goes off duty holding it.
+    const strandedElsewhere = await inProgressRequest(otherQueueId, soloTa.private_profile_id);
+    // Same queue, a different TA who is still on shift. Dropping the assignee filter would
+    // release this one too.
+    const otherTaRequest = await inProgressRequest(otherQueueId, otherTa.private_profile_id);
+
+    await endShift(queueId, soloTa.private_profile_id);
+
+    const released = await readRequest(strandedElsewhere);
+    expect(released.status).toBe("open");
+    expect(released.assignee).toBeNull();
+
+    const untouched = await readRequest(otherTaRequest);
+    expect(untouched.status).toBe("in_progress");
+    expect(untouched.assignee).toBe(otherTa.private_profile_id);
   });
 
   test("with the feature on, a request nobody picked up is left alone", async () => {

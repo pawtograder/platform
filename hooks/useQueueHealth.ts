@@ -23,8 +23,9 @@ export { DEFAULT_QUEUE_HEALTH_THRESHOLDS } from "@/lib/queueHealthThresholds";
 const REFRESH_MS = 30_000;
 
 /**
- * Health numbers for every queue in the class, keyed by queue id, plus the class's thresholds for
- * the colors. Refreshes every 30 seconds.
+ * Health numbers for every active queue in the class, keyed by queue id, plus the class's
+ * thresholds for the colors. Inactive queues are left out by the RPC, so they get no card, no
+ * badge and no alert. Refreshes every 30 seconds.
  */
 export function useQueueHealth(
   classId: number,

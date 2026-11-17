@@ -195,7 +195,7 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     name: COURSE_FEATURES.OFFICE_HOURS_SHIFT_RELEASE,
     title: "Office hours: release requests at shift end",
     description:
-      "When a TA's shift ends, the requests they were still helping with go back to the queue, open and unassigned, instead of staying with them. When off, nothing changes.",
+      "When a TA's shift ends, the requests they were still helping with go back to the queue, open and unassigned, instead of staying with them. Requests on the queue they were on shift in always go back; requests on other queues go back once the TA has no shift still running. When off, nothing changes.",
     defaultWhenMissing: false,
     switchLabel: "Release a TA's requests when their shift ends",
     ariaLabel: "Release office hours requests when a TA's shift ends"

@@ -1,4 +1,8 @@
--- Queue health for the staff dashboard: one row per queue in the class.
+-- Queue health for the staff dashboard: one row per active queue in the class.
+--
+-- Only active queues, because that is what the dashboard shows and what the red-queue alert fires
+-- on. An inactive queue with a leftover open request would otherwise alert about a card nobody can
+-- see.
 --
 -- waiting: open requests (no TA yet). oldest_wait_seconds: age of the longest-waiting open request.
 -- helping: in-progress requests. staffed_tas: TA shifts with no end time.
@@ -44,7 +48,7 @@ BEGIN
 
   RETURN QUERY
   WITH queues AS (
-    SELECT q.id, q.name FROM public.help_queues q WHERE q.class_id = p_class_id
+    SELECT q.id, q.name FROM public.help_queues q WHERE q.class_id = p_class_id AND q.is_active
   ),
   open_now AS (
     SELECT r.help_queue AS qid, COUNT(*)::int AS n, MIN(r.created_at) AS oldest

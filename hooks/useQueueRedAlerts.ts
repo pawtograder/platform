@@ -15,6 +15,10 @@ import { isQueueRed, queuesTurnedRed } from "@/lib/queueHealthAlerts";
  *
  * Health is computed in the browser on a 30 second refresh, so this only runs while an instructor
  * has the staff office hours page open.
+ *
+ * byQueue holds only active queues, because office_hours_queue_health filters on is_active. That
+ * keeps this loop on the same set of queues the dashboard draws cards for, so an alert always has
+ * a card behind it.
  */
 export function useQueueRedAlerts(health: {
   byQueue: Record<number, QueueHealth>;

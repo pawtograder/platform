@@ -1,4 +1,4 @@
--- Manual check for 20261111120000_office_hours_release_on_shift_end.sql.
+-- Manual check for 20261117174000_office_hours_release_on_shift_end.sql.
 -- Fixtures: an active help_queue_assignments row for the TA below on queue 3 (the seeded instructor shift).
 -- Run against a local database with the migration applied. Everything is rolled back.
 --   psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/manual/office_hours_shift_release.sql

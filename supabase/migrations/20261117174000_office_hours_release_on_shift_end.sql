@@ -1,5 +1,11 @@
--- When a TA's shift ends, the requests they were still helping on that queue go back to the queue
--- (open, unassigned) instead of staying in_progress with someone who is no longer working.
+-- When a TA's shift ends, the requests they were still helping go back to the queue (open,
+-- unassigned) instead of staying in_progress with someone who is no longer working.
+--
+-- Which requests: nothing stops a TA from helping on a queue they are not on shift in (Start
+-- Helping checks only the request's status), so "the queue whose shift ended" is not enough on its
+-- own. Requests on that queue are always released. Requests the TA is helping on other queues are
+-- released only when this was their last shift still running in the class, because a TA with
+-- another shift open is still working office hours and should keep what they are holding.
 --
 -- Behind the course feature "office-hours-shift-release", which defaults off. The work-session
 -- trigger (20251226204315) closes the TA's session when the assignee is cleared, so this only needs
@@ -38,13 +44,25 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- This is an AFTER trigger, so the row that just ended is already visible with its ended_at set
+  -- and does not count itself as a shift that is still running.
   UPDATE public.help_requests
   SET status = 'open',
       assignee = NULL,
       updated_at = now()
-  WHERE help_queue = NEW.help_queue_id
+  WHERE class_id = NEW.class_id
     AND assignee = NEW.ta_profile_id
-    AND status = 'in_progress';
+    AND status = 'in_progress'
+    AND (
+      help_queue = NEW.help_queue_id
+      OR NOT EXISTS (
+        SELECT 1
+        FROM public.help_queue_assignments a
+        WHERE a.class_id = NEW.class_id
+          AND a.ta_profile_id = NEW.ta_profile_id
+          AND a.ended_at IS NULL
+      )
+    );
 
   RETURN NEW;
 END;

@@ -332,7 +332,12 @@ export default function HelpQueuesDashboard({
             <Box flex={1}>
               <HStack spaceX="2" wrap="wrap">
                 <Text fontWeight="medium">{queue.name}</Text>
-                {healthOn && queueAssignments.length === 0 && <QueueUnstaffedBadge health={healthByQueue[queue.id]} />}
+                {/* Staffed means the same thing here as in the health numbers and the card's tone:
+                    a shift row with no ended_at. The assignment list below filters on is_active
+                    instead, so keying the badge off it would disagree with the tone. */}
+                {healthOn && healthByQueue[queue.id]?.staffed_tas === 0 && (
+                  <QueueUnstaffedBadge health={healthByQueue[queue.id]} />
+                )}
               </HStack>
               <HStack spaceX="2" mt="1">
                 <Text fontSize="sm">Mode:</Text>
