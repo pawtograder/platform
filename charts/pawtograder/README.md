@@ -645,7 +645,76 @@ Each app has a `database` value. `pawtograder` (the default) uses this chart's P
 
 The app's own settings name the server, so that changing it rolls the app's pods: `forgejo.gitea.config.database.HOST` and the `CODER_PG_CONNECTION_URL` entry in `coder.coder.env`. The defaults point at `pawtograder-postgres:5432`. With `database: own` they become `pawtograder-forgejo-db:5432` and `postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable`, and with a non-default `service.port` they take that port. The render fails, naming the expected value, when one doesn't match its `database` mode. Switching an existing app between the two connects it to an empty database; move the data first.
 
-**Backups don't cover Forgejo or Coder yet.** `backup.enabled` dumps only Pawtograder's database (`postgres.database`). In `database: pawtograder` mode, `postgres.walg` base backups and WAL archiving cover the `forgejo` and `coder` databases, because they're physical backups of the whole server. The `*-db` servers in `own` mode have no backup. Neither does Forgejo's repository volume, which a database dump wouldn't restore anyway. Back up the volumes, or use `forgejo dump`, until the chart does this itself.
+**Backups.** With `backup.enabled`, each enabled app gets a nightly CronJob beside Pawtograder's dump: `pawtograder-backup-forgejo` and `pawtograder-backup-coder`. They run on `backup.schedule` and write to the same bucket under the same `daily/` and `monthly/` prefixes, so `backup.retention` applies to them as it does to Pawtograder's dump. Each one dumps the app's database with `pg_dump -Fc`, in either `database` mode, connecting as the server's superuser the way the `app-databases` Job does. The dump runs on `<app>-db.image`, the Postgres image the chart runs for `own`, because `pg_dump` must be at least as new as the server it dumps. In `pawtograder` mode the render fails when that image is an older major version than `postgres.image`.
+
+Forgejo's job then archives Forgejo's `/data` volume and uploads both files as `daily/forgejo-<TS>.dump` and `daily/forgejo-<TS>.tar.gz`. The two share `<TS>` and make one restore point. The archive holds the repositories, `app.ini` (with the `SECRET_KEY` that encrypts some database columns), avatars, and attachments and LFS objects when they're kept on the volume. It skips the queues, the issue indexer (Forgejo rebuilds it), generated repository archives and temporary files. Files Forgejo keeps in object storage (`forgejo.gitea.config.storage`, as in `examples/values-forgejo-coder.yaml`) aren't copied: give that bucket versioning or replication of its own. The archive is taken right after the dump, so it holds every repository the dump names, and pushes made during those minutes can leave it a little ahead of the database. The volume is ReadWriteOnce, so the job runs on the node where Forgejo's pod runs (pod affinity, plus `forgejo.nodeSelector` and `forgejo.tolerations`) and mounts the volume read-only. While Forgejo is scaled to 0, the job waits and then fails at `backup.activeDeadlineSeconds`. `backup.scratchSize` must hold Forgejo's dump and archive together. The render fails when Forgejo's `/data` isn't a PersistentVolumeClaim or `repository.ROOT` is outside it. The archive and the dumps contain secrets and student work: store them with the same care as Pawtograder's dumps.
+
+A failed app backup fires `PawtograderBackupJobFailed`. `backup-verify` checks each app's newest dump the way it checks Pawtograder's (a readable TOC, at most 48 hours old). It also checks that Forgejo's dump has its archive beside it, holding the repository root and `app.ini`. So a missing, empty or stale app backup fails it. With `backup.restoreDrill.enabled`, the drill also restores each app's newest dump into a throwaway Postgres on `<app>-db.image`. The drill fails on any restore error or when the restored database has no users, and for Forgejo when a repository in the restored database is missing from the archive.
+
+With `global.environment: production`, the render fails when Forgejo or Coder is on without `backup.enabled` (which needs this chart's Postgres) and `backup.verify.enabled`, or when `<app>-db.image` has a floating tag.
+
+**Restoring Forgejo.** Restore both files of one set: the database from one night and the repositories from another don't match. List the sets with `mc ls <bucket>/daily/forgejo-`. Then:
+
+1. Stop the nightly job and Forgejo: `kubectl patch cronjob pawtograder-backup-forgejo -p '{"spec":{"suspend":true}}'` and `kubectl scale deployment/pawtograder-forgejo --replicas=0`.
+2. Run the pod below, as Forgejo's uid, with Forgejo's claim mounted. It recreates the `forgejo` database from the dump, then replaces everything on the volume with the archive. Wait for it to finish (`kubectl logs -f app-restore`), then delete it.
+3. `kubectl scale deployment/pawtograder-forgejo --replicas=1`. Once it's up, run the admin tasks `resync_all_hooks` and `check_repo_stats` (Site Administration → Dashboard, or `POST /api/v1/admin/cron/<task>` as an admin). Then resume the CronJob (`"suspend":false`).
+
+A repository created between the dump and the archive is on the volume but not in the database; Site Administration → Repositories → Unadopted Repositories lists it, to adopt or delete.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-restore
+spec:
+  restartPolicy: Never
+  # Forgejo's uid and group (forgejo.containerSecurityContext).
+  securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 }
+  containers:
+    - name: restore
+      image: ghcr.io/pawtograder/backup:<tag> # backup.image: it has mc and pg_restore
+      env:
+        - { name: APP, value: forgejo }
+        - { name: SET, value: "s3/<backup.s3.bucket>/daily/forgejo-<TS>" }
+        - { name: S3_ENDPOINT, value: "<backup.s3.endpoint>" }
+        - { name: AWS_ACCESS_KEY_ID, valueFrom: { secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID } } }
+        - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: pawtograder-s3, key: AWS_SECRET_ACCESS_KEY } } }
+        # database: pawtograder. For own: PGHOST pawtograder-<app>-db, PGUSER postgres,
+        # PGPASSWORD from pawtograder-<app>-db-superuser.
+        - { name: PGHOST, value: pawtograder-postgres }
+        - { name: PGUSER, value: supabase_admin }
+        - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: pawtograder-postgres, key: POSTGRES_PASSWORD } } }
+      command:
+        - bash
+        - -c
+        - |
+          set -euo pipefail
+          export MC_CONFIG_DIR=/tmp/mc
+          mc alias set s3 "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null
+          if [ "$APP" = forgejo ]; then mc stat "$SET.tar.gz" >/dev/null; fi
+          mc cp -q "$SET.dump" /restore/app.dump
+          psql -v ON_ERROR_STOP=1 -d postgres \
+            -c "DROP DATABASE IF EXISTS $APP WITH (FORCE)" -c "CREATE DATABASE $APP OWNER $APP"
+          pg_restore --exit-on-error --no-owner --no-acl --role="$APP" -d "$APP" /restore/app.dump
+          echo "database $APP restored from $SET.dump"
+          if [ "$APP" = forgejo ]; then
+            find /data -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +
+            mc cat "$SET.tar.gz" | tar -xzf - -C /data
+            echo "volume restored from $SET.tar.gz"
+          fi
+      volumeMounts:
+        - { name: data, mountPath: /data } # Forgejo only
+        - { name: restore, mountPath: /restore }
+  volumes:
+    - name: data # Forgejo only
+      persistentVolumeClaim: { claimName: gitea-shared-storage } # forgejo.persistence.claimName
+    - name: restore
+      emptyDir: {}
+```
+
+**Restoring Coder.** Coder's backup is its database. Suspend `pawtograder-backup-coder`, run `kubectl scale deployment/coder --replicas=0`, and run the same pod with `APP` set to `coder`, `SET` to a `daily/coder-<TS>` set, the connection settings for Coder's server, and no `data` volume. Then scale Coder back to 1 and resume the CronJob. Workspaces created after `<TS>` are no longer in Coder's database, but their pods and home volumes stay in the cluster: delete them with `kubectl`.
+
+**Coder home volumes aren't backed up.** Each workspace keeps the student's files on its own home volume. Nothing copies those volumes, and Coder deletes a workspace's volume with the workspace. Students must push their work to Forgejo: only pushed work is graded, and only pushed work survives a lost volume or a deleted workspace.
 
 The same physical backup ties the three databases together. A point-in-time restore of `pawtograder-postgres` for a Pawtograder incident ([`docs/operations/point-in-time-recovery.md`](../../docs/operations/point-in-time-recovery.md)) also rewinds the `forgejo` and `coder` databases to the restore target, but not what those apps keep outside Postgres. Afterwards Forgejo's database no longer matches the repositories on its volume: repositories created and pushes made after the target are on disk, while the database is missing them or describes their older state. Coder's database no longer lists workspaces created after the target, but their pods and home volumes stay in the cluster. Before restoring the shared server, stop Forgejo and Coder, and plan to reconcile them afterwards, or put them on `own` so a Pawtograder restore leaves them alone.
 
