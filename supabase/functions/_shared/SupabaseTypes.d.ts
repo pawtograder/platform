@@ -3790,11 +3790,11 @@ export type Database = {
         };
         Relationships: [
           {
-            foreignKeyName: "exam_scanned_submissions_batch_id_fkey";
-            columns: ["batch_id"];
+            foreignKeyName: "exam_scanned_submissions_batch_scope_fkey";
+            columns: ["batch_id", "exam_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "exam_scan_batches";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "exam_id", "class_id"];
           },
           {
             foreignKeyName: "exam_scanned_submissions_class_id_fkey";

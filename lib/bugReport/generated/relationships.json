@@ -734,7 +734,11 @@
   "exam_scanned_submissions": {
     "kind": "table",
     "fks": [
-      { "name": "exam_scanned_submissions_batch_id_fkey", "columns": ["batch_id"], "ref": "exam_scan_batches" },
+      {
+        "name": "exam_scanned_submissions_batch_scope_fkey",
+        "columns": ["batch_id", "exam_id", "class_id"],
+        "ref": "exam_scan_batches"
+      },
       { "name": "exam_scanned_submissions_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
       { "name": "exam_scanned_submissions_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
       { "name": "exam_scanned_submissions_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" },

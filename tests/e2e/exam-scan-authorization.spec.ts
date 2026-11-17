@@ -90,7 +90,7 @@ type CourseA = {
   studentClient: SupabaseClient<Database>;
   studentSis: number;
 };
-type CourseB = { classId: number; batchId: number; objectPath: string; objectSha: string };
+type CourseB = { classId: number; examId: number; batchId: number; objectPath: string; objectSha: string };
 
 /** Course A: an exam, a second exam, a grader who belongs only to A, and a student. */
 async function arrangeCourseA(): Promise<CourseA> {
@@ -130,7 +130,7 @@ async function arrangeCourseB(): Promise<CourseB> {
     .from("exam-scans")
     .upload(objectPath, bytes, { contentType: "image/png", upsert: true });
   expect(up.error).toBeNull();
-  return { classId: course.id, batchId: batch!.id, objectPath, objectSha: sha256(bytes) };
+  return { classId: course.id, examId, batchId: batch!.id, objectPath, objectSha: sha256(bytes) };
 }
 
 /** As the grader: create a one-page batch and its page row, uploading our own page image first. */
@@ -268,6 +268,15 @@ async function expectScopeChangeRefused(
   const { error } = await staff.from("exam_scanned_submissions").update(change).eq("id", scannedId).select("id");
   expect(error?.message ?? "").toMatch(/cannot change after it is created/);
   expect(await scope()).toEqual(before);
+}
+
+/**
+ * The database refused a write because a scanned exam would name a batch of another exam or class:
+ * the batch-scope foreign key (23503), not row RLS (42501) or a fixture error.
+ */
+function expectBatchScopeRefused(error: { code?: string; message?: string } | null) {
+  expect(error?.code).toBe("23503");
+  expect(error?.message ?? "").toContain('"exam_scanned_submissions_batch_scope_fkey"');
 }
 
 const MEMBERSHIP_GUARD = /only matching can change which exam a page belongs to/;
@@ -468,9 +477,8 @@ test.describe("Exam scan ownership (#1078)", () => {
       .eq("id", pageId)
       .single();
     expect(page).toEqual({ class_id: a.classId, batch_id: batchId });
-    // A scanned exam's batch is not coupled to its class by a foreign key, but once the row exists
-    // it cannot be repointed. The next test covers the worker's own check for a row that names
-    // another batch.
+    // A scanned exam's batch, exam and class are tied to one batch row by a foreign key (next test),
+    // and once the row exists the scope trigger refuses repointing it.
     const { data: scanned, error: insertScannedErr } = await supabase
       .from("exam_scanned_submissions")
       .insert({ class_id: a.classId, exam_id: a.examId, batch_id: batchId, exam_index: 99 })
@@ -480,10 +488,10 @@ test.describe("Exam scan ownership (#1078)", () => {
     await expectScopeChangeRefused(a.grader, scanned!.id, { batch_id: b.batchId });
   });
 
-  test("a confirmed exam cannot be retargeted at course B's batch, and finalize refuses a row from another batch", async () => {
-    // exam_scanned_submissions.batch_id is not tied to the row's class, so a scope taken from it
-    // would let B's path validate. The database refuses to change it once the row exists, and
-    // finalize still judges ownership by the batch its message was enqueued for.
+  test("a scanned exam cannot name course B's batch, and finalize refuses a row from another batch", async () => {
+    // A scanned exam's batch, exam and class must be those of one batch row. Otherwise a course-A
+    // grader could plant a row at a position of course B's batch: B's Process would link B's pages
+    // to it and the match worker would write B's student identity into a row A's staff can read.
     const { batchId, pageId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     const { data: scanned } = await a.grader
@@ -496,28 +504,54 @@ test.describe("Exam scan ownership (#1078)", () => {
     expect(scanned?.id).toBeTruthy();
     await expectScopeChangeRefused(a.grader, scanned!.id, { batch_id: b.batchId });
 
-    // The worker's own check, for a row that names another batch from the start: row RLS still
-    // lets the course-A grader insert one pointing at B's batch. The grader cannot relink this
-    // batch's page to it, so the service role builds that state, with the page swapped to B's object.
-    const { data: foreign, error: foreignErr } = await a.grader
+    // Inserting a row for course A's exam into course B's batch is refused by the foreign key, for
+    // the grader and for the service role.
+    const examIndex = 1000 + Math.floor(Math.random() * 1_000_000);
+    const foreignRow = {
+      class_id: a.classId,
+      exam_id: a.examId,
+      batch_id: b.batchId,
+      exam_index: examIndex,
+      matched_profile_id: a.student.private_profile_id,
+      match_status: "confirmed" as const
+    };
+    const { data: planted, error: graderErr } = await a.grader
+      .from("exam_scanned_submissions")
+      .insert(foreignRow)
+      .select("id");
+    expectBatchScopeRefused(graderErr);
+    expect(planted).toBeNull();
+    const { error: serviceErr } = await supabase.from("exam_scanned_submissions").insert(foreignRow).select("id");
+    expectBatchScopeRefused(serviceErr);
+    const { count: plantedCount } = await supabase
+      .from("exam_scanned_submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("batch_id", b.batchId)
+      .eq("class_id", a.classId);
+    expect(plantedCount).toBe(0);
+
+    // The worker's own check, for a finalize message that names a row of another batch. No row can
+    // name another course's batch now, so this uses a consistent course-B row instead. The service
+    // role builds it, links this batch's page to it with B's object, and queues a finalize for this
+    // batch that names it.
+    const { data: bRow, error: bRowErr } = await supabase
       .from("exam_scanned_submissions")
       .insert({
-        class_id: a.classId,
-        exam_id: a.examId,
+        class_id: b.classId,
+        exam_id: b.examId,
         batch_id: b.batchId,
-        exam_index: 1000 + Math.floor(Math.random() * 1_000_000),
+        exam_index: examIndex,
         matched_profile_id: a.student.private_profile_id,
         match_status: "confirmed"
       })
-      .select("id, batch_id")
+      .select("id")
       .single();
-    expect(foreignErr).toBeNull();
-    expect(foreign?.batch_id).toBe(b.batchId);
+    expect(bRowErr).toBeNull();
     await expectLinkedPageChangeRefused(a.grader, pageId, {
-      scanned_submission_id: foreign!.id,
+      scanned_submission_id: bRow!.id,
       image_path: b.objectPath
     });
-    await forgePage(pageId, { scanned_submission_id: foreign!.id, image_path: b.objectPath });
+    await forgePage(pageId, { scanned_submission_id: bRow!.id, image_path: b.objectPath });
     const before = await courseRowIds(a.classId);
     // Fixture: a finalize message for this batch naming that row (enqueue_exam_finalize only queues
     // a batch's own rows, so this is the worker's defence in depth, not an RPC path).
@@ -525,7 +559,7 @@ test.describe("Exam scan ownership (#1078)", () => {
       method: "finalize",
       class_id: a.classId,
       batch_id: batchId,
-      args: { scanned_submission_id: foreign!.id }
+      args: { scanned_submission_id: bRow!.id }
     });
     await expect
       .poll(
@@ -548,9 +582,15 @@ test.describe("Exam scan ownership (#1078)", () => {
     expect(state.status).toBe("error");
     expect(state.error ?? "").toMatch(/is no longer in batch/);
     expect(await courseRowIds(a.classId)).toEqual(before);
+    const { data: bRowAfter } = await supabase
+      .from("exam_scanned_submissions")
+      .select("submission_id, finalized_at")
+      .eq("id", bRow!.id)
+      .single();
+    expect(bRowAfter).toEqual({ submission_id: null, finalized_at: null });
   });
 
-  test("a confirmed exam cannot be moved to another exam of the same course, and finalize refuses a row whose exam is not its batch's", async () => {
+  test("a scanned exam cannot be moved to, or created for, another exam of its batch's course", async () => {
     // The batch and the page path stay legitimate (exam X); only the scanned submission names exam
     // Y. exam_create_submission takes the assignment from that exam_id, so accepting the row would
     // file the student's scan under exam Y's assignment.
@@ -584,7 +624,7 @@ test.describe("Exam scan ownership (#1078)", () => {
     };
     const before = await destination();
 
-    const { batchId, pageId } = await graderCreatesBatch(a, {});
+    const { batchId } = await graderCreatesBatch(a, {});
     expect((await graderProcesses(a, batchId)).status).toBe("review");
     // As the course-A grader: the processed exam cannot be moved to exam Y.
     const { data: processed, error: processedErr } = await supabase
@@ -595,57 +635,37 @@ test.describe("Exam scan ownership (#1078)", () => {
     expect(processedErr).toBeNull();
     await expectScopeChangeRefused(a.grader, processed!.id, { exam_id: a.otherExamId });
 
-    // The worker's own check: row RLS still lets the grader insert a confirmed exam for this batch
-    // that names exam Y, and enqueue_exam_finalize queues it. The grader cannot link this batch's
-    // page to it, so the service role does; without the check, finalize would then file the scan
-    // under exam Y's assignment. (The processed row stays unconfirmed, so the RPC's
-    // one-confirmed-exam-per-student guard does not fire.)
-    const { data: scanned, error: insertErr } = await a.grader
+    // Nor can a row for exam Y be created in this exam X batch, by the grader or the service role,
+    // and the batch itself cannot be moved to exam Y while it has a scanned exam. finalize's own
+    // exam check stays as defence in depth, but no role can now build the state it refuses.
+    const mismatched = {
+      class_id: a.classId,
+      exam_id: a.otherExamId,
+      batch_id: batchId,
+      exam_index: 99,
+      matched_profile_id: a.student.private_profile_id,
+      match_status: "confirmed" as const
+    };
+    const { data: inserted, error: graderErr } = await a.grader
       .from("exam_scanned_submissions")
-      .insert({
-        class_id: a.classId,
-        exam_id: a.otherExamId,
-        batch_id: batchId,
-        exam_index: 99,
-        matched_profile_id: a.student.private_profile_id,
-        match_status: "confirmed"
-      })
-      .select("id, exam_id, batch_id")
-      .single();
-    expect(insertErr).toBeNull();
-    expect(scanned).toMatchObject({ exam_id: a.otherExamId, batch_id: batchId });
-    await expectLinkedPageChangeRefused(a.grader, pageId, { scanned_submission_id: scanned!.id });
-    await forgePage(pageId, { scanned_submission_id: scanned!.id });
-    const { data: queued, error: finErr } = await a.grader.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
-    expect(finErr).toBeNull();
-    expect(queued).toBe(1);
-
-    // Stop at the first of "batch errored" or "finalize created a submission for the row". The
-    // submission is created before finalize's answer-region query, so this does not wait on #1075.
-    await expect
-      .poll(
-        async () => {
-          await runExamWorker();
-          const { data: row } = await supabase
-            .from("exam_scanned_submissions")
-            .select("submission_id")
-            .eq("id", scanned!.id)
-            .single();
-          return (await batch(batchId)).status === "error" || row?.submission_id != null;
-        },
-        { timeout: 60_000, intervals: [1000, 2000, 3000] }
-      )
-      .toBe(true);
-    const { data: row } = await supabase
-      .from("exam_scanned_submissions")
-      .select("submission_id, finalized_at")
-      .eq("id", scanned!.id)
-      .single();
-    expect(row).toEqual({ submission_id: null, finalized_at: null });
+      .insert(mismatched)
+      .select("id");
+    expectBatchScopeRefused(graderErr);
+    expect(inserted).toBeNull();
+    const { error: serviceErr } = await supabase.from("exam_scanned_submissions").insert(mismatched).select("id");
+    expectBatchScopeRefused(serviceErr);
+    const { data: moved, error: moveErr } = await a.grader
+      .from("exam_scan_batches")
+      .update({ exam_id: a.otherExamId })
+      .eq("id", batchId)
+      .select("id");
+    expectBatchScopeRefused(moveErr);
+    expect(moved).toBeNull();
+    const { data: batchRow } = await supabase.from("exam_scan_batches").select("exam_id").eq("id", batchId).single();
+    expect(batchRow?.exam_id).toBe(a.examId);
+    const { data: rows } = await supabase.from("exam_scanned_submissions").select("exam_id").eq("batch_id", batchId);
+    expect((rows ?? []).map((r) => r.exam_id)).toEqual([a.examId]);
     expect(await destination()).toEqual(before);
-    const state = await batch(batchId);
-    expect(state.status).toBe("error");
-    expect(state.error ?? "").toMatch(/names exam \d+, but batch \d+ is exam \d+; refusing to read its scans/);
   });
 
   test("a legitimate upload is processed and matched", async () => {
