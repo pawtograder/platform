@@ -922,6 +922,7 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "forgejo_repo_tokens.instance_url": "none",
   "forgejo_repo_tokens.recorded_at": "none",
   "forgejo_repo_tokens.repository_id": "none",
+  "forgejo_repo_tokens.revoke_claim_id": "none",
   "forgejo_repo_tokens.revoke_claimed_at": "none",
   "forgejo_repo_tokens.user_id": "none",
   "git_accounts.claimed_at": "none",

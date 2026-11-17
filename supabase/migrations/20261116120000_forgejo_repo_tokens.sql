@@ -72,6 +72,9 @@ AS $$
   LEFT JOIN public.git_accounts ga
     ON ga.user_id = t.user_id AND ga.provider = 'forgejo' AND ga.instance_url = t.instance_url
   WHERE t.instance_url = p_instance_url
+    -- The row is recorded before the mint. Wait out any mint still in flight, so the revoke can't run
+    -- before the token exists and delete the only row tracking it. Same grace as REPLACED_TOKEN_GRACE_MS.
+    AND t.recorded_at <= now() - interval '10 minutes'
     AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
     AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
   ORDER BY t.revoke_claimed_at ASC NULLS FIRST, t.id
@@ -91,6 +94,8 @@ AS $$
   SET revoke_claimed_at = now(),
       revoke_claim_id = nextval('public.forgejo_repo_token_claims')
   WHERE t.id = p_id
+    -- A re-mint between listing and claiming moves recorded_at; skip the row until that mint has settled.
+    AND t.recorded_at <= now() - interval '10 minutes'
     AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
     AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
   RETURNING t.revoke_claim_id;

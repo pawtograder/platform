@@ -60,6 +60,13 @@ Deno.test("a registered credential is redacted anywhere in the event, and the or
   assertEquals(breadcrumb.message, `pushed with ${forgejoToken}`);
 });
 
+Deno.test("the first credential stays redacted after hundreds more are registered", () => {
+  const first = ["fedcba9876543210", "fedcba9876543210", "first000"].join("");
+  redactSecret(first);
+  for (let i = 0; i < 500; i++) redactSecret(`later-credential-${String(i).padStart(8, "0")}`);
+  assertEquals(redactSecretsInText(`token ${first} leaked`), "token [redacted] leaked");
+});
+
 Deno.test("redactSecretsInText leaves ordinary text, UUIDs and short values alone", () => {
   redactSecret("short");
   const text = "user 7d1c7c9e-0000-4000-8000-000000000001 opened repo-42 (short)";

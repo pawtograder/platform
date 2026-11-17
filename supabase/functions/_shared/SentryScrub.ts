@@ -56,16 +56,16 @@ export function scrubEdgeBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
   return scrubbed;
 }
 
-const SECRETS: string[] = [];
-const MAX_SECRETS = 200;
+// No cap: an evicted credential would reach Sentry unredacted, and Forgejo tokens have no pattern
+// to fall back on. The set lives only as long as the isolate.
+const SECRETS = new Set<string>();
 const REDACTED = "[redacted]";
 const CODER_API_KEY = /\b[0-9A-Za-z]{10}-[0-9A-Za-z]{22}\b/g;
 
 /** Call as soon as a credential is in hand, before anything that could throw. */
 export function redactSecret(value: string): void {
-  if (value.length < 16 || SECRETS.includes(value)) return;
-  SECRETS.push(value);
-  if (SECRETS.length > MAX_SECRETS) SECRETS.shift();
+  if (value.length < 16) return;
+  SECRETS.add(value);
 }
 
 export function redactSecretsInText(text: string): string {
