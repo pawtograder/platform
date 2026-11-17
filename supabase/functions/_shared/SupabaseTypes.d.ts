@@ -4372,6 +4372,7 @@ export type Database = {
           instance_url: string;
           recorded_at: string;
           repository_id: number;
+          revoke_claim_id: number | null;
           revoke_claimed_at: string | null;
           user_id: string;
         };
@@ -4380,6 +4381,7 @@ export type Database = {
           instance_url: string;
           recorded_at?: string;
           repository_id: number;
+          revoke_claim_id?: number | null;
           revoke_claimed_at?: string | null;
           user_id: string;
         };
@@ -4388,6 +4390,7 @@ export type Database = {
           instance_url?: string;
           recorded_at?: string;
           repository_id?: number;
+          revoke_claim_id?: number | null;
           revoke_claimed_at?: string | null;
           user_id?: string;
         };
@@ -13761,7 +13764,7 @@ export type Database = {
       };
       claim_forgejo_repo_token_revocation: {
         Args: { p_id: number; p_stale_minutes: number };
-        Returns: string;
+        Returns: number;
       };
       claim_git_account: {
         Args: {

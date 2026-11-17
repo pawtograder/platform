@@ -14,7 +14,7 @@
 {{- $cidr = $host }}
 {{- else if regexMatch "^[0-9]+([.][0-9]+){3}$" $host }}
 {{- $cidr = printf "%s/32" $host }}
-{{- else if regexMatch "(?i)^[0-9a-f:]+$" $host }}
+{{- else if and (contains ":" $host) (regexMatch "(?i)^[0-9a-f:.]+$" $host) }}
 {{- $cidr = printf "%s/128" $host }}
 {{- end }}
 {{- if and $cidr (ne (include "pawtograder.forgejo.webhookCidrAllowed" $cidr) "true") }}

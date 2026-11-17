@@ -147,7 +147,7 @@ Deno.test("reconcile: a failed backlog query fails the pass", async () => {
 
 type Due = { id: number; user_id: string; repository_id: number; login: string | null };
 
-const claimStamp = (id: number) => `2026-11-17T06:00:0${id}.000000+00:00`;
+const claimGeneration = (id: number) => 9000 + id;
 
 function fakeTokenSupabase(
   due: Due[],
@@ -167,7 +167,7 @@ function fakeTokenSupabase(
       }
       const claimable = opts.claimable ?? new Set(due.map((d) => d.id));
       const id = args.p_id as number;
-      return Promise.resolve({ data: claimable.has(id) ? claimStamp(id) : null, error: null });
+      return Promise.resolve({ data: claimable.has(id) ? claimGeneration(id) : null, error: null });
     },
     from(table: string) {
       assertEquals(table, "forgejo_repo_tokens");
@@ -226,11 +226,11 @@ Deno.test(
     });
     assertEquals(deleted[0], [
       ["eq", "id", 1],
-      ["eq", "revoke_claimed_at", claimStamp(1)]
+      ["eq", "revoke_claim_id", claimGeneration(1)]
     ]);
     assertEquals(deleted[1], [
       ["eq", "id", 2],
-      ["eq", "revoke_claimed_at", claimStamp(2)]
+      ["eq", "revoke_claim_id", claimGeneration(2)]
     ]);
   }
 );

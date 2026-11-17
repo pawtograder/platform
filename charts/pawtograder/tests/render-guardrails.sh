@@ -3326,7 +3326,10 @@ apps_has "webhook: Forgejo reads it from the ConfigMap" yes "name: FORGEJO__WEBH
 apps_has "webhook: a bare public address is kept" yes \
   'ALLOWED_HOST_LIST: "external,203.0.113.5,2001:db8::1,api.pawtograder.example.com"' \
   --set-json 'forgejo.webhookAllowedHosts=["external","203.0.113.5","2001:db8::1"]' "${WH[@]}"
-for host in '0.0.0.0/0' '11.0.0.1/7' '127.0.0.0/8' '169.254.0.0/16' '::/0' 'fc00::/7' 'fe80::/10' '::ffff:127.0.0.1/128' '10.0.0.5' '127.0.0.1' '169.254.169.254' '0.0.0.0' '::1' 'fd00::1' 'fe80::1' private Private loopback ' LOOPBACK ' '*' '*.example.com' 'hook?.example.org' 'hook[ab].example.org' 'external,private' ' private '; do
+apps_has "webhook: a host name of hex letters is not read as an address" yes \
+  'ALLOWED_HOST_LIST: "external,cafe.feed,dead,api.pawtograder.example.com"' \
+  --set-json 'forgejo.webhookAllowedHosts=["external","cafe.feed","dead"]' "${WH[@]}"
+for host in '0.0.0.0/0' '11.0.0.1/7' '127.0.0.0/8' '169.254.0.0/16' '::/0' 'fc00::/7' 'fe80::/10' '::ffff:127.0.0.1/128' '10.0.0.5' '127.0.0.1' '169.254.169.254' '0.0.0.0' '::1' 'fd00::1' 'fe80::1' '::ffff:127.0.0.1' '::ffff:10.0.0.5' private Private loopback ' LOOPBACK ' '*' '*.example.com' 'hook?.example.org' 'hook[ab].example.org' 'external,private' ' private '; do
   apps_refused "webhook: $host in webhookAllowedHosts is refused" \
     "forgejo.webhookAllowedHosts can't contain \"$host\"" --set-json "forgejo.webhookAllowedHosts=[\"external\",\"$host\"]"
 done
