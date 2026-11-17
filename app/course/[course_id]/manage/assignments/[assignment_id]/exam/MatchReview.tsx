@@ -186,7 +186,8 @@ export default function MatchReview({
   );
 
   const closePrompt = useCallback((id: number) => {
-    setPendingAck(null);
+    // Only this row's prompt: a confirm that settles late must not close one opened on another row.
+    setPendingAck((p) => (p?.id === id ? null : p));
     // The prompt replaced the row's buttons; put focus back on Confirm instead of losing it.
     requestAnimationFrame(() => confirmButtons.current.get(id)?.focus());
   }, []);
@@ -398,7 +399,10 @@ export default function MatchReview({
               </Table.Cell>
               <Table.Cell>
                 {pendingAck?.id === r.id ? (
-                  <Box role="alert" maxW="260px">
+                  // Keyed on what is being acknowledged: when the row changed under an open prompt and it
+                  // asks again, it remounts, so focus goes back to Cancel instead of staying on
+                  // "Confirm anyway", where one more Enter would accept a name nobody has read.
+                  <Box key={`${pendingAck.profileId}|${pendingAck.detectedName ?? ""}`} role="alert" maxW="260px">
                     <Text fontSize="xs" mb={1}>
                       {namesEquivalent(pendingAck.detectedName, rosterName(pendingAck.profileId))
                         ? `More than one student is named “${rosterName(pendingAck.profileId)}”.`
@@ -406,6 +410,11 @@ export default function MatchReview({
                       Check the scan first.
                     </Text>
                     <HStack gap={1}>
+                      {/* Cancel comes first, where Confirm was, and has focus: a repeated Enter or the
+                          second click of a double-click on Confirm lands on it, not on the warning. */}
+                      <Button size="xs" variant="ghost" autoFocus onClick={() => closePrompt(r.id)}>
+                        Cancel
+                      </Button>
                       <Button
                         size="xs"
                         colorPalette="orange"
@@ -413,10 +422,6 @@ export default function MatchReview({
                         onClick={() => confirm(r.id, pendingAck)}
                       >
                         Confirm anyway
-                      </Button>
-                      {/* Focus starts here, so a repeated Enter on Confirm cannot accept the warning. */}
-                      <Button size="xs" variant="ghost" autoFocus onClick={() => closePrompt(r.id)}>
-                        Cancel
                       </Button>
                     </HStack>
                   </Box>

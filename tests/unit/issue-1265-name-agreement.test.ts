@@ -11,7 +11,11 @@ describe("names that are the same name", () => {
     ["Johnson, Clark", "Clark Johnson"],
     ["  clark   johnson ", "Clark Johnson"],
     ["José Núñez", "Jose Nunez"],
-    ["Mary-Kate O'Brien", "Mary Kate O Brien"]
+    ["Mary-Kate O'Brien", "Mary Kate O Brien"],
+    ["Nguyễn Văn An", "Nguyen Van An"],
+    ["İsmail Yılmaz", "ismail yılmaz"],
+    ["सीता राम", "सीता राम"],
+    ["ガト", "ガト"]
   ])("%p is %p", (detected, roster) => {
     expect(namesEquivalent(detected, roster)).toBe(true);
   });
@@ -25,7 +29,10 @@ describe("names that need the instructor to look", () => {
     ["Clark", "Clark Johnson"], // missing word
     ["Clark Johnson Jr", "Clark Johnson"], // extra word
     ["Clark Clark", "Clark Johnson"],
-    ["Johnson", "Jordan Johnson"] // same surname
+    ["Johnson", "Jordan Johnson"], // same surname
+    ["सीता", "सत"], // a vowel sign is a combining mark in Devanagari, not an accent
+    ["राम", "रम"],
+    ["ガト", "カト"] // so is the kana voicing mark
   ])("%p is not %p", (detected, roster) => {
     expect(namesEquivalent(detected, roster)).toBe(false);
   });
