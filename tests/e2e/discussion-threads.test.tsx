@@ -200,7 +200,8 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Edit")).toBeVisible();
     await page.getByText("Edit", { exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Edit reply" })).toBeVisible();
-    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByRole("textbox", { name: "Edit reply" })).toBeHidden();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
 
     // Need to go to browse topics to see the thread (because it's public)
