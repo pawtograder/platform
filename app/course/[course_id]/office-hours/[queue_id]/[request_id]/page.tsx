@@ -115,7 +115,15 @@ export default function RequestDetailPage() {
   const { private_profile_id } = useClassProfiles();
   // Ask the database whether this student is on the request. The realtime membership list can lag behind
   // a request that was just created, so it isn't reliable for this check. Students can read their own rows.
-  const [isRequestMember, setIsRequestMember] = useState(false);
+  // The result is stored with the request and profile it was computed for, so it can't be used after either changes.
+  const [memberCheck, setMemberCheck] = useState<{ requestId: number; profileId: string; isMember: boolean } | null>(
+    null
+  );
+  const isRequestMember =
+    memberCheck !== null &&
+    memberCheck.requestId === requestIdNum &&
+    memberCheck.profileId === private_profile_id &&
+    memberCheck.isMember;
   useEffect(() => {
     if (private_profile_id == null || !Number.isFinite(requestIdNum)) return;
     let cancelled = false;
@@ -125,7 +133,8 @@ export default function RequestDetailPage() {
       .eq("help_request_id", requestIdNum)
       .eq("profile_id", private_profile_id)
       .then(({ data }) => {
-        if (!cancelled) setIsRequestMember((data?.length ?? 0) > 0);
+        if (!cancelled)
+          setMemberCheck({ requestId: requestIdNum, profileId: private_profile_id, isMember: (data?.length ?? 0) > 0 });
       });
     return () => {
       cancelled = true;
