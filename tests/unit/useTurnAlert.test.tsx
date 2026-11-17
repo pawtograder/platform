@@ -115,6 +115,30 @@ describe("useTurnAlert", () => {
     expect(document.title).toBe("Office Hours");
   });
 
+  it("alerts for a pickup that happened while the membership check was still pending", () => {
+    // enabled is false until the page knows the viewer is on the request. A TA picking it up in
+    // that window used to look like the state the page started in, and nothing fired.
+    const { rerender } = renderHook(
+      (p: { status: string; assignee: string | null; position: number; enabled: boolean }) => useTurnAlert(p),
+      { initialProps: { status: "open", assignee: null as string | null, position: 2, enabled: false } }
+    );
+    rerender({ status: "in_progress", assignee: "ta-1", position: 0, enabled: false });
+    expect(notes).toEqual([]);
+
+    rerender({ status: "in_progress", assignee: "ta-1", position: 0, enabled: true });
+    expect(notes).toEqual([{ title: "Office hours", body: "A TA picked up your request." }]);
+  });
+
+  it("stays quiet for a request that was already picked up before the membership check finished", () => {
+    const { rerender } = renderHook(
+      (p: { status: string; assignee: string | null; position: number; enabled: boolean }) => useTurnAlert(p),
+      { initialProps: { status: "in_progress", assignee: "ta-1" as string | null, position: 0, enabled: false } }
+    );
+    rerender({ status: "in_progress", assignee: "ta-1", position: 0, enabled: true });
+    expect(notes).toEqual([]);
+    expect(document.title).toBe("Office Hours");
+  });
+
   it("restores the title when the student comes back to the tab", () => {
     const { rerender } = renderHook(
       (p: { status: string; assignee: string | null; position: number }) => useTurnAlert({ ...p, enabled: true }),

@@ -1,5 +1,5 @@
 export type QueueHealthThresholds = {
-  /** The waiting count turns red at this many students or more. */
+  /** The waiting count turns red at this many open requests or more. One request can hold several students. */
   waiting_red: number;
   /** The oldest wait turns red at this many minutes or more. */
   oldest_wait_red_minutes: number;

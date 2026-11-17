@@ -50,10 +50,16 @@ export function useTurnAlert({ status, assignee, position, enabled }: TurnAlertI
   }, [inPageMessage]);
 
   useEffect(() => {
-    if (!enabled || status === undefined) return;
+    if (status === undefined) return;
     const before = previous.current;
-    previous.current = { status, assignee, position };
-    if (!before) return;
+    // While alerts are off, which on this page means the membership check hasn't come back yet,
+    // record the first state seen and then leave it alone. Overwriting it would swallow a pickup
+    // that happened during that window: once alerts switch on, the request would already look
+    // in_progress and read as the state the page started in. Not recording anything would lose
+    // the starting state instead, and a request that was picked up before the page opened would
+    // alert. With alerts on, every render moves it forward as usual.
+    if (enabled || before === null) previous.current = { status, assignee, position };
+    if (!enabled || !before) return;
 
     const pickedUp = before.status === "open" && status === "in_progress" && Boolean(assignee);
     const nextInLine = status === "open" && position === 1 && before.position > 1;

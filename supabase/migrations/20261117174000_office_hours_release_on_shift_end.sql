@@ -44,6 +44,17 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Two of this TA's shifts can end in separate transactions at once, since each End button ends
+  -- one shift by id. Neither transaction would see the other's uncommitted ended_at, so both would
+  -- decide the TA still has a shift running and a request held on a third queue would stay
+  -- stranded. Serializing per class and TA makes the second check run after the first commits.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      'release_help_requests_on_shift_end:' || NEW.class_id::text || ':' || NEW.ta_profile_id::text,
+      0
+    )
+  );
+
   -- This is an AFTER trigger, so the row that just ended is already visible with its ended_at set
   -- and does not count itself as a shift that is still running.
   UPDATE public.help_requests

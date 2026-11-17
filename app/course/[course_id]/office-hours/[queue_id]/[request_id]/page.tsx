@@ -130,17 +130,28 @@ export default function RequestDetailPage() {
   useEffect(() => {
     if (private_profile_id == null || !Number.isFinite(requestIdNum)) return;
     let cancelled = false;
-    createClient()
-      .from("help_request_students")
-      .select("profile_id")
-      .eq("help_request_id", requestIdNum)
-      .eq("profile_id", private_profile_id)
-      .then(({ data }) => {
-        if (!cancelled)
-          setMemberCheck({ requestId: requestIdNum, profileId: private_profile_id, isMember: (data?.length ?? 0) > 0 });
-      });
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const read = async (attempt: number) => {
+      const { data, error } = await createClient()
+        .from("help_request_students")
+        .select("profile_id")
+        .eq("help_request_id", requestIdNum)
+        .eq("profile_id", private_profile_id);
+      if (cancelled) return;
+      if (error) {
+        // A failed read is not an answer. Recording "not a member" here would turn the alert off
+        // for the rest of the visit, because this effect only reruns when the request, the profile
+        // or the realtime list changes. Leave membership unknown, which keeps the alert off, and
+        // try again with a widening gap.
+        retry = setTimeout(() => read(attempt + 1), Math.min(30_000, 1_000 * 2 ** attempt));
+        return;
+      }
+      setMemberCheck({ requestId: requestIdNum, profileId: private_profile_id, isMember: data.length > 0 });
+    };
+    read(0);
     return () => {
       cancelled = true;
+      if (retry !== undefined) clearTimeout(retry);
     };
   }, [private_profile_id, requestIdNum, realtimeSaysMember]);
   const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);

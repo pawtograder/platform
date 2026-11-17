@@ -81,7 +81,9 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
         <Stack spaceY={3}>
           <HStack gap={4} align="flex-start" wrap="wrap">
             <Field.Root invalid={!!errors.waiting_red} w="auto">
-              <Field.Label>Students waiting</Field.Label>
+              {/* Requests, not students: one request can have several students on it, and the
+                  health numbers count open requests. */}
+              <Field.Label>Requests waiting</Field.Label>
               <Input
                 type="number"
                 min={1}

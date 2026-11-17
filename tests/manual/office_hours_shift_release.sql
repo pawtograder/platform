@@ -23,6 +23,24 @@ BEGIN
     RAISE EXCEPTION 'Missing fixture: no active shift for TA % on queue %. Start a shift for this TA on this queue, then rerun.', v_ta, v_queue;
   END IF;
 
+  -- Fixture check: request 1 has to be the one the ending shift covers. The trigger releases
+  -- another queue's request only once the TA has no shift left, so a request on a different queue
+  -- would correctly stay assigned and the enabled case below would report a failure that isn't one.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.help_requests WHERE id = 1 AND class_id = v_class AND help_queue = v_queue
+  ) THEN
+    RAISE EXCEPTION 'Missing fixture: help request 1 is not on class % queue %. Point v_class/v_queue at a request this TA''s shift covers, then rerun.', v_class, v_queue;
+  END IF;
+
+  -- Fixture check: this has to be the TA's only running shift in the class, or the release below
+  -- would be the queue-scoped half of the rule rather than the whole thing.
+  IF EXISTS (
+    SELECT 1 FROM public.help_queue_assignments
+    WHERE class_id = v_class AND ta_profile_id = v_ta AND ended_at IS NULL AND help_queue_id <> v_queue
+  ) THEN
+    RAISE EXCEPTION 'Missing fixture: TA % has another running shift in class %. End it first, then rerun.', v_ta, v_class;
+  END IF;
+
   -- Flag off: the shift ends and nothing is released.
   UPDATE public.classes SET features = '[]'::jsonb WHERE id = v_class;
   UPDATE public.help_requests SET status = 'in_progress', assignee = v_ta WHERE id = 1;

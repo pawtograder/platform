@@ -41,7 +41,7 @@ export function useQueueRedAlerts(health: {
     for (const h of newlyRed) {
       const reason =
         h.waiting >= health.thresholds.waiting_red
-          ? `${h.waiting} students are waiting`
+          ? `${h.waiting} requests are waiting`
           : `the oldest student has waited ${Math.round(h.oldest_wait_seconds / 60)} min`;
       getNotificationManager().notify({
         title: "Queue needs attention",
