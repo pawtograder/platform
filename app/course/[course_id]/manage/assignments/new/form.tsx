@@ -619,8 +619,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }],
     pagination: { pageSize: 1000 }
   });
+  // The provider trigger refuses a fork source on another host (#1091).
   const eligibleSourceAssignments = priorAssignments?.data?.filter(
-    (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
+    (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission" && (a.git_provider ?? "github") === provider
   );
 
   // Branch protection only makes sense when a repository is actually created, and
