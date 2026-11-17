@@ -21,8 +21,12 @@ VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+  -- Lowercase, because Forgejo matches org and repo names case-insensitively, so two names that differ
+  -- only in case are one repo there. The class slug comes first, as in GitHub's names, so sections that
+  -- share a forgejo_org and an assignment slug get different repos.
   SELECT a.id, a.class_id, ur.private_profile_id, ga.login,
-         coalesce(nullif(c.forgejo_org, ''), c.slug), a.slug || '-' || ga.login, a.template_repo
+         lower(coalesce(nullif(c.forgejo_org, ''), c.slug)), lower(c.slug || '-' || a.slug || '-' || ga.login),
+         a.template_repo
   FROM public.assignments a
   JOIN public.classes c ON c.id = a.class_id
   JOIN public.user_roles ur ON ur.class_id = a.class_id AND ur.role = 'student' AND NOT ur.disabled

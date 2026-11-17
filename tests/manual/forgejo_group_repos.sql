@@ -6,7 +6,8 @@
 --   psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -v ON_ERROR_STOP=1 -f tests/manual/forgejo_group_repos.sql
 --
 -- Scenarios:
---   1. a released Forgejo group assignment lists each group once, as <slug>-group-<sanitized name>,
+--   1. a released Forgejo group assignment lists each group once, as
+--      <class slug>-<assignment slug>-group-<sanitized name> lowercased,
 --      with every member's login, and says whether every member has one
 --   2. a ready group repo takes the group off the list
 --   3. adding a member marks the group's Forgejo repo not ready and kicks forgejo-reconciler once;
@@ -17,6 +18,9 @@
 --      creates the row the first time; the pass's first save claims the name, so a second group can't
 --   6. publish and copy don't re-permission a GitHub repo that shares a Forgejo group repo's name,
 --      once the class has a GitHub org; copy into a Forgejo assignment needs no GitHub org
+--   7. names that Forgejo would treat as one repo: groups Team1 and team1 in two sections that share
+--      a forgejo_org get different names, and a group Blue and a student with login group-blue in the
+--      same class get the same lowercase name, so the second claim fails
 \set ON_ERROR_STOP on
 \timing off
 begin;
@@ -90,9 +94,10 @@ create temp table needed as select * from public.forgejo_group_repos_needed('htt
 -- 1
 select pg_temp.check('1a each group with members is listed once', (select count(*) from needed) = 3,
   (select string_agg(name, ', ') from needed));
-select pg_temp.check('1b the repo is <slug>-group-<sanitized name> in the class org',
+select pg_temp.check('1b the repo is <class slug>-<slug>-group-<sanitized name>, lowercased, in the class org',
   exists (select 1 from needed where assignment_group_id = pg_temp.g('complete')
-          and owner = 'grp-org' and name = 'proj-group-Team-One'));
+          and owner = 'grp-org'
+          and name = (select slug from public.classes where id = pg_temp.cls()) || '-proj-group-team-one'));
 select pg_temp.check('1c it carries every member''s login and knows they all have one',
   exists (select 1 from needed where assignment_group_id = pg_temp.g('complete')
           and logins = array['login-u1', 'login-u2'] and all_members_have_logins));
@@ -245,6 +250,77 @@ exception when others then
   perform pg_temp.check('6c copy into a released Forgejo assignment works in a class with no GitHub org', false, sqlerrm);
 end $$;
 select set_config('request.jwt.claims', '', true);
+
+-- 7
+-- A second section that shares grp-org and also has a released Forgejo group assignment 'proj'.
+create temp table fx7(name text primary key, class_id bigint, user_id uuid, priv uuid, pub uuid, a bigint, g bigint);
+with c as (
+  insert into public.classes (name, slug, features, forgejo_org)
+  values ('groups 2', 'grp2-' || left(gen_random_uuid()::text, 8), '[{"name":"cloud-workspaces","enabled":true}]', 'grp-org')
+  returning id
+)
+insert into fx7 (name, class_id) select 'class2', id from c;
+insert into fx7 (name, class_id, user_id, priv, pub)
+values ('s2', (select class_id from fx7 where name = 'class2'), gen_random_uuid(), gen_random_uuid(), gen_random_uuid()),
+       ('a9', pg_temp.cls(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid()),
+       ('blue', pg_temp.cls(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid()),
+       ('loner', pg_temp.cls(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid());
+insert into auth.users (id, email, aud, role)
+select user_id, name || '-' || left(user_id::text, 8) || '@groups.test', 'authenticated', 'authenticated' from fx7 where user_id is not null;
+insert into public.profiles (id, class_id, is_private_profile, name)
+select priv, class_id, true, name from fx7 where user_id is not null
+union all select pub, class_id, false, name || ' (public)' from fx7 where user_id is not null;
+insert into public.user_roles (user_id, class_id, role, private_profile_id, public_profile_id)
+select user_id, class_id, 'student', priv, pub from fx7 where user_id is not null;
+insert into public.git_accounts (user_id, provider, instance_url, remote_user_id, login)
+select user_id, 'forgejo', 'https://git.test', 900 + row_number() over (order by name),
+       case name when 'loner' then 'group-blue' else 'login-' || name end
+from fx7 where user_id is not null;
+with st as (insert into public.assignment_self_review_settings (class_id)
+            select class_id from fx7 where name = 'class2' returning id, class_id),
+     a as (
+  insert into public.assignments (class_id, title, slug, due_date, release_date, group_config, repo_mode, template_repo,
+                                  git_provider, self_review_setting_id)
+  select st.class_id, 'proj', 'proj', now() + interval '7 days', now() + interval '1 day', 'groups',
+         'template_only_staff', 'staff/handout', 'forgejo', st.id from st returning id
+)
+update fx7 set a = (select id from a) where name = 'class2';
+update public.assignments set release_date = now() - interval '1 hour' where id = (select a from fx7 where name = 'class2');
+-- Team1 in section 2's proj, Team1 (as 'Team1') in this section's proj, and Blue in this section's lab.
+with g as (
+  insert into public.assignment_groups (assignment_id, class_id, name)
+  values ((select a from fx7 where name = 'class2'), (select class_id from fx7 where name = 'class2'), 'team1'),
+         (pg_temp.a('groups'), pg_temp.cls(), 'Team1'),
+         (pg_temp.a('both'), pg_temp.cls(), 'Blue')
+  returning id, name
+)
+update fx7 set g = (select id from g where g.name = case fx7.name when 's2' then 'team1' when 'a9' then 'Team1' else 'Blue' end)
+where fx7.name in ('s2', 'a9', 'blue');
+insert into public.assignment_groups_members (assignment_group_id, assignment_id, class_id, profile_id, added_by)
+select f.g, ag.assignment_id, f.class_id, f.priv, f.priv
+from fx7 f join public.assignment_groups ag on ag.id = f.g where f.name in ('s2', 'a9', 'blue');
+create temp table needed7 as
+  select assignment_group_id, owner, name from public.forgejo_group_repos_needed('https://git.test', 100)
+  where assignment_group_id in (select g from fx7 where g is not null);
+select pg_temp.check('7a Team1 and team1 in two sections that share an org get different names',
+  (select count(distinct owner || '/' || name) from needed7
+   where assignment_group_id in (select g from fx7 where name in ('s2', 'a9'))) = 2
+  and (select bool_and(name = lower(name)) from needed7),
+  (select string_agg(owner || '/' || name, ', ') from needed7));
+create temp table blue7 as
+  select (select owner || '/' || name from needed7 where assignment_group_id = (select g from fx7 where name = 'blue')) as grp,
+         (select owner || '/' || name from public.forgejo_repos_needed('https://git.test', 100)
+          where profile_id = (select priv from fx7 where name = 'loner') and assignment_id = pg_temp.a('both')) as solo;
+select pg_temp.check('7b a group Blue and a student with login group-blue derive the same lowercase name',
+  (select grp is not null and grp = solo from blue7), (select grp || ' vs ' || coalesce(solo, 'null') from blue7));
+select public.save_forgejo_group_repo((select g from fx7 where name = 'blue'), (select grp from blue7), 'https://git.test', '{}');
+do $$ begin
+  insert into public.repositories (assignment_id, class_id, profile_id, repository, git_provider, is_github_ready)
+  values (pg_temp.a('both'), pg_temp.cls(), (select priv from fx7 where name = 'loner'), (select solo from blue7), 'forgejo', false);
+  perform pg_temp.check('7c the student''s claim fails once the group holds the name', false, 'insert succeeded');
+exception when unique_violation then
+  perform pg_temp.check('7c the student''s claim fails once the group holds the name', true);
+end $$;
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;
