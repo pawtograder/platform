@@ -31,7 +31,7 @@ export default function MatchReview({
   /** The parent's exam_scan_batches.status for this batch; rows reload whenever it changes. */
   batchStatus: string;
   /** Asks the parent to reload the batch, after something here changed its status. */
-  onBatchChanged: () => void;
+  onBatchChanged: () => Promise<void> | void;
 }) {
   const [rows, setRows] = useState<Scanned[]>([]);
   const [roster, setRoster] = useState<RosterStudent[]>([]);
@@ -96,10 +96,17 @@ export default function MatchReview({
   }, [load, batchStatus]);
 
   // While the worker creates submissions, rows change one at a time; follow them.
+  // A tick is skipped while the previous poll is still out: if each request takes longer than
+  // POLL_MS, the next one would supersede it before it lands and nothing would ever update.
+  const polling = useRef(false);
   useEffect(() => {
     if (batchStatus !== "finalizing") return;
     const t = setInterval(() => {
-      if (document.visibilityState === "visible") void load();
+      if (document.visibilityState !== "visible" || polling.current) return;
+      polling.current = true;
+      void load().finally(() => {
+        polling.current = false;
+      });
     }, POLL_MS);
     return () => clearInterval(t);
   }, [batchStatus, load]);
@@ -169,8 +176,10 @@ export default function MatchReview({
       toaster.success({ title: `Queued ${data ?? 0} submission(s) for creation` });
       // The RPC moved the batch to 'finalizing'. Reload here and in the parent, so the page shows
       // that and starts polling, instead of the review state it had before the click (#1262).
+      // Awaited, so Create stays disabled until the parent has seen 'finalizing'; otherwise a
+      // second click in that gap queues every row again.
       await load();
-      onBatchChanged();
+      await onBatchChanged();
     } catch (e) {
       toaster.error({ title: "Finalize failed", description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -298,7 +307,15 @@ export default function MatchReview({
         </Table.Body>
       </Table.Root>
       <Flex>
-        <Button size="xs" variant="ghost" onClick={load}>
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() => {
+            // The batch too, so its badge and frozen state agree with the rows (#1262 step 5).
+            void load();
+            void onBatchChanged();
+          }}
+        >
           Refresh
         </Button>
       </Flex>

@@ -176,3 +176,44 @@ test("a page count that fails keeps the last count instead of showing 0", async 
   expect(await screen.findByText(/Couldn.t refresh the batches \(count failed\)/)).toBeInTheDocument();
   expect(screen.getByText("Reading pages: 2 of 3")).toBeInTheDocument();
 });
+
+test("Create stays disabled until the page has reloaded the batch", async () => {
+  mockResults.exam_scanned_submissions = () => ({ data: [scanned(1, false)], error: null });
+  mockRpc.mockResolvedValue({ data: 1, error: null });
+  // The parent's batch reload is still out: its batchStatus prop still says 'review'.
+  let finishBatchReload: () => void = () => {};
+  const onBatchChanged = jest.fn(() => new Promise<void>((resolve) => (finishBatchReload = resolve)));
+  render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={onBatchChanged} />));
+  const create = await screen.findByRole("button", { name: "Create 1 submission(s)" });
+  fireEvent.click(create);
+  await waitFor(() => expect(onBatchChanged).toHaveBeenCalledTimes(1));
+  expect(create).toBeDisabled();
+  fireEvent.click(create);
+  expect(mockRpc).toHaveBeenCalledTimes(1);
+  await act(async () => finishBatchReload());
+});
+
+test("Refresh reloads the batch as well as the rows", async () => {
+  mockResults.exam_scanned_submissions = () => ({ data: [scanned(1, false)], error: null });
+  const onBatchChanged = jest.fn();
+  render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={onBatchChanged} />));
+  await screen.findByText("Student 1");
+  const before = count("exam_scanned_submissions");
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Refresh" })));
+  expect(onBatchChanged).toHaveBeenCalledTimes(1);
+  expect(count("exam_scanned_submissions")).toBe(before + 1);
+});
+
+test("progress still updates when each poll takes longer than the poll interval", async () => {
+  // Every batch request takes 5 s, longer than the 4 s interval.
+  let read = 1;
+  mockResults.exam_scan_batches = () =>
+    new Promise((resolve) => setTimeout(() => resolve({ data: [batch("ocr")], error: null }), 5000));
+  mockResults.exam_scan_pages = () => ({ count: read, error: null });
+  render(wrap(<ExamScansPage />));
+  for (let i = 0; i < 12; i++) await act(async () => jest.advanceTimersByTime(500));
+  expect(screen.getByRole("status")).toHaveTextContent("Reading pages: 1 of 3");
+  read = 3;
+  for (let i = 0; i < 40; i++) await act(async () => jest.advanceTimersByTime(500));
+  expect(screen.getByRole("status")).toHaveTextContent("Reading pages: 3 of 3");
+});

@@ -108,11 +108,18 @@ function ExamScansPageContent() {
 
   // Poll while the worker is moving a batch on by itself. A hidden tab skips its ticks and catches
   // up as soon as it is shown again.
+  // A tick is skipped while the previous poll is still out: if each request takes longer than
+  // POLL_MS, the next one would supersede it before it lands and nothing would ever update.
   const working = useMemo(() => batches.some((b) => scanBatchStatus(b.status).working), [batches]);
+  const polling = useRef(false);
   useEffect(() => {
     if (!examId || !working) return;
     const refreshIfVisible = () => {
-      if (document.visibilityState === "visible") void loadBatches(examId);
+      if (document.visibilityState !== "visible" || polling.current) return;
+      polling.current = true;
+      void loadBatches(examId).finally(() => {
+        polling.current = false;
+      });
     };
     const t = setInterval(refreshIfVisible, POLL_MS);
     document.addEventListener("visibilitychange", refreshIfVisible);
