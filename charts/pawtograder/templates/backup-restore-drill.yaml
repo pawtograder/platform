@@ -127,9 +127,14 @@ spec:
                   mc cp "s3/${S3_BUCKET}/daily/{{ $app }}-${APP_TS}.dump" /work/{{ $app }}.dump
                   echo "daily/{{ $app }}-${APP_TS}" > /work/{{ $app }}-name
                   {{- if eq $app "forgejo" }}
-                  # Only the archive's file list: the drill checks every repository
-                  # the restored database names is in the archive from the same run.
-                  mc cat "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.tar.gz" | tar -tzf - > /work/forgejo.list
+                  # The archive from the same run: its file list, to match against
+                  # the restored database, and its repositories, extracted for the
+                  # restore-drill-forgejo-repositories container to git fsck.
+                  mc cp "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.tar.gz" /scratch/forgejo.tar.gz
+                  tar -tzf /scratch/forgejo.tar.gz > /work/forgejo.list
+                  mkdir -p /scratch/forgejo-data
+                  tar -xzf /scratch/forgejo.tar.gz -C /scratch/forgejo-data "{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}"
+                  rm -f /scratch/forgejo.tar.gz
                   {{- end }}
                   {{- end }}
               env:
@@ -143,6 +148,9 @@ spec:
                   valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.s3 }}, key: AWS_SECRET_ACCESS_KEY } }
               volumeMounts:
                 - { name: work, mountPath: /work }
+                {{- if .Values.forgejo.enabled }}
+                - { name: scratch, mountPath: /scratch }
+                {{- end }}
           containers:
             - name: restore-drill
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
@@ -260,15 +268,21 @@ spec:
                   echo "[drill] forgejo: restored ${USERS} users (require >= 1)"
                   [ "$USERS" -ge 1 ] || { echo "[drill] FATAL: forgejo has no users"; exit 1; }
                   # Every repository the database names must be in the archive
-                  # taken right after the dump; the archive may hold newer ones.
-                  REPOS=0; MISSING=0
+                  # taken after the dump. One deleted or renamed while the backup
+                  # ran is missing, and fails the drill for that set. One created
+                  # while it ran is only in the archive, and is reported.
+                  ROOT="{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}"
+                  psql -d forgejo -tAc "SELECT lower(owner_name) || '/' || lower_name FROM repository;" | sort > /tmp/db-repos
+                  sed -n "s,^${ROOT}/\([^/]*/[^/]*\)\.git/\$,\1,p" /work/forgejo.list | grep -v '\.wiki$' | sort > /tmp/archive-repos || true
+                  REPOS=$(wc -l < /tmp/db-repos)
+                  MISSING=0
                   while IFS= read -r repo; do
-                    REPOS=$((REPOS + 1))
-                    if ! grep -qxF "{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}/${repo}.git/" /work/forgejo.list; then
-                      echo "[drill] forgejo: repository ${repo} is in the database but not in the archive"
-                      MISSING=$((MISSING + 1))
-                    fi
-                  done < <(psql -d forgejo -tAc "SELECT lower(owner_name) || '/' || lower_name FROM repository;")
+                    echo "[drill] forgejo: repository ${repo} is in the database but not in the archive"
+                    MISSING=$((MISSING + 1))
+                  done < <(comm -23 /tmp/db-repos /tmp/archive-repos)
+                  while IFS= read -r repo; do
+                    echo "[drill] forgejo: repository ${repo} is in the archive but not in the database (created during the backup?)"
+                  done < <(comm -13 /tmp/db-repos /tmp/archive-repos)
                   echo "[drill] forgejo: ${REPOS} repositories in the database, ${MISSING} missing from the archive"
                   [ "$MISSING" -eq 0 ] || { echo "[drill] FATAL: the database and the archive don't match"; exit 1; }
                   {{- else }}
@@ -281,6 +295,44 @@ spec:
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
                 - { name: work, mountPath: /work }
+            {{- if eq $app "forgejo" }}
+            # git fsck on every repository in the archive, wikis included, on
+            # Forgejo's own image. A repository missing objects, with a ref to
+            # a missing object, or that isn't a git repository fails the drill.
+            - name: restore-drill-forgejo-repositories
+              image: {{ include "gitea.image" $.Subcharts.forgejo }}
+              imagePullPolicy: {{ $.Values.forgejo.image.pullPolicy | default "IfNotPresent" }}
+              {{- with $.Values.forgejo.containerSecurityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export HOME=/tmp GIT_CONFIG_NOSYSTEM=1
+                  # Extracted as root with Forgejo's owner kept; git's ownership
+                  # check would otherwise refuse them.
+                  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+                  ROOT=/scratch/forgejo-data/{{ trimPrefix "./" (include "pawtograder.backupApps.forgejoRepoRoot" $) }}
+                  REPOS=0
+                  BROKEN=0
+                  for repo in "$ROOT"/*/*.git; do
+                    [ -e "$repo" ] || continue
+                    REPOS=$((REPOS + 1))
+                    if ! GIT_DIR="$repo" git fsck --connectivity-only --no-dangling --no-progress; then
+                      echo "[drill] forgejo: ${repo#"$ROOT"/} fails git fsck"
+                      BROKEN=$((BROKEN + 1))
+                    fi
+                  done
+                  echo "[drill] forgejo: git fsck on ${REPOS} repositories in the archive, ${BROKEN} failed"
+                  [ "$BROKEN" -eq 0 ] || { echo "[drill] FATAL: the archive holds broken repositories"; exit 1; }
+                  echo "[drill] restore drill PASSED for the repositories of $(cat /work/forgejo-name)"
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
+                - { name: work, mountPath: /work }
+            {{- end }}
             {{- end }}
           volumes:
             # Throwaway PGDATA — its own volume, off the primary's tier.
