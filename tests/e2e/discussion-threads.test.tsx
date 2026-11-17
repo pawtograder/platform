@@ -104,6 +104,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("A short, descriptive subject for your post. Be specific.")).toBeVisible();
     await expect(page.getByText("Description", { exact: true })).toBeVisible();
     await expect(page.getByText("A detailed description of your post. Be specific.")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Description" })).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Submit" })).toBeVisible();
 
     // Scan the "New Discussion Thread" form before filling/submitting — it has
@@ -197,6 +198,9 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Yes.")).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
+    await page.getByText("Edit", { exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Edit reply" })).toBeVisible();
+    await page.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
 
     // Need to go to browse topics to see the thread (because it's public)
