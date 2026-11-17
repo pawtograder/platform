@@ -29,7 +29,9 @@ a broken or unschedulable app backup must not cost Pawtograder its nightly dump.
 The dump runs in an init container on <app>-db.image (see
 pawtograder.backupApps.image), the upload in the main container on
 backup.image, which has mc. A failed run is retried in a new pod
-(backoffLimit) with a fresh scratch volume.
+(backoffLimit) with a fresh scratch volume, except an incomplete Forgejo set:
+a retry would fail on the same repository and upload another whole set, so
+the upload container exits 120 and podFailurePolicy fails the Job at once.
 */ -}}
 {{- if and .Values.postgres.enabled .Values.backup.enabled }}
 {{- range $app := splitList " " (include "pawtograder.backupApps.enabled" $) }}
@@ -53,6 +55,20 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
+      {{- if $forgejo }}
+      # Exit 120 from upload is an incomplete set that was uploaded. Each
+      # repository was already tried three times, so a retry would only fail
+      # on the same one and upload another whole set. The Job still counts
+      # as failed (status.failed 1), so PawtograderBackupJobFailed fires.
+      # Any other failure, exit 1 included, is retried as before.
+      podFailurePolicy:
+        rules:
+          - action: FailJob
+            onExitCodes:
+              containerName: upload
+              operator: In
+              values: [120]
+      {{- end }}
       # No ttlSecondsAfterFinished, as in backup.yaml: PawtograderBackupJobFailed
       # reads the failed Job object.
       activeDeadlineSeconds: {{ $.Values.backup.activeDeadlineSeconds | default 3600 }}
@@ -278,9 +294,15 @@ spec:
                     for f in $FILES; do upload "/scratch/${f%%:*}" "s3/${S3_BUCKET}/$1/{{ $app }}-${TS}.${f#*:}"; done
                   }
                   DEFERRED_FAILURE=""
+                  # Retried in a new pod.
+                  DEFERRED_EXIT=1
                   {{- if $forgejo }}
+                  # 120 fails the Job without a retry (podFailurePolicy above).
+                  # None of the commands here exits with 120: curl's codes end
+                  # at 101, apt-get's at 100.
                   if [ -s /scratch/broken-repositories ]; then
                     DEFERRED_FAILURE="repositories git could not read were left out of the set: $(tr '\n' ' ' < /scratch/broken-repositories)"
+                    DEFERRED_EXIT=120
                     # The set's status travels with it: forgejo-<TS>.incomplete
                     # lists the omitted repositories, one path per line, and is
                     # uploaded before the dump and the archive, so no reader can
@@ -313,7 +335,7 @@ spec:
                   rm -f /scratch/{{ $app }}.dump /scratch/forgejo.tar.gz
                   if [ -n "$DEFERRED_FAILURE" ]; then
                     echo "[backup-{{ $app }}] FATAL: $DEFERRED_FAILURE (the daily set itself was uploaded and size-checked)"
-                    exit 1
+                    exit "$DEFERRED_EXIT"
                   fi
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
