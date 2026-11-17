@@ -9,7 +9,6 @@
 {{- if or (contains "*" $host) (contains "?" $host) (contains "[" $host) (contains "," $host) (has (lower $host) (list "private" "loopback")) }}
 {{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: anyone who can add a webhook to a repository could then send requests into the cluster" (toString .)) }}
 {{- end }}
-{{- /* A bare literal is checked as its single-address range, so 10.0.0.5 can't slip past what 10.0.0.5/32 refuses. */}}
 {{- $cidr := "" }}
 {{- if contains "/" $host }}
 {{- $cidr = $host }}

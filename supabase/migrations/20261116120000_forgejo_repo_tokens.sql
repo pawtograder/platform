@@ -73,10 +73,7 @@ AS $$
   LIMIT p_limit;
 $$;
 
--- Returns the stamp of the claim it took, or NULL when the row was already claimed. The caller gives
--- the stamp back to delete the row, so a pass whose revocation is still running can't delete a row a
--- later pass now owns: a re-mint clears the claim, and the pass that claims it next stamps its own.
--- clock_timestamp(), not now(): two transactions can share a start time, and these stamps must differ.
+-- Returns its claim stamp (clock_timestamp(), so no two claims share one) for the caller's delete to match.
 CREATE OR REPLACE FUNCTION public.claim_forgejo_repo_token_revocation(
   p_id bigint,
   p_stale_minutes integer

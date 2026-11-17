@@ -91,8 +91,7 @@ export async function revokeDroppedTokens(
       if (!token.login) throw new Error("Missing Forgejo login for workspace token revocation");
       await revoke(config, token.login, token.repository_id);
 
-      // Only the row this pass claimed. A re-mint clears the claim (record_forgejo_repo_token) and a
-      // later pass stamps its own, so matching the stamp leaves that pass's row, and its token, tracked.
+      // Match this pass's own stamp: a re-mint plus a later pass's claim must keep that row.
       const { error: deleteError } = await supabase
         .from("forgejo_repo_tokens")
         .delete()
