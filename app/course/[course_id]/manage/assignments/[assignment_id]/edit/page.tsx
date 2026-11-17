@@ -125,6 +125,16 @@ export default function EditAssignment() {
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
         }
+        // Moving to Forgejo (#1091) writes the settings the form shows off and disabled for it. An
+        // assignment already saved on Forgejo keeps its stored values. The host can only change
+        // while no repositories exist, so no GitHub cleanup is needed here.
+        if (values.git_provider === "forgejo" && queryData?.git_provider !== "forgejo") {
+          values.has_autograder = false;
+          values.protect_block_force_push = false;
+          values.protect_require_pull_request = false;
+          values.protect_required_reviewers = 0;
+          values.enable_repo_analytics = false;
+        }
         // Switching an assignment that HAS a handout to a no-repo mode has to clean up the handout
         // BEFORE the pointer to it is discarded.
         //
@@ -642,6 +652,7 @@ export default function EditAssignment() {
       update,
       updateAsync,
       queryData?.has_autograder,
+      queryData?.git_provider,
       revalidateServerCaches
     ]
   );
