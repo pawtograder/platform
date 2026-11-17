@@ -81,6 +81,15 @@ export type Database = {
         Args: { messages: Json[]; queue_name: string; sleep_seconds?: number };
         Returns: number[];
       };
+      set_vt_if_claimed: {
+        Args: {
+          msg_id: number;
+          queue_name: string;
+          read_ct: number;
+          vt: number;
+        };
+        Returns: boolean;
+      };
     };
     Enums: {
       [_ in never]: never;
