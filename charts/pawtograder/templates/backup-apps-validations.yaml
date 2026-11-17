@@ -1,0 +1,38 @@
+{{- /* Guards for the Forgejo and Coder backups (backup-apps.yaml). Renders nothing. */ -}}
+{{- $apps := compact (splitList " " (include "pawtograder.backupApps.enabled" .)) -}}
+{{- $backups := and .Values.postgres.enabled .Values.backup.enabled -}}
+{{- if and $apps (eq .Values.global.environment "production") -}}
+{{- if not $backups -}}
+{{- fail (printf "%s on with backup.enabled=false (or postgres.enabled=false): nothing would back up their data. Production needs backup.enabled=true with this chart's Postgres; see README \"Databases\" under \"Forgejo and Coder\"." (join " and " $apps)) -}}
+{{- end -}}
+{{- if not .Values.backup.verify.enabled -}}
+{{- fail (printf "%s on with backup.verify.enabled=false: nothing would notice a missing or empty app backup. Production keeps backup-verify on." (join " and " $apps)) -}}
+{{- end -}}
+{{- end -}}
+{{- if $backups -}}
+{{- if and .Values.forgejo.enabled (not (include "pawtograder.backupApps.forgejoClaim" .)) -}}
+{{- fail "backup.enabled with forgejo on needs Forgejo's /data on a PersistentVolumeClaim (forgejo.persistence.enabled, or an extraVolumes entry named data with persistentVolumeClaim.claimName): the backup archives the repositories from that claim" -}}
+{{- end -}}
+{{- if and .Values.forgejo.enabled (not (include "pawtograder.backupApps.forgejoRepoRoot" .)) -}}
+{{- fail "forgejo.gitea.config.repository.ROOT must be under /data: the backup archives Forgejo's /data volume, and repositories kept elsewhere would have no backup" -}}
+{{- end -}}
+{{- /* pg_dump refuses a server newer than itself, and in pawtograder mode the server is postgres.image. */ -}}
+{{- $serverMajor := regexFind "^[0-9]+" (toString .Values.postgres.image.tag) -}}
+{{- range $app := $apps -}}
+{{- $dumpMajor := regexFind "^[0-9]+" (toString (index $.Values (printf "%s-db" $app)).image.tag) -}}
+{{- $img := (index $.Values (printf "%s-db" $app)).image -}}
+{{- if and (eq (index $.Values $app).database "pawtograder") $serverMajor $dumpMajor (lt (atoi $dumpMajor) (atoi $serverMajor)) -}}
+{{- fail (printf "%s-db.image.tag=%s dumps %s's database, but pg_dump %s can't dump postgres.image (Postgres %s); set %s-db.image to Postgres %s or newer" $app (toString $img.tag) $app $dumpMajor $serverMajor $app $serverMajor) -}}
+{{- end -}}
+{{- /* forgejo-coder-validations.yaml checks these only with <app>-db on; the backups use the image either way. */ -}}
+{{- $tag := toString $img.tag -}}
+{{- if and (eq $.Values.global.environment "production") (or (not $tag) (eq $tag "latest") (hasSuffix "-latest" $tag)) -}}
+{{- fail (printf "%s-db.image.tag=%q: the %s backup dumps with this image, and production deploys must pin an immutable tag" $app $tag $app) -}}
+{{- end -}}
+{{- with $.Values.global.imageRegistry -}}
+{{- if not (hasPrefix (printf "%s/" .) (printf "%s/" $img.registry)) -}}
+{{- fail (printf "global.imageRegistry=%s doesn't reach the %s backup's image; point %s-db.image.registry at it (got %q)" . $app $app $img.registry) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

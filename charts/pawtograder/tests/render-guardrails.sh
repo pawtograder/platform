@@ -2904,6 +2904,146 @@ else echo "ok   [$label]"; fi
 
 echo
 
+echo "== backups of Forgejo and Coder (#1192) =="
+# backup-apps.yaml renders one CronJob per enabled app; verify and the restore drill
+# check each app's newest set. The overlay runs both apps on this chart's Postgres.
+BK=(--set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com)
+BK_OWN_FORGEJO=(--set forgejo.database=own --set forgejo-db.enabled=true
+  --set forgejo.gitea.config.database.HOST=pawtograder-forgejo-db:5432)
+BK_OWN_CODER=(--set coder.database=own --set coder-db.enabled=true
+  --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
+  --set 'coder.coder.env[0].value=postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable')
+BK_NO_FORGEJO=(--set forgejo.enabled=false --set forgejoRunner.enabled=false
+  --set coder.externalAuth.forgejo.enabled=false)
+BK_NO_CODER=(--set coder.enabled=false)
+BK_ONLY=(--show-only templates/backup-apps.yaml)
+
+apps_has "backups: Forgejo gets a backup CronJob" yes "name: pawtograder-backup-forgejo" "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Coder gets a backup CronJob" yes "name: pawtograder-backup-coder" "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the app backups run on backup.schedule" yes 'schedule: "17 3 * * *"' "${BK[@]}" \
+  --set 'backup.schedule=17 3 * * *' "${BK_ONLY[@]}"
+apps_has "backups: the app sets land under daily/, which the retention tiers cover" yes \
+  's3/${S3_BUCKET}/$1/forgejo-${TS}.${f#*:}' "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the monthly tier copies app sets too" yes "monthly/coder-\${TS:0:6}" "${BK[@]}" \
+  --set backup.retention.monthlyDays=90 "${BK_ONLY[@]}"
+apps_has "backups: off with backup.enabled=false" no "pawtograder-backup-forgejo" --set backup.enabled=false
+apps_has "backups: Forgejo off renders no Forgejo backup" no "pawtograder-backup-forgejo" "${BK[@]}" "${BK_NO_FORGEJO[@]}"
+apps_has "backups: Coder off renders no Coder backup" no "pawtograder-backup-coder" "${BK[@]}" "${BK_NO_CODER[@]}"
+apps_has "backups: both off render no app backup" no "backup-forgejo" "${BK[@]}" "${BK_NO_FORGEJO[@]}" "${BK_NO_CODER[@]}"
+apps_has "backups: both off still back up Pawtograder" yes "name: pawtograder-backup" "${BK[@]}" \
+  "${BK_NO_FORGEJO[@]}" "${BK_NO_CODER[@]}" --show-only templates/backup.yaml
+apps_has "backups: Forgejo on pawtograder dumps from this chart's Postgres" yes "value: pawtograder-postgres" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo on pawtograder dumps as supabase_admin" yes "value: supabase_admin" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo on own dumps from forgejo-db" yes "value: pawtograder-forgejo-db" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_OWN_FORGEJO[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo on own dumps with forgejo-db's superuser" yes "name: pawtograder-forgejo-db-superuser" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_OWN_FORGEJO[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo on own no longer dumps from this chart's Postgres" no "value: pawtograder-postgres" \
+  "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_OWN_FORGEJO[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Coder on pawtograder dumps from this chart's Postgres" yes "value: pawtograder-postgres" \
+  "${BK[@]}" "${BK_NO_FORGEJO[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Coder on own dumps from coder-db" yes "value: pawtograder-coder-db" \
+  "${BK[@]}" "${BK_NO_FORGEJO[@]}" "${BK_OWN_CODER[@]}" "${BK_ONLY[@]}"
+apps_has "backups: the dump uses <app>-db.image, which is at least the server's Postgres" yes \
+  "image: ghcr.io/pawtograder/mirror/postgres:18.6" "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo's backup mounts its repository volume read-only" yes "claimName: gitea-shared-storage" \
+  "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo's backup runs on Forgejo's node (RWO volume)" yes "app.kubernetes.io/name: forgejo" \
+  "${BK[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo's backup takes Forgejo's tolerations" yes "key: forgejo-only" "${BK[@]}" \
+  --set 'forgejo.tolerations[0].key=forgejo-only' --set 'forgejo.tolerations[0].operator=Exists' "${BK_ONLY[@]}"
+apps_has "backups: Forgejo's backup follows persistence.claimName" yes "claimName: repos" "${BK[@]}" \
+  --set forgejo.persistence.claimName=repos "${BK_ONLY[@]}"
+apps_has "backups: the archive is taken after the database dump" yes \
+  "find /data -mindepth 1 -maxdepth 1" "${BK[@]}" "${BK_ONLY[@]}"
+if apps "${BK[@]}" "${BK_ONLY[@]}" >"$OUTFILE"; then
+  label="backups: Forgejo's pg_dump runs before its tar"
+  dump_line=$(grep -n 'pg_dump -Fc > /scratch/forgejo.dump' "$OUTFILE" | head -1 | cut -d: -f1)
+  tar_line=$(grep -n 'tar -C /data' "$OUTFILE" | head -1 | cut -d: -f1)
+  if [ -n "$dump_line" ] && [ -n "$tar_line" ] && [ "$dump_line" -lt "$tar_line" ]; then echo "ok   [$label]"
+  else echo "FAIL [$label]: pg_dump at line ${dump_line:-none}, tar at ${tar_line:-none}"; FAILED=1; fi
+fi
+apps_has "backups: verify checks Forgejo's newest dump" yes 'daily/forgejo-${APP_TS}.dump' "${BK[@]}" \
+  --show-only templates/backup-verify.yaml
+apps_has "backups: verify requires Forgejo's archive beside its dump" yes 'has no forgejo-${APP_TS}.tar.gz beside it' \
+  "${BK[@]}" --show-only templates/backup-verify.yaml
+apps_has "backups: verify checks Coder's newest dump" yes 'daily/coder-${APP_TS}.dump' "${BK[@]}" \
+  --show-only templates/backup-verify.yaml
+apps_has "backups: verify skips Forgejo when it is off" no "daily/forgejo-" "${BK[@]}" "${BK_NO_FORGEJO[@]}" \
+  --show-only templates/backup-verify.yaml
+apps_has "backups: verify skips Coder when it is off" no "daily/coder-" "${BK[@]}" "${BK_NO_CODER[@]}" \
+  --show-only templates/backup-verify.yaml
+apps_has "backups: verify looks for the repositories under repository.ROOT" yes "for want in ./repos/" "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/data/repos --show-only templates/backup-verify.yaml
+DRILL=(--set backup.restoreDrill.enabled=true --show-only templates/backup-restore-drill.yaml)
+apps_has "backups: the drill restores Forgejo's dump" yes "name: restore-drill-forgejo" "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill restores Coder's dump" yes "name: restore-drill-coder" "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill fails on any app restore error" yes "pg_restore --exit-on-error --no-owner --no-acl -d forgejo" \
+  "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill matches Forgejo's repositories against the archive" yes \
+  "is in the database but not in the archive" "${BK[@]}" "${DRILL[@]}"
+apps_has "backups: the drill has no Forgejo step with Forgejo off" no "restore-drill-forgejo" "${BK[@]}" \
+  "${BK_NO_FORGEJO[@]}" "${DRILL[@]}"
+apps_has "backups: the drill restores on own-mode's image" yes "image: ghcr.io/pawtograder/mirror/postgres:18.6" \
+  "${BK[@]}" "${BK_OWN_CODER[@]}" "${DRILL[@]}"
+apps_has "backups: a failed app backup pages like Pawtograder's" yes \
+  'job_name=~"pawtograder-backup-((forgejo|coder)-)?[0-9].*"' "${BK[@]}" --set monitoring.enabled=true \
+  --set monitoring.allowMissingWorkflowMetrics=true --set monitoring.prometheusRules.allowUnselectedRules=true \
+  --show-only templates/prometheus-rules.yaml
+apps_refused "backups: Forgejo without a volume claim is refused" \
+  "backup.enabled with forgejo on needs Forgejo's /data on a PersistentVolumeClaim" "${BK[@]}" \
+  --set forgejo.persistence.enabled=false
+apps_refused "backups: repositories outside /data are refused" \
+  "forgejo.gitea.config.repository.ROOT must be under /data" "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/repos
+apps_refused "backups: a dump image older than this chart's Postgres is refused" \
+  "pg_dump 16 can't dump postgres.image (Postgres 17)" "${BK[@]}" --set forgejo-db.image.tag=16.4
+apps_has "backups: own mode dumps with its own server's image, whatever postgres.image is" yes \
+  "image: ghcr.io/pawtograder/mirror/postgres:16.4" "${BK[@]}" "${BK_NO_CODER[@]}" "${BK_OWN_FORGEJO[@]}" \
+  --set forgejo-db.image.tag=16.4 "${BK_ONLY[@]}"
+apps_refused "backups: a dump image outside global.imageRegistry is refused" \
+  "global.imageRegistry=reg.example.com doesn't reach the forgejo backup's image" "${BK[@]}" "${BK_NO_CODER[@]}" \
+  --set forgejoRunner.enabled=false --set global.imageRegistry=reg.example.com
+
+# Production: Forgejo or Coder on without these backups is refused.
+BK_PROD=("${BASE[@]}" -n pawtograder -f "$CHART/examples/values-forgejo-coder.yaml"
+  --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast
+  --set coderBootstrap.workspaces.image=ghcr.io/pawtograder/coder-workspace:v1.0.0)
+bk_prod() {
+  local label="$1" want="$2"; shift 2
+  if helm template pawtograder "$CHART" "${BK_PROD[@]}" "$@" >/dev/null 2>"$ERRFILE"; then
+    if [ -z "$want" ]; then echo "ok   [$label]"; else echo "FAIL [$label]: render SUCCEEDED but the guard should have refused it"; FAILED=1; fi
+  elif [ -z "$want" ]; then
+    echo "FAIL [$label]: render was REFUSED but should have succeeded"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  elif ! grep -qF "$want" "$ERRFILE"; then
+    echo "FAIL [$label]: refused, but message missing expected text: $want"
+    echo "       got: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  else
+    echo "ok   [$label]"
+  fi
+}
+bk_prod "backups: production with Forgejo and Coder and no backups is refused" \
+  "forgejo and coder on with backup.enabled=false"
+bk_prod "backups: production with Forgejo alone and no backups is refused" \
+  "forgejo on with backup.enabled=false" "${BK_NO_CODER[@]}"
+bk_prod "backups: production with Coder alone and no backups is refused" \
+  "coder on with backup.enabled=false" "${BK_NO_FORGEJO[@]}"
+bk_prod "backups: production with Forgejo on own and no backups is refused" \
+  "forgejo and coder on with backup.enabled=false" "${BK_OWN_FORGEJO[@]}" --set forgejo-db.storage.className=fast
+bk_prod "backups: production with backups but no verify is refused" \
+  "backup.verify.enabled=false" "${BK[@]}" --set backup.verify.enabled=false
+bk_prod "backups: production with a floating dump image is refused" \
+  'forgejo-db.image.tag="latest": the forgejo backup dumps with this image' "${BK[@]}" --set forgejo-db.image.tag=latest
+bk_prod "backups: production with backups on renders" "" "${BK[@]}"
+bk_prod "backups: production with both apps on own and backups on renders" "" "${BK[@]}" "${BK_OWN_FORGEJO[@]}" \
+  "${BK_OWN_CODER[@]}" --set forgejo-db.storage.className=fast --set coder-db.storage.className=fast
+assert_renders "backups: production with neither app needs no app backup" --set backup.enabled=false
+apps_has "backups: outside production, no backups is still allowed" yes "kind: Deployment" --set backup.enabled=false
+echo
+
 echo "== pg_hba keeps shared-mode Forgejo and Coder roles out of other databases =="
 
 APP_HBA_OWN_CODER=(
@@ -3143,7 +3283,8 @@ apps_has "template: workspaces default to the chart's coder-workspace image" yes
   --show-only templates/coder-bootstrap.yaml
 apps_has "template: a workspace image override is passed through" yes 'image: "registry.school.edu/ws:1"' \
   --set coderBootstrap.workspaces.image=registry.school.edu/ws:1 --show-only templates/coder-bootstrap.yaml
-APPS_PROD=("${BASE[@]}" --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast)
+APPS_PROD=("${BASE[@]}" --set forgejo.persistence.storageClass=fast --set coderBootstrap.workspaces.storageClass=fast
+  --set backup.enabled=true --set backup.s3.endpoint=https://s3.example.com)
 apps_has "template: production takes the default workspace image's appVersion tag" yes \
   'image: "ghcr.io/pawtograder/coder-workspace:' "${APPS_PROD[@]}" --show-only templates/coder-bootstrap.yaml
 apps_refused "template: production refuses an untagged workspace image" \
