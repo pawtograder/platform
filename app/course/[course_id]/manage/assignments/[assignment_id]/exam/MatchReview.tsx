@@ -72,6 +72,13 @@ export default function MatchReview({
     null
   );
   const [rowsError, setRowsError] = useState<string | null>(null);
+  // The batch status Create was clicked in, until the page reports a different one. If the
+  // page's reload after Create fails or is superseded, batchStatus still says 'review' and Create
+  // would be offered again, queueing every row a second time.
+  const [queuedFrom, setQueuedFrom] = useState<string | null>(null);
+  useEffect(() => {
+    setQueuedFrom((q) => (q !== null && q !== batchStatus ? null : q));
+  }, [batchStatus]);
   // Latest load wins, and nothing is written after unmount (see scans/page.tsx).
   const loadSeq = useRef(0);
   const mounted = useRef(false);
@@ -277,6 +284,8 @@ export default function MatchReview({
       const { data, error } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
       if (error) throw error;
       toaster.success({ title: `Queued ${data ?? 0} submission(s) for creation` });
+      // Only a call that queued work moves the batch to 'finalizing'.
+      if ((data ?? 0) > 0) setQueuedFrom(batchStatus);
       // The RPC moved the batch to 'finalizing'. Reload here and in the parent, so the page shows
       // that and starts polling, instead of the review state it had before the click (#1262).
       // Awaited, so Create stays disabled until the parent has seen 'finalizing'; otherwise a
@@ -288,7 +297,7 @@ export default function MatchReview({
     } finally {
       setBusy(false);
     }
-  }, [batchId, load, onBatchChanged]);
+  }, [batchId, batchStatus, load, onBatchChanged]);
 
   // Count rows that are not FINALIZED, not rows without a submission id. finalized_at is the
   // worker's single source of truth for "fully finalized" (set last, after the submission row,
@@ -311,7 +320,7 @@ export default function MatchReview({
           colorPalette="green"
           onClick={createSubmissions}
           loading={busy}
-          disabled={busy || batchStatus === "finalizing" || unfinalizedCount === 0}
+          disabled={busy || batchStatus === "finalizing" || queuedFrom === batchStatus || unfinalizedCount === 0}
         >
           Create {unfinalizedCount} submission(s)
         </Button>

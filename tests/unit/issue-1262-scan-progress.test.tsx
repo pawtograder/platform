@@ -217,3 +217,21 @@ test("progress still updates when each poll takes longer than the poll interval"
   for (let i = 0; i < 40; i++) await act(async () => jest.advanceTimersByTime(500));
   expect(screen.getByRole("status")).toHaveTextContent("Reading pages: 3 of 3");
 });
+
+test("Create stays disabled when the page's batch reload fails, until the batch status changes", async () => {
+  mockResults.exam_scanned_submissions = () => ({ data: [scanned(1, false)], error: null });
+  mockRpc.mockResolvedValue({ data: 1, error: null });
+  // The reload settles but changes nothing: batchStatus stays 'review'.
+  const props = { batchId: 5, classId: 7, onBatchChanged: jest.fn() };
+  const { rerender } = render(wrap(<MatchReview {...props} batchStatus="review" />));
+  const create = await screen.findByRole("button", { name: "Create 1 submission(s)" });
+  fireEvent.click(create);
+  await waitFor(() => expect(props.onBatchChanged).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(create).toBeDisabled());
+  fireEvent.click(create);
+  expect(mockRpc).toHaveBeenCalledTimes(1);
+  // Once the page sees the batch move on (and, after an error and Retry, come back), Create returns.
+  rerender(wrap(<MatchReview {...props} batchStatus="error" />));
+  rerender(wrap(<MatchReview {...props} batchStatus="review" />));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Create 1 submission(s)" })).not.toBeDisabled());
+});
