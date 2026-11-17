@@ -127,6 +127,13 @@ spec:
                   mc cp "s3/${S3_BUCKET}/daily/{{ $app }}-${APP_TS}.dump" /work/{{ $app }}.dump
                   echo "daily/{{ $app }}-${APP_TS}" > /work/{{ $app }}-name
                   {{- if eq $app "forgejo" }}
+                  # A set marked forgejo-<TS>.incomplete is missing the
+                  # repositories that file lists: fail the drill naming them.
+                  if printf '%s\n' "$OUT" | awk '{print $NF}' | grep -qxF "forgejo-${APP_TS}.incomplete"; then
+                    echo "[drill] FATAL: forgejo-${APP_TS} is incomplete: its backup left out these repositories:"
+                    mc cat "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.incomplete" | sed 's/^/[drill]   /'
+                    exit 1
+                  fi
                   # The archive from the same run: its file list, to match against
                   # the restored database, and its repositories, extracted for the
                   # restore-drill-forgejo-repositories container to git fsck.

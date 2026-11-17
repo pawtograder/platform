@@ -151,6 +151,14 @@ spec:
                     exit 1
                   fi
                   {{- if eq $app "forgejo" }}
+                  # A set whose run left unreadable repositories out carries
+                  # forgejo-<TS>.incomplete, listing them. It's kept for salvage
+                  # only, so the newest set being one fails verify by name.
+                  if printf '%s\n' "$OUT" | awk '{print $NF}' | grep -qxF "forgejo-${APP_TS}.incomplete"; then
+                    echo "[verify] FATAL: forgejo-${APP_TS} is incomplete: its backup left out these repositories:"
+                    mc cat "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.incomplete" | sed 's/^/[verify]   /'
+                    exit 1
+                  fi
                   # The volume archive from the same run: same <TS>, readable to
                   # the end, and holding the repositories root and app.ini (the
                   # SECRET_KEY the database's encrypted columns need).

@@ -8,6 +8,9 @@ them the same retention. Objects:
   daily/forgejo-<TS>.dump        pg_dump -Fc of the forgejo database
   daily/forgejo-<TS>.tar.gz      Forgejo's /data volume: repositories, app.ini,
                                  avatars, attachments and LFS kept on disk
+  daily/forgejo-<TS>.incomplete  only when repositories git couldn't read were
+                                 left out: their paths, one per line. Verify,
+                                 the drill and the README restore reject the set.
 
 The two Forgejo objects share <TS> and form one restore point. Forgejo keeps
 running. The dump is taken first, then each repository is copied with git (a
@@ -173,8 +176,9 @@ spec:
                     rm -rf "${DST:?}/$rel"
                     if [ -d "$src" ]; then
                       # git can't read it (a corrupt repository). The rest of the
-                      # set is still uploaded; the upload container then fails the
-                      # run with this list, and the set gets no monthly copy.
+                      # set is still uploaded with this list beside it as
+                      # forgejo-<TS>.incomplete; the upload container then fails
+                      # the run with it, and the set gets no monthly copy.
                       echo "[backup-forgejo] could not copy repository $rel: left out of this set"
                       echo "$rel" >> /scratch/broken-repositories
                       BROKEN=$((BROKEN + 1))
@@ -277,6 +281,13 @@ spec:
                   {{- if $forgejo }}
                   if [ -s /scratch/broken-repositories ]; then
                     DEFERRED_FAILURE="repositories git could not read were left out of the set: $(tr '\n' ' ' < /scratch/broken-repositories)"
+                    # The set's status travels with it: forgejo-<TS>.incomplete
+                    # lists the omitted repositories, one path per line, and is
+                    # uploaded before the dump and the archive, so no reader can
+                    # see the set without it. backup-verify and the restore
+                    # drill fail on a set that has one, and the README restore
+                    # steps refuse it. The set is kept only for salvage.
+                    upload /scratch/broken-repositories "s3/${S3_BUCKET}/daily/forgejo-${TS}.incomplete"
                   fi
                   {{- end }}
                   upload_all daily
