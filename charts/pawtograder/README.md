@@ -659,11 +659,13 @@ With `global.environment: production`, the render fails when Forgejo or Coder is
 
 **Restoring Forgejo.** Restore both files of one set: the database from one night and the repositories from another don't match. List the sets with `mc ls <bucket>/daily/forgejo-`. A set with a `forgejo-<TS>.incomplete` file beside its `.dump` and `.tar.gz` is incomplete: its run couldn't read the repositories that file lists (`mc cat <bucket>/daily/forgejo-<TS>.incomplete`), and they are not in its archive, wikis included. Such a set is kept only for salvage, for example to extract one repository's files from its archive. Don't restore it; the pod below refuses it and prints the list. Pick the newest set without that file. Then:
 
-1. Stop the nightly job and Forgejo: `kubectl patch cronjob pawtograder-backup-forgejo -p '{"spec":{"suspend":true}}'` and `kubectl scale deployment/pawtograder-forgejo --replicas=0`. Suspending the CronJob doesn't stop a backup Job it already started, and that Job would go on copying the volume while the pod below rewrites it. Delete any such Job, and wait until its pods are gone:
+1. Stop the nightly job and Forgejo: `kubectl patch cronjob pawtograder-backup-forgejo -p '{"spec":{"suspend":true}}'` and `kubectl scale deployment/pawtograder-forgejo --replicas=0`. Suspending the CronJob doesn't stop a backup Job that's already running, and that Job would go on copying the volume while the pod below rewrites it. Delete any such Job, and wait until its pods are gone. The loop takes the Jobs the CronJob started from its `.status.active`, and Jobs started by hand (`kubectl create job --from`), which that list leaves out, from their running pods:
 
    ```sh
-   for job in $(kubectl get cronjob pawtograder-backup-forgejo -o jsonpath='{.status.active[*].name}'); do
-     kubectl delete job "$job" --cascade=foreground --wait
+   for job in $(kubectl get cronjob pawtograder-backup-forgejo -o jsonpath='{.status.active[*].name}') \
+     $(kubectl get pods -l app.kubernetes.io/component=backup-forgejo \
+       --field-selector=status.phase!=Succeeded,status.phase!=Failed -o jsonpath='{.items[*].metadata.labels.job-name}'); do
+     kubectl delete job "$job" --cascade=foreground --wait --ignore-not-found
    done
    kubectl get pods -l app.kubernetes.io/component=backup-forgejo \
      --field-selector=status.phase!=Succeeded,status.phase!=Failed
@@ -742,7 +744,7 @@ spec:
       emptyDir: {}
 ```
 
-**Restoring Coder.** Coder's backup is its database. Suspend `pawtograder-backup-coder`, and stop a running Coder backup Job the way step 1 above does, with `backup-coder` in place of `backup-forgejo` in both commands. Then run `kubectl scale deployment/coder --replicas=0`, and run the same pod with `APP` set to `coder`, `SET` to a `daily/coder-<TS>` set, the connection settings for Coder's server, and no `data` volume. Then scale Coder back to 1 and resume the CronJob. Workspaces created after `<TS>` are no longer in Coder's database, but their pods and home volumes stay in the cluster: delete them with `kubectl`.
+**Restoring Coder.** Coder's backup is its database. Suspend `pawtograder-backup-coder`, and stop a running Coder backup Job the way step 1 above does, with `backup-coder` in place of `backup-forgejo` throughout. Then run `kubectl scale deployment/coder --replicas=0`, and run the same pod with `APP` set to `coder`, `SET` to a `daily/coder-<TS>` set, the connection settings for Coder's server, and no `data` volume. Then scale Coder back to 1 and resume the CronJob. Workspaces created after `<TS>` are no longer in Coder's database, but their pods and home volumes stay in the cluster: delete them with `kubectl`.
 
 **Coder home volumes aren't backed up.** Each workspace keeps the student's files on its own home volume. Nothing copies those volumes, and Coder deletes a workspace's volume with the workspace. Students must push their work to Forgejo: only pushed work is graded, and only pushed work survives a lost volume or a deleted workspace.
 
