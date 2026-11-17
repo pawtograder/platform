@@ -205,8 +205,9 @@ resource "coder_agent" "main" {
     # owner's email is a placeholder (#1222), so any address in the name means there is no name.
     OWNER_GIT_NAME  = contains(["", "default"], data.coder_workspace_owner.me.full_name) || strcontains(data.coder_workspace_owner.me.full_name, "@") ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
     OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
-    # The template import plans with an empty repo_url.
-    FORGEJO_API = "${var.forgejo_url != "" ? trimsuffix(var.forgejo_url, "/") : try(regex("^https?://[^/]+", data.coder_parameter.repo_url.value), "")}/api/v1"
+    # Only the Forgejo this release is set up for. The lookup below sends the owner's token, and
+    # without forgejo_url the repo_url parameter may name any host.
+    FORGEJO_API = var.forgejo_url != "" ? "${trimsuffix(var.forgejo_url, "/")}/api/v1" : ""
     GIT_AUTH_ID = var.external_auth_id
   }
   startup_script = <<-EOT
@@ -214,7 +215,12 @@ resource "coder_agent" "main" {
     git config --global user.name "$OWNER_GIT_NAME"
     # Pawtograder gives each Coder user a placeholder email made from their login id (#1222), so
     # commit as the Forgejo account's address, and fall back to the placeholder if Forgejo won't say.
-    EMAIL="$(curl -fsS -m 10 -H "Authorization: token $(coder external-auth access-token "$GIT_AUTH_ID")" "$FORGEJO_API/user" | jq -r '.email // empty')" || EMAIL=""
+    # Both calls are bounded, so a stalled one can't hold up the editor.
+    EMAIL=""
+    if [ -n "$FORGEJO_API" ]; then
+      TOKEN="$(timeout 10 coder external-auth access-token "$GIT_AUTH_ID" 2>/dev/null)" || TOKEN=""
+      [ -z "$TOKEN" ] || EMAIL="$(curl -fsS -m 10 -H "Authorization: token $TOKEN" "$FORGEJO_API/user" | jq -r '.email // empty')" || EMAIL=""
+    fi
     git config --global user.email "$${EMAIL:-$OWNER_GIT_EMAIL}"
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"

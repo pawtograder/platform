@@ -2177,7 +2177,7 @@ export type Database = {
           created_at: string;
           id: number;
           instance_url: string;
-          user_id: string;
+          user_id: string | null;
         };
         Insert: {
           coder_user_id: string;
@@ -2185,7 +2185,7 @@ export type Database = {
           created_at?: string;
           id?: never;
           instance_url: string;
-          user_id: string;
+          user_id?: string | null;
         };
         Update: {
           coder_user_id?: string;
@@ -2193,7 +2193,7 @@ export type Database = {
           created_at?: string;
           id?: never;
           instance_url?: string;
-          user_id?: string;
+          user_id?: string | null;
         };
         Relationships: [
           {
@@ -2230,7 +2230,7 @@ export type Database = {
           student_inactive_seen_at: string | null;
           superseded_at: string | null;
           updated_at: string;
-          user_id: string;
+          user_id: string | null;
         };
         Insert: {
           assignment_archived_seen_at?: string | null;
@@ -2256,7 +2256,7 @@ export type Database = {
           student_inactive_seen_at?: string | null;
           superseded_at?: string | null;
           updated_at?: string;
-          user_id: string;
+          user_id?: string | null;
         };
         Update: {
           assignment_archived_seen_at?: string | null;
@@ -2282,7 +2282,7 @@ export type Database = {
           student_inactive_seen_at?: string | null;
           superseded_at?: string | null;
           updated_at?: string;
-          user_id?: string;
+          user_id?: string | null;
         };
         Relationships: [
           {

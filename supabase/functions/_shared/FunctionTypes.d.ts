@@ -380,8 +380,9 @@ export type WorkspaceOpenRequest = {
 export type WorkspaceStep = "build" | "clone" | "editor";
 export type WorkspaceOpenResponse = {
   /**
-   * `restarting`: workspace-open is stopping the workspace to start it again; a status read starts it
-   * once the stop finishes, and it reads `starting` from then on. `account_conflict`: the student's
+   * `restarting`: workspace-open is stopping the workspace to start it again, or found it already
+   * being stopped; a status read starts it once the stop finishes, and it reads `starting` from then
+   * on. Keep polling workspace-status while it reads `restarting`. `account_conflict`: the student's
    * Coder account can't be signed in to and staff have to remove it; `message` says so.
    */
   status: "not_started" | "starting" | "restarting" | "ready" | "failed" | "needs_linking" | "account_conflict";
