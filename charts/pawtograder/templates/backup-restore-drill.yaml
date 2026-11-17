@@ -280,7 +280,8 @@ spec:
                   # while it ran is only in the archive, and is reported.
                   ROOT="{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}"
                   psql -d forgejo -tAc "SELECT lower(owner_name) || '/' || lower_name FROM repository;" | sort > /tmp/db-repos
-                  sed -n "s,^${ROOT}/\([^/]*/[^/]*\)\.git/\$,\1,p" /work/forgejo.list | grep -v '\.wiki$' | sort > /tmp/archive-repos || true
+                  REPO_ROOT="$ROOT" {{ include "pawtograder.backupApps.listRepositories" $ }} /work/forgejo.list \
+                    | grep -v '\.wiki$' | sort > /tmp/archive-repos || true
                   REPOS=$(wc -l < /tmp/db-repos)
                   MISSING=0
                   while IFS= read -r repo; do

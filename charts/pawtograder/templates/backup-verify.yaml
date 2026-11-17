@@ -174,7 +174,7 @@ spec:
                       exit 1
                     fi
                   done
-                  echo "[verify] forgejo: volume archive OK: $(wc -l < /scratch/forgejo.list) entries, $(grep -c '^{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}/[^/]*/[^/]*\.git/$' /scratch/forgejo.list || true) repositories"
+                  echo "[verify] forgejo: volume archive OK: $(wc -l < /scratch/forgejo.list) entries, $(REPO_ROOT="{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}" {{ include "pawtograder.backupApps.listRepositories" $ }} /scratch/forgejo.list | wc -l) repositories"
                   rm -f /scratch/forgejo.list
                   {{- end }}
                   {{- end }}

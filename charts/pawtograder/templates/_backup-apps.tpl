@@ -77,6 +77,17 @@ Forgejo's repository root as a member name in the /data archive, such as
 {{- end -}}
 {{- end -}}
 
+{{/*
+Reads `tar -t` member names on stdin or from the file arguments and prints
+<owner>/<name> for each repository directory directly under $REPO_ROOT, such
+as ./git/gitea-repositories/alice/course.git/, wikis as <owner>/<name>.wiki.
+$REPO_ROOT is compared as a plain string, never as a pattern, so a root such
+as /data/git/repos[1].v2 matches itself only.
+*/}}
+{{- define "pawtograder.backupApps.listRepositories" -}}
+awk 'BEGIN { p = ENVIRON["REPO_ROOT"] "/" } index($0, p) == 1 { r = substr($0, length(p) + 1); if (r ~ "^[^/]+/[^/]+[.]git/$") print substr(r, 1, length(r) - 5) }'
+{{- end -}}
+
 {{/* The mc fallback and alias, as in backup.yaml. .tag is the log prefix. */}}
 {{- define "pawtograder.backupApps.mc" -}}
 if ! command -v mc >/dev/null 2>&1; then

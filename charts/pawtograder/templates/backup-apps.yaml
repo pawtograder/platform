@@ -232,13 +232,16 @@ spec:
                 - |
                   set -euo pipefail
                   ROOT={{ $root }}
+                  # find -path reads its argument as a pattern: escape [ ] * ? \
+                  # so the repository root matches itself only.
+                  ROOT_PATTERN=$(printf '%s' "$ROOT" | sed 's/[][*?\\]/\\&/g')
                   # Member names are relative to the volume's root (./gitea/...),
                   # never "." itself: the root belongs to whoever provisioned the
                   # volume, so a restore running as Forgejo's uid can't set its
                   # mode or times. The repository root comes from the copies, so
                   # it's in the archive even before Forgejo creates it on /data.
                   {
-                    find /data -mindepth 1 \( -path "/data/$ROOT" -o -path /data/queues -o -path /data/indexers \
+                    find /data -mindepth 1 \( -path "/data/$ROOT_PATTERN" -o -path /data/queues -o -path /data/indexers \
                       -o -path /data/repo-archive -o -path /data/tmp -o -path /data/sessions -o -path /data/log \
                       -o -path /data/lost+found \) -prune -o -printf 'data/%P\0'
                     printf 'scratch/repositories\0'
@@ -248,7 +251,7 @@ spec:
                         -czf /scratch/forgejo.tar.gz -T -
                   rm -rf /scratch/repositories
                   tar -tzf /scratch/forgejo.tar.gz > /scratch/forgejo.list
-                  echo "[backup-forgejo] volume archive OK: $(stat -c%s /scratch/forgejo.tar.gz) bytes, $(wc -l < /scratch/forgejo.list) entries, $(grep -c "^\./$ROOT/[^/]*/[^/]*\.git/$" /scratch/forgejo.list || true) repositories"
+                  echo "[backup-forgejo] volume archive OK: $(stat -c%s /scratch/forgejo.tar.gz) bytes, $(wc -l < /scratch/forgejo.list) entries, $(REPO_ROOT="./$ROOT" {{ include "pawtograder.backupApps.listRepositories" $ }} /scratch/forgejo.list | wc -l) repositories"
                   rm -f /scratch/forgejo.list
                   # Written last: the uploader reads it as "every file is complete".
                   mv /scratch/dump-ts /scratch/ts
