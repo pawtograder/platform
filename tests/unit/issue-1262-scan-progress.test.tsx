@@ -141,7 +141,10 @@ test("while finalizing, nothing can be changed and rows are followed until the b
   expect(await screen.findByText("Creating submissions: 1 of 2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Create 1 submission(s)" })).toBeDisabled();
   for (const b of screen.getAllByRole("button", { name: /^(Confirm|Skip)$/ })) expect(b).toBeDisabled();
-  for (const s of screen.getAllByRole("combobox")) expect(s).toBeDisabled();
+  // One student picker per row, all disabled (found by label: a disabled picker is not exposed by role).
+  const pickers = screen.getAllByLabelText(/^Student for exam #/);
+  expect(pickers).toHaveLength(2);
+  for (const s of pickers) expect(s).toBeDisabled();
 
   const before = count("exam_scanned_submissions");
   await act(async () => jest.advanceTimersByTime(4000));

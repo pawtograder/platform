@@ -16,6 +16,11 @@ type Batch = { id: number; status: string; total_pages: number; pages_per_exam: 
 
 const POLL_MS = 4000;
 
+/** exam_scan_batches.error as lib/exam/examClient.ts writes it when pages failed to upload. */
+function isIncompleteUpload(b: Batch) {
+  return b.status === "error" && (b.error ?? "").startsWith("incomplete upload");
+}
+
 function ExamScansPageContent() {
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
@@ -229,14 +234,15 @@ function ExamScansPageContent() {
                     {b.total_pages} pages · {b.pages_per_exam}/exam
                   </Text>
                 </HStack>
-                {(b.status === "uploaded" || b.status === "error") && (
+                {/* An incomplete upload cannot be processed (the RPC refuses it); it has to be uploaded again. */}
+                {(b.status === "uploaded" || (b.status === "error" && !isIncompleteUpload(b))) && (
                   <Button
                     size="xs"
                     onClick={() => process(b.id)}
                     loading={processingId === b.id}
                     disabled={processingId !== null}
                   >
-                    Process (OCR + match)
+                    {b.status === "error" ? "Retry processing" : "Process (OCR + match)"}
                   </Button>
                 )}
               </HStack>
@@ -258,7 +264,15 @@ function ExamScansPageContent() {
                   {b.error}
                 </Text>
               )}
-              {["review", "finalizing", "completed"].includes(b.status) && (
+              {b.status === "error" && (
+                <Text fontSize="sm" mb={2}>
+                  {isIncompleteUpload(b)
+                    ? "Some pages of this scan were not uploaded. Upload the PDF again as a new batch."
+                    : "Retry processing reads the scans again and returns the batch to review. Confirmed matches are kept; picks you have not confirmed may change. If exams below are confirmed but have no submission yet, Create submissions finishes them without retrying."}
+                </Text>
+              )}
+              {/* An errored batch keeps its matches visible, read-only (#1270). */}
+              {["review", "finalizing", "completed", "error"].includes(b.status) && (
                 <MatchReview
                   batchId={b.id}
                   classId={courseId}
