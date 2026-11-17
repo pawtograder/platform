@@ -6,7 +6,8 @@
 -- has no submissions (the same gate that already refreshes generated check points), a sync into the
 -- assignment's GRADING rubric for a PAPER exam sets assignments.total_points to the exam total, the sum of
 -- the leaf questions' points. And the assignment row is locked FOR UPDATE before that gate, so a
--- submission can't commit between the check and the writes it guards.
+-- submission can't commit between the check and the writes it guards, and the delivery mode is read
+-- again under that lock, since exam_create can change it.
 --
 -- Left alone on purpose:
 -- - Once there are submissions. The questions are frozen by then, and an instructor may have set the max
@@ -88,6 +89,9 @@ begin
   -- submission insert takes FOR KEY SHARE on this row through its foreign key, so one can't commit
   -- between the check below and the writes inside it.
   perform 1 from public.assignments where id = v_assignment_id for update;
+  -- exam_create can switch the delivery mode under this same lock, so read it again now that we hold it.
+  select delivery_mode into v_delivery from public.exams where id = p_exam_id;
+  v_in_app := coalesce(v_delivery, 'paper') = 'in_app';
   if not exists (select 1 from public.submissions where assignment_id = v_assignment_id) then
     update public.rubric_checks c
       set points = coalesce(q.points, 0)
