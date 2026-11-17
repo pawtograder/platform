@@ -88,7 +88,8 @@ export async function revokeDroppedTokens(
       if (claimError) throw claimError;
       if (!claimed) continue;
 
-      if (token.login) await revoke(config, token.login, token.repository_id);
+      if (!token.login) throw new Error("Missing Forgejo login for workspace token revocation");
+      await revoke(config, token.login, token.repository_id);
 
       // A re-mint clears the claim (record_forgejo_repo_token); that row must stay.
       const { error: deleteError } = await supabase
