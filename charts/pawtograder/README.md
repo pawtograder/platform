@@ -664,18 +664,18 @@ With `global.environment: production`, the render fails when Forgejo or Coder is
    ```sh
    sel=app.kubernetes.io/component=backup-forgejo,app.kubernetes.io/instance=pawtograder
    unfinished() {
-     kubectl get jobs -l "$sel" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.status=="True")].type}{"\n"}{end}' |
-       awk '$0 !~ / (Complete|Failed)( |$)/ { print $1 }'
+     listing=$(kubectl get jobs -l "$sel" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.status=="True")].type}{"\n"}{end}') &&
+       printf '%s\n' "$listing" | awk 'NF && $0 !~ / (Complete|Failed)( |$)/ { print $1 }'
    }
    for job in $(unfinished); do
      kubectl delete job "$job" --cascade=foreground --wait --ignore-not-found
    done
-   echo "unfinished backup Jobs: $(unfinished)"
+   left=$(unfinished) && echo "unfinished backup Jobs: $left" || echo "couldn't list the backup Jobs: don't restore yet"
    kubectl get pods -l "$sel" --field-selector=status.phase!=Succeeded,status.phase!=Failed
    kubectl get pods -l app.kubernetes.io/name=forgejo,app.kubernetes.io/instance=pawtograder
    ```
 
-   Go on only when the last three commands print `unfinished backup Jobs: ` with no name after it, then `No resources found` twice. The last one is Forgejo's own pod: `kubectl scale` returns before it has stopped, and it lists a pod that is still terminating, so repeat it until the pod is gone. To let a backup finish instead, run everything but the loop, then repeat the last three commands until they print that. A deleted run can leave part of a set in `daily/`, such as a dump without its archive. Don't pick that set: the pod below refuses a set without its archive.
+   Go on only when the last three commands print `unfinished backup Jobs: ` with no name after it, then `No resources found` twice. If the Jobs can't be listed (for example, your account may not list Jobs), the line says so instead, and the restore has to wait until it can. The last one is Forgejo's own pod: `kubectl scale` returns before it has stopped, and it lists a pod that is still terminating, so repeat it until the pod is gone. To let a backup finish instead, run everything but the loop, then repeat the last three commands until they print that. A deleted run can leave part of a set in `daily/`, such as a dump without its archive. Don't pick that set: the pod below refuses a set without its archive.
 2. Run the pod below in the release's namespace, as Forgejo's uid, with Forgejo's claim mounted the way the backup job mounts it: at its root, or with `subPath` set to `forgejo.persistence.subPath` when that value is set. It recreates the `forgejo` database from the dump, then replaces everything on the volume with the archive. Before it changes anything, it checks that the set is complete and waits up to two minutes for the database; when either check fails it exits with an error and nothing is changed. Wait for it to finish (`kubectl logs -f app-restore`), then delete it. `activeDeadlineSeconds` stops it after four hours; raise it for a volume that takes longer to download. A restore stopped partway leaves the database or the volume half restored: run the pod again, since it starts over from the top. Its two labels are the release's, so the chart's NetworkPolicies (`networkPolicy.enabled`) let it reach the database in either mode. They assume the chart's name and a release called `pawtograder`: with `nameOverride` set, use that value for `app.kubernetes.io/name`, and use your release's name for `app.kubernetes.io/instance`.
 3. `kubectl scale deployment/pawtograder-forgejo --replicas=1`. Once it's up, run the admin tasks `resync_all_hooks` and `check_repo_stats` (Site Administration → Dashboard, or `POST /api/v1/admin/cron/<task>` as an admin). Then resume the CronJob (`"suspend":false`).
 
@@ -748,7 +748,7 @@ spec:
       emptyDir: {}
 ```
 
-**Restoring Coder.** Coder's backup is its database. Suspend `pawtograder-backup-coder`, and stop the unfinished Coder backup Jobs with the commands in step 1 above, with `sel=app.kubernetes.io/component=backup-coder,app.kubernetes.io/instance=pawtograder`; a Coder backup left running would dump the database while it's being restored. Then run `kubectl scale deployment/coder --replicas=0` and repeat `kubectl get pods -l app.kubernetes.io/name=coder,app.kubernetes.io/instance=pawtograder` until it prints `No resources found` (workspace pods are labelled `coder-workspace`, so they don't count). Then run the same pod with `APP` set to `coder`, `SET` to a `daily/coder-<TS>` set, the connection settings for Coder's server, and no `data` volume. Then scale Coder back to 1 and resume the CronJob. Workspaces created after `<TS>` are no longer in Coder's database, but their pods and home volumes stay in the cluster: delete them with `kubectl`.
+**Restoring Coder.** Coder's backup is its database. Suspend `pawtograder-backup-coder`, and stop the unfinished Coder backup Jobs with the commands in step 1 above, with `sel=app.kubernetes.io/component=backup-coder,app.kubernetes.io/instance=pawtograder` and without the last command, which checks Forgejo's pod; a Coder backup left running would dump the database while it's being restored. Then run `kubectl scale deployment/coder --replicas=0` and repeat `kubectl get pods -l app.kubernetes.io/name=coder,app.kubernetes.io/instance=pawtograder` until it prints `No resources found` (workspace pods are labelled `coder-workspace`, so they don't count). Then run the same pod with `APP` set to `coder`, `SET` to a `daily/coder-<TS>` set, the connection settings for Coder's server, and no `data` volume. Then scale Coder back to 1 and resume the CronJob. Workspaces created after `<TS>` are no longer in Coder's database, but their pods and home volumes stay in the cluster: delete them with `kubectl`.
 
 **Coder home volumes aren't backed up.** Each workspace keeps the student's files on its own home volume. Nothing copies those volumes, and Coder deletes a workspace's volume with the workspace. Students must push their work to Forgejo: only pushed work is graded, and only pushed work survives a lost volume or a deleted workspace.
 
