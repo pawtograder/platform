@@ -116,6 +116,9 @@ export default function RequestDetailPage() {
   // Ask the database whether this student is on the request. The realtime membership list can lag behind
   // a request that was just created, so it isn't reliable for this check. Students can read their own rows.
   // The result is stored with the request and profile it was computed for, so it can't be used after either changes.
+  // The realtime list is still the signal for rechecking: when it changes its mind about this viewer, someone
+  // was added to or removed from the request, so the database answer is read again.
+  const realtimeSaysMember = private_profile_id != null && memberProfileIds.includes(private_profile_id);
   const [memberCheck, setMemberCheck] = useState<{ requestId: number; profileId: string; isMember: boolean } | null>(
     null
   );
@@ -139,7 +142,7 @@ export default function RequestDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [private_profile_id, requestIdNum]);
+  }, [private_profile_id, requestIdNum, realtimeSaysMember]);
   const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
   const turnMessage = useTurnAlert({
     status: request?.status,
