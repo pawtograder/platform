@@ -36,8 +36,24 @@ export async function batchStatus(batchId: number): Promise<string | undefined> 
   return data?.status;
 }
 
-/** A one-page exam with name and SIS regions, and an uploaded batch of Alice, Bob and an unknown sheet. */
-export async function seedUploadedBatch(label: string) {
+/** One scanned sheet: whose SIS id is written on it, and the name written on it (underscores for spaces). */
+export type Sheet = { sis: "alice" | "bob" | "unknown"; name: string };
+
+/**
+ * A one-page exam with name and SIS regions, and an uploaded batch. By default the batch holds Alice,
+ * Bob and an unknown sheet; `extraStudents` adds roster students that no sheet names.
+ */
+export async function seedUploadedBatch(
+  label: string,
+  {
+    sheets = [
+      { sis: "alice", name: "Alice_Smith" },
+      { sis: "bob", name: "Bob_Jones" },
+      { sis: "unknown", name: "Nobody_Here" }
+    ],
+    extraStudents = []
+  }: { sheets?: Sheet[]; extraStudents?: string[] } = {}
+) {
   const course = await createClass({ name: `Exam scan review UI ${label}` });
   await setCourseFeature(course.id, COURSE_FEATURES.EXAMS, true);
   const instructor = await createUserInClass({ role: "instructor", class_id: course.id });
@@ -95,11 +111,11 @@ export async function seedUploadedBatch(label: string) {
   });
   expect(syncErr).toBeNull();
 
-  const scans = [
-    { sis: String(sisBase + 1), name: "Alice_Smith" },
-    { sis: String(sisBase + 2), name: "Bob_Jones" },
-    { sis: String(sisBase + 9), name: "Nobody_Here" }
-  ];
+  const extras = [];
+  for (const name of extraStudents)
+    extras.push(await createUserInClass({ role: "student", class_id: course.id, name }));
+  const sisFor = { alice: sisBase + 1, bob: sisBase + 2, unknown: sisBase + 9 };
+  const scans = sheets.map((sheet) => ({ sis: String(sisFor[sheet.sis]), name: sheet.name }));
   const { data: batch } = await supabase
     .from("exam_scan_batches")
     .insert({
@@ -129,7 +145,7 @@ export async function seedUploadedBatch(label: string) {
     });
     expect(error).toBeNull();
   }
-  return { course, instructor, alice, bob, assignment, examId: examId as number, batchId };
+  return { course, instructor, alice, bob, extras, assignment, examId: examId as number, batchId };
 }
 
 /** Runs the real OCR + match worker until the batch is in review. */

@@ -1,12 +1,35 @@
 "use client";
 
+import {
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
+import { namesEquivalent } from "@/lib/exam/nameAgreement";
 import { createClient } from "@/utils/supabase/client";
-import { Badge, Button, Flex, Heading, HStack, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  Flex,
+  Heading,
+  HStack,
+  Image,
+  NativeSelect,
+  Spinner,
+  Table,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Scanned = {
   id: number;
+  exam_id: number;
   exam_index: number;
   detected_name: string | null;
   detected_sis_id: string | null;
@@ -37,6 +60,17 @@ export default function MatchReview({
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  // The row (and the student picked on it) waiting for "Confirm anyway" after a name mismatch.
+  // What the instructor is acknowledging: this student for this scanned name. A re-detected name or
+  // another pick needs a new acknowledgment.
+  const [pendingAck, setPendingAck] = useState<{ id: number; profileId: string; detectedName: string | null } | null>(
+    null
+  );
+  const confirmButtons = useRef(new Map<number, HTMLButtonElement>());
+  const scanSeq = useRef(0);
+  const [scanView, setScanView] = useState<{ examIndex: number; url: string | null; error: string | null } | null>(
+    null
+  );
   const [rowsError, setRowsError] = useState<string | null>(null);
   // Latest load wins, and nothing is written after unmount (see scans/page.tsx).
   const loadSeq = useRef(0);
@@ -54,7 +88,7 @@ export default function MatchReview({
     const { data: scanned, error } = await supabase
       .from("exam_scanned_submissions")
       .select(
-        "id, exam_index, detected_name, detected_sis_id, matched_profile_id, match_confidence, match_status, submission_id, finalized_at"
+        "id, exam_id, exam_index, detected_name, detected_sis_id, matched_profile_id, match_confidence, match_status, submission_id, finalized_at"
       )
       .eq("batch_id", batchId)
       .order("exam_index");
@@ -118,38 +152,106 @@ export default function MatchReview({
         .from("exam_scanned_submissions")
         .update({
           matched_profile_id: profileId,
-          match_status: profileId ? "suggested" : "unmatched"
+          match_status: profileId ? "suggested" : "unmatched",
+          // The worker's confidence was for the student it suggested, not this one (#1265).
+          match_confidence: null
         })
         .eq("id", id);
       if (error) {
         toaster.error({ title: "Update failed", description: error.message });
         return;
       }
+      setPendingAck((p) => (p?.id === id ? null : p));
       await load();
     },
     [load]
   );
 
+  const rosterName = useCallback(
+    (profileId: string | null) => roster.find((s) => s.profile_id === profileId)?.name ?? null,
+    [roster]
+  );
+
+  // Two roster students with the same name: matching the scanned name says nothing about which one.
+  const nameIsAmbiguous = useCallback(
+    (name: string | null) => roster.filter((s) => namesEquivalent(s.name, name)).length > 1,
+    [roster]
+  );
+  const needsAcknowledgment = useCallback(
+    (row: Scanned) => {
+      const selected = rosterName(row.matched_profile_id);
+      return !namesEquivalent(row.detected_name, selected) || nameIsAmbiguous(selected);
+    },
+    [rosterName, nameIsAmbiguous]
+  );
+
+  const closePrompt = useCallback((id: number) => {
+    setPendingAck(null);
+    // The prompt replaced the row's buttons; put focus back on Confirm instead of losing it.
+    requestAnimationFrame(() => confirmButtons.current.get(id)?.focus());
+  }, []);
+
   const confirm = useCallback(
-    async (id: number) => {
+    async (id: number, acknowledged?: { profileId: string; detectedName: string | null }) => {
       const row = rows.find((r) => r.id === id);
       if (!row?.matched_profile_id) {
         toaster.error({ title: "Pick a student first" });
         return;
       }
+      // A different name on the paper than the student picked needs a second, deliberate click (#1265).
+      const stillAcknowledged =
+        acknowledged?.profileId === row.matched_profile_id && acknowledged.detectedName === row.detected_name;
+      if (!stillAcknowledged && needsAcknowledgment(row)) {
+        setPendingAck({ id, profileId: row.matched_profile_id, detectedName: row.detected_name });
+        return;
+      }
       const supabase = createClient();
-      const { error } = await supabase
+      // Confirm only the student the instructor saw: if the row changed meanwhile, nothing matches.
+      const { data, error } = await supabase
         .from("exam_scanned_submissions")
         .update({ match_status: "confirmed" })
-        .eq("id", id);
+        .eq("id", id)
+        .eq("matched_profile_id", row.matched_profile_id)
+        .select("id");
+      if (acknowledged) closePrompt(id);
       if (error) {
         toaster.error({ title: "Confirm failed", description: error.message });
         return;
       }
+      if (!data?.length) toaster.error({ title: "This exam's match changed. Check it again before confirming." });
       await load();
     },
-    [rows, load]
+    [rows, load, needsAcknowledgment, closePrompt]
   );
+
+  const viewScan = useCallback(async (row: Scanned) => {
+    // Only the latest click may fill the dialog, and not after it was closed.
+    const seq = ++scanSeq.current;
+    setScanView({ examIndex: row.exam_index, url: null, error: null });
+    const supabase = createClient();
+    const [{ data: pages, error: pagesErr }, { data: nameRegion, error: regionErr }] = await Promise.all([
+      supabase.from("exam_scan_pages").select("image_path").eq("scanned_submission_id", row.id).order("page_index"),
+      supabase
+        .from("exam_question_regions")
+        .select("page_number")
+        .eq("exam_id", row.exam_id)
+        .eq("kind", "name")
+        .limit(1)
+        .maybeSingle()
+    ]);
+    if (seq !== scanSeq.current) return;
+    // The page the name was read from (region page_number indexes the exam's pages in page_index
+    // order, as in the worker's identity read); the first page when the template has no name region.
+    const page = pages?.[(nameRegion?.page_number ?? 1) - 1] ?? pages?.[0];
+    const loadError = pagesErr?.message ?? regionErr?.message ?? (page ? null : "No scanned page found.");
+    if (loadError || !page) {
+      setScanView({ examIndex: row.exam_index, url: null, error: loadError });
+      return;
+    }
+    const { data: signed, error } = await supabase.storage.from("exam-scans").createSignedUrl(page.image_path, 300);
+    if (seq !== scanSeq.current) return;
+    setScanView({ examIndex: row.exam_index, url: signed?.signedUrl ?? null, error: error?.message ?? null });
+  }, []);
 
   const skip = useCallback(
     async (id: number) => {
@@ -250,6 +352,9 @@ export default function MatchReview({
                 <Text fontSize="xs" color="fg.muted">
                   SIS: {r.detected_sis_id ?? "—"}
                 </Text>
+                <Button size="2xs" variant="plain" px={0} onClick={() => viewScan(r)}>
+                  View scan
+                </Button>
               </Table.Cell>
               <Table.Cell>
                 {r.submission_id ? (
@@ -258,12 +363,21 @@ export default function MatchReview({
                   <Badge colorPalette="green">confirmed</Badge>
                 ) : r.match_status === "suggested" ? (
                   <Badge colorPalette="yellow">
-                    suggested {r.match_confidence != null ? `(${Math.round(r.match_confidence * 100)}%)` : ""}
+                    suggested{r.match_confidence != null ? ` (${Math.round(r.match_confidence * 100)}%)` : ""}
                   </Badge>
                 ) : r.match_status === "skipped" ? (
                   <Badge>skipped</Badge>
                 ) : (
                   <Badge colorPalette="red">unmatched</Badge>
+                )}
+                {r.matched_profile_id && needsAcknowledgment(r) && (
+                  <Text fontSize="xs" color="fg.warning" mt={1}>
+                    Scan: {r.detected_name ? `“${r.detected_name}”` : "no name read"} · Selected: “
+                    {rosterName(r.matched_profile_id) ?? "unknown"}”
+                    {r.match_status === "suggested" && [0.9, 0.5].includes(r.match_confidence ?? -1)
+                      ? " · SIS matched"
+                      : ""}
+                  </Text>
                 )}
               </Table.Cell>
               <Table.Cell>
@@ -283,24 +397,53 @@ export default function MatchReview({
                 </NativeSelect.Root>
               </Table.Cell>
               <Table.Cell>
-                <HStack gap={1}>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => confirm(r.id)}
-                    disabled={!!r.submission_id || matchesFrozen}
-                  >
-                    Confirm
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => skip(r.id)}
-                    disabled={!!r.submission_id || matchesFrozen}
-                  >
-                    Skip
-                  </Button>
-                </HStack>
+                {pendingAck?.id === r.id ? (
+                  <Box role="alert" maxW="260px">
+                    <Text fontSize="xs" mb={1}>
+                      {namesEquivalent(pendingAck.detectedName, rosterName(pendingAck.profileId))
+                        ? `More than one student is named “${rosterName(pendingAck.profileId)}”.`
+                        : `The scan says ${pendingAck.detectedName ? `“${pendingAck.detectedName}”` : "nothing readable"}, not “${rosterName(pendingAck.profileId) ?? "this student"}”.`}{" "}
+                      Check the scan first.
+                    </Text>
+                    <HStack gap={1}>
+                      <Button
+                        size="xs"
+                        colorPalette="orange"
+                        disabled={!!r.submission_id || matchesFrozen}
+                        onClick={() => confirm(r.id, pendingAck)}
+                      >
+                        Confirm anyway
+                      </Button>
+                      {/* Focus starts here, so a repeated Enter on Confirm cannot accept the warning. */}
+                      <Button size="xs" variant="ghost" autoFocus onClick={() => closePrompt(r.id)}>
+                        Cancel
+                      </Button>
+                    </HStack>
+                  </Box>
+                ) : (
+                  <HStack gap={1}>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      ref={(el: HTMLButtonElement | null) => {
+                        if (el) confirmButtons.current.set(r.id, el);
+                        else confirmButtons.current.delete(r.id);
+                      }}
+                      onClick={() => confirm(r.id)}
+                      disabled={!!r.submission_id || matchesFrozen}
+                    >
+                      Confirm
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => skip(r.id)}
+                      disabled={!!r.submission_id || matchesFrozen}
+                    >
+                      Skip
+                    </Button>
+                  </HStack>
+                )}
               </Table.Cell>
             </Table.Row>
           ))}
@@ -319,6 +462,38 @@ export default function MatchReview({
           Refresh
         </Button>
       </Flex>
+      <DialogRoot
+        open={scanView !== null}
+        onOpenChange={(d) => {
+          if (d.open) return;
+          scanSeq.current++; // a response still on its way must not reopen it
+          setScanView(null);
+        }}
+        size="lg"
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Scan of exam #{(scanView?.examIndex ?? 0) + 1}</DialogTitle>
+          </DialogHeader>
+          <DialogCloseTrigger />
+          <DialogBody pb={4}>
+            {scanView?.error ? (
+              <Text color="fg.error" fontSize="sm">
+                Couldn&apos;t load the scan: {scanView.error}
+              </Text>
+            ) : scanView?.url ? (
+              <Image
+                src={scanView.url}
+                alt={`Scanned page of exam #${scanView.examIndex + 1}`}
+                maxW="100%"
+                onError={() => setScanView((v) => (v ? { ...v, url: null, error: "The image did not load." } : v))}
+              />
+            ) : (
+              <Spinner />
+            )}
+          </DialogBody>
+        </DialogContent>
+      </DialogRoot>
     </VStack>
   );
 }
