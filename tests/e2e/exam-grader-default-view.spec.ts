@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
 import {
   createClass,
@@ -6,7 +6,8 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
-  supabase
+  supabase,
+  type TestingUser
 } from "./TestingUtils";
 
 /**
@@ -14,8 +15,8 @@ import {
  * submission file, plus the exam_v1 artifact. The artifact has no page images, so the renderer
  * shows "(page image unavailable)" next to the OCR text, which is enough to tell students apart.
  */
-async function examSubmission(classId: number, assignmentId: number, ocrText: string) {
-  const student = await createUserInClass({ role: "student", class_id: classId });
+async function examSubmission(classId: number, assignmentId: number, ocrText: string, owner?: TestingUser) {
+  const student = owner ?? (await createUserInClass({ role: "student", class_id: classId }));
   const submission = await insertPreBakedSubmission({
     student_profile_id: student.private_profile_id,
     assignment_id: assignmentId,
@@ -84,5 +85,100 @@ test.describe("Grader view of a paper exam (#1267)", () => {
     await next.click();
     await expect(page).toHaveURL(new RegExp(`/submissions/${second}/files`));
     await expect(page.getByText(answers.get(second)!)).toBeVisible();
+  });
+});
+
+test.describe("The rubric line above a paper exam (#1269)", () => {
+  async function examAssignment(name: string) {
+    const course = await createClass({ name });
+    const instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    const assignment = await insertAssignment({
+      class_id: course.id,
+      name: "Midterm Exam",
+      assignment_type: "exam",
+      due_date: addDays(new Date(), 7).toISOString()
+    });
+    return { course, instructor, assignment };
+  }
+  // Records whether a wrong line ever reached the page, from the first paint on: a message that is
+  // only right once everything has loaded must not flash the wrong one first.
+  async function watchFor(page: Page, texts: string[]) {
+    await page.addInitScript((wrong: string[]) => {
+      const w = window as unknown as { __wrongRubricLine?: string };
+      new MutationObserver(() => {
+        const text = document.body?.innerText ?? "";
+        for (const t of wrong) if (text.includes(t)) w.__wrongRubricLine ??= t;
+      }).observe(document, { childList: true, subtree: true, characterData: true });
+    }, texts);
+    return async () => page.evaluate(() => (window as unknown as { __wrongRubricLine?: string }).__wrongRubricLine);
+  }
+  const filesUrl = (courseId: number, assignmentId: number, id: number) =>
+    `/course/${courseId}/assignments/${assignmentId}/submissions/${id}/files`;
+
+  test("staff see that the exam's questions are graded in the rubric panel", async ({ page }) => {
+    const { course, instructor, assignment } = await examAssignment("Exam rubric line E2E");
+    // The exam's rubric as the template editor builds it: one question, one generated check.
+    const { data: examId } = await supabase.rpc("exam_create", {
+      p_assignment_id: assignment.id,
+      p_source_type: "pdf",
+      p_num_pages: 1
+    });
+    const { error: structErr } = await supabase.rpc("exam_upsert_questions_and_regions", {
+      p_exam_id: examId as number,
+      p_questions: [
+        {
+          client_id: "q1",
+          parent_client_id: null,
+          level: 1,
+          ordinal: 0,
+          label: "Q1",
+          answer_type: "free_text",
+          points: 5
+        }
+      ],
+      p_regions: [{ question_client_id: "q1", kind: "answer", page_number: 1, x: 0.1, y: 0.3, width: 0.8, height: 0.2 }]
+    });
+    expect(structErr).toBeNull();
+    const { error: syncErr } = await supabase.rpc("exam_sync_rubric_from_questions", {
+      p_exam_id: examId as number,
+      p_rubric_id: assignment.grading_rubric_id as number
+    });
+    expect(syncErr).toBeNull();
+    const id = await examSubmission(course.id, assignment.id, "An answer");
+
+    await loginAsUser(page, instructor, course);
+    const sawWrongLine = await watchFor(page, [
+      "No rubric checks available for this artifact.",
+      "This review has no rubric.",
+      "This review's rubric has no checks yet."
+    ]);
+    await page.goto(filesUrl(course.id, assignment.id, id));
+    await expect(page.getByText("An answer")).toBeVisible();
+    await expect(page.getByText("Grade this exam's questions in the rubric panel.")).toBeVisible();
+    expect(await sawWrongLine()).toBeUndefined();
+  });
+
+  test("staff see that the rubric has no checks yet, and the student sees no rubric line", async ({ page }) => {
+    const { course, instructor, assignment } = await examAssignment("Exam no rubric line E2E");
+    // New assignments come with a template grading rubric that has checks; empty it.
+    const { error: delErr } = await supabase
+      .from("rubric_checks")
+      .delete()
+      .eq("rubric_id", assignment.grading_rubric_id as number);
+    expect(delErr).toBeNull();
+    const student = await createUserInClass({ role: "student", class_id: course.id });
+    const id = await examSubmission(course.id, assignment.id, "Another answer", student);
+
+    await loginAsUser(page, instructor, course);
+    await page.goto(filesUrl(course.id, assignment.id, id));
+    await expect(page.getByText("Another answer")).toBeVisible();
+    await expect(page.getByText("This review's rubric has no checks yet.")).toBeVisible();
+
+    // The student's own view of the same submission: staff guidance is not for them.
+    await page.context().clearCookies();
+    await loginAsUser(page, student, course);
+    await page.goto(filesUrl(course.id, assignment.id, id));
+    await expect(page.getByText("Another answer")).toBeVisible();
+    await expect(page.getByText(/rubric checks|rubric panel|apply to artifacts/)).toHaveCount(0);
   });
 });
