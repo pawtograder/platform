@@ -3323,7 +3323,10 @@ apps_has "webhook: an extra exact host and a CIDR are kept" yes \
   --set-json 'forgejo.webhookAllowedHosts=["external","hooks.example.org","203.0.113.0/24","2001:db8::/32"]' "${WH[@]}"
 apps_has "webhook: Forgejo reads it from the ConfigMap" yes "name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST" \
   --show-only charts/forgejo/templates/gitea/deployment.yaml
-for host in '0.0.0.0/0' '11.0.0.1/7' '127.0.0.0/8' '169.254.0.0/16' '::/0' 'fc00::/7' 'fe80::/10' '::ffff:127.0.0.1/128' private Private loopback ' LOOPBACK ' '*' '*.example.com' 'hook?.example.org' 'hook[ab].example.org' 'external,private' ' private '; do
+apps_has "webhook: a bare public address is kept" yes \
+  'ALLOWED_HOST_LIST: "external,203.0.113.5,2001:db8::1,api.pawtograder.example.com"' \
+  --set-json 'forgejo.webhookAllowedHosts=["external","203.0.113.5","2001:db8::1"]' "${WH[@]}"
+for host in '0.0.0.0/0' '11.0.0.1/7' '127.0.0.0/8' '169.254.0.0/16' '::/0' 'fc00::/7' 'fe80::/10' '::ffff:127.0.0.1/128' '10.0.0.5' '127.0.0.1' '169.254.169.254' '0.0.0.0' '::1' 'fd00::1' 'fe80::1' private Private loopback ' LOOPBACK ' '*' '*.example.com' 'hook?.example.org' 'hook[ab].example.org' 'external,private' ' private '; do
   apps_refused "webhook: $host in webhookAllowedHosts is refused" \
     "forgejo.webhookAllowedHosts can't contain \"$host\"" --set-json "forgejo.webhookAllowedHosts=[\"external\",\"$host\"]"
 done

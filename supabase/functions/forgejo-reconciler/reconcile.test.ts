@@ -147,6 +147,9 @@ Deno.test("reconcile: a failed backlog query fails the pass", async () => {
 
 type Due = { id: number; user_id: string; repository_id: number; login: string | null };
 
+/** What the claim RPC hands back: the stamp the row now carries. */
+const claimStamp = (id: number) => `2026-11-17T06:00:0${id}.000000+00:00`;
+
 function fakeTokenSupabase(
   due: Due[],
   opts: { claimable?: Set<number>; dueError?: unknown; claimErrorFor?: number } = {}
@@ -164,7 +167,8 @@ function fakeTokenSupabase(
         return Promise.resolve({ data: null, error: new Error("PostgREST 503") });
       }
       const claimable = opts.claimable ?? new Set(due.map((d) => d.id));
-      return Promise.resolve({ data: claimable.has(args.p_id as number), error: null });
+      const id = args.p_id as number;
+      return Promise.resolve({ data: claimable.has(id) ? claimStamp(id) : null, error: null });
     },
     from(table: string) {
       assertEquals(table, "forgejo_repo_tokens");
@@ -201,7 +205,7 @@ Deno.test("revoke: asks for this instance's dropped tokens with the stale window
 });
 
 Deno.test(
-  "revoke: claims each token, revokes it in Forgejo, then deletes its row unless a mint cleared the claim",
+  "revoke: claims each token, revokes it in Forgejo, then deletes the row its own claim still holds",
   async () => {
     const { client, rpcCalls, deleted } = fakeTokenSupabase([
       { id: 1, user_id: "u1", repository_id: 42, login: "alex.kim" },
@@ -221,9 +225,15 @@ Deno.test(
       name: "claim_forgejo_repo_token_revocation",
       args: { p_id: 1, p_stale_minutes: STALE_CLAIM_MINUTES }
     });
+    // Each delete carries that pass's own claim stamp, so a row a re-mint and a later pass have
+    // taken over is left alone.
     assertEquals(deleted[0], [
       ["eq", "id", 1],
-      ["not", "revoke_claimed_at", "is", null]
+      ["eq", "revoke_claimed_at", claimStamp(1)]
+    ]);
+    assertEquals(deleted[1], [
+      ["eq", "id", 2],
+      ["eq", "revoke_claimed_at", claimStamp(2)]
     ]);
   }
 );

@@ -81,22 +81,23 @@ export async function revokeDroppedTokens(
   for (const token of due ?? []) {
     try {
       // function-grants: service-role
-      const { data: claimed, error: claimError } = await supabase.rpc("claim_forgejo_repo_token_revocation", {
+      const { data: claimedAt, error: claimError } = await supabase.rpc("claim_forgejo_repo_token_revocation", {
         p_id: token.id,
         p_stale_minutes: STALE_CLAIM_MINUTES
       });
       if (claimError) throw claimError;
-      if (!claimed) continue;
+      if (!claimedAt) continue;
 
       if (!token.login) throw new Error("Missing Forgejo login for workspace token revocation");
       await revoke(config, token.login, token.repository_id);
 
-      // A re-mint clears the claim (record_forgejo_repo_token); that row must stay.
+      // Only the row this pass claimed. A re-mint clears the claim (record_forgejo_repo_token) and a
+      // later pass stamps its own, so matching the stamp leaves that pass's row, and its token, tracked.
       const { error: deleteError } = await supabase
         .from("forgejo_repo_tokens")
         .delete()
         .eq("id", token.id)
-        .not("revoke_claimed_at", "is", null);
+        .eq("revoke_claimed_at", claimedAt);
       if (deleteError) throw deleteError;
       result.revoked++;
     } catch (failure) {

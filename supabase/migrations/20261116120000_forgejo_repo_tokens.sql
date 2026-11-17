@@ -73,23 +73,24 @@ AS $$
   LIMIT p_limit;
 $$;
 
+-- Returns the stamp of the claim it took, or NULL when the row was already claimed. The caller gives
+-- the stamp back to delete the row, so a pass whose revocation is still running can't delete a row a
+-- later pass now owns: a re-mint clears the claim, and the pass that claims it next stamps its own.
+-- clock_timestamp(), not now(): two transactions can share a start time, and these stamps must differ.
 CREATE OR REPLACE FUNCTION public.claim_forgejo_repo_token_revocation(
   p_id bigint,
   p_stale_minutes integer
-) RETURNS boolean
+) RETURNS timestamptz
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  WITH claimed AS (
-    UPDATE public.forgejo_repo_tokens t
-    SET revoke_claimed_at = now()
-    WHERE t.id = p_id
-      AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
-      AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
-    RETURNING 1
-  )
-  SELECT EXISTS (SELECT 1 FROM claimed);
+  UPDATE public.forgejo_repo_tokens t
+  SET revoke_claimed_at = clock_timestamp()
+  WHERE t.id = p_id
+    AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
+    AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
+  RETURNING t.revoke_claimed_at;
 $$;
 
 REVOKE ALL ON FUNCTION public.forgejo_repo_token_revocable(uuid, bigint) FROM public, anon, authenticated;
