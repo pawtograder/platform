@@ -2,10 +2,11 @@
 -- assignment's max points, so after a points change Configure Rubric reported a mismatch and told the
 -- instructor to remove points from a rubric that was correct.
 --
--- This redefines exam_sync_rubric_from_questions unchanged except for one block: while the assignment
+-- This redefines exam_sync_rubric_from_questions unchanged except for two things. While the assignment
 -- has no submissions (the same gate that already refreshes generated check points), a sync into the
 -- assignment's GRADING rubric for a PAPER exam sets assignments.total_points to the exam total, the sum of
--- the leaf questions' points.
+-- the leaf questions' points. And the assignment row is locked FOR UPDATE before that gate, so a
+-- submission can't commit between the check and the writes it guards.
 --
 -- Left alone on purpose:
 -- - Once there are submissions. The questions are frozen by then, and an instructor may have set the max
@@ -83,6 +84,10 @@ begin
   -- Gating on "no submissions yet" keeps both properties -- a draft stays consistent, and once
   -- grading can have happened the grader's numbers are left alone. Only rows with an
   -- exam_question_id are touched, so user-authored checks are never rewritten.
+  -- #1284: lock the assignment first, the same way exam_upsert_questions_and_regions does. A
+  -- submission insert takes FOR KEY SHARE on this row through its foreign key, so one can't commit
+  -- between the check below and the writes inside it.
+  perform 1 from public.assignments where id = v_assignment_id for update;
   if not exists (select 1 from public.submissions where assignment_id = v_assignment_id) then
     update public.rubric_checks c
       set points = coalesce(q.points, 0)
