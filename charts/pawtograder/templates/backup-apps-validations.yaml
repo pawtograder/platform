@@ -39,6 +39,18 @@
 {{- if and .Values.forgejo.enabled (not (include "pawtograder.backupApps.forgejoRepoRoot" .)) -}}
 {{- fail "forgejo.gitea.config.repository.ROOT must be under /data: the backup archives Forgejo's /data volume, and repositories kept elsewhere would have no backup" -}}
 {{- end -}}
+{{- /* backup-apps.yaml writes the root unquoted into a shell assignment and into
+     the replacement of tar's s,...,...,S rewrite. There \ and & are syntax in
+     both, and , ends the replacement, so the backup would fail or put the
+     repositories at another path. */ -}}
+{{- if .Values.forgejo.enabled -}}
+{{- $root := dig "gitea" "config" "repository" "ROOT" "" .Values.forgejo | toString -}}
+{{- range $c := list "\\" "&" "," -}}
+{{- if contains $c $root -}}
+{{- fail (printf "forgejo.gitea.config.repository.ROOT=%s contains '%s': the Forgejo backup's script and tar's name rewriting read \\, & and , as syntax, so the backup would fail or store the repositories under another path. Choose a repository root without \\, & or ,." $root $c) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- /* pg_dump refuses a server newer than itself, and in pawtograder mode the server is postgres.image. */ -}}
 {{- $serverMajor := regexFind "^[0-9]+" (toString .Values.postgres.image.tag) -}}
 {{- range $app := $apps -}}

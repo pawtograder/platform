@@ -3125,6 +3125,20 @@ apps_refused "backups: Forgejo without a volume claim is refused" \
 apps_refused "backups: repositories outside /data are refused" \
   "forgejo.gitea.config.repository.ROOT must be under /data" "${BK[@]}" \
   --set forgejo.gitea.config.repository.ROOT=/repos
+# --set-json, because --set reads \ and , itself.
+apps_refused "backups: a repository root with \\ is refused" \
+  "forgejo.gitea.config.repository.ROOT=/data/git/a\\b contains '\\'" "${BK[@]}" \
+  --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/a\\b"'
+apps_refused "backups: a repository root with & is refused" \
+  "forgejo.gitea.config.repository.ROOT=/data/git/a&b contains '&'" "${BK[@]}" \
+  --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/a&b"'
+apps_refused "backups: a repository root with , is refused" \
+  "forgejo.gitea.config.repository.ROOT=/data/git/a,b contains ','" "${BK[@]}" \
+  --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/a,b"'
+apps_has "backups: a repository root with [ and . still renders" yes 'ROOT=git/repos[1].v2' "${BK[@]}" \
+  "${ODD_ROOT[@]}" "${BK_ONLY[@]}"
+apps_has "backups: Forgejo off doesn't check repository.ROOT" no "pawtograder-backup-forgejo" "${BK[@]}" \
+  "${BK_NO_FORGEJO[@]}" --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/a,b"'
 apps_refused "backups: a dump image older than this chart's Postgres is refused" \
   "pg_dump 16 can't dump postgres.image (Postgres 17)" "${BK[@]}" --set forgejo-db.image.tag=16.4
 apps_has "backups: own mode dumps with its own server's image, whatever postgres.image is" yes \
