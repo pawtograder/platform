@@ -3135,6 +3135,14 @@ apps_refused "backups: a repository root with & is refused" \
 apps_refused "backups: a repository root with , is refused" \
   "forgejo.gitea.config.repository.ROOT=/data/git/a,b contains ','" "${BK[@]}" \
   --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/a,b"'
+apps_refused "backups: a repository root with a space is refused" \
+  "forgejo.gitea.config.repository.ROOT=/data/git/a b contains ' '" "${BK[@]}" \
+  --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/a b"'
+apps_refused "backups: a repository root with \$ is refused" \
+  "forgejo.gitea.config.repository.ROOT=/data/git/\$HOME contains '\$'" "${BK[@]}" \
+  --set-json 'forgejo.gitea.config.repository.ROOT="/data/git/$HOME"'
+apps_has "backups: a repository root with + @ - _ still renders" yes 'ROOT=git/a+b@c-d_e' "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/data/git/a+b@c-d_e "${BK_ONLY[@]}"
 apps_has "backups: a repository root with [ and . still renders" yes 'ROOT=git/repos[1].v2' "${BK[@]}" \
   "${ODD_ROOT[@]}" "${BK_ONLY[@]}"
 apps_has "backups: Forgejo off doesn't check repository.ROOT" no "pawtograder-backup-forgejo" "${BK[@]}" \

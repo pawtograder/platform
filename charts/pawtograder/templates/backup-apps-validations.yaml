@@ -40,15 +40,14 @@
 {{- fail "forgejo.gitea.config.repository.ROOT must be under /data: the backup archives Forgejo's /data volume, and repositories kept elsewhere would have no backup" -}}
 {{- end -}}
 {{- /* backup-apps.yaml writes the root unquoted into a shell assignment and into
-     the replacement of tar's s,...,...,S rewrite. There \ and & are syntax in
-     both, and , ends the replacement, so the backup would fail or put the
-     repositories at another path. */ -}}
+     the replacement of tar's s,...,...,S rewrite. \ and & are syntax in both,
+     , ends the replacement, and spaces, quotes, $ or ; break the assignment,
+     so only characters that mean nothing to either are allowed. */ -}}
 {{- if .Values.forgejo.enabled -}}
 {{- $root := dig "gitea" "config" "repository" "ROOT" "" .Values.forgejo | toString -}}
-{{- range $c := list "\\" "&" "," -}}
-{{- if contains $c $root -}}
-{{- fail (printf "forgejo.gitea.config.repository.ROOT=%s contains '%s': the Forgejo backup's script and tar's name rewriting read \\, & and , as syntax, so the backup would fail or store the repositories under another path. Choose a repository root without \\, & or ,." $root $c) -}}
-{{- end -}}
+{{- $c := regexFind "[^A-Za-z0-9._/+@\\[\\]-]" $root -}}
+{{- if $c -}}
+{{- fail (printf "forgejo.gitea.config.repository.ROOT=%s contains '%s': the Forgejo backup's script and tar's name rewriting can only carry letters, digits and . _ / + @ [ ] -, so the backup would fail or store the repositories under another path. Choose a repository root made of those characters." $root $c) -}}
 {{- end -}}
 {{- end -}}
 {{- /* pg_dump refuses a server newer than itself, and in pawtograder mode the server is postgres.image. */ -}}
