@@ -32,7 +32,9 @@ describe("names that need the instructor to look", () => {
     ["Johnson", "Jordan Johnson"], // same surname
     ["सीता", "सत"], // a vowel sign is a combining mark in Devanagari, not an accent
     ["राम", "रम"],
-    ["ガト", "カト"] // so is the kana voicing mark
+    ["ガト", "カト"], // so is the kana voicing mark
+    ["Андрей", "Андреи"], // й and и are different Cyrillic letters
+    ["Ўладзь", "Уладзь"]
   ])("%p is not %p", (detected, roster) => {
     expect(namesEquivalent(detected, roster)).toBe(false);
   });
