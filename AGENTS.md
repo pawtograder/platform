@@ -1,5 +1,35 @@
 # AGENTS.md
 
+## Before you open or update a pull request
+
+These checks are yours to run. Report what you found in the PR description, and never report a result you didn't produce in this session. The rules behind them are in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
+1. **Migration version.** If you add a migration, pick a version later than the newest one on `staging` and not used by any open PR. This lists every version that two different migration files share across `staging` and all open PRs:
+
+   ```bash
+   {
+     gh api "repos/pawtograder/platform/contents/supabase/migrations?ref=staging" \
+       --jq '.[].name | "staging " + .'
+     gh pr list -R pawtograder/platform --state open --limit 200 --json number,files \
+       --jq '.[] | .number as $n | .files[].path
+             | select(startswith("supabase/migrations/"))
+             | "#\($n) " + ltrimstr("supabase/migrations/")'
+   } | sed -E 's/\.down\.sql\.txt$/.sql/' \
+     | awk '{ v = substr($2, 1, 14)
+              if (!file[v, $2]++) names[v]++
+              if (!src[v, $1]++) who[v] = who[v] " " $1 }
+            END { for (v in names) if (names[v] > 1) print v ":" who[v] }' | sort
+   ```
+
+   If your PR's number appears in the output, rename your migration. The check counts file names, not PRs, because PRs in a stack carry the same migration file and aren't a collision. `gh pr list` returns at most 100 files per PR, so for a PR larger than that, check its migrations by hand.
+
+2. **Tests you claim.** Run every test the PR description says passes, and paste the command and its summary line.
+3. **Type check and lint.** Run `npx tsc --noEmit` and `npm run lint`, and report any new errors.
+4. **Overlapping PRs.** List the open PRs that touch the same files, and put them in the PR description under "Touches."
+5. **Size.** If a reviewer couldn't read the diff in about 20 minutes (section 4 of `CONTRIBUTING.md`), stop and propose a stack instead. Ask your human what documentation would help them and a reviewer follow the change.
+6. **Review threads.** You may reply to bot reviewers (CodeRabbit, Codex) and resolve their threads: fix the finding, or say why not. For a human reviewer, draft the reply and leave it for your human to edit and post, and remind them that the reply is theirs to stand behind. Don't post on a human reviewer's thread, resolve it, or submit a review on your human's behalf. When you draft a review, start it with the Agent line from section 6 of `CONTRIBUTING.md`.
+7. **Escalate, don't loop.** If a human reviewer's concern is still open after one round of replies, don't draft another reply. Tell your human to set up a call with the reviewer, and offer to prepare what they'll need to show.
+
 ## Cursor Cloud specific instructions
 
 ### Overview
