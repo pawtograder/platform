@@ -1,0 +1,166 @@
+import { expect, test } from "@playwright/test";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+import {
+  createAuthenticatedClient,
+  createClass,
+  createUserInClass,
+  insertHelpQueueAssignment,
+  insertHelpRequest,
+  insertOfficeHoursQueue,
+  supabase
+} from "@/tests/e2e/TestingUtils";
+import type { TestingUser } from "@/tests/e2e/TestingUtils";
+
+type QueueHealthRow = {
+  queue_id: number;
+  queue_name: string;
+  waiting: number;
+  oldest_wait_seconds: number;
+  helping: number;
+  staffed_tas: number;
+  unstaffed_seconds: number | null;
+  resolved_today: number;
+  median_wait_seconds_today: number;
+};
+
+/**
+ * Contract tests for office_hours_queue_health
+ * (supabase/migrations/20261117174200_office_hours_queue_health.sql).
+ *
+ * Two things the UI cannot check for itself:
+ *   * the RPC must skip inactive queues, because the staff dashboard only renders active ones and
+ *     the red-queue alert loops over whatever the RPC returns. Without the filter, an inactive
+ *     queue holding a stale open request alerts about a card nobody can see;
+ *   * "staffed" means a shift row with no ended_at, not one flagged is_active. The Unstaffed badge
+ *     and the card's tone both read staffed_tas, so the two definitions have to stay apart.
+ */
+test.describe("office hours queue health RPC", () => {
+  test.describe.configure({ timeout: 120_000 });
+
+  let classId: number;
+  let activeQueueId: number;
+  let inactiveQueueId: number;
+  let instructor: TestingUser;
+  let ta: TestingUser;
+  let student: TestingUser;
+  let instructorClient: SupabaseClient<Database>;
+  let studentClient: SupabaseClient<Database>;
+
+  /** The RPC is not in the generated types yet, so the call is typed here. */
+  async function queueHealth(
+    client: SupabaseClient<Database>
+  ): Promise<{ data: QueueHealthRow[] | null; error: { message: string; code?: string } | null }> {
+    return await (
+      client as unknown as {
+        rpc: (
+          fn: string,
+          args: object
+        ) => Promise<{ data: QueueHealthRow[] | null; error: { message: string; code?: string } | null }>;
+      }
+    ).rpc("office_hours_queue_health", { p_class_id: classId });
+  }
+
+  async function healthFor(queueId: number): Promise<QueueHealthRow | undefined> {
+    const { data, error } = await queueHealth(instructorClient);
+    expect(error).toBeNull();
+    return (data ?? []).find((row) => row.queue_id === queueId);
+  }
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const course = await createClass({ name: `E2E Queue Health ${suffix}` });
+    classId = course.id;
+
+    instructor = await createUserInClass({
+      role: "instructor",
+      class_id: classId,
+      name: `E2E Queue Health Instructor ${suffix}`,
+      email: `e2e-queue-health-instructor-${suffix}@pawtograder.net`
+    });
+    ta = await createUserInClass({
+      role: "grader",
+      class_id: classId,
+      name: `E2E Queue Health TA ${suffix}`,
+      email: `e2e-queue-health-ta-${suffix}@pawtograder.net`
+    });
+    student = await createUserInClass({
+      role: "student",
+      class_id: classId,
+      name: `E2E Queue Health Student ${suffix}`,
+      email: `e2e-queue-health-student-${suffix}@pawtograder.net`
+    });
+
+    instructorClient = await createAuthenticatedClient(instructor);
+    studentClient = await createAuthenticatedClient(student);
+
+    activeQueueId = (await insertOfficeHoursQueue({ class_id: classId, name: `Active ${suffix}` })).id;
+    inactiveQueueId = (await insertOfficeHoursQueue({ class_id: classId, name: `Inactive ${suffix}` })).id;
+
+    const { error: deactivateError } = await supabase
+      .from("help_queues")
+      .update({ is_active: false })
+      .eq("id", inactiveQueueId);
+    expect(deactivateError).toBeNull();
+
+    // One student waiting on each queue, so the only difference between them is is_active.
+    for (const help_queue_id of [activeQueueId, inactiveQueueId]) {
+      await insertHelpRequest({
+        class_id: classId,
+        student_profile_id: student.private_profile_id,
+        request: "Queue health fixture",
+        help_queue_id,
+        status: "open"
+      });
+    }
+  });
+
+  test("an active queue is reported with its waiting count", async () => {
+    const health = await healthFor(activeQueueId);
+    expect(health).toBeDefined();
+    expect(health!.waiting).toBe(1);
+    expect(health!.oldest_wait_seconds).toBeGreaterThanOrEqual(0);
+  });
+
+  test("an inactive queue is left out, even with a student waiting on it", async () => {
+    // The request on the inactive queue is identical to the one on the active queue, so a missing
+    // is_active filter would return this row and the red-queue alert would fire for a hidden card.
+    const { data: waiting, error } = await supabase
+      .from("help_requests")
+      .select("id")
+      .eq("help_queue", inactiveQueueId)
+      .eq("status", "open");
+    expect(error).toBeNull();
+    expect(waiting!.length).toBeGreaterThan(0);
+
+    expect(await healthFor(inactiveQueueId)).toBeUndefined();
+  });
+
+  test("a shift with no ended_at counts as staffed even when it is flagged inactive", async () => {
+    await insertHelpQueueAssignment({
+      class_id: classId,
+      help_queue_id: activeQueueId,
+      ta_profile_id: ta.private_profile_id
+    });
+    const { error } = await supabase
+      .from("help_queue_assignments")
+      .update({ is_active: false })
+      .eq("class_id", classId)
+      .eq("help_queue_id", activeQueueId)
+      .eq("ta_profile_id", ta.private_profile_id)
+      .is("ended_at", null);
+    expect(error).toBeNull();
+
+    // The badge and the card tone both key off staffed_tas, so this is the number that decides
+    // whether the instructor sees "Unstaffed" on a queue that does have someone on shift.
+    const health = await healthFor(activeQueueId);
+    expect(health!.staffed_tas).toBe(1);
+    expect(health!.unstaffed_seconds).toBeNull();
+  });
+
+  test("a student cannot read queue health", async () => {
+    const { error } = await queueHealth(studentClient);
+    expect(error).not.toBeNull();
+    expect(error!.code).toBe("42501");
+  });
+});

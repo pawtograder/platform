@@ -239,8 +239,9 @@ secrets:
                                   #   and .../install/callback), not only by the
                                   #   worker. Omitting it makes the install button
                                   #   answer 500.
-    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, aws-chime,
-                                  #   discord, canvas, sis, smtp, mcp, redis, sentry, misc
+    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, coder-api,
+                                  #   aws-chime, discord, canvas, sis, smtp, mcp, redis,
+                                  #   sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
     pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
@@ -2822,6 +2823,10 @@ forgejo:
         SSL_MODE: disable
       service:
         DISABLE_REGISTRATION: true
+      admin:
+        # Only Pawtograder's admin makes orgs. A student who registered a class's org name first would
+        # otherwise own every classmate's repo created in it (the reconciler also refuses such an org).
+        DISABLE_REGULAR_ORG_CREATION: true
       actions:
         ENABLED: true
       session:
