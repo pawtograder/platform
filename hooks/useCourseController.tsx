@@ -27,7 +27,6 @@ import {
   HelpRequestWatcher,
   LabSection,
   LabSectionMeeting,
-  Notification,
   Tag,
   UserProfile,
   UserRoleWithUser,
@@ -45,6 +44,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRouter } from "next/navigation";
 import useAuthState from "./useAuthState";
 import { useClassProfiles, useIsReadOnly } from "./useClassProfiles";
+import { useCourseNotificationsQuery } from "./useCourseNotificationsQuery";
 
 const CourseContext = createContext<Course | null>(null);
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -1781,38 +1781,7 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
   const { user } = useAuthState();
   const isReadOnly = useIsReadOnly();
 
-  // Skip the user_id-keyed fetch entirely in view-as: the rows would be the masquerading
-  // instructor's, not the student's. useNotifications already returns [] when read-only,
-  // but not fetching here also avoids pushing the instructor's inbox into the controller's
-  // generic-data store where other surfaces might pick it up.
-  const { data: notifications } = useList<Notification>({
-    resource: "notifications",
-    filters: [{ field: "user_id", operator: "eq", value: user?.id }],
-    // liveMode: "manual",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity,
-      enabled: !!user?.id && !isReadOnly
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    onLiveEvent: (event) => {
-      if (isReadOnly) return;
-      controller.handleGenericDataEvent("notifications", event);
-    },
-    sorters: [
-      { field: "viewed_at", order: "desc" },
-      { field: "created_at", order: "desc" }
-    ]
-  });
-  useEffect(() => {
-    controller.registerGenericDataType("notifications", (item: Notification) => item.id);
-    if (isReadOnly) return;
-    if (notifications?.data) {
-      controller.setGeneric("notifications", notifications.data);
-    }
-  }, [controller, notifications?.data, isReadOnly]);
+  useCourseNotificationsQuery(controller, user?.id, isReadOnly);
 
   const { data: threadWatches } = useList<DiscussionThreadWatcher>({
     resource: "discussion_thread_watchers",
