@@ -2455,6 +2455,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   exam_sync_rubric_from_questions: "none",
   // DRAFT: new entry, review and remove this comment
   exam_upsert_questions_and_regions: "none",
+  // Returns applied | state_changed | not_owner; arguments are ids, a status and an error message.
+  exam_worker_set_batch_status: "none",
   finalize_submission_early: "none",
   fix_assignment_repo_permissions: {
     $: "none",

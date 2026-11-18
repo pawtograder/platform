@@ -14012,6 +14012,17 @@ export type Database = {
         Args: { p_exam_id: number; p_questions: Json; p_regions: Json };
         Returns: undefined;
       };
+      exam_worker_set_batch_status: {
+        Args: {
+          p_batch_id: number;
+          p_error?: string;
+          p_from: string[];
+          p_msg_id: number;
+          p_read_ct: number;
+          p_status: string;
+        };
+        Returns: string;
+      };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
