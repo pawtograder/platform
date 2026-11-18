@@ -58,7 +58,11 @@ export default function NewAssignmentPage() {
         const repoMode = isCode ? getValues("repo_mode") || "template_only_staff" : "none";
         const isNoRepo = repoMode === "none" || repoMode === "no_submission";
         const isPr = isCode && getValues("submission_mode") === "pr";
-        const willCreateRepos = !isNoRepo;
+        // The Repository host picker only sets this in a course with Cloud workspaces on. Without
+        // it the insert leaves git_provider to its database default, as before #1091.
+        const isForgejo = isCode && getValues("git_provider") === "forgejo";
+        // Handout and solution setup only create GitHub repositories, and they reject Forgejo.
+        const willCreateRepos = !isNoRepo && !isForgejo;
 
         // Validate the fork/source autograder agreement BEFORE inserting anything.
         // assignment-create-handout-repo rejects this mismatch, but by then the
@@ -229,7 +233,7 @@ export default function NewAssignmentPage() {
               min_group_size: isCode ? getValues("min_group_size") || null : null,
               max_group_size: isCode ? getValues("max_group_size") || null : null,
               allow_student_formed_groups: isCode ? getValues("allow_student_formed_groups") : false,
-              enable_repo_analytics: getValues("enable_repo_analytics") || false,
+              enable_repo_analytics: !isForgejo && (getValues("enable_repo_analytics") || false),
               grader_pseudonymous_mode: getValues("grader_pseudonymous_mode") || false,
               show_leaderboard: getValues("show_leaderboard") || false,
               minutes_due_after_lab:
@@ -246,9 +250,12 @@ export default function NewAssignmentPage() {
               // DB constraint `assignments_no_protection_when_no_repo` rejects non-default
               // protect_* when repo_mode is none/no_submission, so coerce here rather than
               // surfacing a constraint error from the disabled-but-still-set checkboxes.
-              protect_block_force_push: isNoRepo ? false : getValues("protect_block_force_push") !== false,
-              protect_require_pull_request: isNoRepo ? false : getValues("protect_require_pull_request") === true,
-              protect_required_reviewers: isNoRepo ? 0 : Number(getValues("protect_required_reviewers") || 0),
+              // Forgejo shows these off and disabled, so write what it shows.
+              protect_block_force_push: isNoRepo || isForgejo ? false : getValues("protect_block_force_push") !== false,
+              protect_require_pull_request:
+                isNoRepo || isForgejo ? false : getValues("protect_require_pull_request") === true,
+              protect_required_reviewers:
+                isNoRepo || isForgejo ? 0 : Number(getValues("protect_required_reviewers") || 0),
               // Submission-mode axis. Only persist the upstream/PR config when the
               // instructor actually selected PR mode; otherwise leave the columns at
               // their push-mode defaults.
@@ -261,7 +268,8 @@ export default function NewAssignmentPage() {
               upstream_base_branch: isPr ? getValues("upstream_base_branch") || "main" : "main",
               pr_identification: prIdentification,
               pr_branch_convention: prBranchConvention,
-              require_pr_open: isPr ? getValues("require_pr_open") === true : false
+              require_pr_open: isPr ? getValues("require_pr_open") === true : false,
+              ...(isForgejo ? { git_provider: "forgejo" } : {})
             })
             .select("id")
             .single();
@@ -277,7 +285,7 @@ export default function NewAssignmentPage() {
               description: error?.message ?? "The assignment was not created. Please try again."
             });
           } else {
-            if (!isNoRepo) {
+            if (willCreateRepos) {
               await assignmentCreateHandoutRepo(
                 { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
                 supabase
@@ -295,9 +303,11 @@ export default function NewAssignmentPage() {
               title: "Assignment Created Successfully",
               description: willCreateRepos
                 ? "GitHub repositories have been created and the assignment is ready."
-                : isCode
-                  ? "The assignment is ready."
-                  : "The assignment is ready to configure.",
+                : isForgejo && !isNoRepo
+                  ? "The assignment is saved. Forgejo repositories are not created from this page yet."
+                  : isCode
+                    ? "The assignment is ready."
+                    : "The assignment is ready to configure.",
               type: "success"
             });
 
@@ -313,7 +323,10 @@ export default function NewAssignmentPage() {
                       // form links back to it -- its `assignment_id` defaults to null, so without
                       // this the flow can leave a survey assignment with no survey attached.
                       `/course/${course_id}/manage/surveys/new?assignment_id=${data.id}`
-                    : `${base}/autograder`;
+                    : isForgejo
+                      ? // The Autograder page sets up GitHub grader repositories, which Forgejo rejects.
+                        base
+                      : `${base}/autograder`;
             // Awaited, and the navigation goes through the hook: this also drops the browser's
             // Router Cache, which still holds the pre-insert render of the assignments list the
             // user came from (#937). `revalidateTag` alone never reached that copy.
