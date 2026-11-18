@@ -5,7 +5,7 @@
  * finalize reads matched_profile_id, calls exam_create_submission, then writes storage keys, file
  * rows and the exam_v1 artifact under the profile it read. exam_create_submission now takes that
  * profile and, under the row lock, refuses when the row names someone else
- * (20261116130000_exam_create_submission_expected_profile.sql). These tests drive the interleavings
+ * (20261118130000_exam_create_submission_expected_profile.sql). These tests drive the interleavings
  * over direct connections (courseGeminiKeyDb.ts helpers: postgres, or a user's PostgREST-equivalent
  * transaction). The exam worker starts passing the profile in a later change, which adds an
  * end-to-end case with the real worker to this file.
