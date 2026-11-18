@@ -66,7 +66,7 @@ type Fence = { msgId: number; readCt: number };
 class NotOwnerError extends Error {}
 
 // The one place the worker writes exam_scan_batches.status. See exam_worker_set_batch_status
-// (20261116140000_pgmq_public_set_vt_if_claimed.sql) and batchTransitions.ts.
+// (20261118170000_pgmq_public_set_vt_if_claimed.sql) and batchTransitions.ts.
 async function setBatchStatus(
   admin: Admin,
   fence: Fence,
