@@ -339,13 +339,21 @@ test.describe("finalize cannot split a scanned exam between two students (#1270)
     // The interleaving really happened: the first finalize was refused and a retry finished the job.
     const audit = await privilegedClient();
     try {
-      const { rows: retried } = await audit.query(
-        `SELECT 1 FROM pgmq.a_exam_processing
-          WHERE message->>'method' = 'finalize' AND (message->'args'->>'scanned_submission_id')::bigint = $1
-            AND coalesce((message->>'retry_count')::int, 0) >= 1`,
-        [rowId]
-      );
-      expect(retried.length).toBeGreaterThan(0);
+      // The worker stamps finalized_at before it archives the message, so wait for the archive.
+      await expect
+        .poll(
+          async () => {
+            const { rows: retried } = await audit.query(
+              `SELECT 1 FROM pgmq.a_exam_processing
+                WHERE message->>'method' = 'finalize' AND (message->'args'->>'scanned_submission_id')::bigint = $1
+                  AND coalesce((message->>'retry_count')::int, 0) >= 1`,
+              [rowId]
+            );
+            return retried.length;
+          },
+          { timeout: 150_000, intervals: [2000, 5000] }
+        )
+        .toBeGreaterThan(0);
     } finally {
       await audit.end();
     }
