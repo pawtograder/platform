@@ -470,8 +470,10 @@ async function handleGitHubApiCall<T>(
         if (tripCount) {
           Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
           scope.setTag("circuit_trip_count", String(tripCount));
-          if (tripCount >= 5) {
-            Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
+          // A third trip within the 24h decay window usually means a 24h window, but not always: an
+          // error_threshold trip counts too and keeps its 8h window. The RPC returns only the count.
+          if (tripCount >= 3) {
+            Sentry.captureMessage(`Repeated circuit trips for ${org} (trip count ${tripCount})`, {
               level: "error"
             });
           }
@@ -575,6 +577,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
+    .eq("git_provider", decoded.provider)
     .maybeSingle();
   if (repoError) {
     Sentry.captureException(repoError, scope);
@@ -1256,6 +1259,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
           .select("id, created_at")
+          // The same owner/name can exist on GitHub and on Forgejo; only this provider's repository counts.
+          .eq("repository_id", repoData.id)
           .eq("repository", repository)
           .eq("sha", sha)
           .eq("run_number", Number.parseInt(decoded.run_id))

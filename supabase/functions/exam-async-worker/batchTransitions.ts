@@ -20,9 +20,12 @@
 
 export type BatchStatus = "uploaded" | "ocr" | "matching" | "review" | "finalizing" | "completed" | "error";
 
-/** match: the batch is still reading or matching. Not from review, finalizing or completed (a stale match). */
-export const MATCHING_FROM: readonly BatchStatus[] = ["ocr", "matching"];
-export const REVIEW_FROM: readonly BatchStatus[] = ["ocr", "matching"];
+/**
+ * match: the batch is before review (staging's MATCHABLE_STATUSES, #1133). Not from review,
+ * finalizing, completed or error: a stale match must not move a batch backwards or hide a result.
+ */
+export const MATCHING_FROM: readonly BatchStatus[] = ["uploaded", "ocr", "matching"];
+export const REVIEW_FROM: readonly BatchStatus[] = ["uploaded", "ocr", "matching"];
 
 /**
  * finalize: only a batch whose submissions are being created. A finalize left over from an earlier

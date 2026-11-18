@@ -35,6 +35,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<Reposit
   const { data: repo, error: repoError } = await supabase
     .from("repositories")
     .select("*")
+    // Commits are listed through the GitHub API.
+    .eq("git_provider", "github")
     .eq("repository", repo_name)
     .eq("class_id", course_id)
     .eq("git_provider", "github")

@@ -21,10 +21,10 @@ const ALL: BatchStatus[] = ["uploaded", "ocr", "matching", "review", "finalizing
 const WORKER = join(__dirname, "..", "..", "supabase", "functions", "exam-async-worker", "index.ts");
 
 describe("issue #1158: worker batch status transitions", () => {
-  test("match moves a batch only while it is reading or matching", () => {
-    expect([...MATCHING_FROM].sort()).toEqual(["matching", "ocr"]);
-    expect([...REVIEW_FROM].sort()).toEqual(["matching", "ocr"]);
-    for (const later of ["review", "finalizing", "completed", "error", "uploaded"] as BatchStatus[]) {
+  test("match moves a batch only while it is before review", () => {
+    expect([...MATCHING_FROM].sort()).toEqual(["matching", "ocr", "uploaded"]);
+    expect([...REVIEW_FROM].sort()).toEqual(["matching", "ocr", "uploaded"]);
+    for (const later of ["review", "finalizing", "completed", "error"] as BatchStatus[]) {
       expect(MATCHING_FROM).not.toContain(later);
       expect(REVIEW_FROM).not.toContain(later);
     }
