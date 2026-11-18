@@ -43,6 +43,16 @@ type RosterStudent = { profile_id: string; name: string | null };
 
 const POLL_MS = 4000;
 
+type Filterable<Q> = { eq(column: string, value: string): Q; is(column: string, value: null): Q };
+/**
+ * A condition that the column still holds the value the reviewer was shown (null-aware: `eq` never
+ * matches null). A decision written with these conditions matches no row if the row changed after
+ * it was shown, instead of committing against something the reviewer never saw (#1265, #1270).
+ */
+function asShown<Q extends Filterable<Q>>(query: Q, column: string, value: string | null): Q {
+  return value === null ? query.is(column, null) : query.eq(column, value);
+}
+
 export default function MatchReview({
   batchId,
   classId,
@@ -162,8 +172,12 @@ export default function MatchReview({
 
   const setMatch = useCallback(
     async (id: number, profileId: string | null) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row) return;
       const supabase = createClient();
-      const { error } = await supabase
+      // Only over the match that was on screen: if someone else confirmed or changed this exam since,
+      // nothing matches, instead of silently undoing their decision.
+      let update = supabase
         .from("exam_scanned_submissions")
         .update({
           matched_profile_id: profileId,
@@ -171,15 +185,19 @@ export default function MatchReview({
           // The worker's confidence was for the student it suggested, not this one (#1265).
           match_confidence: null
         })
-        .eq("id", id);
+        .eq("id", id)
+        .eq("match_status", row.match_status);
+      update = asShown(update, "matched_profile_id", row.matched_profile_id);
+      const { data, error } = await update.select("id");
       if (error) {
         toaster.error({ title: "Update failed", description: error.message });
         return;
       }
+      if (!data?.length) toaster.error({ title: "This exam changed while you were choosing. Check it again." });
       setPendingAck((p) => (p?.id === id ? null : p));
       await load();
     },
-    [load]
+    [rows, load]
   );
 
   const rosterName = useCallback(
@@ -200,8 +218,15 @@ export default function MatchReview({
     [rosterName, nameIsAmbiguous]
   );
 
+  // The prompt on screen, for closePrompt to compare against without a stale closure.
+  const activePrompt = useRef<number | null>(null);
+  useEffect(() => {
+    activePrompt.current = pendingAck?.id ?? null;
+  }, [pendingAck]);
   const closePrompt = useCallback((id: number) => {
-    // Only this row's prompt: a confirm that settles late must not close one opened on another row.
+    // Only this row's prompt: a confirm that settles late must not close one opened on another row,
+    // nor move focus away from it (the next Enter would then land on this row's Confirm).
+    if (activePrompt.current !== id) return;
     setPendingAck((p) => (p?.id === id ? null : p));
     // The prompt replaced the row's buttons; put focus back on Confirm instead of losing it.
     requestAnimationFrame(() => confirmButtons.current.get(id)?.focus());
@@ -222,13 +247,17 @@ export default function MatchReview({
         return;
       }
       const supabase = createClient();
-      // Confirm only the student the instructor saw: if the row changed meanwhile, nothing matches.
-      const { data, error } = await supabase
+      // Confirm only what the instructor saw: the student, and the name and SIS id read from the
+      // paper, which decided whether the acknowledgment was needed. The worker can rewrite those
+      // on an unconfirmed row (a redelivered or late match); if any changed meanwhile, nothing matches.
+      let update = supabase
         .from("exam_scanned_submissions")
         .update({ match_status: "confirmed" })
         .eq("id", id)
-        .eq("matched_profile_id", row.matched_profile_id)
-        .select("id");
+        .eq("matched_profile_id", row.matched_profile_id);
+      update = asShown(update, "detected_name", row.detected_name);
+      update = asShown(update, "detected_sis_id", row.detected_sis_id);
+      const { data, error } = await update.select("id");
       if (acknowledged) closePrompt(id);
       if (error) {
         toaster.error({ title: "Confirm failed", description: error.message });
@@ -271,18 +300,25 @@ export default function MatchReview({
 
   const skip = useCallback(
     async (id: number) => {
+      const row = rows.find((r) => r.id === id);
+      if (!row) return;
       const supabase = createClient();
-      const { error } = await supabase
+      // Same rule as a pick: skip only the exam as it was shown.
+      let update = supabase
         .from("exam_scanned_submissions")
         .update({ match_status: "skipped" })
-        .eq("id", id);
+        .eq("id", id)
+        .eq("match_status", row.match_status);
+      update = asShown(update, "matched_profile_id", row.matched_profile_id);
+      const { data, error } = await update.select("id");
       if (error) {
         toaster.error({ title: "Skip failed", description: error.message });
         return;
       }
+      if (!data?.length) toaster.error({ title: "This exam changed before it was skipped. Check it again." });
       await load();
     },
-    [load]
+    [rows, load]
   );
 
   const createSubmissions = useCallback(async () => {

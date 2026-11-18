@@ -15,7 +15,7 @@ const mockRpc = jest.fn();
 
 function mockChain(table: string) {
   const chain: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "order", "not", "maybeSingle", "update"]) chain[method] = () => chain;
+  for (const method of ["select", "eq", "is", "order", "not", "maybeSingle", "update"]) chain[method] = () => chain;
   chain.then = (resolve: (r: Result) => unknown, reject: (e: unknown) => unknown) => {
     mockQueries.push(table);
     return Promise.resolve(mockResults[table]()).then(resolve, reject);
