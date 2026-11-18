@@ -235,3 +235,75 @@ test("Create stays disabled when the page's batch reload fails, until the batch 
   rerender(wrap(<MatchReview {...props} batchStatus="review" />));
   await waitFor(() => expect(screen.getByRole("button", { name: "Create 1 submission(s)" })).not.toBeDisabled());
 });
+
+// A failed load must not leave the page on stale state with nothing scheduled to replace it: the
+// server keeps moving the batch on whether or not this page's last request succeeded.
+describe("recovery after a failed load", () => {
+  test("a failed reload when the batch completes is retried until it succeeds, then polling stops", async () => {
+    mockResults.exam_scanned_submissions = () => ({ data: [scanned(1, false)], error: null });
+    const props = { batchId: 5, classId: 7, onBatchChanged: jest.fn() };
+    const { rerender } = render(wrap(<MatchReview {...props} batchStatus="finalizing" />));
+    expect(await screen.findByText("Creating submissions: 0 of 1")).toBeInTheDocument();
+
+    // The page sees 'completed', but the reload for it fails.
+    mockResults.exam_scanned_submissions = () => ({ data: null, error: { message: "timeout" } });
+    rerender(wrap(<MatchReview {...props} batchStatus="completed" />));
+    expect(await screen.findByText(/Couldn.t refresh the matches \(timeout\)/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create 1 submission(s)" })).toBeInTheDocument();
+
+    // No click: the next tick retries and the finalized row arrives.
+    mockResults.exam_scanned_submissions = () => ({ data: [scanned(1, true)], error: null });
+    await act(async () => jest.advanceTimersByTime(4000));
+    expect(await screen.findByRole("button", { name: "Create 0 submission(s)" })).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t refresh the matches/)).not.toBeInTheDocument();
+
+    const settled = count("exam_scanned_submissions");
+    await act(async () => jest.advanceTimersByTime(12000));
+    expect(count("exam_scanned_submissions")).toBe(settled);
+  });
+
+  test("a failed roster load is reported, not shown as an empty roster, and is retried until it loads", async () => {
+    mockResults.exam_scanned_submissions = () => ({
+      data: [{ ...scanned(1, false), match_status: "unmatched", matched_profile_id: null }],
+      error: null
+    });
+    mockResults.user_roles = () => ({ data: null, error: { message: "roster timeout" } });
+    render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
+    expect(await screen.findByText(/Couldn.t load the student list \(roster timeout\)/)).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Ada Lovelace" })).not.toBeInTheDocument();
+
+    mockResults.user_roles = () => ({
+      data: [{ private_profile_id: "p-ada", profiles: { name: "Ada Lovelace" } }],
+      error: null
+    });
+    await act(async () => jest.advanceTimersByTime(4000));
+    expect(await screen.findByRole("option", { name: "Ada Lovelace" })).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t load the student list/)).not.toBeInTheDocument();
+
+    // Loaded once successfully: not refetched by later ticks or by Refresh.
+    const loaded = count("user_roles");
+    await act(async () => jest.advanceTimersByTime(12000));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Refresh" })));
+    expect(count("user_roles")).toBe(loaded);
+  });
+
+  test("Create queues the work and the batch reload fails: the page keeps polling until it sees finalizing", async () => {
+    mockResults.exam_scan_batches = () => ({ data: [batch("review")], error: null });
+    mockResults.exam_scanned_submissions = () => ({ data: [scanned(1, false)], error: null });
+    mockRpc.mockResolvedValue({ data: 1, error: null });
+    render(wrap(<ExamScansPage />));
+    const create = await screen.findByRole("button", { name: "Create 1 submission(s)" });
+
+    // The RPC commits 'finalizing', but the page's reload after it fails.
+    mockResults.exam_scan_batches = () => ({ data: null, error: { message: "network down" } });
+    fireEvent.click(create);
+    expect(await screen.findByText(/Couldn.t refresh the batches \(network down\)/)).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+
+    mockResults.exam_scan_batches = () => ({ data: [batch("finalizing")], error: null });
+    await act(async () => jest.advanceTimersByTime(4000));
+    expect(await screen.findByText("Creating submissions: 0 of 1")).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t refresh the batches/)).not.toBeInTheDocument();
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
+});

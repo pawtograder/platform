@@ -72,6 +72,8 @@ export default function MatchReview({
     null
   );
   const [rowsError, setRowsError] = useState<string | null>(null);
+  // A failed roster load is not an empty roster: say so, and keep retrying until it loads.
+  const [rosterError, setRosterError] = useState<string | null>(null);
   // The batch status Create was clicked in, until the page reports a different one. If the
   // page's reload after Create fails or is superseded, batchStatus still says 'review' and Create
   // would be offered again, queueing every row a second time.
@@ -107,50 +109,56 @@ export default function MatchReview({
     setLoaded(true);
   }, [batchId]);
 
-  // The roster does not change while the page is open; load it once, not on every poll.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const { data: students } = await createClient()
-        .from("user_roles")
-        .select("private_profile_id, profiles!user_roles_private_profile_id_fkey(name)")
-        .eq("class_id", classId)
-        .eq("role", "student");
-      if (cancelled) return;
-      setRoster(
-        (students ?? [])
-          .filter((s) => s.private_profile_id)
-          .map((s) => ({
-            profile_id: s.private_profile_id as string,
-            name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null
-          }))
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
+  // The roster does not change while the page is open, so a successful load is kept and not repeated
+  // on every poll. A failed one is retried: by the poll below and by Refresh.
+  const rosterSeq = useRef(0);
+  const loadRoster = useCallback(async () => {
+    const seq = ++rosterSeq.current;
+    const { data: students, error } = await createClient()
+      .from("user_roles")
+      .select("private_profile_id, profiles!user_roles_private_profile_id_fkey(name)")
+      .eq("class_id", classId)
+      .eq("role", "student");
+    if (!mounted.current || seq !== rosterSeq.current) return;
+    setRosterError(error ? error.message : null);
+    if (error) return;
+    setRoster(
+      (students ?? [])
+        .filter((s) => s.private_profile_id)
+        .map((s) => ({
+          profile_id: s.private_profile_id as string,
+          name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null
+        }))
+    );
   }, [classId]);
+  useEffect(() => {
+    void loadRoster();
+  }, [loadRoster]);
 
   // Reload when the batch changes state, e.g. to completed while submissions were being created.
   useEffect(() => {
     void load();
   }, [load, batchStatus]);
 
-  // While the worker creates submissions, rows change one at a time; follow them.
+  // While the worker creates submissions, rows change one at a time; follow them. Also keep polling
+  // while the last load failed: otherwise a failed reload (e.g. the one when the batch turns
+  // completed) would leave stale rows on screen with nothing scheduled to replace them.
   // A tick is skipped while the previous poll is still out: if each request takes longer than
   // POLL_MS, the next one would supersede it before it lands and nothing would ever update.
   const polling = useRef(false);
+  const rowsFailed = rowsError !== null;
+  const rosterFailed = rosterError !== null;
   useEffect(() => {
-    if (batchStatus !== "finalizing") return;
+    if (batchStatus !== "finalizing" && !rowsFailed && !rosterFailed) return;
     const t = setInterval(() => {
       if (document.visibilityState !== "visible" || polling.current) return;
       polling.current = true;
-      void load().finally(() => {
+      void Promise.all([load(), rosterFailed ? loadRoster() : undefined]).finally(() => {
         polling.current = false;
       });
     }, POLL_MS);
     return () => clearInterval(t);
-  }, [batchStatus, load]);
+  }, [batchStatus, load, loadRoster, rowsFailed, rosterFailed]);
 
   const setMatch = useCallback(
     async (id: number, profileId: string | null) => {
@@ -343,6 +351,11 @@ export default function MatchReview({
           Couldn&apos;t refresh the matches ({rowsError}). What you see may be out of date.
         </Text>
       )}
+      {rosterError && (
+        <Text fontSize="xs" color="fg.error">
+          Couldn&apos;t load the student list ({rosterError}). Retrying; until then no student can be picked.
+        </Text>
+      )}
       <Table.Root size="sm" variant="outline">
         <Table.Header>
           <Table.Row>
@@ -471,6 +484,7 @@ export default function MatchReview({
             // The batch too, so its badge and frozen state agree with the rows (#1262 step 5).
             void load();
             void onBatchChanged();
+            if (rosterError) void loadRoster();
           }}
         >
           Refresh
