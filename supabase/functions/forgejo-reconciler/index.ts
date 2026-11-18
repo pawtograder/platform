@@ -17,7 +17,7 @@ import { reconcileForgejo } from "./reconcile.ts";
  * for each student in each released Forgejo assignment (#1093), so both exist before the student
  * first signs in. Invoked hourly via pg_cron, and kicked when someone joins such a class, a class
  * turns the flag on (20261112120100_forgejo_reconciler.sql) or a Forgejo assignment is released
- * (20261112120200_forgejo_repos.sql).
+ * (20261118110000_forgejo_repos.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
