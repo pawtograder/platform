@@ -2,7 +2,15 @@
  * @jest-environment node
  */
 
-import { boxCenterInRegion, cropAspect, wordsInRegion } from "@/lib/exam/regionMath";
+import {
+  boxCenterInRegion,
+  CROP_PAGE_RENDER_WIDTH,
+  cropAspect,
+  cropDisplayWidth,
+  wordsInRegion,
+  type NormRect,
+  type WordBox
+} from "@/lib/exam/regionMath";
 import { wordsInRegion as sharedWordsInRegion } from "@/supabase/functions/_shared/examRegionText";
 
 describe("boxCenterInRegion", () => {
@@ -63,5 +71,47 @@ describe("cropAspect", () => {
   it("falls back to 4 for a degenerate region rather than collapsing the box", () => {
     expect(cropAspect({ x: 0, y: 0, width: 0.5, height: 0 }, LETTER)).toBe(4);
     expect(cropAspect({ x: 0, y: 0, width: 0, height: 0.5 }, LETTER)).toBe(4);
+  });
+});
+
+describe("cropDisplayWidth (#1263)", () => {
+  const LETTER = { width: 1224, height: 1584 };
+  // The two shapes from the report: Q1 a wide short box, Q2 a tall narrow one.
+  const WIDE_SHORT: NormRect = { x: 0.1, y: 0.1, width: 0.8, height: 0.05 };
+  const TALL_NARROW: NormRect = { x: 0.1, y: 0.3, width: 0.15, height: 0.4 };
+
+  /** Rendered px per source px: what "zoom" means here. */
+  const scale = (region: NormRect) => cropDisplayWidth(region) / (region.width * LETTER.width);
+
+  it("renders two differently shaped regions at the same zoom", () => {
+    expect(scale(WIDE_SHORT)).toBeCloseTo(scale(TALL_NARROW), 10);
+  });
+
+  it("would not have, when the height was what was fixed", () => {
+    // The old sizing, verbatim: width = round(height * cropAspect(region, page)) with height=120.
+    // Kept here because the point of #1263 is that this was shape-dependent, and a test that only
+    // checked the new behavior would pass just as happily against the bug.
+    const oldScale = (region: NormRect) => Math.round(120 * cropAspect(region, LETTER)) / (region.width * LETTER.width);
+    expect(oldScale(WIDE_SHORT) / oldScale(TALL_NARROW)).toBeGreaterThan(5);
+  });
+
+  it("is the region's share of the page width", () => {
+    expect(cropDisplayWidth({ x: 0, y: 0, width: 0.5, height: 0.2 }, 1000)).toBe(500);
+    expect(cropDisplayWidth({ x: 0, y: 0, width: 1, height: 0.2 }, 1000)).toBe(1000);
+  });
+
+  it("does not move when the same sheet is scanned at a different resolution", () => {
+    // region coordinates are normalized, so a 200dpi rescan of the same page is the same call.
+    expect(cropDisplayWidth(WIDE_SHORT)).toBe(cropDisplayWidth(WIDE_SHORT));
+    expect(scale(WIDE_SHORT)).toBeCloseTo(CROP_PAGE_RENDER_WIDTH / LETTER.width, 10);
+  });
+
+  it("falls back to the full page width rather than 0px for a degenerate region", () => {
+    expect(cropDisplayWidth({ x: 0, y: 0, width: 0, height: 0.2 }, 1000)).toBe(1000);
+    expect(cropDisplayWidth({ x: 0, y: 0, width: Number.NaN, height: 0.2 }, 1000)).toBe(1000);
+  });
+
+  it("clamps a region wider than its page", () => {
+    expect(cropDisplayWidth({ x: 0, y: 0, width: 1.4, height: 0.2 }, 1000)).toBe(1000);
   });
 });

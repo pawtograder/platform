@@ -33,3 +33,37 @@ export function cropAspect(region: NormRect, page?: { width?: number; height?: n
   }
   return region.width / region.height;
 }
+
+/**
+ * The width, in CSS px, that the grader view lays a whole scanned page out at.
+ *
+ * Only the ratio to the page matters, so this is not tied to any scan resolution: a 1224px scan
+ * and a 1700px scan of the same sheet render identically.
+ */
+export const CROP_PAGE_RENDER_WIDTH = 1000;
+
+/**
+ * Rendered width in px for a crop of `region`, at the one zoom every crop on a page shares.
+ *
+ * #1263: the grader view fixed each crop's HEIGHT and let its width follow the aspect ratio, so
+ * the rendered scale was `height / (region.height * page.height)`. That is a function of the box
+ * the instructor drew: a short wide box came out magnified, a tall one came out a thumbnail. On
+ * the seeded Midterm Exam 1 the numeric and true/false answers filled the panel while the
+ * free-text answers, the ones that actually need reading, rendered smallest. A TA working down
+ * 200 submissions got a different zoom on every row.
+ *
+ * Sizing from the region's width instead makes the scale `CROP_PAGE_RENDER_WIDTH / page.width`,
+ * which is the same for every region on the page whatever its shape. `region.width` is already a
+ * fraction of the page width, so the page's pixel size does not enter into it; `cropAspect` still
+ * supplies the shape, and still needs the page, because width and height are fractions of
+ * different dimensions.
+ *
+ * A region the instructor drew small therefore renders small. That is the point: it holds less.
+ * "View original page" is still there for reading one closely.
+ */
+export function cropDisplayWidth(region: NormRect, pageRenderWidth: number = CROP_PAGE_RENDER_WIDTH): number {
+  // A degenerate region has no width to scale from; fall back to the full page rather than 0px,
+  // which would render an invisible box with no hint that anything is wrong.
+  if (!(region.width > 0)) return pageRenderWidth;
+  return Math.round(Math.min(1, region.width) * pageRenderWidth);
+}
