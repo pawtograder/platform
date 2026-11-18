@@ -763,7 +763,11 @@
   "exam_scanned_submissions": {
     "kind": "table",
     "fks": [
-      { "name": "exam_scanned_submissions_batch_id_fkey", "columns": ["batch_id"], "ref": "exam_scan_batches" },
+      {
+        "name": "exam_scanned_submissions_batch_scope_fkey",
+        "columns": ["batch_id", "exam_id", "class_id"],
+        "ref": "exam_scan_batches"
+      },
       { "name": "exam_scanned_submissions_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
       { "name": "exam_scanned_submissions_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
       { "name": "exam_scanned_submissions_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" },
@@ -1172,6 +1176,33 @@
   "help_queues": {
     "kind": "table",
     "fks": [{ "name": "help_queues_class_fkey", "columns": ["class_id"], "ref": "classes" }]
+  },
+  "help_request_escalations": {
+    "kind": "table",
+    "fks": [
+      { "name": "help_request_escalations_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
+      { "name": "help_request_escalations_escalated_by_fkey", "columns": ["escalated_by"], "ref": "profiles" },
+      {
+        "name": "help_request_escalations_escalated_by_fkey",
+        "columns": ["escalated_by"],
+        "ref": "submissions_with_grades_for_assignment_nice"
+      },
+      {
+        "name": "help_request_escalations_help_request_id_fkey",
+        "columns": ["help_request_id"],
+        "ref": "help_requests"
+      },
+      {
+        "name": "help_request_escalations_previous_assignee_fkey",
+        "columns": ["previous_assignee"],
+        "ref": "profiles"
+      },
+      {
+        "name": "help_request_escalations_previous_assignee_fkey",
+        "columns": ["previous_assignee"],
+        "ref": "submissions_with_grades_for_assignment_nice"
+      }
+    ]
   },
   "help_request_feedback": {
     "kind": "table",
