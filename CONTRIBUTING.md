@@ -22,13 +22,16 @@ A claim is **checked** when you can show the command you or an agent ran, or the
 ### 3. Answer in words
 
 - A review thread is **answered** when you reply on it: either the commit that fixes it, or why you won't change it. A silent push isn't an answer, and neither is resolving the thread without a reply.
-- Answer within 48 hours. "I need a day on this one" counts.
+- If you requested changes, come back after the author replies. Approve, or say what's still open.
+- Authors and reviewers both answer within 48 hours. For a reviewer, the review request is the question. "I need a day on this one" counts as an answer.
 - **Agents answer agents; people answer people.** Your agent can reply to bot reviewers (CodeRabbit, Codex) on its own: fix the finding, or say why not. A reply to a human reviewer comes from you. Draft it with an agent if you like, but edit it until you'd stand behind every word.
 - If you promise something by a date and it slips, say so on the thread.
+- Re-request a review only after you've pushed a fix or replied on every open thread.
 
 ### 4. Size it for a person
 
 - A reviewer should be able to read your PR in one sitting, about 20 minutes. If it's bigger than that, split it into a stack of smaller PRs.
+- If your PR is stacked, say which PR it sits on and which commits are new. Or base it on that PR's branch, so the diff shows only yours.
 - Include documentation that explains the overall shape of the change and the architectural decisions it makes, so the reviewer doesn't have to work them out from the diff.
 - Draft means not ready. Mark the PR ready when you want a review, and don't leave a draft sitting for weeks.
 
