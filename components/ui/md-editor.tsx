@@ -8,6 +8,7 @@ import remarkEscapeHtml from "@/lib/remark-escape-html";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { isTextFile, getLanguageFromFile } from "@/lib/utils";
+import { hideToolbarIcon } from "./md-editor-a11y";
 
 // Dynamic import of MD Editor to reduce build memory usage
 const MDEditor = dynamic(() => import("@uiw/react-md-editor").then((mod) => mod.default), {
@@ -141,6 +142,7 @@ const MdEditor = (props: ExtendedMdEditorProps) => {
 
   return (
     <MDEditor
+      commandsFilter={hideToolbarIcon}
       {...mdEditorProps}
       onChange={onChange}
       draggable={true}
