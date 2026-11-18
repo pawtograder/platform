@@ -21,7 +21,7 @@
 -- class_id can still change while it has no scanned exams; the batch's own (exam_id, class_id)
 -- key and write policy keep that change inside one course.
 --
--- This supersedes the note in 20261114133600 that row RLS still allows inserting a row whose exam
+-- This supersedes the note in 20261118100100 that row RLS still allows inserting a row whose exam
 -- differs from its batch's. That migration's trigger still refuses changes to a row's scope, with
 -- its own message. The worker's finalize checks stay as defence in depth.
 --
