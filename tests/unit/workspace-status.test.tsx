@@ -284,6 +284,32 @@ describe("WorkspaceStatus", () => {
     expect(screen.getByRole("status").closest("div")?.contains(document.activeElement)).toBe(true);
   });
 
+  it("leaves focus where the student moved it while a slow Open was running", async () => {
+    let resolveOpen: (s: WorkspaceState) => void = () => {};
+    const client: WorkspaceClient = {
+      getStatus: jest.fn(async () => ({ status: "not_started" }) as WorkspaceState),
+      open: jest.fn(() => new Promise<WorkspaceState>((resolve) => (resolveOpen = resolve)))
+    };
+    render(
+      <ChakraProvider value={defaultSystem}>
+        <button>Elsewhere</button>
+        <WorkspaceStatus assignmentId={7} client={client} />
+      </ChakraProvider>
+    );
+    const openButton = await screen.findByRole("button", { name: "Open in Coder" });
+    openButton.focus();
+    fireEvent.click(openButton);
+    // Focus moves to the status line before the request, while the pressed button is still there.
+    expect(document.activeElement).toBe(screen.getByRole("status"));
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    elsewhere.focus();
+    await act(async () => {
+      resolveOpen({ status: "failed", step: "clone", message: "Clone broke." });
+    });
+    await screen.findByRole("button", { name: "Retry" });
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
   it("sends one open request for a double click", async () => {
     let resolveOpen: (s: WorkspaceState) => void = () => {};
     const client: WorkspaceClient & { open: jest.Mock } = {
@@ -392,6 +418,24 @@ describe("WorkspaceStatus", () => {
     });
     expect(await screen.findByText("Your workspace is not running.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Open in VS Code/ })).not.toBeInTheDocument();
+  });
+
+  it("hides the editor link when the check on coming back fails, and offers Try again", async () => {
+    const getStatus = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", url: "https://editor.example" } as WorkspaceState)
+      .mockRejectedValueOnce(new Error("timed out"))
+      .mockResolvedValue({ status: "not_started" } as WorkspaceState);
+    renderCard({ getStatus, open: jest.fn() });
+    await screen.findByRole("link", { name: /Open in VS Code/ });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(screen.queryByRole("link", { name: /Open in VS Code/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Couldn't check that your workspace is still running.");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Your workspace is not running.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("skips polls while the tab is hidden", async () => {

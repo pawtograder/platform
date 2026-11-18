@@ -88,23 +88,32 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
   const statusRef = useRef<HTMLParagraphElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
 
-  // Each state renders a different button, so the one the student pressed unmounts. Move focus to
-  // the status line so the next Tab reaches the new button or link instead of the page header. The
+  // Each state renders a different button, so the one the student pressed unmounts. If that button
+  // had focus, move it to the status line before the request starts, so the next Tab reaches the
+  // new button or link instead of the page header. When the reply lands, put focus back only if it
+  // was lost (it's on <body>), so a student who tabbed elsewhere while waiting stays there. The
   // ready link is never focused on its own, because that change comes from a poll, not the student.
   const restoreFocus = useRef(false);
   const runAndKeepFocus = useCallback((action: () => Promise<void>) => {
-    restoreFocus.current = true;
+    const card = cardRef.current;
+    if (card && card.contains(document.activeElement)) {
+      // Before the first status loads there is no status line, only the error.
+      (statusRef.current ?? errorRef.current)?.focus();
+      restoreFocus.current = true;
+    }
     void action();
   }, []);
   useEffect(() => {
     if (pending || !restoreFocus.current) return;
     restoreFocus.current = false;
-    const card = cardRef.current;
-    if (card && !card.contains(document.activeElement)) {
-      // Before the first status loads there is no status line, only the error.
+    if (!document.activeElement || document.activeElement === document.body) {
       (statusRef.current ?? errorRef.current)?.focus();
     }
   }, [pending, state, error]);
+
+  // A ready workspace whose last check failed (say, on coming back to the tab after an idle stop)
+  // may be gone, so its editor link is hidden until a fresh answer comes back.
+  const unconfirmed = state?.status === "ready" && error !== null;
 
   return (
     <Box ref={cardRef} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
@@ -137,7 +146,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
               aria-live="polite"
               data-testid="workspace-status"
             >
-              {statusText(state)}
+              {unconfirmed ? "Couldn't check that your workspace is still running." : statusText(state)}
               {"message" in state && (
                 // The reason is in the Alert below, which is not a live region, so it is repeated
                 // here for screen readers. Otherwise they hear what went wrong but not why.
@@ -192,7 +201,19 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
                   Starting…
                 </Button>
               )}
-              {state.status === "ready" && (
+              {unconfirmed && (
+                <Button
+                  size="sm"
+                  colorPalette="blue"
+                  variant="outline"
+                  loading={pending}
+                  onClick={() => runAndKeepFocus(reload)}
+                >
+                  <LuRotateCcw />
+                  Try again
+                </Button>
+              )}
+              {state.status === "ready" && !unconfirmed && (
                 <Button size="sm" colorPalette="green" asChild>
                   <a href={state.url} target="_blank" rel="noopener noreferrer">
                     <LuCodeXml />
