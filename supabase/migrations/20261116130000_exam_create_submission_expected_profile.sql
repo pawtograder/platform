@@ -73,6 +73,23 @@ begin
   if v_match_status <> 'confirmed' or v_profile_id is null then
     raise exception 'Scanned submission % is not a confirmed match', p_scanned_submission_id;
   end if;
+  -- matched_profile_id is staff-writable and references any profile, and the staff write policy
+  -- checks only the row's class. This function runs as its owner and creates a submission that the
+  -- profile's owner can read from any course (the submissions and submission_artifacts SELECT
+  -- policies grant a profile its own rows), so a grader writing another course's student here
+  -- would hand that student this course's scanned exam. Create only for an active student of this
+  -- course.
+  if not exists (
+    select 1 from public.user_roles ur
+    where ur.private_profile_id = v_profile_id
+      and ur.class_id = v_class_id
+      and ur.role = 'student'
+      and not coalesce(ur.disabled, false)
+  ) then
+    raise exception
+      'Scanned submission % is matched to a profile that is not an active student in this course',
+      p_scanned_submission_id;
+  end if;
 
   -- Shared lock on the assignment, matching quiz_submit. FOR KEY SHARE does not conflict with
   -- itself (concurrent finalize workers proceed in parallel) but does conflict with the
