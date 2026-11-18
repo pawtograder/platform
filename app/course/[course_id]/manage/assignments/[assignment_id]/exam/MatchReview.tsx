@@ -9,7 +9,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
-import { namesEquivalent } from "@/lib/exam/nameAgreement";
+import { namesEquivalent, normalizeName } from "@/lib/exam/nameAgreement";
 import { createClient } from "@/utils/supabase/client";
 import { createFilter, Select } from "chakra-react-select";
 import { Badge, Box, Button, Flex, Heading, HStack, Image, Spinner, Table, Text, VStack } from "@chakra-ui/react";
@@ -27,7 +27,7 @@ type Scanned = {
   submission_id: number | null;
   finalized_at: string | null;
 };
-type RosterStudent = { profile_id: string; name: string | null; sortable_name: string | null };
+type RosterStudent = { profile_id: string; name: string | null; sortable_name: string | null; email: string | null };
 type StudentOption = { value: string; label: string };
 // Search the student's name only. react-select's default also searches the option's value, which
 // here is the profile UUID, so "ed" would match every student whose id contains "ed".
@@ -118,7 +118,9 @@ export default function MatchReview({
     const seq = ++rosterSeq.current;
     const { data: students, error } = await createClient()
       .from("user_roles")
-      .select("private_profile_id, profiles!user_roles_private_profile_id_fkey(name, sortable_name)")
+      .select(
+        "private_profile_id, profiles!user_roles_private_profile_id_fkey(name, sortable_name), users!user_roles_user_id_fkey1(email)"
+      )
       .eq("class_id", classId)
       .eq("role", "student");
     if (!mounted.current || seq !== rosterSeq.current) return;
@@ -130,7 +132,8 @@ export default function MatchReview({
         .map((s) => ({
           profile_id: s.private_profile_id as string,
           name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null,
-          sortable_name: (s.profiles as unknown as { sortable_name: string | null } | null)?.sortable_name ?? null
+          sortable_name: (s.profiles as unknown as { sortable_name: string | null } | null)?.sortable_name ?? null,
+          email: (s.users as unknown as { email: string | null } | null)?.email ?? null
         }))
     );
   }, [classId]);
@@ -194,13 +197,37 @@ export default function MatchReview({
   );
 
   // One searchable option list for every row, sorted the way the roster is (#1270).
+  // How many roster students share each name, compared the way namesEquivalent compares them. Built
+  // once per roster, so the per-row ambiguity check is a lookup instead of a scan of the roster.
+  const nameCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of roster) {
+      const key = normalizeName(s.name).join(" ");
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [roster]);
+  const sharesName = useCallback(
+    (name: string | null) => {
+      const key = normalizeName(name).join(" ");
+      return key !== "" && (nameCounts.get(key) ?? 0) > 1;
+    },
+    [nameCounts]
+  );
+  // Two students with the same name would be two identical options, and picking the wrong one gives
+  // one student's exam to the other. Those labels carry the email staff already see on the
+  // enrollments page; every other label is just the name.
   const studentOptions = useMemo<StudentOption[]>(
     () =>
       roster
-        .map((s) => ({ value: s.profile_id, label: s.name ?? s.profile_id, sort: s.sortable_name || s.name || "" }))
+        .map((s) => ({
+          value: s.profile_id,
+          label: sharesName(s.name) ? `${s.name} (${s.email ?? "no email"})` : (s.name ?? s.profile_id),
+          sort: s.sortable_name || s.name || ""
+        }))
         .sort((a, b) => a.sort.localeCompare(b.sort))
         .map(({ value, label }) => ({ value, label })),
-    [roster]
+    [roster, sharesName]
   );
   const needStudent = rows.filter((r) => !r.matched_profile_id && r.match_status !== "skipped").length;
 
@@ -210,10 +237,7 @@ export default function MatchReview({
   );
 
   // Two roster students with the same name: matching the scanned name says nothing about which one.
-  const nameIsAmbiguous = useCallback(
-    (name: string | null) => roster.filter((s) => namesEquivalent(s.name, name)).length > 1,
-    [roster]
-  );
+  const nameIsAmbiguous = sharesName;
   const needsAcknowledgment = useCallback(
     (row: Scanned) => {
       const selected = rosterName(row.matched_profile_id);

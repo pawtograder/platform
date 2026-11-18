@@ -179,3 +179,44 @@ test("search matches names only, not the profile ids behind them", async () => {
   const options = await screen.findAllByRole("option");
   expect(options.map((o) => o.textContent)).toEqual(["Ed Park"]);
 });
+
+test("two students with the same name are told apart in the picker, and the chosen one is saved", async () => {
+  mockResults.user_roles = () => ({
+    data: [
+      {
+        private_profile_id: "alex-a",
+        profiles: { name: "Alex Chen", sortable_name: "Chen, Alex" },
+        users: { email: "achen@school.edu" }
+      },
+      {
+        private_profile_id: "alex-b",
+        profiles: { name: "alex  CHEN", sortable_name: "Chen, Alex" },
+        users: { email: "alex.chen2@school.edu" }
+      },
+      {
+        private_profile_id: "dana",
+        profiles: { name: "Dana Lee", sortable_name: "Lee, Dana" },
+        users: { email: "dlee@school.edu" }
+      }
+    ],
+    error: null
+  });
+  render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
+  const picker = await screen.findByLabelText("Student for exam #1");
+  await waitFor(() => expect(picker).not.toBeDisabled());
+  fireEvent.focus(picker);
+  fireEvent.keyDown(picker, { key: "ArrowDown", code: "ArrowDown" });
+  const labels = (await screen.findAllByRole("option")).map((o) => o.textContent);
+  // Names compared as #1265 compares them (case, spacing): the two Alex Chens collide, Dana does not.
+  expect(labels).toEqual(
+    expect.arrayContaining(["Alex Chen (achen@school.edu)", "alex  CHEN (alex.chen2@school.edu)", "Dana Lee"])
+  );
+  expect(new Set(labels).size).toBe(labels.length);
+
+  fireEvent.change(picker, { target: { value: "alex.chen2" } });
+  expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+    "alex  CHEN (alex.chen2@school.edu)"
+  ]);
+  fireEvent.keyDown(picker, { key: "Enter", code: "Enter" });
+  await waitFor(() => expect(mockUpdates).toContainEqual(expect.objectContaining({ matched_profile_id: "alex-b" })));
+});
