@@ -558,7 +558,8 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("run_attempt", run_attempt);
   scope?.setTag("is_e2e_run", isE2ERun.toString());
   // One click from any event this request reports to the run that caused it.
-  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
+  // The link is GitHub's Actions URL; a Forgejo run gets none rather than a link to the wrong host.
+  if (decoded.provider === "github") attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
 
   // Circuit breaker: check if org-level circuit is open for GitHub API calls
   const adminSupabase = createClient<Database>(
@@ -599,14 +600,17 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (isPrModeLeftoverRun) {
     scope?.setTag("circuit_exempt", "pr_mode_leftover_workflow");
   }
+  // A Forgejo submission's only GitHub call is fetching the grader (D6), so it waits on the grader org's circuit.
+  const circuitOrg =
+    repoData?.git_provider === "forgejo" ? (repoData.assignments?.autograder?.grader_repo?.split("/")[0] ?? org) : org;
   try {
-    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
+    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: circuitOrg });
     if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
       const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
       if (!isPrModeLeftoverRun && row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
         scope.setTag("circuit_state", "open");
         scope.setContext("circuit_breaker_active", {
-          org,
+          org: circuitOrg,
           reason: row.reason || "Circuit breaker active",
           open_until: row.open_until
         });
@@ -1549,7 +1553,9 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
             throw new UserVisibleError("Forgejo grading isn't configured on this deployment.", 503);
           }
           try {
-            repo = Buffer.from(await downloadArchive(forgejo, repository, sha));
+            // Reads one byte past the limit at most; the size check below rejects that as oversized.
+            const archive = await downloadArchive(forgejo, repository, sha, MAX_SUBMISSION_ZIP_BYTES);
+            repo = Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
           } catch (e) {
             // The student only sees the message; the status and reason go to Sentry.
             Sentry.captureException(e, scope);

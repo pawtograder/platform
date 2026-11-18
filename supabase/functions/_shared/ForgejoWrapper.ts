@@ -110,12 +110,13 @@ export async function ensureAccountForUser(
 /**
  * The repo at `sha` as a zip with one top-level directory, the same shape as GitHub's zipball, for
  * grading (#1110). Forgejo 15.0.9 held a request for an unknown commit open for minutes, hence the
- * timeout.
+ * timeout. Returns more than `maxBytes` only when the archive is larger, and then not all of it.
  */
 export async function downloadArchive(
   config: ForgejoConfig,
   repository: string,
   sha: string,
+  maxBytes: number,
   timeoutMs = 60_000
 ): Promise<Uint8Array> {
   const res = await fetch(`${config.url}/api/v1/repos/${repoPath(repository)}/archive/${encodeURIComponent(sha)}.zip`, {
@@ -123,7 +124,25 @@ export async function downloadArchive(
     signal: AbortSignal.timeout(timeoutMs)
   });
   if (!res.ok) throw await failure(res, "archive download");
-  return new Uint8Array(await res.arrayBuffer());
+  if (!res.body) return new Uint8Array();
+  // Stops past maxBytes, so an oversized archive is never held whole; the caller rejects what it gets.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  while (total <= maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.length;
+  }
+  if (total > maxBytes) await reader.cancel();
+  const archive = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    archive.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return archive;
 }
 
 /**

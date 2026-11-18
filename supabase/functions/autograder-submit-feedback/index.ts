@@ -491,7 +491,8 @@ export async function handleRequest(req: Request, scope: Sentry.Scope): Promise<
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
   // One click from any event this request reports to the run that caused it.
-  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
+  // The link is GitHub's Actions URL; a Forgejo run gets none rather than a link to the wrong host.
+  if (decoded.provider === "github") attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
   await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
   scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
@@ -578,6 +579,12 @@ export async function handleRequest(req: Request, scope: Sentry.Scope): Promise<
   let repository_id: number | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
+    // Grader repos stay on GitHub (D6) and have no repositories row, so only a GitHub token may name one.
+    if (decoded.provider !== "github") {
+      throw new SecurityError(
+        `Regression test run not found: ${autograder_regression_test_id}, grader repo: ${repository}`
+      );
+    }
     const { data: regressionTestRun } = await adminSupabase
       .from("autograder_regression_test")
       .select("*,autograder(assignments(id, class_id))")

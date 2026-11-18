@@ -177,11 +177,29 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
 Deno.test("downloadArchive: fetches the commit's zip, and an error status fails", async () => {
   const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
   await withForgejo([new Response(zip, { status: 200 })], async (calls) => {
-    assertEquals(await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c"), zip);
+    assertEquals(await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 1024), zip);
     assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/archive/b275490c.zip");
   });
   await withForgejo([new Response("Not Found", { status: 404 })], async () => {
-    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c"), Error, "404");
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 1024), Error, "404");
+  });
+});
+
+Deno.test("downloadArchive: stops reading an archive past the limit instead of buffering all of it", async () => {
+  let pulled = 0;
+  // 100 chunks of 10 bytes, produced only as they're read.
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled === 100) return controller.close();
+      pulled++;
+      controller.enqueue(new Uint8Array(10));
+    }
+  });
+  await withForgejo([new Response(body, { status: 200 })], async () => {
+    const archive = await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 25);
+    assert(archive.length > 25, "an archive past the limit comes back larger than it, so the caller rejects it");
+    assert(archive.length <= 35, `read ${archive.length} bytes, more than one chunk past the limit`);
+    assert(pulled < 100, "read the whole archive");
   });
 });
 
@@ -192,7 +210,7 @@ Deno.test("downloadArchive: gives up on a request Forgejo never answers", async 
       init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
     })) as typeof fetch;
   try {
-    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "0000", 50), DOMException);
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "0000", 1024, 50), DOMException);
   } finally {
     globalThis.fetch = realFetch;
   }

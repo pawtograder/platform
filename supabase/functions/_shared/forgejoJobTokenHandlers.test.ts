@@ -7,7 +7,7 @@
  */
 import { assert, assertRejects } from "jsr:@std/assert@^1";
 import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
-import { JobTokenRejectedError } from "./HandlerUtils.ts";
+import { JobTokenRejectedError, SecurityError } from "./HandlerUtils.ts";
 
 const FORGEJO_URL = "https://git.example.edu";
 const FORGEJO_JWKS_URL = `${FORGEJO_URL}/api/actions/.well-known/keys`;
@@ -109,3 +109,37 @@ for (const [name, mod] of [
     assert(!fetched.some(toDatabase), "an untrusted token reached the database");
   });
 }
+
+Deno.test(
+  "autograder-submit-feedback: a Forgejo token for a regression run is refused before the regression lookup",
+  async () => {
+    const realFetch = globalThis.fetch;
+    const fetched: string[] = [];
+    globalThis.fetch = ((input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input);
+      fetched.push(url);
+      if (url === FORGEJO_JWKS_URL) return Promise.resolve(new Response(JSON.stringify({ keys: [jwk] })));
+      // assertJobTokenMatchesRepository: a Forgejo repository row with the token's name exists.
+      if (new URL(url).pathname === "/rest/v1/repositories") {
+        return Promise.resolve(new Response(JSON.stringify([{ git_provider: "forgejo" }]), { status: 200 }));
+      }
+      return Promise.reject(new Error(`stopped at ${url}`));
+    }) as typeof fetch;
+    try {
+      const req = new Request("http://localhost/?autograder_regression_test_id=7", {
+        method: "POST",
+        headers: { Authorization: await forgejoToken() },
+        body: "{}"
+      });
+      const error = await assertRejects(
+        () =>
+          submitFeedback.handleRequest(req, undefined as unknown as Parameters<typeof submitFeedback.handleRequest>[1]),
+        SecurityError
+      );
+      assert(error.details.startsWith("Regression test run not found"), error.details);
+      assert(!fetched.some((url) => url.includes("autograder_regression_test")), "looked up the regression test");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+);
