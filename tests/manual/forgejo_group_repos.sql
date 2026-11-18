@@ -1,4 +1,4 @@
--- Proof harness for 20261118110200_forgejo_group_repos.sql (#1236).
+-- Proof harness for 20261118140200_forgejo_group_repos.sql (#1236).
 --
 -- Makes its own fixtures and ends in ROLLBACK. Run it in one transaction with the migration if the
 -- migration isn't applied yet:
