@@ -71,7 +71,9 @@ Forgejo's repository root as a member name in the /data archive, such as
 ./git/gitea-repositories, or "" when repository.ROOT is outside /data.
 */}}
 {{- define "pawtograder.backupApps.forgejoRepoRoot" -}}
-{{- $root := dig "gitea" "config" "repository" "ROOT" "/data/git/gitea-repositories" .Values.forgejo | toString | trimSuffix "/" -}}
+{{- $root := dig "gitea" "config" "repository" "ROOT" "/data/git/gitea-repositories" .Values.forgejo | toString -}}
+{{- /* Forgejo accepts /data//git/ for /data/git, but tar member names don't. */ -}}
+{{- $root = regexReplaceAll "/+$" (regexReplaceAll "/{2,}" $root "/") "" -}}
 {{- if hasPrefix "/data/" $root -}}
 {{- printf ".%s" (trimPrefix "/data" $root) -}}
 {{- end -}}

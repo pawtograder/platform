@@ -3023,6 +3023,12 @@ apps_has "backups: verify skips Coder when it is off" no "daily/coder-" "${BK[@]
   --show-only templates/backup-verify.yaml
 apps_has "backups: verify looks for the repositories under repository.ROOT" yes "for want in ./repos/" "${BK[@]}" \
   --set forgejo.gitea.config.repository.ROOT=/data/repos --show-only templates/backup-verify.yaml
+apps_has "backups: verify drops trailing slashes from repository.ROOT" yes "for want in ./repos/ " "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/data/repos// --show-only templates/backup-verify.yaml
+apps_has "backups: verify collapses repeated slashes in repository.ROOT" yes "for want in ./git/repos/ " "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/data//git//repos --show-only templates/backup-verify.yaml
+apps_has "backups: the archive follows a repository.ROOT with repeated slashes" yes "ROOT=git/repos" "${BK[@]}" \
+  --set forgejo.gitea.config.repository.ROOT=/data//git/repos/ "${BK_ONLY[@]}"
 DRILL=(--set backup.restoreDrill.enabled=true --show-only templates/backup-restore-drill.yaml)
 apps_has "backups: the drill restores Forgejo's dump" yes "name: restore-drill-forgejo" "${BK[@]}" "${DRILL[@]}"
 apps_has "backups: the drill restores Coder's dump" yes "name: restore-drill-coder" "${BK[@]}" "${DRILL[@]}"

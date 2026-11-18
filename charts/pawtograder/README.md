@@ -706,6 +706,8 @@ spec:
         # database: pawtograder. For own: PGHOST pawtograder-<app>-db, PGUSER postgres,
         # PGPASSWORD from pawtograder-<app>-db-superuser.
         - { name: PGHOST, value: pawtograder-postgres }
+        # postgres.service.port, or <app>-db.service.port for own.
+        - { name: PGPORT, value: "5432" }
         - { name: PGUSER, value: supabase_admin }
         - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: pawtograder-postgres, key: POSTGRES_PASSWORD } } }
       command:
