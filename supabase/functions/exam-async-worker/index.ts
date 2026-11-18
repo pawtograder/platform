@@ -54,6 +54,21 @@ class ScanGroupChangeRejectedError extends ScanPathRejectedError {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Logging (#1157)
+// ---------------------------------------------------------------------------
+// This worker had three console statements and all three sat on error paths, so a run that went
+// wrong showed nothing at all. In the CI run for #1088 (run 40775885939) it was invoked 197 times
+// and printed not one line of its own, while discord-async-worker logged every pass beside it. The
+// cause was getExamVisionProvider() throwing because EXAM_VISION_PROVIDER was unset, which one line
+// would have said outright; instead the only symptom was a batch sitting at "ocr".
+//
+// These lines answer one question: did it run, and what did it see. The prefix follows the
+// [scope] convention discord-async-worker uses, so the two read the same way in one log artifact.
+function log(message: string): void {
+  console.log(`[exam-async-worker] ${message}`);
+}
+
 async function archive(admin: Admin, msgId: number): Promise<void> {
   // The one queue call whose error is deliberately ignored. A failed archive leaves the message
   // to be redelivered and the handler re-run, which every handler here is written to tolerate
@@ -877,9 +892,11 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   }
 }
 
-async function runBatch(): Promise<number> {
+async function runBatch(source: string): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
+  const startedAt = Date.now();
+  log(`run start (source=${source})`);
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let processed = 0;
@@ -890,10 +907,19 @@ async function runBatch(): Promise<number> {
       n: 5
     });
     if (error) {
+      // Logged as well as captured. A failed read leaves `processed` at 0, so without this line
+      // the run is indistinguishable from an idle one, which is the misreading that cost an
+      // evening on #814.
+      console.error(`[exam-async-worker] queue read failed on pass ${pass}: ${error.message}`);
       Sentry.captureException(error, scope);
       break;
     }
     const messages = (data ?? []) as QueueMessage[];
+    // What this read returned, not the queue's depth. Depth lives in the pgmq schema, which is not
+    // exposed over PostgREST, so reporting it means a new RPC and a migration: more than this
+    // ticket's "log statements only, rollback is a revert". Read counts still separate the two
+    // candidates #1157 names, because an idle worker and a backed-up one look different here.
+    log(`pass ${pass}: read ${messages.length} message(s)`);
     if (messages.length === 0) break;
     for (const msg of messages) {
       // Isolate per-message failures. processMessage handles its own errors, but it can now
@@ -903,6 +929,16 @@ async function runBatch(): Promise<number> {
       // message reappears when its 120s visibility timeout lapses -- but the remaining
       // messages should not have to wait for that.
       try {
+        // Printed before the handler runs, so a message that kills the isolate still leaves its
+        // own name in the log. read_ct is here because a climbing one is the shape of a poison
+        // pill. It sits inside the try rather than above it because a message with a null body
+        // throws on env.method: outside, that throw leaves runBatch mid-loop, so the rest of the
+        // read is skipped and "run done" never prints. Inside, it reaches the handler below.
+        const env = msg.message;
+        log(
+          `handling ${env.method} msg_id=${msg.msg_id} batch=${env.batch_id} read_ct=${msg.read_ct}` +
+            (env.debug_id ? ` debug_id=${env.debug_id}` : "")
+        );
         await processMessage(admin, msg, scope.clone());
       } catch (error) {
         Sentry.captureException(error, scope.clone());
@@ -911,6 +947,7 @@ async function runBatch(): Promise<number> {
       processed++;
     }
   }
+  log(`run done: processed ${processed} message(s) in ${Date.now() - startedAt}ms (source=${source})`);
   return processed;
 }
 
@@ -934,7 +971,24 @@ Deno.serve((req) => {
       headers: { "Content-Type": "application/json" }
     });
   }
-  EdgeRuntime.waitUntil(runBatch());
+  // What the caller says triggered this run, so one log artifact can tell a cron tick from a
+  // manual or test invocation. Callers that send nothing read as "http".
+  const source = req.headers.get("x-invocation-source") ?? "http";
+  // Printed before the work is handed to the runtime, and deliberately paired with runBatch's own
+  // "run done" line. An invocation that prints this and never prints that one had its isolate
+  // reclaimed mid-flight, which is otherwise invisible: the 200 has already gone out.
+  log(`invocation accepted (source=${source}); work continues in waitUntil`);
+  EdgeRuntime.waitUntil(
+    // Not _shared/SentryInit.ts's waitUntilWithSentryFlush, which is the obvious helper to reach
+    // for. Importing it runs initSentry() as an import side effect, and this function runs its own
+    // Sentry.init above with a different config (no fingerprint, no identity, no SentryScrub), so
+    // the import would quietly change which client reports. Worth doing, but not in a change whose
+    // rollback is a revert. The flush is the part this path needed: every capture in runBatch
+    // happens after the response, so under per_request they died with the isolate.
+    runBatch(source).finally(async () => {
+      await Sentry.flush(2000);
+    })
+  );
   return Promise.resolve(
     new Response(JSON.stringify({ message: "exam-async-worker started" }), {
       headers: { "Content-Type": "application/json" }
