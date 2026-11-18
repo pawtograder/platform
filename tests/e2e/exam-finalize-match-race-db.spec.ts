@@ -215,6 +215,58 @@ test.describe("finalize cannot split a scanned exam between two students (#1270)
     }
   });
 
+  test("only a student of this course gets a submission; a dropped student still does", async () => {
+    const { course, alice, assignmentId, rowId } = await seedConfirmedRow();
+    const grader = await createUserInClass({ role: "grader", class_id: course.id });
+    const other = await createClass({ name: "Finalize match race, another course" });
+    const foreign = await createUserInClass({ role: "student", class_id: other.id, name: "Foreign Student" });
+    const client = await privilegedClient();
+    const notAStudent = { code: "P0001", message: expect.stringMatching(/not a student in this course/) };
+    try {
+      // The staff write policy checks only the row's class, so this course's grader can point the
+      // row at another course's student and confirm it (what PostgREST runs for a PATCH).
+      await beginAsUser(client, grader.user_id);
+      const edit = await client.query(
+        "UPDATE public.exam_scanned_submissions SET matched_profile_id = $1, match_status = 'confirmed' WHERE id = $2",
+        [foreign.private_profile_id, rowId]
+      );
+      expect(edit.rowCount).toBe(1);
+      await client.query("COMMIT");
+      // Finalize must not turn that into a submission the other course's student can read.
+      await expect(createAsWorker(client, rowId, foreign.private_profile_id)).rejects.toMatchObject(notAStudent);
+      await client.query("ROLLBACK");
+      await beginAsUser(client, foreign.user_id);
+      const visible = await client.query("SELECT id FROM public.submissions WHERE assignment_id = $1", [assignmentId]);
+      expect(visible.rowCount).toBe(0);
+      await client.query("ROLLBACK");
+
+      // A staff profile of this course is not a student either.
+      await client.query("UPDATE public.exam_scanned_submissions SET matched_profile_id = $1 WHERE id = $2", [
+        grader.private_profile_id,
+        rowId
+      ]);
+      await expect(createAsWorker(client, rowId, grader.private_profile_id)).rejects.toMatchObject(notAStudent);
+      await client.query("ROLLBACK");
+      expect(await submissionsFor(assignmentId)).toEqual([]);
+
+      // A student who dropped after sitting the exam can still have it finalized.
+      await client.query("UPDATE public.exam_scanned_submissions SET matched_profile_id = $1 WHERE id = $2", [
+        alice.private_profile_id,
+        rowId
+      ]);
+      await client.query("UPDATE public.user_roles SET disabled = true WHERE private_profile_id = $1", [
+        alice.private_profile_id
+      ]);
+      const created = await createAsWorker(client, rowId, alice.private_profile_id);
+      await client.query("COMMIT");
+      expect(await submissionsFor(assignmentId)).toEqual([
+        { id: Number(created.rows[0].id), profile_id: alice.private_profile_id }
+      ]);
+    } finally {
+      await client.end();
+    }
+  });
+
   test("PostgREST serves the two-argument signature, and the one-argument call still resolves", async () => {
     // What the worker will send once it passes the student it read (a separate, later change), and
     // what today's worker sends, both through PostgREST rather than a direct connection.
