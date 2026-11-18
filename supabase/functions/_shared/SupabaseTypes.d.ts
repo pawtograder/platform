@@ -3966,11 +3966,11 @@ export type Database = {
         };
         Relationships: [
           {
-            foreignKeyName: "exam_scanned_submissions_batch_id_fkey";
-            columns: ["batch_id"];
+            foreignKeyName: "exam_scanned_submissions_batch_scope_fkey";
+            columns: ["batch_id", "exam_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "exam_scan_batches";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "exam_id", "class_id"];
           },
           {
             foreignKeyName: "exam_scanned_submissions_class_id_fkey";
@@ -14270,6 +14270,10 @@ export type Database = {
           p_scanned_submission_id: number;
         };
         Returns: number;
+      };
+      exam_link_scan_groups: {
+        Args: { p_batch_id: number; p_groups: Json };
+        Returns: Json;
       };
       exam_sync_rubric_from_questions: {
         Args: { p_exam_id: number; p_rubric_id: number };
