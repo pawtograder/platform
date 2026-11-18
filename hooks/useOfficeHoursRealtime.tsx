@@ -75,6 +75,7 @@ export class OfficeHoursController {
   private _helpRequestFileReferences?: TableController<"help_request_file_references">;
   private _videoMeetingSessions?: TableController<"video_meeting_sessions">;
   private _helpRequestWorkSessions?: TableController<"help_request_work_sessions">;
+  private _helpRequestEscalations?: TableController<"help_request_escalations">;
 
   private _classRealTimeController: ClassRealTimeController;
 
@@ -278,6 +279,22 @@ export class OfficeHoursController {
     return this._helpRequestWorkSessions;
   }
 
+  /** Staff-only: RLS returns no rows to students, and changes arrive on the staff channel. */
+  get helpRequestEscalations(): TableController<"help_request_escalations"> {
+    if (!this._helpRequestEscalations) {
+      this._helpRequestEscalations = new TableController({
+        client: this._client,
+        table: "help_request_escalations",
+        query: this._client.from("help_request_escalations").select("*").eq("class_id", this.classId),
+        additionalRealTimeControllers: [this.officeHoursRealTimeController],
+        // No updated_at column, so reconnects would otherwise skip the refetch and lose any
+        // escalation broadcast while the staff channel was down.
+        enableAutoRefetch: true
+      });
+    }
+    return this._helpRequestEscalations;
+  }
+
   set officeHoursRealTimeController(officeHoursRealTimeController: OfficeHoursRealTimeController) {
     this._officeHoursRealTimeController = officeHoursRealTimeController;
   }
@@ -443,6 +460,7 @@ export class OfficeHoursController {
     this._helpRequestFileReferences?.close();
     this._videoMeetingSessions?.close();
     this._helpRequestWorkSessions?.close();
+    this._helpRequestEscalations?.close();
 
     // Close per-help-request message controllers
     for (const controller of this._helpRequestMessageControllers.values()) {
@@ -680,6 +698,28 @@ export function useWorkSessionsForRequest(help_request_id: number | undefined) {
   if (!help_request_id || !allSessions) return [];
 
   return allSessions.filter((session) => session.help_request_id === help_request_id);
+}
+
+/**
+ * Staff-only; see `helpRequestEscalations` on the controller. Pass `enabled = false` from views
+ * shared with students so the controller (and its query) is never created for them.
+ */
+export function useHelpRequestEscalations(enabled: boolean = true) {
+  const controller = useOfficeHoursController();
+  return useTableControllerTableValues(enabled ? controller.helpRequestEscalations : undefined);
+}
+
+export function useEscalationsForRequest(help_request_id: number | undefined) {
+  const allEscalations = useHelpRequestEscalations();
+  return useMemo(
+    () =>
+      help_request_id
+        ? allEscalations
+            .filter((e) => e.help_request_id === help_request_id)
+            .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        : [],
+    [allEscalations, help_request_id]
+  );
 }
 
 export { useConnectionStatus } from "./useConnectionStatus";
