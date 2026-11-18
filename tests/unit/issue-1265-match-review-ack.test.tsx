@@ -14,7 +14,7 @@ const mockWrites: Op[][] = [];
 function mockChain(table: string) {
   const ops: Op[] = [];
   const chain: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "order", "not", "maybeSingle", "update", "single"])
+  for (const method of ["select", "eq", "is", "order", "not", "maybeSingle", "update", "single"])
     chain[method] = (...args: unknown[]) => {
       ops.push([method, ...args]);
       return chain;

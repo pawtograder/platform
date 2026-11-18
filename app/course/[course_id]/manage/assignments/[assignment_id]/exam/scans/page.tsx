@@ -116,9 +116,13 @@ function ExamScansPageContent() {
   // A tick is skipped while the previous poll is still out: if each request takes longer than
   // POLL_MS, the next one would supersede it before it lands and nothing would ever update.
   const working = useMemo(() => batches.some((b) => scanBatchStatus(b.status).working), [batches]);
+  // A failed refresh is a reason to keep polling too. Otherwise the page can stop on a stale status
+  // it never re-reads: Create queues the work and moves the batch to finalizing, but if the reload
+  // after it fails, the page still shows review, polls nothing, and Create stays disabled (#1262).
+  const refreshFailed = refreshError !== null;
   const polling = useRef(false);
   useEffect(() => {
-    if (!examId || !working) return;
+    if (!examId || !(working || refreshFailed)) return;
     const refreshIfVisible = () => {
       if (document.visibilityState !== "visible" || polling.current) return;
       polling.current = true;
@@ -132,7 +136,7 @@ function ExamScansPageContent() {
       clearInterval(t);
       document.removeEventListener("visibilitychange", refreshIfVisible);
     };
-  }, [examId, working, loadBatches]);
+  }, [examId, working, refreshFailed, loadBatches]);
 
   const onUpload = useCallback(async () => {
     if (!examId) return;

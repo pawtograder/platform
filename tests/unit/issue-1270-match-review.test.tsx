@@ -12,7 +12,7 @@ const mockUpdates: Record<string, unknown>[] = [];
 
 function mockChain(table: string) {
   const chain: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "order", "not", "maybeSingle", "limit"]) chain[method] = () => chain;
+  for (const method of ["select", "eq", "is", "order", "not", "maybeSingle", "limit"]) chain[method] = () => chain;
   chain.update = (payload: Record<string, unknown>) => {
     mockUpdates.push(payload);
     return chain;
