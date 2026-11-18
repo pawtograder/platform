@@ -18,8 +18,8 @@ reference: "Forgejo and Coder (optional)" in
 ```bash
 NS=pawtograder-staging   # the release must be named pawtograder
 kubectl -n "$NS" exec -it pawtograder-postgres-0 -c postgres -- psql -U supabase_admin -d postgres
-# One function's logs across all functions pods (a selector otherwise keeps 10 lines per pod).
-kubectl -n "$NS" logs -l app.kubernetes.io/instance=pawtograder,app.kubernetes.io/component=functions \
+# One function's logs across all functions pods, stable and canary (a selector otherwise keeps 10 lines per pod).
+kubectl -n "$NS" logs -l 'app.kubernetes.io/instance=pawtograder,app.kubernetes.io/component in (functions,functions-canary)' \
   --since=2h --tail=-1 --prefix --max-log-requests=20 | grep '<function-name>'
 ```
 
@@ -198,12 +198,17 @@ error. `?password_login=1` reaches the admin login. The access token hook adds
 `Ready=False` for 15 minutes, if ESO's `externalsecret_status_condition` series
 is scraped, but a broken login can leave the Secret healthy.
 
-To replace clients, pass only the affected app's URL. The script defaults to
+To replace a client, pass only the affected app's URL, so the other app's
+users don't have to sign in or consent again. The script defaults to
 namespace `pawtograder`.
 
 ```bash
+# Forgejo's client only
 NAMESPACE="$NS" scripts/setup-sso-clients.sh --api-url https://api.staging.pawtograder.net \
-  --forgejo-url https://git.staging.pawtograder.net --coder-url https://coder.staging.pawtograder.net
+  --forgejo-url https://git.staging.pawtograder.net
+# Coder's client only
+NAMESPACE="$NS" scripts/setup-sso-clients.sh --api-url https://api.staging.pawtograder.net \
+  --coder-url https://coder.staging.pawtograder.net
 ```
 
 It writes OpenBao (`BAO_ADDR`/`BAO_TOKEN`), waits for the Secret and the app's
