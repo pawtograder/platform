@@ -398,6 +398,7 @@ export default function NewDiscussionThread() {
                     return (
                       <MessageInput
                         style={{ minWidth: "100%", width: "100%" }}
+                        ariaLabel="Description"
                         onChange={field.onChange}
                         value={field.value}
                         enableFilePicker={true}

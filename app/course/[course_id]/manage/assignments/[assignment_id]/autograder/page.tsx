@@ -1,11 +1,13 @@
 "use client";
 
 import AutograderConfiguration from "@/components/ui/autograder-configuration";
+import { Alert } from "@/components/ui/alert";
 import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { FORGEJO_GRADER_SETUP_REASON } from "@/lib/gitProviderOptions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -93,6 +95,10 @@ export default function AutograderPage() {
       const supabase = createClient();
       const priorHasAutograder = savedHasAutograder.current;
       const nextHasAutograder = values.assignments.has_autograder;
+      // Both edge functions below reject Forgejo assignments (#1091).
+      if (values.assignments?.git_provider === "forgejo") {
+        throw new Error(FORGEJO_GRADER_SETUP_REASON);
+      }
 
       // Only validate the grader repo when the autograder will REMAIN enabled.
       // This reads pawtograder.yml from that repo, so doing it unconditionally
@@ -377,6 +383,11 @@ export default function AutograderPage() {
   return (
     <div>
       <Heading size="md">Autograder Configuration</Heading>
+      {currentAssignment?.git_provider === "forgejo" && (
+        <Alert status="info" title="Forgejo assignment" my={2}>
+          {FORGEJO_GRADER_SETUP_REASON}
+        </Alert>
+      )}
       <form
         onSubmit={async (e) => {
           e.preventDefault();

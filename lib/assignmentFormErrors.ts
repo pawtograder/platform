@@ -32,7 +32,8 @@ export const FIELD_LABELS: Record<string, string> = {
   group_formation_deadline: "Group Formation Deadline",
   eval_config: "Self evaluation setting",
   deadline_offset: "Hours due after programming assignment",
-  regrade_deadline: "Regrade Request Deadline"
+  regrade_deadline: "Regrade Request Deadline",
+  git_provider: "Repository host"
 };
 
 export type InvalidFieldsSummary = {

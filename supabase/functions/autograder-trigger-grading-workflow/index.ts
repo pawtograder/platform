@@ -150,6 +150,8 @@ export async function handleRequest(
   const { data: repoData, error: repoError } = await supabase
     .from("repositories")
     .select("*")
+    // Grading is triggered through GitHub Actions.
+    .eq("git_provider", "github")
     .eq("repository", repository)
     .eq("class_id", class_id)
     .maybeSingle();

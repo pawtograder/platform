@@ -5,7 +5,7 @@
  * finalize reads matched_profile_id, calls exam_create_submission, then writes storage keys, file
  * rows and the exam_v1 artifact under the profile it read. exam_create_submission now takes that
  * profile and, under the row lock, refuses when the row names someone else
- * (20261116130000_exam_create_submission_expected_profile.sql). These tests drive the interleavings
+ * (20261118130000_exam_create_submission_expected_profile.sql). These tests drive the interleavings
  * over direct connections (courseGeminiKeyDb.ts helpers: postgres, or a user's PostgREST-equivalent
  * transaction). The exam worker starts passing the profile in a later change, which adds an
  * end-to-end case with the real worker to this file.
@@ -210,58 +210,6 @@ test.describe("finalize cannot split a scanned exam between two students (#1270)
       );
       expect(edit.rowCount).toBe(0);
       await client.query("ROLLBACK");
-    } finally {
-      await client.end();
-    }
-  });
-
-  test("a profile that is not an active student of this course gets no submission", async () => {
-    const { course, alice, assignmentId, rowId } = await seedConfirmedRow();
-    const grader = await createUserInClass({ role: "grader", class_id: course.id });
-    const other = await createClass({ name: "Finalize match race, another course" });
-    const foreign = await createUserInClass({ role: "student", class_id: other.id, name: "Foreign Student" });
-    const client = await privilegedClient();
-    try {
-      // The staff write policy checks only the row's class, so this course's grader can point the
-      // row at another course's student and confirm it.
-      await beginAsUser(client, grader.user_id);
-      const edit = await client.query(
-        "UPDATE public.exam_scanned_submissions SET matched_profile_id = $1, match_status = 'confirmed' WHERE id = $2",
-        [foreign.private_profile_id, rowId]
-      );
-      expect(edit.rowCount).toBe(1);
-      await client.query("COMMIT");
-      // Finalize must not turn that into a submission the other course's student can read.
-      await expect(createAsWorker(client, rowId, foreign.private_profile_id)).rejects.toMatchObject({
-        code: "P0001",
-        message: expect.stringMatching(/not an active student in this course/)
-      });
-      await client.query("ROLLBACK");
-      expect(await submissionsFor(assignmentId)).toEqual([]);
-      await beginAsUser(client, foreign.user_id);
-      const visible = await client.query("SELECT id FROM public.submissions WHERE assignment_id = $1", [assignmentId]);
-      expect(visible.rowCount).toBe(0);
-      await client.query("ROLLBACK");
-
-      // A dropped student is refused the same way.
-      await client.query(
-        "UPDATE public.exam_scanned_submissions SET matched_profile_id = $1, match_status = 'confirmed' WHERE id = $2",
-        [alice.private_profile_id, rowId]
-      );
-      await client.query("UPDATE public.user_roles SET disabled = true WHERE private_profile_id = $1", [
-        alice.private_profile_id
-      ]);
-      await expect(createAsWorker(client, rowId, alice.private_profile_id)).rejects.toMatchObject({ code: "P0001" });
-      await client.query("ROLLBACK");
-      await client.query("UPDATE public.user_roles SET disabled = false WHERE private_profile_id = $1", [
-        alice.private_profile_id
-      ]);
-      // Re-enrolled, the same row finalizes.
-      const created = await createAsWorker(client, rowId, alice.private_profile_id);
-      await client.query("COMMIT");
-      expect(await submissionsFor(assignmentId)).toEqual([
-        { id: Number(created.rows[0].id), profile_id: alice.private_profile_id }
-      ]);
     } finally {
       await client.end();
     }

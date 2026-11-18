@@ -1,4 +1,4 @@
--- Down companion for 20261116130000_exam_create_submission_expected_profile.sql (not applied by the
+-- Down companion for 20261118130000_exam_create_submission_expected_profile.sql (not applied by the
 -- migrator; migrations are forward-only, see docs/operations/rollback.md). Run by hand only after the
 -- worker that passes p_expected_profile_id has been rolled back: a current worker calling the
 -- one-argument function below fails every finalize with "function does not exist".
