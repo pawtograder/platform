@@ -12,6 +12,7 @@ import { JobTokenRejectedError } from "./HandlerUtils.ts";
 const FORGEJO_URL = "https://git.example.edu";
 const FORGEJO_JWKS_URL = `${FORGEJO_URL}/api/actions/.well-known/keys`;
 const SUPABASE_URL = "http://supabase.test";
+const toDatabase = (url: string) => new URL(url).origin === SUPABASE_URL;
 
 // Set before the handlers load: GitHubWrapper builds a GitHub App at import time, and the handlers read
 // these when they create their clients.
@@ -94,10 +95,7 @@ for (const [name, mod] of [
     );
     assert(!(error instanceof JobTokenRejectedError), `token rejected: ${error}`);
     assert(fetched.includes(FORGEJO_JWKS_URL), "the handler didn't verify the token against Forgejo's keys");
-    assert(
-      fetched.some((url) => url.startsWith(SUPABASE_URL)),
-      `the handler never reached the database: ${fetched.join(", ")}`
-    );
+    assert(fetched.some(toDatabase), `the handler never reached the database: ${fetched.join(", ")}`);
   });
 
   Deno.test(`${name}: a token from an untrusted issuer is still refused before the database`, async () => {
@@ -108,6 +106,6 @@ for (const [name, mod] of [
       )
     );
     await assertRejects(() => Promise.reject(error), JobTokenRejectedError);
-    assert(!fetched.some((url) => url.startsWith(SUPABASE_URL)), "an untrusted token reached the database");
+    assert(!fetched.some(toDatabase), "an untrusted token reached the database");
   });
 }
