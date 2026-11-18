@@ -6,6 +6,7 @@
  */
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
+  ArchiveTooLargeError,
   downloadArchive,
   ensureAccountForUser,
   ensureOrg,
@@ -185,7 +186,7 @@ Deno.test("downloadArchive: fetches the commit's zip, and an error status fails"
   });
 });
 
-Deno.test("downloadArchive: stops reading an archive past the limit instead of buffering all of it", async () => {
+Deno.test("downloadArchive: refuses an archive past the limit without reading or keeping all of it", async () => {
   let pulled = 0;
   // 100 chunks of 10 bytes, produced only as they're read.
   const body = new ReadableStream<Uint8Array>({
@@ -196,9 +197,11 @@ Deno.test("downloadArchive: stops reading an archive past the limit instead of b
     }
   });
   await withForgejo([new Response(body, { status: 200 })], async () => {
-    const archive = await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 25);
-    assert(archive.length > 25, "an archive past the limit comes back larger than it, so the caller rejects it");
-    assert(archive.length <= 35, `read ${archive.length} bytes, more than one chunk past the limit`);
+    const error = await assertRejects(
+      () => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 25),
+      ArchiveTooLargeError
+    );
+    assertEquals(error.bytesRead, 30);
     assert(pulled < 100, "read the whole archive");
   });
 });

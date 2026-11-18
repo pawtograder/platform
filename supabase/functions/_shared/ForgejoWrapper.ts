@@ -107,10 +107,17 @@ export async function ensureAccountForUser(
   throw new Error("No free Forgejo username after 20 attempts");
 }
 
+/** A submission archive larger than the caller's limit. `bytesRead` is how far the download got. */
+export class ArchiveTooLargeError extends Error {
+  constructor(readonly bytesRead: number) {
+    super(`Forgejo archive is over the size limit (read ${bytesRead} bytes)`);
+  }
+}
+
 /**
  * The repo at `sha` as a zip with one top-level directory, the same shape as GitHub's zipball, for
  * grading (#1110). Forgejo 15.0.9 held a request for an unknown commit open for minutes, hence the
- * timeout. Returns more than `maxBytes` only when the archive is larger, and then not all of it.
+ * timeout. Throws ArchiveTooLargeError, without assembling what it read, once the archive passes maxBytes.
  */
 export async function downloadArchive(
   config: ForgejoConfig,
@@ -125,17 +132,19 @@ export async function downloadArchive(
   });
   if (!res.ok) throw await failure(res, "archive download");
   if (!res.body) return new Uint8Array();
-  // Stops past maxBytes, so an oversized archive is never held whole; the caller rejects what it gets.
   const chunks: Uint8Array[] = [];
   let total = 0;
   const reader = res.body.getReader();
-  while (total <= maxBytes) {
+  while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
     total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new ArchiveTooLargeError(total);
+    }
+    chunks.push(value);
   }
-  if (total > maxBytes) await reader.cancel();
   const archive = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {

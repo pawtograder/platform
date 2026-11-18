@@ -23,7 +23,7 @@ import {
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
-import { downloadArchive, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { ArchiveTooLargeError, downloadArchive, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
@@ -1547,23 +1547,28 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
         // Clone the repository. A Forgejo clone stays outside handleGitHubApiCall, so its failures never
         // open the GitHub circuit for an org that happens to share the Forgejo org's name.
         let repo: Buffer;
+        // Set when a Forgejo archive passed the limit: its size, for the rejection below.
+        let oversizedZipBytes: number | undefined;
         if (repoData.git_provider === "forgejo") {
           const forgejo = forgejoConfig();
           if (!forgejo) {
             throw new UserVisibleError("Forgejo grading isn't configured on this deployment.", 503);
           }
           try {
-            // Reads one byte past the limit at most; the size check below rejects that as oversized.
             const archive = await downloadArchive(forgejo, repository, sha, MAX_SUBMISSION_ZIP_BYTES);
             repo = Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
           } catch (e) {
-            // The student only sees the message; the status and reason go to Sentry.
-            Sentry.captureException(e, scope);
-            const timedOut = e instanceof DOMException && e.name === "TimeoutError";
-            throw new UserVisibleError(
-              `${timedOut ? "Forgejo took too long to return the submission" : "Forgejo didn't return the submission"}. Try again. If it keeps failing, tell staff.`,
-              502
-            );
+            if (!(e instanceof ArchiveTooLargeError)) {
+              // The student only sees the message; the status and reason go to Sentry.
+              Sentry.captureException(e, scope);
+              const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+              throw new UserVisibleError(
+                `${timedOut ? "Forgejo took too long to return the submission" : "Forgejo didn't return the submission"}. Try again. If it keeps failing, tell staff.`,
+                502
+              );
+            }
+            oversizedZipBytes = e.bytesRead;
+            repo = Buffer.alloc(0);
           }
         } else {
           const repoToClone = getRepoToCloneConsideringE2E(repository);
@@ -1601,10 +1606,11 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         // First guard: reject an oversized zipball BEFORE unzipping it into the
         // heap (openZip.buffer holds the whole compressed buffer + parsed graph).
-        if (repo.length > MAX_SUBMISSION_ZIP_BYTES) {
+        const zipBytes = oversizedZipBytes ?? repo.length;
+        if (zipBytes > MAX_SUBMISSION_ZIP_BYTES) {
           await rejectOversizedSubmission(
             "zip_too_large",
-            Math.ceil(repo.length / (1024 * 1024)),
+            Math.ceil(zipBytes / (1024 * 1024)),
             MAX_SUBMISSION_ZIP_MB,
             "download"
           );
