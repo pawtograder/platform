@@ -746,7 +746,12 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
       const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
       const ocrText = wordsInRegion(words, rect);
       let structuredValue: unknown = ocrText;
-      const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
+      const question = r.exam_questions as unknown as { answer_type: string | null; label: string | null } | null;
+      const answerType = question?.answer_type ?? null;
+      // The instructor's name for the question (#1072). Carried into the artifact because the
+      // grader view has nothing else to show: it had only exam_question_id, which is a database
+      // id, so headings read "Question 38" for a question the instructor called Q1.
+      const label = question?.label?.trim() || null;
       if (answerType && answerType !== "free_text" && ocrText) {
         try {
           const bytes = await downloadImageCached(admin, pageBytes, "exam-scans", page.image_path);
@@ -769,6 +774,7 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
       }
       questions.push({
         exam_question_id: r.exam_question_id,
+        label,
         page_number: examPageNo,
         region: rect,
         ocr_text: ocrText,

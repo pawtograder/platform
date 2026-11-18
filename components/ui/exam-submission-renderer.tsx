@@ -10,12 +10,32 @@ type NormRect = { x: number; y: number; width: number; height: number };
 type ExamPageRef = { page_number: number; storage_key: string; width: number; height: number };
 type ExamQuestionResult = {
   exam_question_id: number;
+  /** The instructor's name for the question. Absent in artifacts finalized before #1072. */
+  label?: string | null;
   page_number: number;
   region: NormRect;
   ocr_text: string;
   structured_value: unknown;
 };
 type ExamArtifactData = { format: "exam_v1"; pages: ExamPageRef[]; questions: ExamQuestionResult[] };
+
+/**
+ * What to call a question in the grader view (#1072).
+ *
+ * The heading used to be `Question ${exam_question_id}`, which is a database id: an exam whose
+ * questions the instructor named Q1, Q2, Q3 showed up as "Question 38", "Question 39", "Question
+ * 40". The artifact now carries the label, so use it.
+ *
+ * Falls back to the id for two cases that both still happen. `exam_questions.label` is nullable,
+ * so an instructor can leave a question unnamed; and artifacts finalized before #1072 have no
+ * label at all. Those render exactly as they do today rather than being backfilled, because
+ * rewriting a finalized artifact is a decision about what "finalized" means (#1074), not a
+ * rename.
+ */
+export function questionHeading(q: ExamQuestionResult): string {
+  const label = q.label?.trim();
+  return label ? label : `Question ${q.exam_question_id}`;
+}
 
 /**
  * CSS sprite-style crop: show only `region` of the page image.
@@ -134,7 +154,7 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
             p={3}
           >
             <HStack justify="space-between" mb={2}>
-              <Heading size="sm">Question {q.exam_question_id}</Heading>
+              <Heading size="sm">{questionHeading(q)}</Heading>
               <Button size="xs" variant="outline" onClick={() => setShowOriginal((s) => ({ ...s, [idx]: !s[idx] }))}>
                 {showOriginal[idx] ? "Hide original page" : "View original page"}
               </Button>
