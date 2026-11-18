@@ -69,14 +69,30 @@ function snapshotOf(questions: EditorQuestion[], regions: EditorRegion[]): strin
   });
 }
 
+/** What the next drawn box will be, in the words the instructor picked it with. */
+const DRAFT_KIND_LABELS: Record<string, string> = {
+  answer: "answer region",
+  name: "student name region",
+  student_id: "student ID region"
+};
+
 export default function RegionEditor({
   examId,
   assignmentId,
-  gradingRubricId
+  gradingRubricId,
+  onDirtyChange
 }: {
   examId: number;
   assignmentId: number;
   gradingRubricId: number | null;
+  /**
+   * Reports whether there are structure edits that "Save structure" has not written yet.
+   *
+   * The template page needs this for the Next control it puts below the editor (#1271): leaving
+   * for step 2 with unsaved regions means scanning against the regions the exam had before, which
+   * is worth saying out loud at the moment someone is about to do it.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [pages, setPages] = useState<TemplatePage[]>([]);
   const [urls, setUrls] = useState<Record<number, string>>({});
@@ -242,6 +258,9 @@ export default function RegionEditor({
   // Render order only: each question under its parent (#1264). `questions` keeps the load order.
   const orderedQuestions = useMemo(() => preorder(questions), [questions]);
   const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const addQuestion = useCallback((level: 1 | 2 | 3, parent: string | null) => {
     setQuestions((qs) => [
@@ -631,6 +650,12 @@ export default function RegionEditor({
               onPointerUp={onPointerUp(p.page_number)}
               borderWidth="1px"
               borderColor="border.emphasized"
+              // #1271: the page image was the thing you draw on and the only thing that never
+              // said so. The crosshair and the hover border are the affordance; the overlay
+              // below is the instruction, and it is on the page rather than in the side panel
+              // because the side panel is what instructors were not reading.
+              cursor="crosshair"
+              _hover={{ borderColor: "blue.400" }}
             >
               {urls[p.page_number] ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -642,6 +667,35 @@ export default function RegionEditor({
                 />
               ) : (
                 <Box h="400px" bg="bg.subtle" />
+              )}
+              {/* First contact only: once a single region exists the instructor has found the
+                  gesture, and a permanent banner over the template would be in the way. */}
+              {regions.length === 0 && (
+                <Box
+                  position="absolute"
+                  inset="0"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  // Nothing here may swallow the drag it is describing.
+                  pointerEvents="none"
+                >
+                  <Text
+                    fontSize="sm"
+                    fontWeight="medium"
+                    color="fg"
+                    bg="bg.panel"
+                    borderWidth="1px"
+                    borderColor="border.emphasized"
+                    borderRadius="md"
+                    px={3}
+                    py={2}
+                    textAlign="center"
+                    maxW="90%"
+                  >
+                    Drag on this page to draw {DRAFT_KIND_LABELS[draftKind] ?? "a region"}
+                  </Text>
+                </Box>
               )}
               {regions
                 .filter((r) => r.page_number === p.page_number)
