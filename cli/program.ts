@@ -24,6 +24,7 @@ import * as discussionsCommand from "./commands/discussions";
 import * as reviewsCommand from "./commands/reviews";
 import * as reposCommand from "./commands/repos";
 import * as assessmentCommand from "./commands/assessment";
+import * as examsCommand from "./commands/exams";
 import { DEFAULT_API_URL } from "./utils/api";
 import { startLoginFlow, logout, getCurrentUser } from "./utils/auth";
 import { getCredentialsPath } from "./utils/credentials";
@@ -129,6 +130,7 @@ export function run(argv: string[] = hideBin(process.argv)): void {
     .command(reviewsCommand)
     .command(reposCommand)
     .command(assessmentCommand)
+    .command(examsCommand)
     .demandCommand(1, "You must specify a command")
     .strict()
     .help()

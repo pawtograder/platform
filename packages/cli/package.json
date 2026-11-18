@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "csv-parse": "^5.6.0",
+    "pdfjs-dist": "^4.10.38",
     "yaml": "^2.7.1",
     "yargs": "^17.0.0"
   },

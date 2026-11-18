@@ -92,18 +92,20 @@ Requires **`pawtograder login`** with an API token from Settings → API Tokens:
 
 Read commands:
 
-| Command                                                               | Purpose                                                         |
-| --------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `classes list` / `classes show <id>`                                  | Classes visible to the token.                                   |
-| `assignments list` / `assignments show <id>`                          | Assignments in a class.                                         |
-| `submissions list -c <class> -a <assignment>`                         | Roster with active submission, autograder and total scores.     |
-| `reviews list -c <class> -a <assignment>`                             | Review assignments, with rubric parts and completion state.     |
-| `discussions list -c <class>`                                         | Discussion topics with thread, question, and unanswered counts. |
-| `help-requests list -c <class> [--status active]`                     | Office-hours help queue.                                        |
-| `rubrics list` / `rubrics export`                                     | Rubrics, and YAML export.                                       |
-| `flashcards list`                                                     | Flashcard decks.                                                |
-| `repos list -c <class> -a <assignment>`                               | Student repos + assignment summary (metadata only).             |
-| `submissions export` / `assessment export` / `assessment deanonymize` | Bulk data dumps (streaming NDJSON; PII-gated).                  |
+| Command                                                                | Purpose                                                         |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `classes list` / `classes show <id>`                                   | Classes visible to the token.                                   |
+| `assignments list` / `assignments show <id>`                           | Assignments in a class.                                         |
+| `submissions list -c <class> -a <assignment>`                          | Roster with active submission, autograder and total scores.     |
+| `reviews list -c <class> -a <assignment>`                              | Review assignments, with rubric parts and completion state.     |
+| `discussions list -c <class>`                                          | Discussion topics with thread, question, and unanswered counts. |
+| `help-requests list -c <class> [--status active]`                      | Office-hours help queue.                                        |
+| `rubrics list` / `rubrics export`                                      | Rubrics, and YAML export.                                       |
+| `flashcards list`                                                      | Flashcard decks.                                                |
+| `repos list -c <class> -a <assignment>`                                | Student repos + assignment summary (metadata only).             |
+| `exams list -c <class>` / `exams questions -c <class> -a <assignment>` | Paper exams; each question with its grading rubric check IDs.   |
+| `exams scans status -c <class> --batch <id>`                           | Scan batch state, pages uploaded, and match counts.             |
+| `submissions export` / `assessment export` / `assessment deanonymize`  | Bulk data dumps (streaming NDJSON; PII-gated).                  |
 
 Every `list` command accepts `--json` for machine-readable output.
 
@@ -116,6 +118,7 @@ Write commands:
 | `help-requests close --id <id>`                                      | Close or resolve a help request (instructor only).                |
 | `rubrics import` / `flashcards copy` / `surveys copy`                | Import a rubric; copy decks or surveys between classes.           |
 | `submissions comments import\|sync` / `submissions artifacts import` | Batch comment and artifact ingestion.                             |
+| `exams scans upload` / `process` / `finalize [--dry-run]`            | The exam Scans page steps, except confirming matches.             |
 
 `reviews assign` allocates round-robin across active graders and instructors, honoring `grading_conflicts` and never assigning someone their own submission — including for explicit `--file` manifests, which are validated against the same exclusions. Pass `--by-part` to fan out per rubric part, or `--file <manifest.json>` to supply explicit `{assignee_profile_id, submission_id, rubric_part_id}` triples. `--dry-run` shows the plan without writing.
 
