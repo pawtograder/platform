@@ -1457,6 +1457,7 @@ export async function processEnvelope(
               .from("repositories")
               .select("assignment_id")
               .eq("class_id", envelope.class_id)
+              .eq("git_provider", "github")
               .eq("repository", fullName)
               .maybeSingle();
             if (repoRowError) throw repoRowError;
@@ -1465,6 +1466,7 @@ export async function processEnvelope(
               .from("repositories")
               .update({ ...repoUpdate, synced_handout_sha: syncedHandoutSha })
               .eq("class_id", envelope.class_id)
+              .eq("git_provider", "github")
               .eq("repository", fullName);
             if (updateError) throw updateError;
           }
@@ -1504,6 +1506,7 @@ export async function processEnvelope(
             .from("repositories")
             .select("id, assignment_group_id")
             .eq("class_id", envelope.class_id)
+            .eq("git_provider", "github")
             .eq("repository", `${org}/${repoName}`)
             .maybeSingle();
           if (repoLookupError) throw repoLookupError;
@@ -1555,6 +1558,7 @@ export async function processEnvelope(
         const { data: repository } = await adminSupabase
           .from("repositories")
           .select("is_github_ready, creation_error")
+          .eq("git_provider", "github")
           .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
@@ -3450,6 +3454,7 @@ export async function processEnvelope(
               .from("repositories")
               .update(repoUpdate)
               .eq("class_id", envelope.class_id)
+              .eq("git_provider", "github")
               .eq("repository", `${eo}/${ern}`)
               .select("id");
             if (e) throw e;
@@ -3458,12 +3463,13 @@ export async function processEnvelope(
           } else if (error instanceof RepositoryMissingError) {
             // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
             // takes org + repo, not a row id), so match on the full name the error actually
-            // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
-            // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
-            // absent on some paths.
+            // confirmed missing. Not scoped by class_id: `(git_provider, repository)` is unique
+            // and this filters on GitHub, so it touches at most one row, and the envelope's class_id
+            // is absent on some paths.
             const { data: rows, error: e } = await adminSupabase
               .from("repositories")
               .update(repoUpdate)
+              .eq("git_provider", "github")
               .eq("repository", error.fullName)
               .select("id");
             if (e) throw e;
