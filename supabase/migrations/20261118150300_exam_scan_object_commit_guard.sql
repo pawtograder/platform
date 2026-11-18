@@ -1,6 +1,6 @@
 -- No storage write can change a linked scan page's object once the link has committed (#1078 review).
 --
--- The exam-scans policies (20261118100200) refuse staff writes to an object a linked page refers
+-- The exam-scans policies (20261118150200) refuse staff writes to an object a linked page refers
 -- to, but Storage (storage-api) tests an upload's policy before it receives the bytes and then
 -- records the object as a privileged role without testing again; moves work the same way. So an
 -- upload authorized just before matching linked the page could still replace its bytes afterwards.
@@ -38,7 +38,7 @@
 -- Rollback:
 --   drop trigger exam_scan_object_commit_guard on storage.objects;
 --   drop function exam_private.refuse_write_to_linked_scan_object();
---   restore public.exam_scan_page_membership_guard() from 20261118100200_exam_scan_linked_page_content_guard.sql
+--   restore public.exam_scan_page_membership_guard() from 20261118150200_exam_scan_linked_page_content_guard.sql
 
 create or replace function exam_private.refuse_write_to_linked_scan_object()
 returns trigger
@@ -92,7 +92,7 @@ create trigger exam_scan_object_commit_guard
   before insert or update on storage.objects
   for each row execute function exam_private.refuse_write_to_linked_scan_object();
 
--- The page guard from 20261118100200, plus the shared lock when a link is set (every role).
+-- The page guard from 20261118150200, plus the shared lock when a link is set (every role).
 create or replace function public.exam_scan_page_membership_guard()
 returns trigger
 language plpgsql

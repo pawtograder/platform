@@ -1,6 +1,6 @@
 -- After matching, staff cannot change what a matched scan page's content is (#1078 review).
 --
--- 20261118100000 froze a linked page's link, position, path and batch for user roles. Two other
+-- 20261118150000 froze a linked page's link, position, path and batch for user roles. Two other
 -- inputs to finalize could still be changed by an authenticated grader or instructor:
 --   - the storage object at the page's image_path, which finalize copies into the submission:
 --     exam-scans_staff_write was FOR ALL, so staff could overwrite, replace, delete and re-upload,
@@ -26,7 +26,7 @@
 --   recreate "exam-scans_staff_write" as in 20261107120000_exam_grading.sql;
 --   drop function exam_private.scan_object_is_linked(text); drop schema exam_private;
 --   drop index public.exam_scan_pages_linked_image_path_idx;
---   restore the trigger and function from 20261118100000_exam_scan_page_membership_guard.sql.
+--   restore the trigger and function from 20261118150000_exam_scan_page_membership_guard.sql.
 
 -- 1. OCR columns of a linked page.
 create or replace function public.exam_scan_page_membership_guard()
