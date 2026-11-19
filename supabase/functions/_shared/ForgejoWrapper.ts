@@ -182,8 +182,22 @@ export async function revokeReplacedTokens(
   return stale.length;
 }
 
-export async function revokeRepoToken(config: ForgejoConfig, login: string, repositoryId: number): Promise<number> {
-  const names = (await listCoderTokenNames(config, login)).filter((n) => n.startsWith(repoTokenPrefix(repositoryId)));
+/**
+ * Deletes this repository's tokens minted at or before `mintedBefore`. A token minted later came from a re-mint
+ * after the caller's revocation claim (the student was re-enabled), so it isn't the one being revoked. Names
+ * without a readable mint time are deleted: they can't be shown to be newer.
+ */
+export async function revokeRepoToken(
+  config: ForgejoConfig,
+  login: string,
+  repositoryId: number,
+  mintedBefore: number = Date.now()
+): Promise<number> {
+  const names = (await listCoderTokenNames(config, login)).filter((n) => {
+    if (!n.startsWith(repoTokenPrefix(repositoryId))) return false;
+    const at = tokenMintedAt(n, repositoryId);
+    return at === null || at <= mintedBefore;
+  });
   for (const name of names) await deleteToken(config, login, name);
   return names.length;
 }

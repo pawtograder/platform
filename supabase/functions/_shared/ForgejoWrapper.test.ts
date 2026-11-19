@@ -291,6 +291,20 @@ Deno.test("revokeRepoToken: deletes every token of the repository and no other; 
   });
 });
 
+Deno.test("revokeRepoToken: keeps a token minted after the cutoff, so a re-mint after the claim survives", async () => {
+  const before = tokenAt(42, NOW - 1);
+  const atCutoff = tokenAt(42, NOW, "bbbb0000");
+  const reMinted = tokenAt(42, NOW + 1, "cccc0000");
+  const list = [before, atCutoff, reMinted, "pawtograder-coder-42-garbage"].map((name) => ({ name }));
+  await withForgejo([ok(list), noContent(), noContent(), noContent()], async (calls) => {
+    assertEquals(await revokeRepoToken(config, "alex.kim", 42, NOW), 3);
+    assertEquals(
+      calls.slice(1).map((c) => decodeURIComponent(c.url.split("/tokens/")[1])),
+      [before, atCutoff, "pawtograder-coder-42-garbage"]
+    );
+  });
+});
+
 Deno.test("revokeAllCoderTokens: deletes only workspace tokens, across pages", async () => {
   const page1 = Array.from({ length: 50 }, (_, i) => ({ name: i % 2 ? `pawtograder-coder-${i}` : `laptop-${i}` }));
   const page2 = [{ name: "pawtograder-coder-900" }, { name: "my-own-token" }];

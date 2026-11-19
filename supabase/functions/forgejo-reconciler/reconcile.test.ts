@@ -4,7 +4,7 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net forgejo-reconciler/
  */
-import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";
 import {
   MAX_ACCOUNTS_PER_PASS,
@@ -217,8 +217,11 @@ Deno.test(
       { id: 2, user_id: "u2", repository_id: 43, login: "sam.lee" }
     ]);
     const revoked: [string, number][] = [];
-    const result = await revokeDroppedTokens(client, config, (_cfg, login, repositoryId) => {
+    const cutoffs: number[] = [];
+    const start = Date.now();
+    const result = await revokeDroppedTokens(client, config, (_cfg, login, repositoryId, mintedBefore) => {
       revoked.push([login, repositoryId]);
+      cutoffs.push(mintedBefore!);
       return Promise.resolve(1);
     });
     assertEquals(result, { revoked: 2, failures: [] });
@@ -226,6 +229,8 @@ Deno.test(
       ["alex.kim", 42],
       ["sam.lee", 43]
     ]);
+    // Each revoke is bounded by the time its claim was taken, so a token re-minted after the claim survives.
+    for (const cutoff of cutoffs) assert(cutoff >= start && cutoff <= Date.now());
     assertEquals(rpcCalls[1], {
       name: "claim_forgejo_repo_token_revocation",
       args: { p_id: 1, p_stale_minutes: STALE_CLAIM_MINUTES }
