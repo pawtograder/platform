@@ -61,8 +61,7 @@ export default function NewAssignmentPage() {
         // The Repository host picker only sets this in a course with Cloud workspaces on. Without
         // it the insert leaves git_provider to its database default, as before #1091.
         const isForgejo = isCode && getValues("git_provider") === "forgejo";
-        // Handout and solution setup only create GitHub repositories, and they reject Forgejo.
-        const willCreateRepos = !isNoRepo && !isForgejo;
+        const willCreateRepos = !isNoRepo;
 
         // Validate the fork/source autograder agreement BEFORE inserting anything.
         // assignment-create-handout-repo rejects this mismatch, but by then the
@@ -123,7 +122,9 @@ export default function NewAssignmentPage() {
         const loadingToast = toaster.create({
           title: "Creating Assignment",
           description: willCreateRepos
-            ? "Creating GitHub repositories for handout and grader... This may take a few moments."
+            ? isForgejo
+              ? "Creating the handout repository on Forgejo... This may take a few moments."
+              : "Creating GitHub repositories for handout and grader... This may take a few moments."
             : "Setting up assignment...",
           type: "loading"
         });
@@ -290,10 +291,13 @@ export default function NewAssignmentPage() {
                 { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
                 supabase
               );
-              await assignmentCreateSolutionRepo(
-                { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-                supabase
-              );
+              // Grader repositories are only created on GitHub; see FORGEJO_GRADER_SETUP_REASON.
+              if (!isForgejo) {
+                await assignmentCreateSolutionRepo(
+                  { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+                  supabase
+                );
+              }
             }
 
             // Clear the timer and dismiss the loading toast
@@ -302,12 +306,12 @@ export default function NewAssignmentPage() {
             toaster.create({
               title: "Assignment Created Successfully",
               description: willCreateRepos
-                ? "GitHub repositories have been created and the assignment is ready."
-                : isForgejo && !isNoRepo
-                  ? "The assignment is saved. Forgejo repositories are not created from this page yet."
-                  : isCode
-                    ? "The assignment is ready."
-                    : "The assignment is ready to configure.",
+                ? isForgejo
+                  ? "The handout repository has been created on Forgejo. Student repositories are created on release."
+                  : "GitHub repositories have been created and the assignment is ready."
+                : isCode
+                  ? "The assignment is ready."
+                  : "The assignment is ready to configure.",
               type: "success"
             });
 

@@ -7,8 +7,8 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
+import { fetchProfileNames } from "../utils/profiles.ts";
 import { classSummary, resolveClass } from "../utils/resolvers.ts";
-import { UUID_IN_BATCH_SIZE } from "../utils/paging.ts";
 import { assertUserCanAccessClass, assertUserIsClassInstructor, getCallerPrivateProfileId } from "../utils/auth.ts";
 import {
   HELP_REQUEST_RESOLUTION_STATUSES,
@@ -42,30 +42,6 @@ interface HelpRequestsCloseParams {
   resolution_status?: string;
   notes?: string;
   force?: boolean;
-}
-
-/** Batched private-profile-id → display name lookup. */
-async function fetchProfileNames(
-  supabase: ReturnType<typeof getAdminClient>,
-  ids: Array<string | null>
-): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
-  const unique = [...new Set(ids.filter((id): id is string => !!id))];
-  if (unique.length === 0) return names;
-
-  // profiles.id is a UUID, so this is bounded by URL length, not max_rows.
-  const BATCH = UUID_IN_BATCH_SIZE;
-  for (let i = 0; i < unique.length; i += BATCH) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, name")
-      .in("id", unique.slice(i, i + BATCH));
-    if (error) throw new CLICommandError(`Failed to resolve profile names: ${error.message}`, 500);
-    for (const row of data ?? []) {
-      if (row.name) names.set(row.id, row.name);
-    }
-  }
-  return names;
 }
 
 async function handleHelpRequestsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {

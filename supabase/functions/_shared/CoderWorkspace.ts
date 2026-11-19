@@ -606,7 +606,7 @@ async function startRestart(
   try {
     const starting = await db.takeRestartStart(rowId, token);
     if (!starting) return { ws, restarting: true };
-    const error = await postBuild(coder, ws.id, "start");
+    const error = await postBuild(coder, ws.id, "start", ws.template_active_version_id);
     await db.releaseRestart(rowId, starting);
     if (error && error.status !== 409) throw error;
     return { ws: (await getWorkspace(coder, ws.id)) ?? ws, restarting: false };
@@ -821,7 +821,7 @@ export async function openWorkspace(
     ({ ws, restarting } = await restartWorkspace(deps, row, ws, deadline));
   } else if (ws.latest_build.status === "failed" || ws.latest_build.status === "canceled") {
     // A build that failed (Retry). An abandoned claim goes too.
-    const error = await postBuild(coder, ws.id, "start");
+    const error = await postBuild(coder, ws.id, "start", ws.template_active_version_id);
     if (row.restart_token) await db.releaseRestart(row.id, row.restart_token);
     if (error && error.status !== 409) throw error;
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
