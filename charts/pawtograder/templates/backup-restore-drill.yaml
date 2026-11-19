@@ -113,6 +113,37 @@ spec:
                   echo "[drill] newest backup: ${DIR}${LATEST}"
                   mc cp "s3/${S3_BUCKET}/${DIR}${LATEST}" /work/latest.dump
                   echo "${DIR}${LATEST}" > /work/dump-name
+                  {{- range $app := compact (splitList " " (include "pawtograder.backupApps.enabled" $)) }}
+                  # {{ $app }} (backup-apps.yaml): the newest daily/{{ $app }}-<TS>.dump,
+                  # restored by the restore-drill-{{ $app }} container.
+                  if ! OUT=$(mc ls "s3/${S3_BUCKET}/daily/{{ $app }}-"); then
+                    echo "[drill] FATAL: could not list s3/${S3_BUCKET}/daily/{{ $app }}-"; exit 1
+                  fi
+                  APP_TS=$(printf '%s\n' "$OUT" | awk '{print $NF}' | grep -E '^{{ $app }}-[0-9]{8}T[0-9]{6}Z\.dump$' | sort | tail -1 | sed -E 's/^{{ $app }}-(.*)\.dump$/\1/' || true)
+                  if [ -z "$APP_TS" ]; then
+                    echo "[drill] FATAL: no {{ $app }}-*.dump objects in s3/${S3_BUCKET}/daily/"; exit 1
+                  fi
+                  echo "[drill] newest {{ $app }} backup: daily/{{ $app }}-${APP_TS}.dump"
+                  mc cp "s3/${S3_BUCKET}/daily/{{ $app }}-${APP_TS}.dump" /work/{{ $app }}.dump
+                  echo "daily/{{ $app }}-${APP_TS}" > /work/{{ $app }}-name
+                  {{- if eq $app "forgejo" }}
+                  # A set marked forgejo-<TS>.incomplete is missing the
+                  # repositories that file lists: fail the drill naming them.
+                  if printf '%s\n' "$OUT" | awk '{print $NF}' | grep -qxF "forgejo-${APP_TS}.incomplete"; then
+                    echo "[drill] FATAL: forgejo-${APP_TS} is incomplete: its backup left out these repositories:"
+                    mc cat "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.incomplete" | sed 's/^/[drill]   /'
+                    exit 1
+                  fi
+                  # The archive from the same run: its file list, to match against
+                  # the restored database, and its repositories, extracted for the
+                  # restore-drill-forgejo-repositories container to git fsck.
+                  mc cp "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.tar.gz" /scratch/forgejo.tar.gz
+                  tar -tzf /scratch/forgejo.tar.gz > /work/forgejo.list
+                  mkdir -p /scratch/forgejo-data
+                  tar -xzf /scratch/forgejo.tar.gz -C /scratch/forgejo-data "{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}"
+                  rm -f /scratch/forgejo.tar.gz
+                  {{- end }}
+                  {{- end }}
               env:
                 - name: S3_ENDPOINT
                   value: {{ required "backup.s3.endpoint is required" .Values.backup.s3.endpoint | quote }}
@@ -124,6 +155,9 @@ spec:
                   valueFrom: { secretKeyRef: { name: {{ .Values.secrets.names.s3 }}, key: AWS_SECRET_ACCESS_KEY } }
               volumeMounts:
                 - { name: work, mountPath: /work }
+                {{- if .Values.forgejo.enabled }}
+                - { name: scratch, mountPath: /scratch }
+                {{- end }}
           containers:
             - name: restore-drill
               image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
@@ -214,6 +248,100 @@ spec:
                 - { name: config, mountPath: /docker-entrypoint-initdb.d/zy-app-role.sh, subPath: init-app-role.sh }
                 - { name: config, mountPath: /docker-entrypoint-initdb.d/zz-supabase-passwords.sh, subPath: zz-supabase-passwords.sh }
                 - { name: pgsodium, mountPath: /var/run/secrets/pgsodium, readOnly: true }
+            {{- range $app := compact (splitList " " (include "pawtograder.backupApps.enabled" $)) }}
+            # {{ $app }}'s newest dump, restored into a plain Postgres of its own
+            # on <app>-db.image, beside the Pawtograder drill. Strict: any
+            # restore error fails the drill (these databases have no pg_cron).
+            - name: restore-drill-{{ $app }}
+              image: {{ include "pawtograder.backupApps.image" (dict "ctx" $ "app" $app) }}
+              imagePullPolicy: {{ (index $.Values (printf "%s-db" $app)).image.pullPolicy | default "IfNotPresent" }}
+              # The postgres user of the official image.
+              securityContext:
+                runAsUser: 999
+                runAsGroup: 999
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  # Unix socket only, so it can't clash with the Pawtograder drill's 5432.
+                  export PGDATA=/scratch/{{ $app }}-pgdata PGHOST=/tmp PGPORT=5433 PGUSER=postgres
+                  initdb -U postgres --auth=trust >/dev/null
+                  pg_ctl -w -t 300 -o "-c listen_addresses='' -k /tmp -p 5433" start
+                  psql -v ON_ERROR_STOP=1 -qd postgres -c "CREATE DATABASE {{ $app }};"
+                  pg_restore --exit-on-error --no-owner --no-acl -d {{ $app }} /work/{{ $app }}.dump
+                  {{- if eq $app "forgejo" }}
+                  USERS=$(psql -d forgejo -tAc 'SELECT count(*) FROM "user";')
+                  echo "[drill] forgejo: restored ${USERS} users (require >= 1)"
+                  [ "$USERS" -ge 1 ] || { echo "[drill] FATAL: forgejo has no users"; exit 1; }
+                  # Every repository the database names must be in the archive
+                  # taken after the dump. One deleted or renamed while the backup
+                  # ran is missing, and fails the drill for that set. One created
+                  # while it ran is only in the archive, and is reported.
+                  ROOT="{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}"
+                  psql -d forgejo -tAc "SELECT lower(owner_name) || '/' || lower_name FROM repository;" | sort > /tmp/db-repos
+                  REPO_ROOT="$ROOT" {{ include "pawtograder.backupApps.listRepositories" $ }} /work/forgejo.list \
+                    | grep -v '\.wiki$' | sort > /tmp/archive-repos || true
+                  REPOS=$(wc -l < /tmp/db-repos)
+                  MISSING=0
+                  while IFS= read -r repo; do
+                    echo "[drill] forgejo: repository ${repo} is in the database but not in the archive"
+                    MISSING=$((MISSING + 1))
+                  done < <(comm -23 /tmp/db-repos /tmp/archive-repos)
+                  while IFS= read -r repo; do
+                    echo "[drill] forgejo: repository ${repo} is in the archive but not in the database (created during the backup?)"
+                  done < <(comm -13 /tmp/db-repos /tmp/archive-repos)
+                  echo "[drill] forgejo: ${REPOS} repositories in the database, ${MISSING} missing from the archive"
+                  [ "$MISSING" -eq 0 ] || { echo "[drill] FATAL: the database and the archive don't match"; exit 1; }
+                  {{- else }}
+                  USERS=$(psql -d coder -tAc 'SELECT count(*) FROM users;')
+                  echo "[drill] coder: restored ${USERS} users (require >= 1)"
+                  [ "$USERS" -ge 1 ] || { echo "[drill] FATAL: coder has no users"; exit 1; }
+                  {{- end }}
+                  echo "[drill] restore drill PASSED for $(cat /work/{{ $app }}-name)"
+                  pg_ctl -m fast stop
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
+                - { name: work, mountPath: /work }
+            {{- if eq $app "forgejo" }}
+            # git fsck on every repository in the archive, wikis included, on
+            # Forgejo's own image. A repository missing objects, with a ref to
+            # a missing object, or that isn't a git repository fails the drill.
+            - name: restore-drill-forgejo-repositories
+              image: {{ include "gitea.image" $.Subcharts.forgejo }}
+              imagePullPolicy: {{ $.Values.forgejo.image.pullPolicy | default "IfNotPresent" }}
+              {{- with $.Values.forgejo.containerSecurityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              command:
+                - bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export HOME=/tmp GIT_CONFIG_NOSYSTEM=1
+                  # Extracted as root with Forgejo's owner kept; git's ownership
+                  # check would otherwise refuse them.
+                  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+                  ROOT=/scratch/forgejo-data/{{ trimPrefix "./" (include "pawtograder.backupApps.forgejoRepoRoot" $) }}
+                  REPOS=0
+                  BROKEN=0
+                  for repo in "$ROOT"/*/*.git; do
+                    [ -e "$repo" ] || continue
+                    REPOS=$((REPOS + 1))
+                    if ! GIT_DIR="$repo" git fsck --connectivity-only --no-dangling --no-progress; then
+                      echo "[drill] forgejo: ${repo#"$ROOT"/} fails git fsck"
+                      BROKEN=$((BROKEN + 1))
+                    fi
+                  done
+                  echo "[drill] forgejo: git fsck on ${REPOS} repositories in the archive, ${BROKEN} failed"
+                  [ "$BROKEN" -eq 0 ] || { echo "[drill] FATAL: the archive holds broken repositories"; exit 1; }
+                  echo "[drill] restore drill PASSED for the repositories of $(cat /work/forgejo-name)"
+              volumeMounts:
+                - { name: scratch, mountPath: /scratch }
+                - { name: work, mountPath: /work }
+            {{- end }}
+            {{- end }}
           volumes:
             # Throwaway PGDATA — its own volume, off the primary's tier.
             - name: scratch
