@@ -1,0 +1,300 @@
+/**
+ * #1091 part 2: the Repository host picker on Create/Edit Assignment, the options Forgejo can't
+ * use yet (#1119), and the GitHub prompt gating.
+ *
+ * Named tests/unit/issue* so the e2e-local lane runs it. It needs no database.
+ */
+import { ChakraProvider, defaultSystem, Fieldset } from "@chakra-ui/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { useForm } from "react-hook-form";
+import type { UseFormReturnType } from "@refinedev/react-hook-form";
+import RepositoryHostPicker from "@/app/course/[course_id]/manage/assignments/new/repositoryHostPicker";
+import {
+  cloudWorkspacesEnabled,
+  FORGEJO_DETACH_REASON,
+  FORGEJO_UNSUPPORTED_SETTINGS,
+  forgejoChoiceUnavailableReason,
+  forgejoConflicts,
+  forgejoSettingState,
+  hostLockReason,
+  needsGitHubPrompts,
+  repoModeUnavailableReason,
+  showRepositoryHostPicker,
+  submissionModeUnavailableReason
+} from "@/lib/gitProviderOptions";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
+
+const FLAG_ON = [{ name: "cloud-workspaces", enabled: true }];
+const FLAG_OFF = [{ name: "cloud-workspaces", enabled: false }];
+
+describe("cloud-workspaces flag", () => {
+  it("is off unless the first entry is boolean true, like the SQL trigger", () => {
+    expect(cloudWorkspacesEnabled(null)).toBe(false);
+    expect(cloudWorkspacesEnabled([])).toBe(false);
+    expect(cloudWorkspacesEnabled(FLAG_OFF)).toBe(false);
+    expect(cloudWorkspacesEnabled([{ name: "cloud-workspaces", enabled: "true" as unknown as boolean }])).toBe(false);
+    expect(cloudWorkspacesEnabled([...FLAG_OFF, ...FLAG_ON])).toBe(false);
+    expect(cloudWorkspacesEnabled(FLAG_ON)).toBe(true);
+  });
+});
+
+describe("picker visibility", () => {
+  it("shows only for code assignments in a flag-on course", () => {
+    expect(showRepositoryHostPicker({ flagEnabled: true, assignmentType: "code", savedProvider: undefined })).toBe(
+      true
+    );
+    expect(showRepositoryHostPicker({ flagEnabled: true, assignmentType: undefined, savedProvider: undefined })).toBe(
+      true
+    );
+    expect(showRepositoryHostPicker({ flagEnabled: false, assignmentType: "code", savedProvider: "github" })).toBe(
+      false
+    );
+    expect(showRepositoryHostPicker({ flagEnabled: true, assignmentType: "quiz", savedProvider: undefined })).toBe(
+      false
+    );
+  });
+
+  it("keeps showing a saved Forgejo assignment after the flag is turned off", () => {
+    expect(showRepositoryHostPicker({ flagEnabled: false, assignmentType: "code", savedProvider: "forgejo" })).toBe(
+      true
+    );
+    // It can still go back to GitHub, but Forgejo can't be chosen again while the flag is off.
+    expect(forgejoChoiceUnavailableReason({ flagEnabled: false, savedProvider: "forgejo" })).toBeNull();
+    expect(forgejoChoiceUnavailableReason({ flagEnabled: false, savedProvider: "github" })).toMatch(
+      /Cloud workspaces is off/
+    );
+    expect(forgejoChoiceUnavailableReason({ flagEnabled: true, savedProvider: "github" })).toBeNull();
+  });
+});
+
+describe("host lock", () => {
+  const none = { templateRepo: null, graderRepo: null, repositoryCount: 0, forkTargetCount: 0 };
+
+  it("is open on the create form and on an assignment with no repositories", () => {
+    expect(hostLockReason({ status: "new" })).toBeNull();
+    expect(hostLockReason({ status: "loaded", facts: none })).toBeNull();
+  });
+
+  it.each([
+    ["a handout repository", { templateRepo: "org/handout" }],
+    ["a grader repository", { graderRepo: "org/grader" }],
+    ["student repositories", { repositoryCount: 3 }]
+  ])("locks once the assignment has %s, like the trigger", (_label, facts) => {
+    expect(hostLockReason({ status: "loaded", facts: { ...none, ...facts } })).toMatch(/already has repositories/);
+  });
+
+  it("locks while another assignment forks from this one", () => {
+    expect(hostLockReason({ status: "loaded", facts: { ...none, forkTargetCount: 1 } })).toMatch(/forks from this/);
+  });
+
+  it("stays locked while checking and when the check fails", () => {
+    expect(hostLockReason({ status: "loading" })).toMatch(/Checking/);
+    expect(hostLockReason({ status: "error" })).toMatch(/Could not check/);
+  });
+});
+
+describe("options Forgejo can't use yet", () => {
+  it("disables the fork-based repository configurations and PR submissions on Forgejo only", () => {
+    expect(repoModeUnavailableReason("forgejo", "template_with_student_forks", undefined)).toMatch(/fork/);
+    expect(repoModeUnavailableReason("forgejo", "fork_from_prior_assignment", undefined)).toMatch(/fork/);
+    expect(repoModeUnavailableReason("forgejo", "template_only_staff", undefined)).toBeNull();
+    expect(repoModeUnavailableReason("forgejo", "none", undefined)).toBeNull();
+    expect(repoModeUnavailableReason("forgejo", "no_submission", undefined)).toBeNull();
+    expect(repoModeUnavailableReason("github", "fork_from_prior_assignment", undefined)).toBeNull();
+    expect(submissionModeUnavailableReason("forgejo", "pr", undefined)).toMatch(/GitHub/);
+    expect(submissionModeUnavailableReason("forgejo", "push", undefined)).toBeNull();
+    expect(submissionModeUnavailableReason("github", "pr", undefined)).toBeNull();
+  });
+
+  it("keeps an unsupported value an existing Forgejo assignment was saved with", () => {
+    const saved = { git_provider: "forgejo", repo_mode: "fork_from_prior_assignment", submission_mode: "pr" };
+    expect(repoModeUnavailableReason("forgejo", "fork_from_prior_assignment", saved)).toBeNull();
+    // Another unsupported mode is still disabled.
+    expect(repoModeUnavailableReason("forgejo", "template_with_student_forks", saved)).not.toBeNull();
+    expect(submissionModeUnavailableReason("forgejo", "pr", saved)).toBeNull();
+    expect(
+      forgejoConflicts("forgejo", { repo_mode: "fork_from_prior_assignment", submission_mode: "pr" }, saved)
+    ).toEqual([]);
+  });
+
+  it("blocks the save when a GitHub choice is carried over to Forgejo", () => {
+    expect(
+      forgejoConflicts("forgejo", { repo_mode: "template_with_student_forks", submission_mode: "pr" }, undefined)
+    ).toHaveLength(1);
+    const githubSaved = { git_provider: "github", repo_mode: "fork_from_prior_assignment" };
+    expect(forgejoConflicts("forgejo", { repo_mode: "fork_from_prior_assignment" }, githubSaved)[0]).toMatch(
+      /Choose another repository configuration/
+    );
+    expect(forgejoConflicts("github", { repo_mode: "fork_from_prior_assignment" }, undefined)).toEqual([]);
+    expect(
+      forgejoConflicts("forgejo", { repo_mode: "template_only_staff", submission_mode: "push" }, undefined)
+    ).toEqual([]);
+  });
+
+  it("doesn't offer to detach a saved Forgejo handout", () => {
+    const saved = { git_provider: "forgejo", repo_mode: "template_only_staff", template_repo: "org/handout" };
+    expect(repoModeUnavailableReason("forgejo", "none", saved)).toBe(FORGEJO_DETACH_REASON);
+    expect(repoModeUnavailableReason("forgejo", "no_submission", saved)).toBe(FORGEJO_DETACH_REASON);
+    expect(repoModeUnavailableReason("forgejo", "template_only_staff", saved)).toBeNull();
+    // Without a handout there is nothing to clean up.
+    expect(repoModeUnavailableReason("forgejo", "none", { ...saved, template_repo: null })).toBeNull();
+    // GitHub keeps its own detach cleanup.
+    expect(repoModeUnavailableReason("github", "none", { ...saved, git_provider: "github" })).toBeNull();
+    expect(forgejoConflicts("forgejo", { repo_mode: "none" }, saved)[0]).toMatch(/Removing a Forgejo handout/);
+  });
+
+  it("leaves the autograder available on Forgejo, which grades only assignments that have it on", () => {
+    expect(Object.keys(FORGEJO_UNSUPPORTED_SETTINGS)).not.toContain("has_autograder");
+  });
+
+  it("shows checkbox settings off on Forgejo, but keeps a saved Forgejo assignment's values", () => {
+    expect(forgejoSettingState("github", undefined)).toEqual({ disabled: false, forceOff: false });
+    expect(forgejoSettingState("forgejo", undefined)).toEqual({ disabled: true, forceOff: true });
+    expect(forgejoSettingState("forgejo", { git_provider: "github" })).toEqual({ disabled: true, forceOff: true });
+    expect(forgejoSettingState("forgejo", { git_provider: "forgejo" })).toEqual({ disabled: true, forceOff: false });
+  });
+});
+
+describe("GitHub prompts", () => {
+  const github = { git_provider: "github", repo_mode: "template_only_staff", archived_at: null };
+  const forgejo = { git_provider: "forgejo", repo_mode: "template_only_staff", archived_at: null };
+
+  it("hide on a Forgejo assignment page and stay on a GitHub one", () => {
+    expect(needsGitHubPrompts([github], "forgejo")).toBe(false);
+    expect(needsGitHubPrompts([forgejo], "github")).toBe(true);
+  });
+
+  it("hide on course pages only when every live repository-backed assignment is on Forgejo", () => {
+    expect(needsGitHubPrompts([])).toBe(true);
+    expect(needsGitHubPrompts([forgejo])).toBe(false);
+    expect(needsGitHubPrompts([forgejo, github])).toBe(true);
+    // No-repository and archived GitHub assignments don't need a GitHub account.
+    expect(needsGitHubPrompts([forgejo, { ...github, repo_mode: "none" }])).toBe(false);
+    expect(needsGitHubPrompts([forgejo, { ...github, repo_mode: "no_submission" }])).toBe(false);
+    expect(needsGitHubPrompts([forgejo, { ...github, archived_at: "2026-10-01T00:00:00Z" }])).toBe(false);
+    // A course with only no-repository assignments keeps them, as on staging.
+    expect(needsGitHubPrompts([{ ...github, repo_mode: "none" }])).toBe(true);
+  });
+});
+
+// The picker component, rendered with a real react-hook-form instance.
+const mockUseCourse = jest.fn();
+jest.mock("@/hooks/useCourseController", () => ({
+  useCourse: () => mockUseCourse()
+}));
+
+type LockRows = { repositories: number; graderRepo: string | null; forkTargets: number; fail?: boolean };
+let lockRows: LockRows = { repositories: 0, graderRepo: null, forkTargets: 0 };
+jest.mock("@/utils/supabase/client", () => ({
+  createClient: () => ({
+    from: (table: string) => ({
+      select: () => {
+        const result =
+          table === "repositories"
+            ? { count: lockRows.repositories, error: lockRows.fail ? { message: "denied" } : null }
+            : { count: lockRows.forkTargets, error: null };
+        const builder = {
+          eq: () => builder,
+          maybeSingle: () => Promise.resolve({ data: { grader_repo: lockRows.graderRepo }, error: null }),
+          then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+            Promise.resolve(result).then(resolve, reject)
+        };
+        return builder;
+      }
+    })
+  })
+}));
+
+let formRef: UseFormReturnType<Assignment> | undefined;
+
+function Harness({ defaults, saved }: { defaults: Partial<Assignment>; saved?: Partial<Assignment> }) {
+  const rhf = useForm<Assignment>({ defaultValues: defaults as Assignment });
+  const form = {
+    ...rhf,
+    refineCore: { query: saved ? { data: { data: saved } } : undefined }
+  } as unknown as UseFormReturnType<Assignment>;
+  formRef = form;
+  return <RepositoryHostPicker form={form} />;
+}
+
+function renderPicker(defaults: Partial<Assignment>, saved?: Partial<Assignment>) {
+  return render(
+    <ChakraProvider value={defaultSystem}>
+      {/* The form wraps every section in Fieldset.Root. */}
+      <Fieldset.Root>
+        <Harness defaults={defaults} saved={saved} />
+      </Fieldset.Root>
+    </ChakraProvider>
+  );
+}
+
+describe("RepositoryHostPicker", () => {
+  beforeEach(() => {
+    lockRows = { repositories: 0, graderRepo: null, forkTargets: 0 };
+    mockUseCourse.mockReturnValue({ features: FLAG_ON });
+    formRef = undefined;
+  });
+
+  it("renders nothing in a flag-off course", () => {
+    mockUseCourse.mockReturnValue({ features: FLAG_OFF });
+    renderPicker({ assignment_type: "code" });
+    expect(screen.queryByLabelText("Repository host")).not.toBeInTheDocument();
+  });
+
+  it("offers GitHub and Forgejo in a flag-on course, defaulting to GitHub", () => {
+    renderPicker({ assignment_type: "code" });
+    const select = screen.getByLabelText("Repository host") as HTMLSelectElement;
+    expect(select.value).toBe("github");
+    expect(select).not.toBeDisabled();
+    expect((screen.getByRole("option", { name: "Forgejo" }) as HTMLOptionElement).disabled).toBe(false);
+  });
+
+  it("locks an assignment that has repositories", async () => {
+    lockRows = { repositories: 2, graderRepo: null, forkTargets: 0 };
+    renderPicker(
+      { assignment_type: "code", git_provider: "github" },
+      { id: 7, git_provider: "github", template_repo: null }
+    );
+    await waitFor(() => expect(screen.getByText(/already has repositories/)).toBeInTheDocument());
+    expect(screen.getByLabelText("Repository host")).toBeDisabled();
+  });
+
+  it("unlocks an assignment once the check finds no repositories", async () => {
+    renderPicker(
+      { assignment_type: "code", git_provider: "github" },
+      { id: 7, git_provider: "github", template_repo: null }
+    );
+    expect(screen.getByLabelText("Repository host")).toBeDisabled();
+    await waitFor(() => expect(screen.getByLabelText("Repository host")).not.toBeDisabled());
+  });
+
+  it("stays locked when the repository check fails", async () => {
+    lockRows = { repositories: 0, graderRepo: null, forkTargets: 0, fail: true };
+    renderPicker(
+      { assignment_type: "code", git_provider: "github" },
+      { id: 7, git_provider: "github", template_repo: null }
+    );
+    await waitFor(() => expect(screen.getByText(/Could not check/)).toBeInTheDocument());
+    expect(screen.getByLabelText("Repository host")).toBeDisabled();
+  });
+
+  it("reports a fork mode carried over to Forgejo and blocks the save", async () => {
+    renderPicker({ assignment_type: "code", git_provider: "forgejo", repo_mode: "template_with_student_forks" });
+    expect(screen.getByTestId("repository-host-conflict")).toHaveTextContent(/fork the handout/);
+    let valid = true;
+    await act(async () => {
+      valid = await formRef!.trigger("git_provider");
+    });
+    expect(valid).toBe(false);
+  });
+
+  it("keeps a saved Forgejo assignment's picker visible after the flag is turned off", async () => {
+    mockUseCourse.mockReturnValue({ features: FLAG_OFF });
+    renderPicker(
+      { assignment_type: "code", git_provider: "forgejo" },
+      { id: 8, git_provider: "forgejo", template_repo: null }
+    );
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("forgejo");
+    await waitFor(() => expect(screen.getByLabelText("Repository host")).not.toBeDisabled());
+  });
+});

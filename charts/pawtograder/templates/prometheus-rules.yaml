@@ -37,11 +37,13 @@ spec:
     {{- if .Values.backup.enabled }}
     - name: pawtograder.backup
       rules:
-        # The nightly pg_dump Job failed. Scoped to the dump Job only
-        # ({{ $backupJob }}-<timestamp>) so a failing verify/restore-drill pages
-        # separately (below), not as a backup outage. The recency guard (Job
-        # started within backupMaxAgeHours) keeps a RETAINED failed Job
-        # (failedJobsHistoryLimit) from firing forever after a later run recovers.
+        # The nightly pg_dump Job failed, or the Forgejo or Coder backup
+        # ({{ $backupJob }}-forgejo-<timestamp>, {{ $backupJob }}-coder-<timestamp>).
+        # Scoped to those dump Jobs ({{ $backupJob }}-<timestamp>) so a failing
+        # verify/restore-drill pages separately (below), not as a backup outage.
+        # The recency guard (Job started within backupMaxAgeHours) keeps a
+        # RETAINED failed Job (failedJobsHistoryLimit) from firing forever after a
+        # later run recovers.
         #
         # kube_job_status_failed counts failed PODS, not terminal Job failure, and
         # the dump Job runs restartPolicy: Never — so a transient first attempt
@@ -55,21 +57,21 @@ spec:
           expr: |
             (
               max by (job_name, namespace) (
-                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+                kube_job_status_failed{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-((forgejo|coder)-)?[0-9].*"}
               ) > 0
             )
             unless on (job_name, namespace) (
               max by (job_name, namespace) (
-                kube_job_status_succeeded{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+                kube_job_status_succeeded{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-((forgejo|coder)-)?[0-9].*"}
               ) > 0
             )
             unless on (job_name, namespace) (
               max by (job_name, namespace) (
-                kube_job_status_active{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+                kube_job_status_active{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-((forgejo|coder)-)?[0-9].*"}
               ) > 0
             )
             and on (job_name, namespace) (
-              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-[0-9].*"}
+              kube_job_status_start_time{namespace="{{ $ns }}", job_name=~"{{ $backupJob }}-((forgejo|coder)-)?[0-9].*"}
                 > time() - {{ $backupMaxAge }} * 3600
             )
           for: 5m
@@ -78,7 +80,8 @@ spec:
           annotations:
             summary: "Pawtograder backup job failed ({{`{{ $labels.job_name }}`}})"
             description: >-
-              The nightly pg_dump Job in {{ $ns }} has failed pods. Backups are
+              A nightly backup Job in {{ $ns }} (Pawtograder's pg_dump, or the
+              Forgejo or Coder backup) has failed pods. Backups are
               the recovery floor for any install without WAL-G/PITR enabled.
               Runbook: docs/operations/disaster-recovery.md ("When backup-verify
               goes red").

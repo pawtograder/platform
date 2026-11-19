@@ -273,6 +273,29 @@ test.describe("Exam grading OCR pipeline", () => {
     const graded = (submissions ?? [])[1]!;
     await loginAsUser(page, grader, course);
     await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${graded.id}/files`);
+
+    // The grader lands on the exam_v1 artifact finalize wrote, and it renders (#1187). Before #1149,
+    // ArtifactView signed a storage file that exam_v1 artifacts don't have, so every finalized exam
+    // showed "Error downloading artifact" in place of the whole view, and the card never appeared.
+    const { data: gradedArtifact } = await supabase
+      .from("submission_artifacts")
+      .select("data")
+      .eq("submission_id", graded.id)
+      .eq("data->>format", "exam_v1")
+      .single();
+    const [gradedQuestion] = (gradedArtifact!.data as { questions: { exam_question_id: number }[] }).questions;
+    const [gradedSis, otherSis] =
+      graded.profile_id === alice.private_profile_id ? [aliceSis, bobSis] : [bobSis, aliceSis];
+    const questionCard = page.getByRole("heading", {
+      name: `Question ${gradedQuestion.exam_question_id}`,
+      exact: true
+    });
+    await expect(questionCard).toBeVisible();
+    await expect(page.getByText("OCR text").first()).toBeVisible();
+    await expect(page.getByText(`sis-${gradedSis}`).first()).toBeVisible();
+    await expect(page.getByText(`sis-${otherSis}`)).toHaveCount(0);
+    await expect(page.getByText(/Error downloading artifact/)).toHaveCount(0);
+
     await page.getByRole("checkbox", { name: /Item 1/ }).check({ force: true });
     await page.getByLabel("Points for Item 1").fill("3");
     await page.getByRole("button", { name: "Add Check" }).click();
@@ -290,6 +313,11 @@ test.describe("Exam grading OCR pipeline", () => {
       )
       .toBe(3);
     await expect(page.getByText("Q1 3/5")).toBeVisible();
+    // Checked again after the grading round trip: the renderer mounts before ArtifactView's own
+    // signing request settles, so the checks above could run before a failed signing replaced the
+    // view. By now that request has long since settled.
+    await expect(questionCard).toBeVisible();
+    await expect(page.getByText(/Error downloading artifact/)).toHaveCount(0);
 
     // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
     const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });

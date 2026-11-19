@@ -239,8 +239,9 @@ secrets:
                                   #   and .../install/callback), not only by the
                                   #   worker. Omitting it makes the install button
                                   #   answer 500.
-    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, aws-chime,
-                                  #   discord, canvas, sis, smtp, mcp, redis, sentry, misc
+    edgeFunctionsBundles: []      # subset of: github-app, forgejo-webhook, coder-api,
+                                  #   aws-chime, discord, canvas, sis, smtp, mcp, redis,
+                                  #   sentry, misc
     storeName: openbao            # ClusterSecretStore name
     storeKind: ClusterSecretStore # or SecretStore for namespace-scoped
     pathPrefix: apps/pawtograder  # full Bao path = <pathPrefix>/<bundle>-<env>
@@ -2247,8 +2248,18 @@ backup:
   # filesystem, defeating the point, and worse than /tmp in one way: a
   # local-path PVC is not charged to the pod's ephemeral storage, so kubelet
   # will not evict the pod before the node fills.
+  # With Forgejo on, its backup (templates/backup-apps.yaml) stages Forgejo's
+  # dump, a git copy of every repository and the /data archive here together
+  # (about twice the volume's size plus the dump), so size for the larger of
+  # that and Pawtograder's dump. Coder's backup stages only its dump.
   scratchSize: 30Gi
   scratchStorageClass: ""
+  # With global.environment: production, the render fails when Forgejo keeps
+  # data outside its /data volume (forgejo.gitea.config: a STORAGE_TYPE other
+  # than local, or a storage PATH off the volume), because the Forgejo backup
+  # copies only that volume. true confirms that storage is backed up some other
+  # way, such as a versioned and replicated bucket.
+  forgejoExternalStorageBackedUp: false
   # Retained Jobs each keep their pod, and each pod keeps its scratch PVC, so
   # these are the retained-storage lever as well as the log-retention one.
   # Worst case is (successful + failed x attempts) x scratchSize of REQUESTED
@@ -2822,6 +2833,10 @@ forgejo:
         SSL_MODE: disable
       service:
         DISABLE_REGISTRATION: true
+      admin:
+        # Only Pawtograder's admin makes orgs. A student who registered a class's org name first would
+        # otherwise own every classmate's repo created in it (the reconciler also refuses such an org).
+        DISABLE_REGULAR_ORG_CREATION: true
       actions:
         ENABLED: true
       session:
@@ -3066,15 +3081,19 @@ coderBootstrap:
   workspaceNamespace: ""
   # Reapplied on every install and upgrade, resetting changes made in Coder's UI.
   schedule:
-    defaultTTL: 2h
+    defaultTTL: 1h
     activityBump: 1h
     # Need a Coder Premium license; with either set non-zero on an unlicensed Coder the hook fails.
     dormancyThreshold: "0"
     dormancyAutoDeletion: "0" # deletes the workspace and its home volume
   workspaces:
-    image: ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005
+    # "" uses ghcr.io/pawtograder/coder-workspace:<chart appVersion>, built from images/coder-workspace by release-images.yml.
+    # A source checkout's appVersion (0.0.1) isn't published, so set a published tag, e.g. ghcr.io/pawtograder/coder-workspace:staging-latest.
+    image: ""
     # "" uses the image's code-server.
     codeServerVersion: 4.143.1
+    # Workspaces clone and push with this Coder external auth provider's token. Must equal coder.externalAuth.forgejo.id.
+    externalAuthId: forgejo
     arch: amd64
     priorityClassName: ""
     imagePullPolicy: IfNotPresent
