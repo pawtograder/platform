@@ -10,6 +10,8 @@ import { useForm } from "react-hook-form";
 import { toaster } from "@/components/ui/toaster";
 import { useSurveysInSeries } from "@/hooks/useCourseController";
 import { useCallback, useEffect } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SeriesFormData = {
   name: string;
@@ -31,6 +33,7 @@ export default function SeriesManagementModal({
   classId,
   existingSeries
 }: SeriesManagementModalProps) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const courseId = Number(course_id ?? classId);
   const { surveys, isLoading } = useSurveysInSeries(existingSeries?.id);
@@ -92,7 +95,7 @@ export default function SeriesManagementModal({
     } catch (err) {
       toaster.error({
         title: "Error",
-        description: `Failed to ${existingSeries ? "update" : "create"} series: ${err instanceof Error ? err.message : String(err)}`
+        description: `Failed to ${existingSeries ? "update" : "create"} series: ${getUserFacingErrorMessage(err, { role: errorRole })}`
       });
     }
   };

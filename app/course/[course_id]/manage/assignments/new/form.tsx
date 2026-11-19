@@ -48,6 +48,8 @@ import {
   submissionModeUnavailableReason
 } from "@/lib/gitProviderOptions";
 import RepositoryHostPicker, { useSavedAssignment, useSelectedGitProvider } from "./repositoryHostPicker";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
@@ -1030,6 +1032,7 @@ export default function AssignmentForm({
   form: UseFormReturnType<Assignment>;
   onSubmit: (values: FieldValues) => void;
 }) {
+  const errorRole = useStaffErrorRole();
   const {
     handleSubmit,
     register,
@@ -1138,14 +1141,14 @@ export default function AssignmentForm({
           description: "An error occurred while saving the assignment. Please try again."
         });
         toaster.error({
-          title: "Error creating assignment: " + (error instanceof Error ? error.name : "Unknown"),
-          description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
+          title: "Error creating assignment",
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setIsSubmitting(false);
       }
     },
-    [onSubmit, timezone]
+    [errorRole, onSubmit, timezone]
   );
 
   return (

@@ -8,6 +8,8 @@ import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type HelpRequestTemplateFormData = {
   name: string;
@@ -33,6 +35,7 @@ export default function CreateHelpRequestTemplateModal({
   onClose,
   onSuccess
 }: CreateHelpRequestTemplateModalProps) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { user } = useAuthState();
 
@@ -90,7 +93,7 @@ export default function CreateHelpRequestTemplateModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create template: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to create template: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

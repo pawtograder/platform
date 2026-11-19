@@ -11,7 +11,10 @@ import { createClient } from "@/utils/supabase/client";
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { useAssignmentController } from "@/hooks/useAssignment";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
+import { ErrorAudienceRole, getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -172,9 +175,10 @@ export function validatePawtograderConfig(config: unknown): { isValid: boolean; 
  * Safely calculates total points from a validated PawtograderConfig.
  *
  * @param config - The validated PawtograderConfig object
+ * @param errorRole - Who sees the error toast if calculation fails (from `useStaffErrorRole`)
  * @returns The total points, or 0 if calculation fails
  */
-function safelyCalculateTotalPoints(config: PawtograderConfig): number {
+function safelyCalculateTotalPoints(config: PawtograderConfig, errorRole: ErrorAudienceRole): number {
   try {
     return config.gradedParts.reduce(
       (acc, part) =>
@@ -190,13 +194,14 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
   } catch (error) {
     toaster.error({
       title: "Error calculating total points",
-      description: error instanceof Error ? error.message : "Unknown error"
+      description: getUserFacingErrorMessage(error, { role: errorRole })
     });
     return 0;
   }
 }
 
 export default function AutograderConfiguration({ graderRepo }: { graderRepo: string }) {
+  const errorRole = useStaffErrorRole();
   const { assignment } = useAssignmentController();
   const [autograderConfig, setAutograderConfig] = useState<PawtograderConfig>();
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
@@ -215,7 +220,11 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
-  const { data: regressionTestRepos, isLoading: regressionTestReposLoading } = useList<AutograderRegressionTest>({
+  const {
+    data: regressionTestRepos,
+    isLoading: regressionTestReposLoading,
+    refetch: refetchRegressionTestRepos
+  } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
     meta: { select: "*" },
     pagination: { pageSize: 1000 },
@@ -245,7 +254,7 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
                 setAutograderConfig(parsedConfig);
                 setError(undefined);
                 // Calculate the total points for the autograder
-                const points = safelyCalculateTotalPoints(parsedConfig);
+                const points = safelyCalculateTotalPoints(parsedConfig, errorRole);
                 if (assignment && assignment.autograder_points !== points) {
                   await updateAssignment({
                     resource: "assignments",
@@ -289,24 +298,36 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     const deletions = regressionTestRepos?.data
       .filter((rt) => !selectedRepos.includes(rt.repository))
       .map((rt) => rt.id);
-    async function saveAdditions() {
-      return Promise.all(
-        additions.map(async (repo) => {
-          await createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } });
-        })
-      );
+    // Wait for every write to settle before re-enabling Save. With Promise.all, the first failure
+    // re-enabled it while other inserts were still in flight, and a retry could insert the same
+    // regression-test row twice.
+    const results = await Promise.allSettled([
+      ...additions.map((repo) =>
+        createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } })
+      ),
+      ...(deletions ?? []).map((id) => deleteRegressionTest({ resource: "autograder_regression_test", id: id }))
+    ]);
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      toaster.error({
+        title:
+          failures.length === 1
+            ? "Failed to save a regression test change"
+            : `Failed to save ${failures.length} regression test changes`,
+        description: getErrorMessage(failures[0].reason, { role: errorRole })
+      });
     }
-    async function saveDeletions() {
-      if (deletions)
-        return Promise.all(
-          deletions.map(async (id) => {
-            await deleteRegressionTest({ resource: "autograder_regression_test", id: id });
-          })
-        );
-    }
-    await Promise.all([saveAdditions(), saveDeletions()]);
+    await refetchRegressionTestRepos();
     setSaveLoading(false);
-  }, [selectedRepos, regressionTestRepos, assignment_id, createRegressionTest, deleteRegressionTest]);
+  }, [
+    selectedRepos,
+    regressionTestRepos,
+    assignment_id,
+    createRegressionTest,
+    deleteRegressionTest,
+    refetchRegressionTestRepos,
+    errorRole
+  ]);
   const toggleRepo = useCallback(
     (repo: string) => {
       setSelectedRepos((oldRepos) => {

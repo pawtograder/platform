@@ -8,6 +8,8 @@ import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/Datab
 import { createListCollection } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface StaffThreadActionsProps {
   thread: DiscussionThreadType;
@@ -15,6 +17,7 @@ interface StaffThreadActionsProps {
 }
 
 export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadActionsProps) {
+  const errorRole = useViewerErrorRole();
   const topics = useDiscussionTopics();
   const [isUpdatingTopic, setIsUpdatingTopic] = useState(false);
   const supabase = useMemo(() => createClient(), []);
@@ -52,13 +55,13 @@ export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadAction
       } catch (error) {
         toaster.error({
           title: "Error",
-          description: `Failed to update topic: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to update topic: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
       } finally {
         setIsUpdatingTopic(false);
       }
     },
-    [thread.id, thread.topic_id, supabase, onUpdateAction]
+    [thread.id, thread.topic_id, supabase, onUpdateAction, errorRole]
   );
 
   // Sort topics for display

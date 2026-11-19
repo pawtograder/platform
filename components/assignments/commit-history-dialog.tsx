@@ -20,6 +20,7 @@ import { Badge, Box, CloseButton, Code, Dialog, Flex, HStack, Icon, Skeleton, Ta
 import { useList } from "@refinedev/core";
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { FaGitAlt, FaPlay } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type RepositoryCommitHistoryDialogProps = {
   courseId: number;
@@ -208,7 +209,7 @@ export function RepositoryCommitHistoryDialog({
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error)
         });
       } finally {
         // Refetch in both branches: even on error the function may have updated

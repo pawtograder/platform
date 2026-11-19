@@ -1,4 +1,6 @@
 "use client";
+import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { HelpRequestWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -6,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useIsReadOnly } from "./useClassProfiles";
 import { useCourseController } from "./useCourseController";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Hook for managing help request watch status for the current user.
@@ -15,6 +18,7 @@ import { useCourseController } from "./useCourseController";
  * @returns Object containing watch status and setter function
  */
 export function useHelpRequestWatchStatus(helpRequestId: number) {
+  const errorRole = useViewerErrorRole();
   const controller = useCourseController();
   const isReadOnly = useIsReadOnly();
   const [curWatch, setCurWatch] = useState<HelpRequestWatcher | undefined>(undefined);
@@ -45,6 +49,7 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
   /**
    * Sets the watch status for the current help request.
    * Creates a new watcher record if none exists, or updates the existing one.
+   * Never rejects: a failed write is shown as a toast here.
    *
    * @param status - Whether to enable or disable watching
    */
@@ -53,25 +58,32 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
       // View-as student is read-only; writing here would subscribe the masquerading
       // instructor to help-request notifications under their own user_id.
       if (isReadOnly) return;
-      if (curWatch) {
-        await updateWatch({
-          id: curWatch.id,
-          values: {
-            enabled: status
-          }
-        });
-      } else {
-        await createHelpRequestWatcher({
-          values: {
-            user_id: user?.id,
-            class_id: course_id,
-            help_request_id: helpRequestId,
-            enabled: status
-          }
+      try {
+        if (curWatch) {
+          await updateWatch({
+            id: curWatch.id,
+            values: {
+              enabled: status
+            }
+          });
+        } else {
+          await createHelpRequestWatcher({
+            values: {
+              user_id: user?.id,
+              class_id: course_id,
+              help_request_id: helpRequestId,
+              enabled: status
+            }
+          });
+        }
+      } catch (error) {
+        toaster.error({
+          title: status ? "Failed to watch help request" : "Failed to unwatch help request",
+          description: getErrorMessage(error, { role: errorRole })
         });
       }
     },
-    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher, isReadOnly]
+    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher, isReadOnly, errorRole]
   );
 
   return {

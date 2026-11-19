@@ -26,6 +26,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { LuArrowLeftRight, LuCheck, LuCircleAlert, LuMaximize2, LuMinimize2, LuUser } from "react-icons/lu";
 import type { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const ExpressionMonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
   ssr: false,
@@ -64,6 +66,7 @@ type Props = {
 };
 
 function useLoadedMathJS(): { math: MathJSNS | null; loadError: string | null } {
+  const errorRole = useStaffErrorRole();
   const [math, setMath] = useState<MathJSNS | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
@@ -76,12 +79,12 @@ function useLoadedMathJS(): { math: MathJSNS | null; loadError: string | null } 
         if (cancelled) return;
         // eslint-disable-next-line no-console -- surface chunk-load failures to the devtools console.
         console.error("Failed to load mathjs for expression builder", err);
-        setLoadError(err instanceof Error ? err.message : String(err));
+        setLoadError(getUserFacingErrorMessage(err, { role: errorRole }));
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [errorRole]);
   return { math, loadError };
 }
 
@@ -93,6 +96,7 @@ function useLoadedMathJS(): { math: MathJSNS | null; loadError: string | null } 
  *    every subexpression.
  */
 export function ExpressionBuilder(props: Props) {
+  const errorRole = useStaffErrorRole();
   const {
     expression,
     onExpressionChange,
@@ -221,7 +225,7 @@ export function ExpressionBuilder(props: Props) {
       return {
         isValid: false,
         isEmpty: expression.trim().length === 0,
-        parseError: e instanceof Error ? e.message : String(e),
+        parseError: getUserFacingErrorMessage(e, { role: errorRole }),
         dependencyError: null,
         evaluation: null
       };
