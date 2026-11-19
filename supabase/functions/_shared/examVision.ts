@@ -10,8 +10,10 @@
 //
 // No npm deps — everything is REST (fetch).
 
-export type NormRect = { x: number; y: number; width: number; height: number };
-export type WordBox = NormRect & { text: string };
+import type { NormRect, WordBox } from "./examRegionText.ts";
+export type { NormRect, WordBox } from "./examRegionText.ts";
+export { wordsInRegion } from "./examRegionText.ts";
+
 export type PageImage = { name: string; bytes: Uint8Array; width: number; height: number };
 
 export type ProposedQuestion = {
@@ -57,24 +59,26 @@ export class ProviderRateLimitError extends Error {
   }
 }
 
-/** Text of the words whose center falls inside `region` (reading order: top-to-bottom, left-to-right). */
-export function wordsInRegion(words: WordBox[], region: NormRect): string {
-  const inside = words.filter((w) => {
-    const cx = w.x + w.width / 2;
-    const cy = w.y + w.height / 2;
-    return cx >= region.x && cx <= region.x + region.width && cy >= region.y && cy <= region.y + region.height;
-  });
-  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right.
-  // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
-  // engine-defined ordering for words clustered within a row. Keep in sync with lib/exam/regionMath.ts.
-  inside.sort((a, b) => {
-    const band = Math.round(a.y / 0.02) - Math.round(b.y / 0.02);
-    return band !== 0 ? band : a.x - b.x;
-  });
-  return inside
-    .map((w) => w.text)
-    .join(" ")
-    .trim();
+export type TransientFailureCategory = "server_error" | "timeout" | "aborted" | "network";
+
+/**
+ * Thrown when a provider request failed in transit or with a 5xx: the request may succeed if
+ * retried, so callers must not treat it as an unusable answer. The worker's dispatcher retries it
+ * on its normal backoff.
+ *
+ * The message is deliberately bounded to provider, category and status. It is persisted to the
+ * batch error and DLQ and sent to Sentry, so it must not carry response bodies or transport
+ * error text, either of which can reflect request material such as the API key.
+ */
+export class ProviderTransientError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly category: TransientFailureCategory,
+    readonly status?: number
+  ) {
+    super(`${provider} request failed: category=${category}${status === undefined ? "" : ` status=${status}`}`);
+    this.name = "ProviderTransientError";
+  }
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -107,7 +111,11 @@ function rpmToInterval(rpm: number): number {
 // Fake provider — deterministic, offline. Used by tests.
 // Scan page names are expected to encode the student's SIS id, e.g.
 //   "...__sis-12345__page-0.png"  ->  readIdentity returns { sisId: "12345" }
+// A page name containing FAKE_TRANSIENT_FAULT_MARKER makes structureAnswer fail the way a 5xx,
+// timeout or reset from Gemini does (tests/e2e/exam-finalize-provider-retry.spec.ts).
 // ---------------------------------------------------------------------------
+const FAKE_TRANSIENT_FAULT_MARKER = "__fault-transient__";
+
 export class FakeExamVisionProvider implements ExamVisionProvider {
   ocrImage(page: PageImage): Promise<{ text: string; words: WordBox[] }> {
     const sis = page.name.match(/sis-([A-Za-z0-9]+)/)?.[1] ?? "unknown";
@@ -153,10 +161,13 @@ export class FakeExamVisionProvider implements ExamVisionProvider {
   }
   structureAnswer(
     _answerType: string | null,
-    _page: PageImage,
+    page: PageImage,
     _region: NormRect,
     ocrText: string
   ): Promise<StructuredAnswer> {
+    if (page.name.includes(FAKE_TRANSIENT_FAULT_MARKER)) {
+      return Promise.reject(new ProviderTransientError("fake", "server_error", 503));
+    }
     return Promise.resolve({ value: ocrText, text: ocrText });
   }
 }
@@ -259,15 +270,17 @@ class GeminiVision {
   constructor(
     private apiKey: string,
     private model: string,
-    rpm: number
+    rpm: number,
+    private baseUrl: string
   ) {
     this.limiter = new RateLimiter(rpmToInterval(rpm));
   }
   private async generate(parts: unknown[]): Promise<string> {
     await this.limiter.wait();
     // Key in a header rather than the query string; see GoogleVisionOcr.ocrImage.
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
-    const res = await fetch(url, {
+    // Build the request before sending it, so a malformed URL, header or body throws here as the
+    // programming error it is, and only a failure of the request itself reaches the catch below.
+    const request = new Request(`${this.baseUrl}/v1beta/models/${this.model}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
       body: JSON.stringify({
@@ -275,11 +288,46 @@ class GeminiVision {
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
       }),
       // Bound the call so a stalled connection can't hang the worker indefinitely.
-      signal: AbortSignal.timeout(60000)
+      signal: AbortSignal.timeout(60000),
+      // fetch would otherwise follow a redirect and resend x-goog-api-key to wherever it points.
+      // A redirect rejects as a TypeError, classified below like any other failed request.
+      redirect: "error"
     });
-    if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
-    if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${await res.text()}`);
-    const json = await res.json();
+    let res: Response;
+    let body = "";
+    try {
+      res = await fetch(request);
+      // Read a successful body here too: a connection that resets, or a timeout that fires, after
+      // the headers arrive surfaces from the body read rather than from fetch. An error status is
+      // classified below by the status alone, so its body is never read and cannot fail first.
+      if (res.ok) body = await res.text();
+    } catch (err) {
+      // The request rejects with a TypeError when the connection fails or is reset, and with a
+      // TimeoutError/AbortError when the signal above fires. Those are worth retrying, unlike an
+      // unusable answer, so they must not reach structureAnswer's caller as a plain Error. Only
+      // the category is kept: transport error text embeds the URL and can echo request material.
+      if (err instanceof TypeError) throw new ProviderTransientError("gemini", "network");
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        throw new ProviderTransientError("gemini", "timeout");
+      }
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ProviderTransientError("gemini", "aborted");
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      // Release the unread body. A failure here (e.g. the body already errored) must not replace
+      // the status's classification.
+      await res.body?.cancel().catch(() => {});
+      if (res.status === 429) throw new ProviderRateLimitError("Gemini rate limited", 60);
+      // No body in either error: an error page can reflect request material, and both messages
+      // reach the batch error, the DLQ and Sentry (see ProviderTransientError). A 4xx stays a
+      // plain Error.
+      if (res.status >= 500) throw new ProviderTransientError("gemini", "server_error", res.status);
+      throw new Error(`Gemini failed: ${res.status}`);
+    }
+    // Outside the catch: a body that is not JSON stays a SyntaxError, as before.
+    const json = JSON.parse(body);
     return json?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
   }
   private imagePart(page: PageImage) {
@@ -418,6 +466,42 @@ function buildExamVisionProvider(): ExamVisionProvider {
   const geminiRpm = parseInt(Deno.env.get("EXAM_GEMINI_RPM") ?? "60", 10);
   return new CompositeExamVisionProvider(
     new GoogleVisionOcr(ocrKey, ocrRpm),
-    new GeminiVision(geminiKey, model, geminiRpm)
+    new GeminiVision(geminiKey, model, geminiRpm, geminiBaseUrl(Deno.env.get("EXAM_GEMINI_BASE_URL")))
   );
+}
+
+// Hosts EXAM_GEMINI_BASE_URL may name. The override exists only to point the real adapter at a
+// local fault-injecting stand-in (_shared/examVision.provider.test.ts), and every request carries
+// GOOGLE_API_KEY, so it must not be configurable to any other destination.
+// host.docker.internal is here because the edge runtime runs in a container, where loopback is
+// the container itself, so functions served locally can only reach a stand-in on the machine
+// through it. This bounds what the variable can name; where these names resolve is still up to
+// the host's resolver and Docker configuration.
+const GEMINI_TEST_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "host.docker.internal"]);
+
+function geminiBaseUrl(raw: string | undefined): string {
+  // An empty value (e.g. `EXAM_GEMINI_BASE_URL=` in an env file) means unset, not a relative URL.
+  const value = raw?.trim();
+  if (!value) return "https://generativelanguage.googleapis.com";
+  let url: URL | null = null;
+  try {
+    url = new URL(value);
+  } catch {
+    // Reported below with every other rejection.
+  }
+  // Checked on the parsed URL, not the string, and the request is built from url.origin, so the
+  // host checked is the host requested. A bare origin only: a path, query, fragment or userinfo
+  // has no use here. The value is not echoed, since this message reaches the batch error.
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !GEMINI_TEST_HOSTS.has(url.hostname) ||
+    url.href !== `${url.origin}/`
+  ) {
+    throw new Error(
+      "EXAM_GEMINI_BASE_URL may only point at a local test server: an http(s) origin on localhost, " +
+        "127.0.0.1, [::1] or host.docker.internal, with no path. Leave it unset to use Gemini."
+    );
+  }
+  return url.origin;
 }

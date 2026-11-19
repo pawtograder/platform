@@ -1,11 +1,32 @@
 /**
- * Forgejo account creation for #1092. Forgejo is stubbed at fetch; the response bodies and 422
- * messages are the ones Forgejo 15.0.9 returns.
+ * Forgejo account (#1092) and repo (#1093) creation. Forgejo is stubbed at fetch; the status codes,
+ * response bodies and messages are the ones Forgejo 15.0.9 returns.
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net _shared/ForgejoWrapper.test.ts
  */
-import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
-import { ensureAccountForUser, forgejoConfig, type ForgejoConfig, usernameFromEmail } from "./ForgejoWrapper.ts";
+import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
+import {
+  coderTokenName,
+  ArchiveTooLargeError,
+  downloadArchive,
+  ensureAccountForUser,
+  ensureHandoutRepo,
+  ensureOrg,
+  ensureRepoFromTemplate,
+  forgejoConfig,
+  type ForgejoConfig,
+  getCommit,
+  grantWrite,
+  mintRepoToken,
+  readFile,
+  REPLACED_TOKEN_GRACE_MS,
+  repoPath,
+  revokeAllCoderTokens,
+  revokeReplacedTokens,
+  revokeRepoToken,
+  startGrading,
+  usernameFromEmail
+} from "./ForgejoWrapper.ts";
 
 const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "Basic eA==", authSourceId: 3 };
 const user = { userId: "7d1c7c9e-0000-4000-8000-000000000001", email: "Alex.Kim@northeastern.edu", name: "Alex Kim" };
@@ -159,4 +180,600 @@ Deno.test("ensureAccountForUser: a failed search is an error, not a reason to cr
     await assertRejects(() => ensureAccountForUser(config, user), Error, "user search failed: 502");
     assertEquals(calls.length, 1);
   });
+});
+
+// Status codes and bodies are what Forgejo 15.0.9 returned in the Phase 0 spike.
+const noContent = () => new Response(null, { status: 204 });
+const notFound = () => new Response(JSON.stringify({ message: "access token does not exist" }), { status: 404 });
+const minted = (sha1: string) =>
+  ok(
+    { id: 7, name: "pawtograder-coder-42", sha1, token_last_eight: sha1.slice(-8), scopes: ["write:repository"] },
+    201
+  );
+
+const NOW = Date.parse("2026-11-16T12:00:00Z");
+const tokenAt = (repositoryId: number, at: number, suffix = "abcd1234") =>
+  `pawtograder-coder-${repositoryId}-${at}-${suffix}`;
+
+Deno.test("coderTokenName: the repository, the mint time, and a random suffix", () => {
+  const a = coderTokenName(42, NOW);
+  const b = coderTokenName(42, NOW);
+  assert(/^pawtograder-coder-42-\d+-[0-9a-f]{8}$/.test(a), a);
+  assert(a.startsWith(`pawtograder-coder-42-${NOW}-`), a);
+  assert(a !== b, "two mints in the same millisecond get different names");
+});
+
+Deno.test("mintRepoToken: mints a token scoped to the repository for the student, deleting nothing", async () => {
+  await withForgejo([minted("f".repeat(40))], async (calls) => {
+    const result = await mintRepoToken(config, "alex.kim", "cs3500-f26/hw1-alex", 42, NOW);
+    assertEquals(result.token, "f".repeat(40));
+    assert(result.name.startsWith(`pawtograder-coder-42-${NOW}-`), result.name);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].method, "POST");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/users/alex.kim/tokens");
+    assertEquals(calls[0].body, {
+      name: result.name,
+      scopes: ["write:repository"],
+      repositories: [{ owner: "cs3500-f26", name: "hw1-alex" }]
+    });
+  });
+});
+
+Deno.test("mintRepoToken: a repository that isn't owner/name fails before calling Forgejo", async () => {
+  for (const repository of ["repo", "org/repo/extra", "/repo", "org/"]) {
+    await withForgejo([], async (calls) => {
+      await assertRejects(() => mintRepoToken(config, "alex.kim", repository, 42), Error, "not owner/name");
+      assertEquals(calls.length, 0);
+    });
+  }
+});
+
+Deno.test("mintRepoToken: a refused mint keeps a known reason and nothing else", async () => {
+  await withForgejo(
+    [new Response(JSON.stringify({ message: "access token name has been used already" }), { status: 400 })],
+    async () => {
+      await assertRejects(
+        () => mintRepoToken(config, "alex.kim", "org/repo", 42),
+        Error,
+        "token mint failed: 400 access token name has been used already"
+      );
+    }
+  );
+  await withForgejo([ok({ id: 7, name: "pawtograder-coder-42" }, 201)], async () => {
+    await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42), Error, "the response has no token");
+  });
+});
+
+Deno.test("mintRepoToken: the token never appears in an error", async () => {
+  await withForgejo([new Response("sha1=deadbeefcafe", { status: 201 })], async () => {
+    const err = await assertRejects(() => mintRepoToken(config, "alex.kim", "org/repo", 42));
+    assertEquals(String(err).includes("deadbeefcafe"), false, String(err));
+  });
+});
+
+Deno.test(
+  "revokeReplacedTokens: deletes this repository's tokens past the grace window, except the one kept",
+  async () => {
+    const keep = tokenAt(42, NOW);
+    const old = tokenAt(42, NOW - REPLACED_TOKEN_GRACE_MS);
+    const recent = tokenAt(42, NOW - REPLACED_TOKEN_GRACE_MS + 1);
+    const otherRepo = tokenAt(420, NOW - 2 * REPLACED_TOKEN_GRACE_MS);
+    const list = [keep, old, recent, otherRepo, "pawtograder-coder-42-garbage", "laptop"].map((name) => ({ name }));
+    await withForgejo([ok(list), noContent()], async (calls) => {
+      assertEquals(await revokeReplacedTokens(config, "alex.kim", 42, keep, NOW), 1);
+      assertEquals(calls[1].method, "DELETE");
+      assertEquals(decodeURIComponent(calls[1].url.split("/tokens/")[1]), old);
+      assertEquals(calls.length, 2);
+    });
+  }
+);
+
+Deno.test("revokeRepoToken: deletes every token of the repository and no other; 404 counts as revoked", async () => {
+  const list = [tokenAt(42, 1), tokenAt(42, NOW), tokenAt(420, 1), "laptop"].map((name) => ({ name }));
+  await withForgejo([ok(list), noContent(), notFound()], async (calls) => {
+    assertEquals(await revokeRepoToken(config, "alex.kim", 42), 2);
+    assertEquals(
+      calls.slice(1).map((c) => decodeURIComponent(c.url.split("/tokens/")[1])),
+      [tokenAt(42, 1), tokenAt(42, NOW)]
+    );
+  });
+  await withForgejo(
+    [ok([{ name: tokenAt(42, 1) }]), new Response("<html>bad gateway alex.kim</html>", { status: 502 })],
+    async () => {
+      await assertRejects(
+        () => revokeRepoToken(config, "alex.kim", 42),
+        Error,
+        "token revoke failed: 502 unrecognized response"
+      );
+    }
+  );
+  await withForgejo([new Response(JSON.stringify({ message: "user does not exist" }), { status: 404 })], async () => {
+    assertEquals(await revokeRepoToken(config, "gone", 42), 0);
+  });
+});
+
+Deno.test("revokeRepoToken: keeps a token minted after the cutoff, so a re-mint after the claim survives", async () => {
+  const before = tokenAt(42, NOW - 1);
+  const atCutoff = tokenAt(42, NOW, "bbbb0000");
+  const reMinted = tokenAt(42, NOW + 1, "cccc0000");
+  const list = [before, atCutoff, reMinted, "pawtograder-coder-42-garbage"].map((name) => ({ name }));
+  await withForgejo([ok(list), noContent(), noContent(), noContent()], async (calls) => {
+    assertEquals(await revokeRepoToken(config, "alex.kim", 42, NOW), 3);
+    assertEquals(
+      calls.slice(1).map((c) => decodeURIComponent(c.url.split("/tokens/")[1])),
+      [before, atCutoff, "pawtograder-coder-42-garbage"]
+    );
+  });
+});
+
+Deno.test("revokeAllCoderTokens: deletes only workspace tokens, across pages", async () => {
+  const page1 = Array.from({ length: 50 }, (_, i) => ({ name: i % 2 ? `pawtograder-coder-${i}` : `laptop-${i}` }));
+  const page2 = [{ name: "pawtograder-coder-900" }, { name: "my-own-token" }];
+  await withForgejo([ok(page1), ok(page2), ...Array.from({ length: 26 }, noContent)], async (calls) => {
+    assertEquals(await revokeAllCoderTokens(config, "alex.kim"), 26);
+    assertEquals(new URL(calls[0].url).searchParams.get("page"), "1");
+    assertEquals(new URL(calls[1].url).searchParams.get("page"), "2");
+    const deleted = calls.slice(2).map((c) => decodeURIComponent(c.url.split("/tokens/")[1]));
+    assertEquals(deleted.length, 26);
+    assertEquals(
+      deleted.every((n) => n.startsWith("pawtograder-coder-")),
+      true
+    );
+    assertEquals(deleted.includes("pawtograder-coder-900"), true);
+    assertEquals(
+      calls.slice(2).every((c) => c.method === "DELETE"),
+      true
+    );
+  });
+});
+
+Deno.test("revokeAllCoderTokens: a user that is gone has nothing to revoke", async () => {
+  await withForgejo([new Response(JSON.stringify({ message: "user does not exist" }), { status: 404 })], async () => {
+    assertEquals(await revokeAllCoderTokens(config, "gone"), 0);
+  });
+});
+
+Deno.test("revokeAllCoderTokens: a failed list is an error, and nothing is deleted", async () => {
+  await withForgejo([new Response("bad gateway", { status: 502 })], async (calls) => {
+    await assertRejects(() => revokeAllCoderTokens(config, "alex.kim"), Error, "token list failed: 502");
+    assertEquals(calls.length, 1);
+  });
+});
+
+Deno.test("downloadArchive: fetches the commit's zip, and an error status fails", async () => {
+  const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+  await withForgejo([new Response(zip, { status: 200 })], async (calls) => {
+    assertEquals(await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 1024), zip);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/archive/b275490c.zip");
+  });
+  await withForgejo([new Response("Not Found", { status: 404 })], async () => {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 1024), Error, "404");
+  });
+});
+
+Deno.test("downloadArchive: refuses an archive past the limit without reading or keeping all of it", async () => {
+  let pulled = 0;
+  // 100 chunks of 10 bytes, produced only as they're read.
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled === 100) return controller.close();
+      pulled++;
+      controller.enqueue(new Uint8Array(10));
+    }
+  });
+  await withForgejo([new Response(body, { status: 200 })], async () => {
+    const error = await assertRejects(
+      () => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 25),
+      ArchiveTooLargeError
+    );
+    assertEquals(error.bytesRead, 30);
+    assert(pulled < 100, "read the whole archive");
+  });
+});
+
+Deno.test("downloadArchive: gives up on a request Forgejo never answers", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+    })) as typeof fetch;
+  try {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "0000", 1024, 50), DOMException);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+const status = (code: number, message = "") => new Response(JSON.stringify({ message }), { status: code });
+
+/** The lookups that prove an existing org is the admin's alone: who the admin is, the org's teams, the owners. */
+const ownedBy = (...logins: string[]) => [
+  ok({ login: "pawtograder-admin" }),
+  ok([
+    { id: 5, permission: "owner" },
+    { id: 6, permission: "write" }
+  ]),
+  ok(logins.map((login) => ({ login })))
+];
+
+Deno.test("ensureOrg: accepts an existing org whose only owner is the admin", async () => {
+  await withForgejo([ok({ username: "cs4535" }), ...ownedBy("Pawtograder-Admin")], async (calls) => {
+    await ensureOrg(config, "cs4535");
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      [
+        "GET https://git.example.edu/api/v1/orgs/cs4535",
+        "GET https://git.example.edu/api/v1/user",
+        "GET https://git.example.edu/api/v1/orgs/cs4535/teams?limit=50",
+        "GET https://git.example.edu/api/v1/teams/5/members?limit=50"
+      ]
+    );
+  });
+});
+
+Deno.test("ensureOrg: refuses an org that anyone else owns, alone or with the admin", async () => {
+  for (const owners of [["alex.kim"], ["pawtograder-admin", "alex.kim"]]) {
+    await withForgejo([ok({ username: "cs4535" }), ...ownedBy(...owners)], async () => {
+      await assertRejects(() => ensureOrg(config, "cs4535"), Error, "owner other than Pawtograder's admin");
+    });
+  }
+});
+
+Deno.test("ensureOrg: creates a missing org as private", async () => {
+  await withForgejo([status(404), ok({}, 201)], async (calls) => {
+    await ensureOrg(config, "cs4535");
+    assertEquals(calls[1].body, { username: "cs4535", visibility: "private" });
+  });
+  await withForgejo([status(404), status(403, "forbidden")], async () => {
+    await assertRejects(() => ensureOrg(config, "cs4535"), Error, "403");
+  });
+});
+
+Deno.test("ensureOrg: after losing a race to create it, still checks who owns the org", async () => {
+  await withForgejo(
+    [
+      status(404),
+      unprocessable("user already exists [name: cs4535]"),
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin")
+    ],
+    async () => {
+      await ensureOrg(config, "cs4535");
+    }
+  );
+});
+
+Deno.test("ensureOrg: refuses a name that is a user, which /orgs reports as missing", async () => {
+  await withForgejo([status(404), unprocessable("user already exists [name: cs4535]"), status(404)], async () => {
+    await assertRejects(() => ensureOrg(config, "cs4535"), Error, "taken by a user");
+  });
+});
+
+Deno.test("repoPath: only a plain owner/name gets into a URL", () => {
+  assertEquals(repoPath("cs4535/hw1-alex.kim"), "cs4535/hw1-alex.kim");
+  for (const bad of ["cs4535", "a/b/c", "../users", "cs4535/..", "a?x/b", "a/b#c", "a/b%2F", "", "/b", "a/"]) {
+    assertThrows(() => repoPath(bad), Error, "Not a Forgejo owner/name", bad);
+  }
+});
+
+Deno.test(
+  "ensureRepoFromTemplate: generates a private repo with the template's content, adopting one that exists",
+  async () => {
+    await withForgejo([ok({}, 201)], async (calls) => {
+      await ensureRepoFromTemplate(config, "cs4535/hw1-handout", "cs4535", "hw1-alex.kim");
+      assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-handout/generate");
+      assertEquals(calls[0].body, { owner: "cs4535", name: "hw1-alex.kim", private: true, git_content: true });
+    });
+    await withForgejo([status(409, "The repository with the same name already exists.")], async () => {
+      await ensureRepoFromTemplate(config, "cs4535/hw1-handout", "cs4535", "hw1-alex.kim");
+    });
+    await withForgejo([unprocessable("this is not a template repo")], async () => {
+      await assertRejects(
+        () => ensureRepoFromTemplate(config, "cs4535/hw1-handout", "cs4535", "hw1-alex.kim"),
+        Error,
+        "not a template"
+      );
+    });
+  }
+);
+
+Deno.test("ensureRepoFromTemplate: a template that isn't owner/name never reaches Forgejo", async () => {
+  await withForgejo([], async (calls) => {
+    await assertRejects(
+      () => ensureRepoFromTemplate(config, "../admin/users?x=", "cs4535", "hw1-alex.kim"),
+      Error,
+      "Not a Forgejo owner/name"
+    );
+    assertEquals(calls, []);
+  });
+});
+
+Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo reports back", async () => {
+  await withForgejo([new Response(null, { status: 204 }), ok({ permission: "write" })], async (calls) => {
+    assertEquals(await grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), true);
+    assertEquals(calls[0].method, "PUT");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/collaborators/alex.kim");
+    assertEquals(calls[0].body, { permission: "write" });
+    assertEquals(
+      calls[1].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/collaborators/alex.kim/permission"
+    );
+  });
+  await withForgejo([new Response(null, { status: 204 }), ok({ permission: "read" })], async () => {
+    assertEquals(await grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), false);
+  });
+  await withForgejo([status(404)], async () => {
+    await assertRejects(() => grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), Error, "404");
+  });
+});
+
+Deno.test("readFile: a repository that isn't owner/name never reaches Forgejo", async () => {
+  await withForgejo([], async (calls) => {
+    await assertRejects(
+      () => readFile(config, "../admin", ".github/workflows/grade.yml"),
+      Error,
+      "Not a Forgejo owner/name"
+    );
+    assertEquals(calls, []);
+  });
+});
+
+Deno.test("readFile: decodes the file's base64 content, and a missing file is null", async () => {
+  const text = "name: Grade\non: push\n";
+  // Forgejo, like GitHub, may wrap the base64.
+  const content = btoa(text).replace(/(.{8})/g, "$1\n");
+  await withForgejo([ok({ content })], async (calls) => {
+    assertEquals(await readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), text);
+    assertEquals(
+      calls[0].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-handout/contents/.github/workflows/grade.yml"
+    );
+  });
+  await withForgejo([status(404)], async () => {
+    assertEquals(await readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), null);
+  });
+  await withForgejo([status(500)], async () => {
+    await assertRejects(() => readFile(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), Error, "500");
+  });
+});
+
+Deno.test("readFile: asks for the file at a given ref", async () => {
+  await withForgejo([status(404)], async (calls) => {
+    await readFile(config, "cs4535/hw1-alex.kim", ".github/workflows/grade.yml", "27d062d9");
+    assertEquals(
+      calls[0].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/contents/.github/workflows/grade.yml?ref=27d062d9"
+    );
+  });
+});
+
+const head = {
+  sha: "5140bf4621ac400f7c2fedd86cfac63e189069c4",
+  commit: { message: "Add .github/workflows/grade.yml" }
+};
+const gradeYml = { path: ".github/workflows/grade.yml", content: "name: Grade\n# \u00e9\n" };
+
+Deno.test(
+  "ensureHandoutRepo: creates a private template repo on main with the files, and returns main's head",
+  async () => {
+    const responses = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), ok({}, 201), ok(head)];
+    await withForgejo(responses, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]), head.sha);
+      assertEquals(
+        calls.slice(4).map((c) => `${c.method} ${c.url}`),
+        [
+          "POST https://git.example.edu/api/v1/orgs/cs4535/repos",
+          "POST https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/.github/workflows/grade.yml",
+          "GET https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/git/commits/main"
+        ]
+      );
+      assertEquals(calls[4].body, {
+        name: "cs4535-handout-hw1",
+        private: true,
+        auto_init: true,
+        default_branch: "main",
+        template: true
+      });
+      const content = calls[5].body!.content as string;
+      assertEquals(new TextDecoder().decode(Uint8Array.from(atob(content), (c) => c.charCodeAt(0))), gradeYml.content);
+      assertEquals(calls[5].body!.branch, "main");
+    });
+  }
+);
+
+Deno.test(
+  "ensureHandoutRepo: adopts an existing repo as a private template and keeps a file already there",
+  async () => {
+    const responses = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 }),
+      ok({ empty: false, default_branch: "main" }),
+      unprocessable("repository file already exists [path: .github/workflows/grade.yml]"),
+      ok(head)
+    ];
+    await withForgejo(responses, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]), head.sha);
+      assertEquals(
+        `${calls[5].method} ${calls[5].url}`,
+        "PATCH https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1"
+      );
+      assertEquals(calls[5].body, { template: true, private: true });
+    });
+  }
+);
+
+Deno.test(
+  "ensureHandoutRepo: an adopted empty repo gets a README on main; another default branch is refused",
+  async () => {
+    const exists = () =>
+      new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 });
+    const gone = { path: ".github/workflows/grade.yml", content: null };
+    const empty = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      exists(),
+      ok({ empty: true, default_branch: "main" }),
+      ok({}, 201),
+      status(404),
+      ok(head)
+    ];
+    await withForgejo(empty, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+      assertEquals(
+        `${calls[6].method} ${calls[6].url}`,
+        "POST https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/README.md"
+      );
+      assertEquals(calls[6].body!.branch, "main");
+    });
+    const trunk = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      exists(),
+      ok({ empty: false, default_branch: "trunk" })
+    ];
+    await withForgejo(trunk, async () => {
+      await assertRejects(
+        () => ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]),
+        Error,
+        "default branch isn't main"
+      );
+    });
+  }
+);
+
+Deno.test("ensureHandoutRepo: removes a file with null content, and a file already gone changes nothing", async () => {
+  const gone = { path: ".github/workflows/grade.yml", content: null };
+  const responses = [
+    ok({ username: "cs4535" }),
+    ...ownedBy("pawtograder-admin"),
+    ok({}, 201),
+    ok({ sha: "1f0e2a" }),
+    ok({}),
+    ok(head)
+  ];
+  await withForgejo(responses, async (calls) => {
+    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+    const file = "https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/.github/workflows/grade.yml";
+    assertEquals(
+      calls.slice(5, 7).map((c) => `${c.method} ${c.url}`),
+      [`GET ${file}?ref=main`, `DELETE ${file}`]
+    );
+    assertEquals(calls[6].body, { sha: "1f0e2a", message: "Remove .github/workflows/grade.yml", branch: "main" });
+  });
+  const again = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), status(404), ok(head)];
+  await withForgejo(again, async (calls) => {
+    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+    assert(!calls.some((c) => c.method === "DELETE"));
+  });
+});
+
+Deno.test("ensureHandoutRepo: any other file error fails, and a bad name never reaches Forgejo", async () => {
+  const responses = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), status(403)];
+  await withForgejo(responses, async () => {
+    await assertRejects(
+      () => ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]),
+      Error,
+      "file create failed: 403"
+    );
+  });
+  await withForgejo([], async () => {
+    await assertRejects(() => ensureHandoutRepo(config, "cs4535/../admin", []), Error, "Not a Forgejo owner/name");
+  });
+});
+
+Deno.test("getCommit: resolves a short sha to the full commit, and a missing one fails", async () => {
+  const commit = { sha: "27d062d99f8551af7be5e9ff7812241574198a0b", commit: { message: "Initial commit\n" } };
+  await withForgejo([ok(commit)], async (calls) => {
+    assertEquals(await getCommit(config, "cs4535/hw1-alex.kim", "27d062d9"), commit);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/git/commits/27d062d9");
+  });
+  await withForgejo([status(404)], async () => {
+    await assertRejects(() => getCommit(config, "cs4535/hw1-alex.kim", "deadbeef"), Error, "commit lookup failed: 404");
+  });
+});
+
+Deno.test("startGrading: tags the commit and dispatches grade.yml at the tag", async () => {
+  const sha = "27d062d99f8551af7be5e9ff7812241574198a0b";
+  await withForgejo([status(201), new Response(null, { status: 204 })], async (calls) => {
+    await startGrading(config, "cs4535/hw1-alex.kim", sha);
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags");
+    assertEquals(calls[0].body, {
+      tag_name: `pawtograder-submit/${sha}`,
+      target: sha,
+      message: "pawtograder submission"
+    });
+    assertEquals(
+      calls[1].url,
+      "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/actions/workflows/grade.yml/dispatches"
+    );
+    assertEquals(calls[1].body, { ref: `pawtograder-submit/${sha}` });
+  });
+  await withForgejo([status(403)], async (calls) => {
+    await assertRejects(() => startGrading(config, "cs4535/hw1-alex.kim", sha), Error, "submission tag failed: 403");
+    assertEquals(calls.length, 1);
+  });
+  await withForgejo([status(201), status(404)], async () => {
+    await assertRejects(() => startGrading(config, "cs4535/hw1-alex.kim", sha), Error, "workflow dispatch failed: 404");
+  });
+});
+
+Deno.test("startGrading: reuses an existing tag at the commit, and replaces one at another commit", async () => {
+  const sha = "27d062d99f8551af7be5e9ff7812241574198a0b";
+  const tagUrl = `https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags/pawtograder-submit/${sha}`;
+  // From an earlier run of the same commit.
+  await withForgejo([status(409), ok({ commit: { sha } }), new Response(null, { status: 204 })], async (calls) => {
+    await startGrading(config, "cs4535/hw1-alex.kim", sha);
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      [
+        "POST https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/tags",
+        `GET ${tagUrl}`,
+        "POST https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/actions/workflows/grade.yml/dispatches"
+      ]
+    );
+  });
+  // A student pushed pawtograder-submit/<sha> at their own commit first.
+  await withForgejo(
+    [
+      status(409),
+      ok({ commit: { sha: "1111111111111111111111111111111111111111" } }),
+      new Response(null, { status: 204 }),
+      status(201),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await startGrading(config, "cs4535/hw1-alex.kim", sha);
+      assertEquals(
+        calls.map((c) => c.method),
+        ["POST", "GET", "DELETE", "POST", "POST"]
+      );
+      assertEquals(calls[2].url, tagUrl);
+      assertEquals(calls[3].body, {
+        tag_name: `pawtograder-submit/${sha}`,
+        target: sha,
+        message: "pawtograder submission"
+      });
+    }
+  );
+  // Pushed again right after the replacement: refuse rather than dispatch at the student's commit.
+  const other = { commit: { sha: "1111111111111111111111111111111111111111" } };
+  await withForgejo(
+    [
+      status(409),
+      ok(other),
+      new Response(null, { status: 204 }),
+      status(409),
+      ok(other),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await assertRejects(
+        () => startGrading(config, "cs4535/hw1-alex.kim", sha),
+        Error,
+        "The submission tag points at another commit"
+      );
+      assert(!calls.some((c) => c.url.endsWith("/dispatches")), "dispatched at the wrong commit");
+    }
+  );
 });
