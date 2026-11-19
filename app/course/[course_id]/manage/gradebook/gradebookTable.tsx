@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
@@ -1178,9 +1179,23 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
                       loading={isDeleting}
                       onClick={async () => {
                         setIsDeleting(true);
-                        await supabase.from("gradebook_column_students").delete().eq("gradebook_column_id", columnId);
-                        await gradebookController.gradebook_columns.hardDelete(columnId);
-                        onClose();
+                        try {
+                          const { error: studentsError } = await supabase
+                            .from("gradebook_column_students")
+                            .delete()
+                            .eq("gradebook_column_id", columnId);
+                          if (studentsError) throw studentsError;
+                          // Rejects with a refused-write error when RLS refuses the delete.
+                          await gradebookController.gradebook_columns.hardDelete(columnId);
+                          onClose();
+                        } catch (error) {
+                          toaster.error({
+                            title: "Error deleting gradebook column",
+                            description: getErrorMessage(error)
+                          });
+                        } finally {
+                          setIsDeleting(false);
+                        }
                       }}
                     >
                       Delete Column

@@ -3428,9 +3428,10 @@ export default class TableController<
    * With 0 rows changed, the row was either refused or already gone (another tab, a realtime
    * race). A follow-up select tells them apart, as `withBlockedDeleteErrors` does for refine:
    * - **still visible:** refused. Restore the row and throw.
-   * - **not visible:** gone, or this session never could see it. Leave it removed and resolve,
-   *   which is what a delete did before. A refused delete lands here only where the table's SELECT
-   *   policy is no wider than its DELETE (or UPDATE) policy.
+   * - **not visible:** this session can't read the row now. Leave it removed and resolve, which is
+   *   what a delete did before. Usually the row is gone, but a refused delete also lands here when
+   *   the session lost the right to read the row after loading it (a capability removed while the
+   *   page was open). That case still reports success; see `withBlockedDeleteErrors`.
    */
   private async _throwIfDeleteRefused(
     id: ExtractIdType<RelationName>,
