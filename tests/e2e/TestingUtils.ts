@@ -1959,7 +1959,8 @@ export async function insertAssignment({
   protect_block_force_push,
   protect_require_pull_request,
   protect_required_reviewers,
-  assignment_type
+  assignment_type,
+  git_provider
 }: {
   due_date: string;
   suggested_due_date?: string;
@@ -2000,6 +2001,11 @@ export async function insertAssignment({
   protect_block_force_push?: boolean;
   protect_require_pull_request?: boolean;
   protect_required_reviewers?: number;
+  /**
+   * Defaults to undefined (DB default 'github'). 'forgejo' needs the class's cloud-workspaces flag
+   * on, and leaves template_repo null: the host is locked once a handout exists.
+   */
+  git_provider?: "github" | "forgejo";
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -2054,7 +2060,7 @@ export async function insertAssignment({
     due_date: due_date,
     suggested_due_date: suggested_due_date ?? null,
     minutes_due_after_lab: lab_due_date_offset,
-    template_repo: noRepoMode ? null : TEST_HANDOUT_REPO,
+    template_repo: noRepoMode || git_provider === "forgejo" ? null : TEST_HANDOUT_REPO,
     autograder_points: 100,
     total_points: 100,
     max_late_tokens: 10,
@@ -2072,6 +2078,7 @@ export async function insertAssignment({
     grader_pseudonymous_mode: grader_pseudonymous_mode || false,
     show_leaderboard: show_leaderboard || false,
     ...(assignment_type !== undefined ? { assignment_type } : {}),
+    ...(git_provider !== undefined ? { git_provider } : {}),
     ...(repo_mode !== undefined ? { repo_mode } : {}),
     ...(repo_mode === "fork_from_prior_assignment" ? { source_assignment_id: source_assignment_id ?? null } : {}),
     ...protectionFields

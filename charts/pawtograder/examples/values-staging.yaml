@@ -304,6 +304,17 @@ edgeFunctions:
       value: staging.pawtograder.net
     - name: PAWTOGRADER_WEBAPP_URL
       value: https://staging.pawtograder.net
+    # forgejo-reconciler (#1092, #1093) creates Forgejo accounts and repos with the chart admin, as
+    # Basic auth: an admin token can't act for other users. It does nothing until all three are set.
+    - name: FORGEJO_ADMIN_USERNAME
+      valueFrom: { secretKeyRef: { name: pawtograder-forgejo-admin, key: username } }
+    - name: FORGEJO_ADMIN_PASSWORD
+      valueFrom: { secretKeyRef: { name: pawtograder-forgejo-admin, key: password } }
+    # The `pawtograder` login source (forgejo.gitea.oauth below). Accounts are bound to it, so sign-in
+    # lands on them. Forgejo's API doesn't list login sources; this is from
+    # `kubectl -n pawtograder-staging exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list`.
+    - name: FORGEJO_AUTH_SOURCE_ID
+      value: "1"
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
@@ -331,6 +342,14 @@ edgeFunctions:
     # roll the edge-function Deployments once the Secret first exists. Not forgejo-staging, which
     # holds Forgejo's own passwords.
     - pawtograder-forgejo-webhook
+    # CODER_API_TOKEN, a Coder owner's token, for workspace-open and workspace-status, which answer
+    # 503 without it (CODER_URL comes from coder.coder.env). Needs a pawtograder-coder-api
+    # ExternalSecret syncing kv/apps/pawtograder/coder-api-staging (written by
+    # scripts/setup-openbao-edge-functions.sh --bundle coder-api); until then this entry is skipped,
+    # like any absent envFromSecrets name. envFrom is read at container start, so roll the
+    # edge-function Deployments once the Secret first exists. Not coder-staging, which holds Coder's
+    # own passwords.
+    - pawtograder-coder-api
   email:
     # Explicit, so missing SMTP config is a reported failure rather than a silent deferral.
     enabled: "true"
@@ -617,3 +636,10 @@ coder:
 
 coderBootstrap:
   workspaceNamespace: pawtograder-staging-workspaces
+  workspaces:
+    # The chart's default resolves to coder-workspace:<appVersion>, and a source install's appVersion
+    # (0.0.1) isn't published. release-images.yml builds images/coder-workspace on every staging push;
+    # deploy-staging pins the exact staging-<sha>, and this default is what redeploy-staging.sh uses.
+    image: ghcr.io/pawtograder/coder-workspace:staging-latest
+    # staging-latest floats, so a node's cached copy would go stale under IfNotPresent (as with backup above).
+    imagePullPolicy: Always

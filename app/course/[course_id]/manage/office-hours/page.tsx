@@ -2,9 +2,14 @@
 
 import { RequestRow } from "@/components/help-queue/request-row";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { useQueueHealth } from "@/hooks/useQueueHealth";
+import { useQueueRedAlerts } from "@/hooks/useQueueRedAlerts";
 import {
   useHelpQueueAssignments,
   useHelpQueues,
+  useHelpRequestEscalations,
   useHelpRequests,
   useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
@@ -12,6 +17,7 @@ import { Box, Flex, Heading, Stack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import HelpQueuesDashboard from "./helpQueuesDashboard";
+import { compareHelpRequestQueueOrder, latestEscalationNoteByRequest } from "@/lib/helpRequestEscalation";
 
 /**
  * Default office hours management page.
@@ -20,12 +26,20 @@ import HelpQueuesDashboard from "./helpQueuesDashboard";
 export default function OfficeHoursAdminPage() {
   const { course_id } = useParams();
   const { private_profile_id } = useClassProfiles();
+  const queueHealthOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
+  const health = useQueueHealth(Number(course_id), queueHealthOn);
+  useQueueRedAlerts(health);
 
   // Get data for working view
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
   const helpRequestStudents = useHelpRequestStudents();
+  const helpRequestEscalations = useHelpRequestEscalations();
+  const latestEscalationNotes = useMemo(
+    () => latestEscalationNoteByRequest(helpRequestEscalations),
+    [helpRequestEscalations]
+  );
 
   // Filter assignments for current TA
   const activeAssignments = useMemo(() => {
@@ -75,7 +89,9 @@ export default function OfficeHoursAdminPage() {
   }, [requestsFromWorkingQueues, private_profile_id]);
 
   const unassignedRequests = useMemo(() => {
-    return requestsFromWorkingQueues.filter((r) => !r.assignee && r.status === "open");
+    return requestsFromWorkingQueues
+      .filter((r) => !r.assignee && r.status === "open")
+      .sort(compareHelpRequestQueueOrder);
   }, [requestsFromWorkingQueues]);
 
   // If user is working on queues, show Working view
@@ -109,6 +125,7 @@ export default function OfficeHoursAdminPage() {
                             href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
                             queue={queue}
                             students={students}
+                            escalationNote={latestEscalationNotes.get(request.id)}
                           />
                         );
                       })}
@@ -129,6 +146,7 @@ export default function OfficeHoursAdminPage() {
                             href={`/course/${course_id}/manage/office-hours/request/${request.id}`}
                             queue={queue}
                             students={students}
+                            escalationNote={latestEscalationNotes.get(request.id)}
                           />
                         );
                       })}
@@ -144,5 +162,5 @@ export default function OfficeHoursAdminPage() {
   }
 
   // If user is not working, show TA Dashboard
-  return <HelpQueuesDashboard />;
+  return <HelpQueuesDashboard health={health} healthOn={queueHealthOn} />;
 }
