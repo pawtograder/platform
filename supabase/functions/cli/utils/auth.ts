@@ -17,6 +17,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import { pageAll } from "./paging.ts";
 import { CLICommandError } from "../errors.ts";
+import { createAuthenticatedSupabaseClient } from "../../_shared/MCPAuth.ts";
 
 /** Roles that grant a CLI caller access to a class's data. */
 const CLI_CLASS_ROLES = ["instructor", "grader"] as const;
@@ -107,6 +108,23 @@ export async function assertUserIsClassInstructor(
   if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
   if (!data) {
     throw new CLICommandError("This command requires instructor access to the class", 403);
+  }
+}
+
+/**
+ * Throws 403 unless `userId` holds `capability` in the class (#1010, docs/capabilities.md).
+ *
+ * The edge-function helper assertUserHasCapabilityOrServiceRole needs the caller's Authorization
+ * header, which a CLI request doesn't have, so this asks the same question as the caller:
+ * user_class_ids_with_capability() on a client minted for `userId`, the function every policy
+ * uses. The command and the database it writes to therefore give the same answer.
+ */
+export async function assertUserHasClassCapability(userId: string, classId: number, capability: string): Promise<void> {
+  const userClient = await createAuthenticatedSupabaseClient(userId);
+  const { data, error } = await userClient.rpc("user_class_ids_with_capability", { p_capability: capability });
+  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
+  if (!(data ?? []).includes(classId)) {
+    throw new CLICommandError(`This command requires the ${capability} capability in the class`, 403);
   }
 }
 

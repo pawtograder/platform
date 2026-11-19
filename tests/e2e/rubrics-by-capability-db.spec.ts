@@ -1,0 +1,471 @@
+/**
+ * #1010: editing rubrics follows manage_rubrics (20261119120100_rubrics_by_capability.sql).
+ *
+ * Writing rubrics, rubric_parts, rubric_criteria, rubric_checks and rubric_check_references, and
+ * saving through update_rubric_full, need manage_rubrics in the class. The default instructor role
+ * holds it; the default grader role doesn't. Reading rubrics doesn't change.
+ *
+ * update_rubric_full also links a new rubric to its assignment, so a Head TA with manage_rubrics
+ * but not manage_assignments can create one.
+ *
+ * PostgREST reports a blocked insert as an error, but an update or delete that RLS hides changes 0
+ * rows without one, so each blocked write is checked and then confirmed through the service client.
+ *
+ * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
+ */
+import { addDays } from "date-fns";
+import { test, expect } from "../global-setup";
+import {
+  supabase,
+  createClass,
+  createUserInClass,
+  createAuthenticatedClient,
+  insertAssignment,
+  type TestingUser
+} from "./TestingUtils";
+
+type WriteResult = { data: unknown[] | null; error: unknown };
+
+function expectBlocked({ data, error }: WriteResult, what: string) {
+  expect(error !== null || (data ?? []).length === 0, `${what} must be blocked`).toBe(true);
+}
+
+// An INSERT policy is checked before the primary key and foreign keys, so a working policy gives
+// 42501 (and nothing else) for every insert below.
+function expectRlsBlocked({ error }: WriteResult, what: string) {
+  expect((error as { code?: string } | null)?.code, `${what} must be refused by RLS`).toBe("42501");
+}
+
+const RUBRIC_TABLES = [
+  "rubrics",
+  "rubric_parts",
+  "rubric_criteria",
+  "rubric_checks",
+  "rubric_check_references"
+] as const;
+type RubricTable = (typeof RUBRIC_TABLES)[number];
+
+test.describe("rubrics follow manage_rubrics (#1010)", () => {
+  let classR: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let plainGrader: TestingUser;
+  let headTa: TestingUser;
+  let assignment: Awaited<ReturnType<typeof insertAssignment>>;
+  // One row per table, all on assignment's grading rubric, for the update and delete checks.
+  const rowIds = {} as Record<RubricTable, number>;
+  let partId: number;
+  let criteriaId: number;
+  let checkId: number;
+
+  async function newAssignment(slug: string) {
+    return insertAssignment({
+      class_id: classR.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      assignment_slug: `e2e-rubric-${slug}-${Date.now().toString(36)}`
+    });
+  }
+
+  test.beforeAll(async () => {
+    classR = await createClass({ name: "E2E Rubrics By Capability R" });
+    instructor = await createUserInClass({ role: "instructor", class_id: classR.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classR.id });
+    headTa = await createUserInClass({ role: "grader", class_id: classR.id });
+    assignment = await newAssignment("base");
+
+    const rubricId = assignment.grading_rubric_id!;
+    const base = { class_id: classR.id, assignment_id: assignment.id, rubric_id: rubricId };
+    const { data: part, error: partError } = await supabase
+      .from("rubric_parts")
+      .insert({ ...base, name: "Fixture part", ordinal: 50 })
+      .select("id")
+      .single();
+    expect(partError).toBeNull();
+    partId = part!.id;
+    const { data: criteria, error: criteriaError } = await supabase
+      .from("rubric_criteria")
+      .insert({ ...base, rubric_part_id: partId, name: "Fixture criterion", total_points: 4, is_additive: true })
+      .select("id")
+      .single();
+    expect(criteriaError).toBeNull();
+    criteriaId = criteria!.id;
+    const { data: checks, error: checksError } = await supabase
+      .from("rubric_checks")
+      .insert([
+        {
+          ...base,
+          rubric_criteria_id: criteriaId,
+          name: "Fixture check A",
+          ordinal: 0,
+          is_annotation: false,
+          points: 2
+        },
+        {
+          ...base,
+          rubric_criteria_id: criteriaId,
+          name: "Fixture check B",
+          ordinal: 1,
+          is_annotation: false,
+          points: 2
+        }
+      ])
+      .select("id, ordinal")
+      .order("ordinal");
+    expect(checksError).toBeNull();
+    checkId = checks![0].id;
+    const { data: reference, error: referenceError } = await supabase
+      .from("rubric_check_references")
+      .insert({ ...base, referencing_rubric_check_id: checks![0].id, referenced_rubric_check_id: checks![1].id })
+      .select("id")
+      .single();
+    expect(referenceError).toBeNull();
+    Object.assign(rowIds, {
+      rubrics: rubricId,
+      rubric_parts: partId,
+      rubric_criteria: criteriaId,
+      rubric_checks: checkId,
+      rubric_check_references: reference!.id
+    });
+
+    // A Head TA: a custom role (a copy of the default grader role) with manage_rubrics turned on.
+    const { data: role, error: roleError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classR.id, name: "Rubric TA" })
+      .select("id")
+      .single();
+    expect(roleError).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: role!.id, capability: "manage_rubrics" })).error
+    ).toBeNull();
+    expect(
+      (
+        await supabase
+          .from("user_roles")
+          .update({ class_role_id: role!.id })
+          .eq("user_id", headTa.user_id)
+          .eq("class_id", classR.id)
+      ).error
+    ).toBeNull();
+  });
+
+  /** A row for each table that a writer would try to insert, on the given rubric. */
+  function newRows(target: { class_id: number; assignment_id: number; rubric_id: number }) {
+    return {
+      rubrics: {
+        class_id: target.class_id,
+        assignment_id: target.assignment_id,
+        name: "Inserted rubric",
+        review_round: "meta-grading-review" as const
+      },
+      rubric_parts: { ...target, name: "Inserted part", ordinal: 90 },
+      rubric_criteria: {
+        ...target,
+        rubric_part_id: partId,
+        name: "Inserted criterion",
+        total_points: 1,
+        is_additive: true
+      },
+      rubric_checks: {
+        ...target,
+        rubric_criteria_id: criteriaId,
+        name: "Inserted check",
+        ordinal: 90,
+        is_annotation: false,
+        points: 1
+      },
+      rubric_check_references: {
+        ...target,
+        referencing_rubric_check_id: rowIds.rubric_checks,
+        referenced_rubric_check_id: rowIds.rubric_checks
+      }
+    };
+  }
+
+  async function rowExists(table: RubricTable, id: number) {
+    const { data, error } = await supabase.from(table).select("id").eq("id", id);
+    expect(error).toBeNull();
+    return (data ?? []).length === 1;
+  }
+
+  function payload(fields: { id?: number; assignment_id: number; review_round: string; name: string }) {
+    return {
+      ...fields,
+      class_id: classR.id,
+      parts: [
+        {
+          name: "Saved part",
+          criteria: [{ name: "Saved criterion", total_points: 5, checks: [{ name: "Saved check", points: 5 }] }]
+        }
+      ]
+    };
+  }
+
+  test("a default grader can't write any rubric table or save a rubric", async () => {
+    const client = await createAuthenticatedClient(plainGrader);
+    const rows = newRows({ class_id: classR.id, assignment_id: assignment.id, rubric_id: rowIds.rubrics });
+
+    for (const table of RUBRIC_TABLES) {
+      expectRlsBlocked(await client.from(table).insert(rows[table]).select("id"), `${table} insert`);
+
+      expectBlocked(
+        await client.from(table).update({ class_id: classR.id }).eq("id", rowIds[table]).select("id"),
+        `${table} update`
+      );
+
+      expectBlocked(await client.from(table).delete().eq("id", rowIds[table]).select("id"), `${table} delete`);
+      expect(await rowExists(table, rowIds[table]), `${table} row is still there`).toBe(true);
+    }
+
+    const { error } = await client.rpc("update_rubric_full", {
+      p_rubric: payload({
+        id: rowIds.rubrics,
+        assignment_id: assignment.id,
+        review_round: "grading-review",
+        name: "Renamed by a grader"
+      }) as never
+    });
+    expect(error?.message).toMatch(/Not authorized to edit rubrics/);
+    const { data: rubric } = await supabase.from("rubrics").select("name").eq("id", rowIds.rubrics).single();
+    expect(rubric!.name).not.toBe("Renamed by a grader");
+  });
+
+  test("a default grader still reads the rubric", async () => {
+    const client = await createAuthenticatedClient(plainGrader);
+    for (const table of RUBRIC_TABLES) {
+      const { data, error } = await client.from(table).select("id").eq("id", rowIds[table]);
+      expect(error, table).toBeNull();
+      expect(data ?? [], `${table} is readable`).toHaveLength(1);
+    }
+  });
+
+  test("a grader on a custom role with manage_rubrics saves a rubric and writes the tables", async () => {
+    const own = await newAssignment("head-ta");
+    const client = await createAuthenticatedClient(headTa);
+
+    const { error } = await client.rpc("update_rubric_full", {
+      p_rubric: payload({
+        id: own.grading_rubric_id!,
+        assignment_id: own.id,
+        review_round: "grading-review",
+        name: "Saved by the Head TA"
+      }) as never
+    });
+    expect(error).toBeNull();
+    const { data: rubric } = await supabase
+      .from("rubrics")
+      .select("name, rubric_parts(name)")
+      .eq("id", own.grading_rubric_id!)
+      .single();
+    expect(rubric!.name).toBe("Saved by the Head TA");
+    expect(rubric!.rubric_parts.map((p) => p.name)).toEqual(["Saved part"]);
+
+    const { data: part, error: insertError } = await client
+      .from("rubric_parts")
+      .insert({
+        class_id: classR.id,
+        assignment_id: own.id,
+        rubric_id: own.grading_rubric_id!,
+        name: "Direct part",
+        ordinal: 9
+      })
+      .select("id")
+      .single();
+    expect(insertError).toBeNull();
+    const { data: updated } = await client
+      .from("rubric_parts")
+      .update({ name: "Direct part, renamed" })
+      .eq("id", part!.id)
+      .select("id");
+    expect(updated ?? []).toHaveLength(1);
+    const { data: deleted } = await client.from("rubric_parts").delete().eq("id", part!.id).select("id");
+    expect(deleted ?? []).toHaveLength(1);
+
+    // A criterion, check and reference whose parents are on the same rubric go through.
+    const onFixture = { class_id: classR.id, assignment_id: assignment.id, rubric_id: rowIds.rubrics };
+    const { data: criterion, error: criterionError } = await client
+      .from("rubric_criteria")
+      .insert({ ...onFixture, rubric_part_id: partId, name: "Head TA criterion", total_points: 1, is_additive: true })
+      .select("id")
+      .single();
+    expect(criterionError).toBeNull();
+    const { data: check, error: checkError } = await client
+      .from("rubric_checks")
+      .insert({
+        ...onFixture,
+        rubric_criteria_id: criterion!.id,
+        name: "Head TA check",
+        ordinal: 0,
+        is_annotation: false,
+        points: 1
+      })
+      .select("id")
+      .single();
+    expect(checkError).toBeNull();
+    const { error: referenceError } = await client
+      .from("rubric_check_references")
+      .insert({ ...onFixture, referencing_rubric_check_id: check!.id, referenced_rubric_check_id: checkId })
+      .select("id")
+      .single();
+    expect(referenceError).toBeNull();
+  });
+
+  test("a new rubric is linked to its assignment by update_rubric_full, without manage_assignments", async () => {
+    const own = await newAssignment("meta");
+    expect(own.meta_grading_rubric_id).toBeNull();
+    const client = await createAuthenticatedClient(headTa);
+
+    // The Head TA can't edit the assignment itself, so the link below must come from the function.
+    const { data: assignmentWrite } = await client
+      .from("assignments")
+      .update({ title: "Renamed by the Head TA" })
+      .eq("id", own.id)
+      .select("id");
+    expect(assignmentWrite ?? [], "the Head TA has no manage_assignments").toHaveLength(0);
+
+    const { error } = await client.rpc("update_rubric_full", {
+      p_rubric: payload({ assignment_id: own.id, review_round: "meta-grading-review", name: "Meta rubric" }) as never
+    });
+    expect(error).toBeNull();
+
+    const { data: created } = await supabase
+      .from("rubrics")
+      .select("id")
+      .eq("assignment_id", own.id)
+      .eq("review_round", "meta-grading-review")
+      .single();
+    const { data: linked } = await supabase
+      .from("assignments")
+      .select("meta_grading_rubric_id")
+      .eq("id", own.id)
+      .single();
+    expect(linked!.meta_grading_rubric_id).toBe(created!.id);
+
+    // A second new rubric for the same round doesn't replace the link: that stays an assignment edit.
+    const { error: secondError } = await client.rpc("update_rubric_full", {
+      p_rubric: payload({ assignment_id: own.id, review_round: "meta-grading-review", name: "Second meta" }) as never
+    });
+    expect(secondError).toBeNull();
+    const { data: stillLinked } = await supabase
+      .from("assignments")
+      .select("meta_grading_rubric_id")
+      .eq("id", own.id)
+      .single();
+    expect(stillLinked!.meta_grading_rubric_id).toBe(created!.id);
+  });
+
+  test("an instructor still saves rubrics", async () => {
+    const own = await newAssignment("instructor");
+    const client = await createAuthenticatedClient(instructor);
+    const { error } = await client.rpc("update_rubric_full", {
+      p_rubric: payload({
+        id: own.grading_rubric_id!,
+        assignment_id: own.id,
+        review_round: "grading-review",
+        name: "Saved by the instructor"
+      }) as never
+    });
+    expect(error).toBeNull();
+    const { data: rubric } = await supabase.from("rubrics").select("name").eq("id", own.grading_rubric_id!).single();
+    expect(rubric!.name).toBe("Saved by the instructor");
+  });
+
+  test("manage_rubrics in one class doesn't reach another class's rubrics", async () => {
+    const otherClass = await createClass({ name: "E2E Rubrics By Capability Other" });
+    const other = await insertAssignment({
+      class_id: otherClass.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      assignment_slug: `e2e-rubric-other-${Date.now().toString(36)}`
+    });
+    const client = await createAuthenticatedClient(headTa);
+
+    // Rows that claim the Head TA's class but sit on the other class's rubric or assignment.
+    const pointedAtOther = newRows({
+      class_id: classR.id,
+      assignment_id: assignment.id,
+      rubric_id: other.grading_rubric_id!
+    });
+    for (const table of RUBRIC_TABLES) {
+      if (table === "rubrics") continue;
+      expectRlsBlocked(
+        await client.from(table).insert(pointedAtOther[table]).select("id"),
+        `${table} on another class's rubric`
+      );
+    }
+    expectRlsBlocked(
+      await client
+        .from("rubrics")
+        .insert({ class_id: classR.id, assignment_id: other.id, name: "On another class's assignment" })
+        .select("id"),
+      "a rubric on another class's assignment"
+    );
+
+    // Rows on the Head TA's own rubric whose parent is the other class's part, criterion or check.
+    const otherPart = other.rubricParts.find((p) => p.rubric_id === other.grading_rubric_id)!;
+    const otherCheck = other.rubricChecks.find((c) => c.rubric_id === other.grading_rubric_id)!;
+    const ownRubric = { class_id: classR.id, assignment_id: assignment.id, rubric_id: rowIds.rubrics };
+    expectRlsBlocked(
+      await client
+        .from("rubric_criteria")
+        .insert({
+          ...ownRubric,
+          rubric_part_id: otherPart.id,
+          name: "Under a foreign part",
+          total_points: 1,
+          is_additive: true
+        })
+        .select("id"),
+      "a criterion under another class's part"
+    );
+    expectRlsBlocked(
+      await client
+        .from("rubric_checks")
+        .insert({
+          ...ownRubric,
+          rubric_criteria_id: otherCheck.rubric_criteria_id,
+          name: "Under a foreign criterion",
+          ordinal: 91,
+          is_annotation: false,
+          points: 1
+        })
+        .select("id"),
+      "a check under another class's criterion"
+    );
+    expectRlsBlocked(
+      await client
+        .from("rubric_check_references")
+        .insert({
+          ...ownRubric,
+          referencing_rubric_check_id: rowIds.rubric_checks,
+          referenced_rubric_check_id: otherCheck.id
+        })
+        .select("id"),
+      "a reference to another class's check"
+    );
+
+    // Rows in the other class itself.
+    expectRlsBlocked(
+      await client
+        .from("rubric_parts")
+        .insert({
+          class_id: otherClass.id,
+          assignment_id: other.id,
+          rubric_id: other.grading_rubric_id!,
+          name: "Other class part",
+          ordinal: 9
+        })
+        .select("id"),
+      "a part in the other class"
+    );
+    const { error } = await client.rpc("update_rubric_full", {
+      p_rubric: {
+        ...payload({
+          id: other.grading_rubric_id!,
+          assignment_id: other.id,
+          review_round: "grading-review",
+          name: "Renamed from another class"
+        }),
+        class_id: otherClass.id
+      } as never
+    });
+    expect(error?.message).toMatch(/Not authorized to edit rubrics/);
+  });
+});
