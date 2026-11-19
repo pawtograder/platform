@@ -19,7 +19,7 @@ npm install -g @pawtograder/cli
 pawtograder --help
 ```
 
-Requires Node.js 20 or later.
+Requires Node.js 20.16 or later.
 
 ## Authenticate
 

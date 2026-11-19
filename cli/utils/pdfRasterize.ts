@@ -41,6 +41,11 @@ export interface PdfDocumentLike {
 }
 
 export async function openPdf(bytes: Uint8Array): Promise<PdfDocumentLike> {
+  // pdfjs sets up its Node canvas through process.getBuiltinModule (Node 20.16+). Without it, the
+  // canvas check below fails and blames @napi-rs/canvas.
+  if (typeof (process as { getBuiltinModule?: unknown }).getBuiltinModule !== "function") {
+    throw new CLIError(`Rasterizing a PDF needs Node.js 20.16 or later; this is ${process.version}.`);
+  }
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   // pdfjs polyfills Path2D from @napi-rs/canvas when it loads, and only warns when it can't.
   if (typeof (globalThis as { Path2D?: unknown }).Path2D === "undefined") {

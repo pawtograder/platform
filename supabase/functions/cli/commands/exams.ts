@@ -18,6 +18,8 @@ import { fetchProfileNames } from "../utils/profiles.ts";
 import { courseFeatureEffectiveEnabled, EXAMS_FEATURE } from "../../_shared/courseFeatures.ts";
 import {
   addPageError,
+  type ExamQuestionRow,
+  type ExamRubricCheckRow,
   pageIndexError,
   pagesPerExamError,
   parsePngDimensions,
@@ -171,21 +173,29 @@ async function handleExamsList(ctx: MCPAuthContext, params: Record<string, unkno
 async function handleExamsQuestions(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { supabase, classData, assignment, exam } = await loadExamContext(ctx, params as ExamParams, false);
 
-  const { data: questions, error } = await supabase
-    .from("exam_questions")
-    .select("id, parent_id, level, ordinal, label, points, answer_type")
-    .eq("exam_id", exam.id);
-  if (error) throw new CLICommandError(`Failed to load questions: ${error.message}`, 500);
+  const questions = await pageAll<ExamQuestionRow>(
+    () =>
+      supabase
+        .from("exam_questions")
+        .select("id, parent_id, level, ordinal, label, points, answer_type")
+        .eq("exam_id", exam.id)
+        .order("id"),
+    "Failed to load questions"
+  );
 
-  const questionIds = (questions ?? []).map((q) => q.id);
-  const { data: checks, error: checksError } = questionIds.length
-    ? await supabase
-        .from("rubric_checks")
-        .select("id, name, points, rubric_id, exam_question_id")
-        .eq("class_id", classData.id)
-        .in("exam_question_id", questionIds)
-    : { data: [], error: null };
-  if (checksError) throw new CLICommandError(`Failed to load rubric checks: ${checksError.message}`, 500);
+  const questionIds = questions.map((q) => q.id);
+  const checks = questionIds.length
+    ? await pageAll<ExamRubricCheckRow>(
+        () =>
+          supabase
+            .from("rubric_checks")
+            .select("id, name, points, rubric_id, exam_question_id")
+            .eq("class_id", classData.id)
+            .in("exam_question_id", questionIds)
+            .order("id"),
+        "Failed to load rubric checks"
+      )
+    : [];
 
   return {
     success: true,
@@ -194,7 +204,7 @@ async function handleExamsQuestions(ctx: MCPAuthContext, params: Record<string, 
       assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
       exam: { id: exam.id, num_pages: exam.num_pages },
       grading_rubric_id: assignment.grading_rubric_id,
-      questions: questionCheckRows(questions ?? [], checks ?? [], assignment.grading_rubric_id)
+      questions: questionCheckRows(questions, checks, assignment.grading_rubric_id)
     }
   };
 }
