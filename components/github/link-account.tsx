@@ -7,6 +7,7 @@ import { installFetchHook } from "@/lib/bugReport/fetchHook";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/popover";
 import { useIdentity } from "@/hooks/useIdentities";
+import { useNeedsGitHubAccount } from "@/hooks/useNeedsGitHubAccount";
 import { useSearchParams } from "next/navigation";
 import { Alert } from "../ui/alert";
 function HelpDialog() {
@@ -58,7 +59,7 @@ function HelpDialog() {
     </PopoverRoot>
   );
 }
-export default function LinkAccount() {
+export default function LinkAccount({ assignmentGitProvider }: { assignmentGitProvider?: string | null } = {}) {
   // Before the client captures `fetch`: the bug reporter's taint ingest listens through this hook.
   installFetchHook();
   const supabase = createBrowserClient(
@@ -68,9 +69,10 @@ export default function LinkAccount() {
   const course = useCourse();
   const { identities } = useIdentity();
   const searchParams = useSearchParams();
+  const needsGitHub = useNeedsGitHubAccount(assignmentGitProvider);
   const errorDescription = searchParams.get("error_description");
   const githubIdentity = identities?.find((identity) => identity.provider === "github");
-  if (!identities || githubIdentity) {
+  if (!identities || githubIdentity || !needsGitHub) {
     return null;
   }
   return (
