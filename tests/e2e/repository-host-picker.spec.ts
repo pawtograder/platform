@@ -183,8 +183,9 @@ test.describe("Repository host picker and GitHub prompts", () => {
     const slug = `fjnew${suffix}`.slice(0, 15);
     await fillRequiredFields(page, `Forgejo Created ${suffix}`, slug);
     await page.getByRole("button", { name: "Save" }).click();
-    // Forgejo skips GitHub handout setup and lands on the assignment, not the GitHub Autograder page.
-    await expect(page).toHaveURL(new RegExp(`/course/${flagOn.id}/manage/assignments/\\d+$`), { timeout: 60_000 });
+    // Saving now sets up the Forgejo handout (#1253). This lane runs no Forgejo, so that step fails after the
+    // row is saved, and the form says why.
+    await expect(page.getByText("Forgejo is not set up on this deployment.").first()).toBeVisible({ timeout: 60_000 });
 
     const { data: created, error } = await supabase
       .from("assignments")
@@ -223,7 +224,8 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await page.locator('select[name="repo_mode"]').selectOption("template_only_staff");
     await expect(page.getByTestId("repository-host-conflict")).toHaveCount(0);
     await page.getByRole("button", { name: "Save" }).click();
-    await expect(page).toHaveURL(new RegExp(`/course/${flagOn.id}/manage/assignments/\\d+$`), { timeout: 60_000 });
+    // As above, the row is saved and only the handout setup fails, since this lane runs no Forgejo.
+    await expect(page.getByText("Forgejo is not set up on this deployment.").first()).toBeVisible({ timeout: 60_000 });
     const saved = await supabase
       .from("assignments")
       .select("git_provider, repo_mode")
