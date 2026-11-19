@@ -66,6 +66,42 @@ describe("wordsInRegion", () => {
   ])("keeps one line in order: %s", (_name, line, text) => {
     expect(wordsInRegion(line, region)).toBe(text);
   });
+  // Short glyphs (punctuation, quote marks) sit inside a line without sharing its center line.
+  it.each<[string, WordBox[], string]>([
+    [
+      // All three boxes end at y 0.311; catches a baseline comma forced onto its own row.
+      "a comma on the baseline",
+      [
+        { text: "second", x: 0.25, y: 0.291, width: 0.05, height: 0.02 },
+        { text: ",", x: 0.18, y: 0.307, width: 0.01, height: 0.004 },
+        { text: "first", x: 0.1, y: 0.291, width: 0.05, height: 0.02 }
+      ],
+      "first , second"
+    ],
+    [
+      // Hangs from the top of line two, nearer line one's bottom; catches measuring only the edge below.
+      "a quote mark at the top of the line",
+      [
+        { text: "s", x: 0.25, y: 0.315, width: 0.05, height: 0.02 },
+        { text: "'", x: 0.18, y: 0.315, width: 0.01, height: 0.006 },
+        { text: "it", x: 0.1, y: 0.315, width: 0.05, height: 0.02 },
+        { text: "b", x: 0.3, y: 0.291, width: 0.05, height: 0.02 },
+        { text: "a", x: 0.1, y: 0.291, width: 0.05, height: 0.02 }
+      ],
+      "a b it ' s"
+    ],
+    [
+      // Nothing full-size to attach to; catches dropping marks when no row has a word.
+      "a region holding only punctuation",
+      [
+        { text: "!", x: 0.25, y: 0.3, width: 0.01, height: 0.004 },
+        { text: "?", x: 0.1, y: 0.3, width: 0.01, height: 0.004 }
+      ],
+      "? !"
+    ]
+  ])("keeps short glyphs on their line: %s", (_name, line, text) => {
+    expect(wordsInRegion(line, region)).toBe(text);
+  });
   it("keeps lines 1.2 word heights apart separate", () => {
     // Line two's words sit between line one's; catches a tolerance loose enough to merge lines.
     const lines: WordBox[] = [

@@ -90,6 +90,41 @@ for (const c of ONE_LINE) {
   });
 }
 
+// Short glyphs (punctuation, quote marks) sit inside a line without sharing its center line.
+const MARKS: { name: string; words: WordBox[]; text: string }[] = [
+  {
+    // All three boxes end at y 0.311, CodeRabbit's example on #1331. Catches a baseline comma
+    // forced onto its own row, which read "first second ,".
+    name: "a comma on the baseline",
+    words: [word("second", 0.4, 0.291), word(",", 0.33, 0.307, 0.01, 0.004), word("first", 0.25, 0.291)],
+    text: "first , second"
+  },
+  {
+    // The quote mark hangs from the top of the second line, nearer the first line's bottom edge than
+    // the second's. Catches marks measured only against the edge below them, which read "a ' b it s".
+    name: "a quote mark at the top of the line",
+    words: [
+      word("s", 0.4, 0.315),
+      word("'", 0.33, 0.315, 0.01, 0.006),
+      word("it", 0.25, 0.315),
+      word("b", 0.45, 0.291),
+      word("a", 0.25, 0.291)
+    ],
+    text: "a b it ' s"
+  },
+  {
+    // Nothing full-size to attach to. Catches dropping marks when no row has a word.
+    name: "a region holding only punctuation",
+    words: [word("!", 0.4, 0.3, 0.01, 0.004), word("?", 0.25, 0.3, 0.01, 0.004)],
+    text: "? !"
+  }
+];
+for (const c of MARKS) {
+  Deno.test(`short glyphs stay on their line: ${c.name}`, () => {
+    assertEquals(wordsInRegion(c.words, REGION), c.text);
+  });
+}
+
 Deno.test("lines 1.2 word heights apart stay separate", () => {
   // Line two's words sit between line one's across the page. Catches a tolerance loose enough to
   // merge neighbouring lines, which would read "a c b d".
