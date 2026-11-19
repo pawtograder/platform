@@ -113,3 +113,37 @@ test("the confirm write is conditional on the student the instructor saw, and a 
     })
   );
 });
+
+// Names are counted once per roster (Aryan's review of #1318), so these pin the result: two students
+// whose names compare equal make a matching scan ambiguous; one student with that name does not.
+function rosterOf(...names: string[]) {
+  mockResults.user_roles = () => ({
+    data: names.map((name, i) => ({ private_profile_id: `p${i + 1}`, profiles: { name } })),
+    error: null
+  });
+  mockResults.exam_scanned_submissions = (ops) =>
+    ops.some(([m]) => m === "update")
+      ? { data: [{ id: 1 }], error: null }
+      : { data: [{ ...row(), detected_name: "SMITH, Alice" }], error: null };
+}
+
+async function clickConfirm() {
+  render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
+  // The roster and the row are both loaded once p1 is selected in the row's picker.
+  await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("p1"));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Confirm" })));
+}
+
+test("two students whose names compare equal make a matching scan ask first", async () => {
+  rosterOf("Alice Smith", "alice  SMITH", "Dana Lee");
+  await clickConfirm();
+  expect(await screen.findByRole("alert")).toHaveTextContent("More than one student is named “Alice Smith”");
+  expect(mockWrites).toHaveLength(0);
+});
+
+test("a scan that names the only student with that name confirms in one click", async () => {
+  rosterOf("Alice Smith", "Alice Smithson", "Dana Lee");
+  await clickConfirm();
+  await waitFor(() => expect(mockWrites).toHaveLength(1));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
