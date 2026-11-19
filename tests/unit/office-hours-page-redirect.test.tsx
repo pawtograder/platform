@@ -47,9 +47,14 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
   useHelpQueueAssignments: () => [],
   useStudentVisibleHelpRequests: () => [],
   useHelpRequestStudents: () => [],
+  useOfficeHoursController: () => {
+    const loaded = { ready: true, readyPromise: Promise.resolve() };
+    return { helpQueues: loaded, helpQueueAssignments: loaded, helpRequests: loaded, helpRequestStudents: loaded };
+  },
   useConnectionStatus: () => ({
     connectionStatus: { overall: "connected" },
     connectionError: null,
+    connectionFailed: false,
     isLoading: false
   })
 }));

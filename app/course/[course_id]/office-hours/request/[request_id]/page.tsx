@@ -3,7 +3,7 @@
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
 import { Alert } from "@/components/ui/alert";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
-import { OfficeHoursControllerProvider, useConnectionStatus, useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
+import { OfficeHoursControllerProvider, useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
 import { createClient } from "@/utils/supabase/client";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -82,24 +82,16 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
 function StudentHelpRequestPageInner() {
   const { request_id } = useParams();
 
-  // Get help request data and connection status using individual hooks
+  // Get help request data using individual hooks
   const request = useHelpRequest(Number(request_id));
-  const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
 
-  if (realtimeLoading || !request) {
+  if (!request) {
     return <Skeleton />;
   }
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
 
   return (
     <Box>
-      {/* Connection Status Indicator */}
-      {!isConnected && (
-        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
-          Help request updates may not appear immediately. Connection status: {connectionStatus?.overall}
-        </Alert>
-      )}
-
       <Box opacity={isRequestInactive ? 0.7 : 1} transition="opacity 0.2s ease-in-out" m={4}>
         <VStack gap={4} align="stretch" mb={4}>
           <HStack justify="space-between" align="center">

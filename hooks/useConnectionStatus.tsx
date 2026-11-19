@@ -30,6 +30,9 @@ export interface UseConnectionStatusReturn {
   // Detailed status
   connectionStatus: OfficeHoursConnectionStatus | null;
 
+  // True once a channel has errored or closed, until every channel joins again
+  connectionFailed: boolean;
+
   // Loading state
   isLoading: boolean;
 }
@@ -75,6 +78,17 @@ export function useConnectionStatus(): UseConnectionStatusReturn {
     };
   }, [controller]);
 
+  // A channel that is retrying passes back through "joining", which would make a
+  // warning flicker on every attempt. Hold the failure until the channels rejoin.
+  const [connectionFailed, setConnectionFailed] = useState(false);
+  useEffect(() => {
+    if (connectionStatus?.overall === "connected") {
+      setConnectionFailed(false);
+    } else if (connectionStatus?.channels.some((c) => c.state === "errored" || c.state === "closed")) {
+      setConnectionFailed(true);
+    }
+  }, [connectionStatus]);
+
   // Calculate derived connection states
   const isConnected = connectionStatus?.overall === "connected";
   const isValidating = connectionStatus?.overall === "connecting";
@@ -87,6 +101,7 @@ export function useConnectionStatus(): UseConnectionStatusReturn {
     isAuthorized,
     connectionError,
     connectionStatus,
+    connectionFailed,
     isLoading
   };
 }

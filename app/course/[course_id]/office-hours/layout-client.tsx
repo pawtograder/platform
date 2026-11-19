@@ -1,9 +1,10 @@
 "use client";
 
 import { OfficeHoursHeader, type OfficeHoursViewMode } from "@/components/help-queue/office-hours-header";
+import { Alert } from "@/components/ui/alert";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
-import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useConnectionStatus, useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { getNotificationManager } from "@/lib/notifications";
 import { Box } from "@chakra-ui/react";
 import { useParams, useSearchParams } from "next/navigation";
@@ -14,6 +15,7 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
   const searchParams = useSearchParams();
 
   const officeHoursBaseHref = `/course/${course_id}/office-hours`;
+  const { connectionFailed } = useConnectionStatus();
 
   // Get current request if viewing one
   const requestId = request_id ? Number.parseInt(request_id as string) : null;
@@ -83,6 +85,12 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
             currentRequest={currentRequest}
             isManageMode={false}
           />
+          {connectionFailed && (
+            <Alert status="warning" title="Live updates unavailable" flexShrink={0} borderRadius={0}>
+              Pawtograder can&apos;t reach its realtime server, so this page won&apos;t update on its own. Reload the
+              page to see new requests and replies.
+            </Alert>
+          )}
           <Box
             flex="1"
             minH="0"
