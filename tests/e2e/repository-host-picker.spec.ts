@@ -21,6 +21,11 @@ import {
 
 test.describe.configure({ mode: "serial" });
 
+const notSetUpToast = (page: Page) =>
+  page
+    .locator('[data-scope="toast"][data-part="root"]')
+    .filter({ hasText: "Forgejo is not set up on this deployment." });
+
 const BANNER = "Connect to GitHub to access assignments";
 
 test.describe("Repository host picker and GitHub prompts", () => {
@@ -184,8 +189,8 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await fillRequiredFields(page, `Forgejo Created ${suffix}`, slug);
     await page.getByRole("button", { name: "Save" }).click();
     // Saving now sets up the Forgejo handout (#1253). This lane runs no Forgejo, so that step fails after the
-    // row is saved, and the form says why.
-    await expect(page.getByText("Forgejo is not set up on this deployment.").first()).toBeVisible({ timeout: 60_000 });
+    // row is saved, and the form says why. The e2e fixture hides the toaster, so the toast is counted, not seen.
+    await expect(notSetUpToast(page)).toHaveCount(1, { timeout: 60_000 });
 
     const { data: created, error } = await supabase
       .from("assignments")
@@ -225,7 +230,7 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(page.getByTestId("repository-host-conflict")).toHaveCount(0);
     await page.getByRole("button", { name: "Save" }).click();
     // As above, the row is saved and only the handout setup fails, since this lane runs no Forgejo.
-    await expect(page.getByText("Forgejo is not set up on this deployment.").first()).toBeVisible({ timeout: 60_000 });
+    await expect(notSetUpToast(page)).toHaveCount(1, { timeout: 60_000 });
     const saved = await supabase
       .from("assignments")
       .select("git_provider, repo_mode")
