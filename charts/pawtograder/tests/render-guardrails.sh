@@ -2916,8 +2916,7 @@ BK_OWN_FORGEJO=(--set forgejo.database=own --set forgejo-db.enabled=true
 BK_OWN_CODER=(--set coder.database=own --set coder-db.enabled=true
   --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
   --set 'coder.coder.env[0].value=postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable')
-BK_NO_FORGEJO=(--set forgejo.enabled=false --set forgejoRunner.enabled=false
-  --set coder.externalAuth.forgejo.enabled=false)
+BK_NO_FORGEJO=(--set forgejo.enabled=false --set forgejoRunner.enabled=false)
 BK_NO_CODER=(--set coder.enabled=false)
 BK_ONLY=(--show-only templates/backup-apps.yaml)
 
