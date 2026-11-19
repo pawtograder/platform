@@ -27,8 +27,8 @@ and nothing else.
 `(class_id, capability)` for the signed-in user.
 
 Every capability is on the default instructor role, so instructors can do everything and nobody
-can be given more than an instructor. A role manager can only add a capability they hold in that
-class to the default grader role or a custom role.
+can be given more than an instructor. A role manager can only add or remove a capability they hold
+in that class, on the default grader role or a custom role.
 
 `manage_roles` lets someone create custom roles and choose their capabilities. It does **not**
 let them put people on a role: changing `user_roles.class_role_id` still goes through the

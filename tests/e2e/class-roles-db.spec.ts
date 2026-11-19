@@ -871,7 +871,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     }
   });
 
-  test("a role manager can't grant a capability they don't hold", async () => {
+  test("a role manager can't grant or take away a capability they don't hold", async () => {
     // A class whose instructor role lacks manage_assignments, as after a migration took it away.
     const classX = await createClass({ name: "E2E Grader Copy X" });
     const instructorX = await createUserInClass({ role: "instructor", class_id: classX.id });
@@ -924,6 +924,27 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .single();
     expect(copyError).toBeNull();
     expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual(["publish_groups"]);
+
+    // Nor take it away: removing manage_assignments from the default grader role is refused, since
+    // the instructor couldn't give it back. Removing publish_groups, which they hold, still works.
+    expectBlocked(
+      await instructor
+        .from("role_capabilities")
+        .delete()
+        .eq("role_id", roleX("grader"))
+        .eq("capability", "manage_assignments")
+        .select("role_id"),
+      "removing manage_assignments from the default grader role without holding it"
+    );
+    const { data: removed, error: removeError } = await instructor
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", roleX("grader"))
+      .eq("capability", "publish_groups")
+      .select("capability");
+    expect(removeError).toBeNull();
+    expect(removed, "removing a capability the instructor holds").toHaveLength(1);
+    expect(await roleCapabilities(roleX("grader"))).toEqual(["manage_assignments"]);
   });
 });
 

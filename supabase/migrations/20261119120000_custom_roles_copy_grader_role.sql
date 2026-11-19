@@ -105,8 +105,8 @@ DROP POLICY IF EXISTS "Role managers can remove capabilities from custom class r
 DROP POLICY IF EXISTS "Role managers can add capabilities to grader roles" ON public.role_capabilities;
 DROP POLICY IF EXISTS "Role managers can remove capabilities from grader roles" ON public.role_capabilities;
 
--- The last check: only a capability the caller holds in the role's class, so a role manager can't
--- give a role more than they have.
+-- The last check, in both policies: only a capability the caller holds in the role's class, so a
+-- role manager can't give a role more than they have, or take away one they couldn't give back.
 CREATE POLICY "Role managers can add capabilities to grader roles" ON public.role_capabilities
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -132,5 +132,11 @@ CREATE POLICY "Role managers can remove capabilities from grader roles" ON publi
       SELECT cr.id FROM public.class_roles cr
       WHERE (cr.default_for IS NULL OR cr.default_for = 'grader')
         AND cr.class_id IN (SELECT public.user_class_ids_with_capability('manage_roles'))
+    )
+    AND capability IN (
+      SELECT ucc.capability
+      FROM public.user_class_capabilities() ucc
+      JOIN public.class_roles cr ON cr.class_id = ucc.class_id
+      WHERE cr.id = role_capabilities.role_id
     )
   );
