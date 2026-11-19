@@ -162,24 +162,6 @@ function resolveExistingRubricIdForRound(
   return fkId && fkId > 0 ? fkId : undefined;
 }
 
-async function syncAssignmentRubricFkIfNeeded(
-  assignment: Assignment,
-  reviewRound: NonNullable<HydratedRubric["review_round"]>,
-  savedRubricId: number
-) {
-  const fkColumn = assignmentRubricFkForRound(reviewRound);
-  if (!fkColumn || assignment[fkColumn] === savedRubricId) return;
-
-  const supabase = createClient();
-  const { error } = await supabase
-    .from("assignments")
-    .update({ [fkColumn]: savedRubricId })
-    .eq("id", assignment.id);
-  if (error) {
-    throw new Error(`Rubric saved but failed to link it to the assignment: ${error.message}`);
-  }
-}
-
 /**
  * Custom hook to get a fully hydrated rubric by review round
  */
@@ -1484,8 +1466,9 @@ function InnerRubricPage() {
       await refetchCurrentRubric();
 
       const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, activeReviewRound);
+      // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
+      // only manage_rubrics, not manage_assignments.
       if (freshRubric) {
-        await syncAssignmentRubricFkIfNeeded(assignmentDetails, activeReviewRound, freshRubric.id);
         syncEditorFromSavedRubric(freshRubric);
       }
 

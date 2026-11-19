@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261119120100_rubrics_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -89,6 +89,10 @@ Like `assertUserIsInstructorOrServiceRole`, which it replaces for an action a ca
 also lets through the service role and an admin of any course. Load the row's class from the database
 and filter by it, so a capability in one class can't reach another class's rows.
 
+A CLI command (`supabase/functions/cli/`) has no Authorization header: it runs on the service role
+with the caller's user id. Use `assertUserHasClassCapability(userId, class_id, "manage_rubrics")` from
+`cli/utils/auth.ts`, which asks the same function on a client minted for that user.
+
 ## Adding a capability
 
 Write one migration that:
@@ -132,3 +136,11 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+**Pages: hide the button, or send the person away.** A page whose only purpose is one capability's
+action sends people without it somewhere useful: its server `layout.tsx` checks
+`userHasClassCapability(course_id, "...")` (in `lib/ssrUtils.ts`) and calls `redirect`, as `/new` and
+`/edit` do for `manage_assignments` and `/rubric` does for `manage_rubrics`. A page that also shows
+things to look at stays open and only hides its action buttons with `useCapability`, as Manage
+Groups does for `publish_groups`. `RequireManageReviews` is an older client-side version of the
+redirect, used by Bulk Assign and Reassign.
