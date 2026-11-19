@@ -6,7 +6,8 @@ import {
   ensureRepoFromTemplate,
   type ForgejoConfig,
   grantWrite,
-  readFile
+  readFile,
+  revokeRepoToken
 } from "../_shared/ForgejoWrapper.ts";
 
 /** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
@@ -321,10 +322,74 @@ export async function reconcileForgejoWorkflowHashes(
   return result;
 }
 
+export const MAX_REVOCATIONS_PER_PASS = 100;
+
+export type RevokeResult = { revoked: number; failures: { userId: string; error: unknown }[] };
+
+export async function revokeDroppedTokens(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  revoke: typeof revokeRepoToken = revokeRepoToken
+): Promise<RevokeResult> {
+  // function-grants: service-role
+  const { data: due, error } = await supabase.rpc("forgejo_repo_tokens_to_revoke", {
+    p_instance_url: config.url,
+    p_stale_minutes: STALE_CLAIM_MINUTES,
+    p_limit: MAX_REVOCATIONS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: RevokeResult = { revoked: 0, failures: [] };
+  for (const token of due ?? []) {
+    try {
+      // Taken before the claim: a re-mint can only clear the claim after it, so its token is newer than this.
+      const claimedAt = Date.now();
+      // function-grants: service-role
+      const { data: claimId, error: claimError } = await supabase.rpc("claim_forgejo_repo_token_revocation", {
+        p_id: token.id,
+        p_stale_minutes: STALE_CLAIM_MINUTES
+      });
+      if (claimError) throw claimError;
+      if (claimId == null) continue;
+
+      if (!token.login) throw new Error("Missing Forgejo login for workspace token revocation");
+      await revoke(config, token.login, token.repository_id, claimedAt);
+
+      // Match this pass's own claim: a re-mint plus a later pass's claim must keep that row.
+      const { error: deleteError } = await supabase
+        .from("forgejo_repo_tokens")
+        .delete()
+        .eq("id", token.id)
+        .eq("revoke_claim_id", claimId);
+      if (deleteError) throw deleteError;
+      result.revoked++;
+    } catch (failure) {
+      result.failures.push({ userId: token.user_id, error: failure });
+    }
+  }
+  return result;
+}
+
+/**
+ * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
+ * repos and workflow hashes; then revoking dropped workspace tokens (forgejo_repo_token_revocable).
+ */
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
-  const accounts = await reconcileForgejoAccounts(supabase, config);
-  const repos = await reconcileForgejoRepos(supabase, config);
-  const groupRepos = await reconcileForgejoGroupRepos(supabase, config);
-  const hashes = await reconcileForgejoWorkflowHashes(supabase, config);
-  return { accounts, repos, groupRepos, hashes };
+  // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
+  let stepError: unknown;
+  let accounts: ReconcileResult | undefined;
+  let repos: RepoReconcileResult | undefined;
+  let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
+  let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
+  try {
+    accounts = await reconcileForgejoAccounts(supabase, config);
+    repos = await reconcileForgejoRepos(supabase, config);
+    groupRepos = await reconcileForgejoGroupRepos(supabase, config);
+    hashes = await reconcileForgejoWorkflowHashes(supabase, config);
+  } catch (e) {
+    stepError = e;
+  }
+  const revocation = await revokeDroppedTokens(supabase, config);
+  if (stepError !== undefined) throw stepError;
+  return { accounts: accounts!, repos: repos!, groupRepos: groupRepos!, hashes: hashes!, revocation };
 }
