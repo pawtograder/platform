@@ -464,7 +464,7 @@ function isConflictError(response: { error: { code?: string; message?: string } 
     Boolean(response.error.message?.includes("grader_results_submission_id_key_uniq"))
   );
 }
-async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeResponse> {
+export async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeResponse> {
   scope?.setTag("function", "autograder-submit-feedback");
   const token = req.headers.get("Authorization");
   const requestBody = (await req.json()) as GradingScriptResult;
@@ -476,7 +476,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   if (!token) {
     throw new UserVisibleError("No token provided", 400);
   }
-  const decoded = await validateOIDCTokenOrAllowE2E(token);
+  // Either host. assertJobTokenMatchesRepository below ties the token to a repository on its own host.
+  const decoded = await validateOIDCTokenOrAllowE2E(token, ["github", "forgejo"]);
   const isE2ERun = decoded.repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
   // Find the corresponding submission
   const adminSupabase = createClient<Database>(
@@ -490,7 +491,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
   // One click from any event this request reports to the run that caused it.
-  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
+  // The link is GitHub's Actions URL; a Forgejo run gets none rather than a link to the wrong host.
+  if (decoded.provider === "github") attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
   await assertJobTokenMatchesRepository(adminSupabase, decoded, scope);
   scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
@@ -577,6 +579,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   let repository_id: number | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
+    // Grader repos stay on GitHub (D6) and have no repositories row, so only a GitHub token may name one.
+    if (decoded.provider !== "github") {
+      throw new SecurityError(
+        `Regression test run not found: ${autograder_regression_test_id}, grader repo: ${repository}`
+      );
+    }
     const { data: regressionTestRun } = await adminSupabase
       .from("autograder_regression_test")
       .select("*,autograder(assignments(id, class_id))")
@@ -1185,9 +1193,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   }
 }
 
-Deno.serve(async (req) => {
-  return await wrapRequestHandler(req, handleRequest, {
-    recordUserVisibleErrors: false,
-    recordSecurityErrors: false
+// Imported by tests, which call handleRequest directly.
+if (import.meta.main) {
+  Deno.serve(async (req) => {
+    return await wrapRequestHandler(req, handleRequest, {
+      recordUserVisibleErrors: false,
+      recordSecurityErrors: false
+    });
   });
-});
+}

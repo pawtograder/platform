@@ -1,4 +1,4 @@
-// Forgejo admin API calls for the accounts (#1092) and repos (#1093) Pawtograder creates.
+// Forgejo admin API calls for the accounts (#1092) and repos (#1093) Pawtograder creates, and for grading (#1110).
 //
 // Admin Basic auth, not an admin token: a token can't act on other users' behalf (Forgejo answers
 // 401 "auth method not allowed"), which repo provisioning (#1093) needs.
@@ -223,6 +223,53 @@ export async function revokeAllCoderTokens(config: ForgejoConfig, login: string)
   return names.length;
 }
 
+/** A submission archive larger than the caller's limit. `bytesRead` is how far the download got. */
+export class ArchiveTooLargeError extends Error {
+  constructor(readonly bytesRead: number) {
+    super(`Forgejo archive is over the size limit (read ${bytesRead} bytes)`);
+  }
+}
+
+/**
+ * The repo at `sha` as a zip with one top-level directory, the same shape as GitHub's zipball, for
+ * grading (#1110). Forgejo 15.0.9 held a request for an unknown commit open for minutes, hence the
+ * timeout. Throws ArchiveTooLargeError, without assembling what it read, once the archive passes maxBytes.
+ */
+export async function downloadArchive(
+  config: ForgejoConfig,
+  repository: string,
+  sha: string,
+  maxBytes: number,
+  timeoutMs = 60_000
+): Promise<Uint8Array> {
+  const res = await fetch(`${config.url}/api/v1/repos/${repoPath(repository)}/archive/${encodeURIComponent(sha)}.zip`, {
+    headers: { Authorization: config.authorization },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!res.ok) throw await failure(res, "archive download");
+  if (!res.body) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new ArchiveTooLargeError(total);
+    }
+    chunks.push(value);
+  }
+  const archive = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    archive.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return archive;
+}
+
 /**
  * The repository's API path, for a plain owner/name only. The admin can call every endpoint, so a name with
  * "..", "?" or another slash, as an instructor could type into template_repo, must never reach the URL.
@@ -294,14 +341,75 @@ export async function ensureRepoFromTemplate(
   throw await failure(res, "repo generate from template");
 }
 
-/** A file's text on the default branch, or null when the repo has no such file. */
-export async function readFile(config: ForgejoConfig, repository: string, path: string): Promise<string | null> {
+/** A file's text at `ref` (default branch when omitted), or null when the repo has no such file there. */
+export async function readFile(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  ref?: string
+): Promise<string | null> {
   const file = path.split("/").map(encodeURIComponent).join("/");
-  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}`);
+  const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}${query}`);
   if (res.status === 404) return null;
   if (!res.ok) throw await failure(res, "file read");
   const { content } = (await res.json()) as { content: string };
   return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+}
+
+/** The same fields of a commit that GitHub's commit API gives. */
+export type ForgejoCommit = {
+  sha: string;
+  commit: {
+    message: string;
+    author?: { name?: string; date?: string } | null;
+    committer?: { name?: string; date?: string } | null;
+  };
+};
+
+/** The commit `ref` names, which may be a short sha; the result's `sha` is the full one. */
+export async function getCommit(config: ForgejoConfig, repository: string, ref: string): Promise<ForgejoCommit> {
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/git/commits/${encodeURIComponent(ref)}`);
+  if (!res.ok) throw await failure(res, "commit lookup");
+  return (await res.json()) as ForgejoCommit;
+}
+
+/**
+ * Runs grade.yml at `sha`, as GitHub's triggerWorkflow does: tag the commit pawtograder-submit/<sha>
+ * and dispatch the workflow at that tag.
+ */
+export async function startGrading(config: ForgejoConfig, repository: string, sha: string): Promise<void> {
+  const tag = `pawtograder-submit/${sha}`;
+  await tagCommit(config, repository, tag, sha);
+  const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/actions/workflows/grade.yml/dispatches`, {
+    ref: tag
+  });
+  if (!res.ok) throw await failure(res, "workflow dispatch");
+}
+
+/**
+ * Points `tag` at `sha`. An existing tag at `sha` is reused. One at another commit is replaced, since a
+ * student with write access can push the tag first, and a dispatch at it would then build their commit.
+ * Forgejo's tag routes take the name unencoded, slash included (checked on 15.0.9).
+ */
+async function tagCommit(config: ForgejoConfig, repository: string, tag: string, sha: string): Promise<void> {
+  const tags = `/repos/${repoPath(repository)}/tags`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const created = await forgejo(config, "POST", tags, {
+      tag_name: tag,
+      target: sha,
+      message: "pawtograder submission"
+    });
+    if (created.ok) return;
+    if (created.status !== 409) throw await failure(created, "submission tag");
+    const existing = await forgejo(config, "GET", `${tags}/${tag}`);
+    if (!existing.ok) throw await failure(existing, "submission tag lookup");
+    const { commit } = (await existing.json()) as { commit?: { sha?: string } };
+    if (commit?.sha?.toLowerCase() === sha.toLowerCase()) return;
+    const deleted = await forgejo(config, "DELETE", `${tags}/${tag}`);
+    if (!deleted.ok && deleted.status !== 404) throw await failure(deleted, "submission tag delete");
+  }
+  throw new Error("The submission tag points at another commit, and was pushed again after Pawtograder replaced it");
 }
 
 /** Gives login write access, then reports whether Forgejo says they have it. */
