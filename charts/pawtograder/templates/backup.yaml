@@ -87,6 +87,11 @@ spec:
                   # filling it kills the dump mid-write while pressuring every
                   # other pod on the node. /scratch is a per-pod ephemeral PVC.
                   FILE="/scratch/pawtograder-${TS}.dump"
+                  # Wait for the server, as backup-apps.yaml does: it may be
+                  # restarting, and some CNIs (k3s' kube-router) drop a new
+                  # pod's first packets until its NetworkPolicy rules land.
+                  # Bounded: if it never answers, pg_dump fails with the reason.
+                  for i in $(seq 1 30); do pg_isready -q -t 2 && break; sleep 2; done
                   pg_dump -Fc > "$FILE"
                   # Verify the archive's TOC parses BEFORE uploading — a
                   # truncated/corrupt dump must fail here, not on restore day.
