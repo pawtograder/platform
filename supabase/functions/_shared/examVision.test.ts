@@ -59,6 +59,14 @@ Deno.test("rows are bucketed, so a small vertical wobble stays on one line", () 
   assertEquals(wordsInRegion(words, REGION), "left right");
 });
 
+Deno.test("words on one line stay in order when their boxes are different heights", () => {
+  // Both centers sit at y 0.301. The tall box (a long word on a tilted scan) has its top edge at
+  // 0.281 and the short one at 0.291, which round into different bands. Catches banding on the
+  // top edge, which read the long word on the right first (#1292).
+  const words = [word("long", 0.45, 0.281, 0.15, 0.04), word("short", 0.25, 0.291, 0.05, 0.02)];
+  assertEquals(wordsInRegion(words, REGION), "short long");
+});
+
 Deno.test("an empty word list returns empty text", () => {
   assertEquals(wordsInRegion([], REGION), "");
 });

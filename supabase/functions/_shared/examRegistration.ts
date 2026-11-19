@@ -20,6 +20,10 @@ export const MIN_PAIRS = 6;
 const MIN_WORD_LENGTH = 3;
 /** A pair agrees with a fit when its scan center is within this share of the scan's diagonal. */
 const INLIER_TOLERANCE = 0.01;
+/** Share of a page's paired words its fit has to agree with. */
+const MIN_AGREEING_SHARE = 0.6;
+/** Share of the paired words' spread, across and down the page, the agreeing words have to cover. */
+const MIN_COVERAGE = 0.5;
 /** Hypotheses come from pairs among at most this many words, spread through the list. */
 const MAX_SEED_WORDS = 40;
 
@@ -99,6 +103,21 @@ function fitSimilarity(from: Point[], to: Point[]): Fit | null {
   return { a, b, tx: c.x - (a * m.x - b * m.y), ty: c.y - (b * m.x + a * m.y) };
 }
 
+function span(points: Point[], axis: "x" | "y"): number {
+  const values = points.map((p) => p[axis]);
+  return Math.max(...values) - Math.min(...values);
+}
+
+// Whether one similarity explains the whole page rather than one part of it: a fit that only half
+// the words agree with, or that only the top of the page agrees with, would misplace the rest.
+function explainsPage(agreeing: Point[], all: Point[]): boolean {
+  return (
+    agreeing.length >= MIN_AGREEING_SHARE * all.length &&
+    span(agreeing, "x") >= MIN_COVERAGE * span(all, "x") &&
+    span(agreeing, "y") >= MIN_COVERAGE * span(all, "y")
+  );
+}
+
 function inliersOf(f: Fit, from: Point[], to: Point[], tolerance: number): number[] {
   const kept: number[] = [];
   for (let i = 0; i < from.length; i++) {
@@ -109,8 +128,9 @@ function inliersOf(f: Fit, from: Point[], to: Point[], tolerance: number): numbe
 }
 
 /**
- * Fit the template-to-scan transform for one page from its printed words, or null when fewer
- * than MIN_PAIRS words agree on one (a blank page, only handwriting, a different page).
+ * Fit the template-to-scan transform for one page from its printed words, or null when no single
+ * fit explains the page: fewer than MIN_PAIRS words agree on one (a blank page, only handwriting, a
+ * different page), or the words that agree are too few or bunched in one part of the page.
  *
  * A plain least-squares fit lets one misplaced OCR word drag every region, so the fit starts from
  * the two-word hypothesis most other pairs agree with, then refits on the pairs that agree.
@@ -150,6 +170,8 @@ export function registerPage(template: PageWords, scan: PageWords): Registration
   if (kept.length < MIN_PAIRS) return null;
   const fit = refit(kept);
   if (!fit) return null;
+  const agreeing = inliersOf(fit, from, to, tolerance).map((i) => from[i]);
+  if (!explainsPage(agreeing, from)) return null;
   return {
     ...fit,
     template: { width: template.width, height: template.height },

@@ -32,6 +32,14 @@ describe("wordsInRegion", () => {
   it("returns words in top-to-bottom reading order", () => {
     expect(wordsInRegion(words, region)).toBe("hello world");
   });
+  it("keeps a line in order when its boxes are different heights", () => {
+    // Same center line, top edges in different 0.02 bands; catches banding on the top edge (#1292).
+    const line: WordBox[] = [
+      { text: "long", x: 0.25, y: 0.281, width: 0.15, height: 0.04 },
+      { text: "short", x: 0.05, y: 0.291, width: 0.05, height: 0.02 }
+    ];
+    expect(wordsInRegion(line, region)).toBe("short long");
+  });
   it("returns empty string when nothing matches", () => {
     expect(wordsInRegion(words, { x: 0.9, y: 0.9, width: 0.05, height: 0.05 })).toBe("");
   });

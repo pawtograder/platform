@@ -13,8 +13,8 @@ import {
   type PageImage
 } from "../_shared/examVision.ts";
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
-import { AS_DRAWN, mapRectToScan, wordsToTemplate } from "../_shared/examRegistration.ts";
-import { alignBatch, alignExam, loadTemplatePages, ocrWords, toOcrData } from "./pageAlignment.ts";
+import { mapRectToScan, wordsToTemplate } from "../_shared/examRegistration.ts";
+import { alignBatch, loadTemplates, ocrWords, requireAligned, toOcrData } from "./pageAlignment.ts";
 import { downloadImage, downloadImageCached } from "./storage.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
@@ -639,6 +639,10 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   }
   // Check every page's image path before copying or structuring from any of them (#1078).
   for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
+  // Line the pages up with the template as it is now, before creating anything. Staff can replace
+  // the template between match and finalize, so a page that no longer lines up refuses the batch
+  // before anything is created (#1292).
+  const [groupPages] = requireAligned(batchId, [pages], await loadTemplates(admin, scanScope), (p) => p.ocr_data);
 
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
@@ -654,9 +658,6 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   // a crash) re-runs them safely. pageBytes fetches each page image at most once.
   {
     const pageBytes = new Map<string, Promise<Uint8Array>>();
-    // Match refused any page that should have lined up and did not, so a page without a
-    // registration here is read as drawn (#1292).
-    const groupPages = alignExam(pages, await loadTemplatePages(admin, scanned.exam_id));
 
     // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the
     // submission's files would fail once a grader has commented on a page (the
@@ -729,9 +730,8 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
       // Read the region as drawn, against this scan's words moved into template space. `rect` is
       // where the region sits on the scan, for the model and the grader's crop.
       const drawn: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
-      const reg = page.reg ?? AS_DRAWN;
-      const ocrText = wordsInRegion(wordsToTemplate(ocrWords(page.ocr_data), reg), drawn);
-      const rect = mapRectToScan(drawn, reg);
+      const ocrText = wordsInRegion(wordsToTemplate(ocrWords(page.ocr_data), page.reg), drawn);
+      const rect = mapRectToScan(drawn, page.reg);
       let structuredValue: unknown = ocrText;
       const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
       if (answerType && answerType !== "free_text" && ocrText) {

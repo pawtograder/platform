@@ -64,11 +64,13 @@ export function wordsInRegion(words: WordBox[], region: NormRect): string {
     const cy = w.y + w.height / 2;
     return cx >= region.x && cx <= region.x + region.width && cy >= region.y && cy <= region.y + region.height;
   });
-  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right.
+  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right. Rows are
+  // keyed on each word's center line: a word on a tilted scan has a taller box, so its top edge
+  // can sit a band above the shorter words on its line (#1292).
   // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
   // engine-defined ordering for words clustered within a row. Keep in sync with lib/exam/regionMath.ts.
   inside.sort((a, b) => {
-    const band = Math.round(a.y / 0.02) - Math.round(b.y / 0.02);
+    const band = Math.round((a.y + a.height / 2) / 0.02) - Math.round((b.y + b.height / 2) / 0.02);
     return band !== 0 ? band : a.x - b.x;
   });
   return inside

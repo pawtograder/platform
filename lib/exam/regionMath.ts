@@ -15,11 +15,13 @@ export function boxCenterInRegion(box: NormRect, region: NormRect): boolean {
 /** Text of the words whose center falls inside `region`, in reading order. */
 export function wordsInRegion(words: WordBox[], region: NormRect): string {
   const inside = words.filter((w) => boxCenterInRegion(w, region));
-  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right.
+  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right. Rows are
+  // keyed on each word's center line: a word on a tilted scan has a taller box, so its top edge
+  // can sit a band above the shorter words on its line (#1292).
   // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
   // engine-defined (and potentially inconsistent) ordering for words clustered within a row.
   inside.sort((a, b) => {
-    const band = Math.round(a.y / 0.02) - Math.round(b.y / 0.02);
+    const band = Math.round((a.y + a.height / 2) / 0.02) - Math.round((b.y + b.height / 2) / 0.02);
     return band !== 0 ? band : a.x - b.x;
   });
   return inside

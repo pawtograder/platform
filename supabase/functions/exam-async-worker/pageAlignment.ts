@@ -1,5 +1,5 @@
 // Reading scan pages against their template pages (#1292): the stored OCR shape, the template's
-// printed words, and lining up one exam's pages. The fitting itself is _shared/examRegistration.ts.
+// printed words, and lining up a batch's pages. The fitting itself is _shared/examRegistration.ts.
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database, Json } from "../_shared/SupabaseTypes.d.ts";
@@ -22,11 +22,7 @@ export function ocrWords(ocr: Json | null): WordBox[] {
   return (ocr as OcrData | null)?.words ?? [];
 }
 
-/**
- * OCR and store every page of this exam's template that has not been read yet. Match runs this
- * before aligning a batch, so a template is read the first time one of its batches is matched, and
- * again after a re-upload (which inserts new rows).
- */
+/** OCR and store every unread page of this exam's template. */
 async function ocrMissingTemplatePages(admin: Admin, scope: { classId: number; examId: number }): Promise<void> {
   const { data, error } = await admin
     .from("exam_template_pages")
@@ -54,35 +50,6 @@ async function ocrMissingTemplatePages(admin: Admin, scope: { classId: number; e
   );
 }
 
-/** The printed words of each template page that has been read, by page number. */
-export async function loadTemplatePages(admin: Admin, examId: number): Promise<Map<number, PageWords>> {
-  const { data, error } = await admin
-    .from("exam_template_pages")
-    .select("page_number, width, height, ocr_data")
-    .eq("exam_id", examId)
-    .not("ocr_data", "is", null);
-  if (error) throw new Error(`load template pages for exam ${examId} failed: ${error.message}`);
-  return new Map(
-    (data ?? []).map((t) => [t.page_number, { words: ocrWords(t.ocr_data), width: t.width, height: t.height }])
-  );
-}
-
-type ScanPage = { width: number | null; height: number | null; ocr_data: Json | null };
-
-// A page against the template page of the same position in its exam: AS_DRAWN when that template
-// page has nothing printed to place it by, null when the page should have lined up and did not.
-function pageRegistration(p: ScanPage, template: PageWords | undefined): Registration | null {
-  return alignPage(template, { words: ocrWords(p.ocr_data), width: p.width ?? 0, height: p.height ?? 0 });
-}
-
-/** One exam's pages, each with its registration; the i-th page goes with template page i+1. */
-export function alignExam<P extends ScanPage>(
-  examPages: P[],
-  templates: Map<number, PageWords>
-): (P & { reg: Registration | null })[] {
-  return examPages.map((p, i) => ({ ...p, reg: pageRegistration(p, templates.get(i + 1)) }));
-}
-
 /**
  * A page that could not be lined up with its template page (#1292). Rescanning is the fix, so the
  * worker dead-letters it at once and shows it on the batch rather than retrying.
@@ -94,30 +61,54 @@ export class ScanAlignmentRejectedError extends ScanPathRejectedError {
   }
 }
 
-type BatchPage = { id: number; page_index: number; width: number | null; height: number | null };
+/**
+ * The printed words of each page of this exam's template, by page number. A page not read yet means
+ * the template was replaced after this batch was matched (match reads every page first), so it is
+ * refused rather than having its scans read as drawn.
+ */
+export async function loadTemplates(
+  admin: Admin,
+  scope: { batchId: number; examId: number }
+): Promise<Map<number, PageWords>> {
+  const { data, error } = await admin
+    .from("exam_template_pages")
+    .select("page_number, width, height, ocr_data")
+    .eq("exam_id", scope.examId);
+  if (error) throw new Error(`load template pages for exam ${scope.examId} failed: ${error.message}`);
+  if ((data ?? []).some((t) => t.ocr_data === null)) {
+    throw new ScanAlignmentRejectedError(
+      `batch ${scope.batchId}: the template changed after this batch was matched. Run Process again.`
+    );
+  }
+  return new Map(
+    (data ?? []).map((t) => [t.page_number, { words: ocrWords(t.ocr_data), width: t.width, height: t.height }])
+  );
+}
+
+type SizedPage = { page_index: number; width: number | null; height: number | null };
 
 /**
- * Every exam of a batch, each page with its registration, reading the template first if it has not
- * been. Throws ScanAlignmentRejectedError naming each page that should have lined up and did not.
- * The pages' OCR words are loaded here and dropped on return, so match does not hold a large
- * batch's words through the identity reads that follow.
+ * Each exam's pages with their registrations, where the i-th page of an exam goes with template
+ * page i+1: AS_DRAWN when that template page has nothing printed to place it by. Throws
+ * ScanAlignmentRejectedError naming every page that should have lined up and did not, so no region
+ * is ever read from a page that is out of place.
  */
-export async function alignBatch<P extends BatchPage>(
-  admin: Admin,
-  scope: ScanScope,
-  exams: P[][]
-): Promise<(P & { reg: Registration })[][]> {
-  await ocrMissingTemplatePages(admin, scope);
-  const [templates, ocr] = await Promise.all([
-    loadTemplatePages(admin, scope.examId),
-    loadBatchOcr(admin, scope.batchId)
-  ]);
+export function requireAligned<P extends SizedPage>(
+  batchId: number,
+  exams: P[][],
+  templates: Map<number, PageWords>,
+  ocrOf: (page: P) => Json | null
+): (P & { reg: Registration })[][] {
   const aligned: (P & { reg: Registration })[][] = [];
   const misaligned: number[] = [];
   for (const examPages of exams) {
     const exam: (P & { reg: Registration })[] = [];
     examPages.forEach((p, i) => {
-      const reg = pageRegistration({ ...p, ocr_data: ocr.get(p.id) ?? null }, templates.get(i + 1));
+      const reg = alignPage(templates.get(i + 1), {
+        words: ocrWords(ocrOf(p)),
+        width: p.width ?? 0,
+        height: p.height ?? 0
+      });
       if (reg) exam.push({ ...p, reg });
       else misaligned.push(p.page_index + 1);
     });
@@ -127,11 +118,26 @@ export async function alignBatch<P extends BatchPage>(
     const shown =
       misaligned.slice(0, 20).join(", ") + (misaligned.length > 20 ? `, and ${misaligned.length - 20} more` : "");
     throw new ScanAlignmentRejectedError(
-      `batch ${scope.batchId}: page${misaligned.length === 1 ? "" : "s"} ${shown} could not be lined up with the template. ` +
+      `batch ${batchId}: page${misaligned.length === 1 ? "" : "s"} ${shown} could not be lined up with the template. ` +
         `Check the pages are in order and belong to this exam, rescan them, and run Process again.`
     );
   }
   return aligned;
+}
+
+/**
+ * Every exam of a batch with its registrations (see requireAligned), reading the template first
+ * if it has not been. The pages' OCR words are loaded here and dropped on return, so match does
+ * not hold a large batch's words through the identity reads that follow.
+ */
+export async function alignBatch<P extends SizedPage & { id: number }>(
+  admin: Admin,
+  scope: ScanScope,
+  exams: P[][]
+): Promise<(P & { reg: Registration })[][]> {
+  await ocrMissingTemplatePages(admin, scope);
+  const [templates, ocr] = await Promise.all([loadTemplates(admin, scope), loadBatchOcr(admin, scope.batchId)]);
+  return requireAligned(scope.batchId, exams, templates, (p) => ocr.get(p.id) ?? null);
 }
 
 async function loadBatchOcr(admin: Admin, batchId: number): Promise<Map<number, Json | null>> {

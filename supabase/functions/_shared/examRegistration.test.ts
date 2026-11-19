@@ -104,6 +104,15 @@ Deno.test("a few misplaced words do not pull the fit off", () => {
   assertAlmostEquals(mapped.y * scan.height, expected.y, 0.5);
 });
 
+Deno.test("a page whose top and bottom disagree is not registered", () => {
+  // The top seven words line up, but the bottom five moved 100px on their own, as on a curled or
+  // pasted-up page. Catches accepting the fit the top agrees on, which would misplace every
+  // region in the bottom half.
+  const scan = { width: 850, height: 1100 };
+  const scanWords = PRINTED.map((w) => (w.y < 0.5 ? w : { ...w, x: w.x + 100 / scan.width }));
+  assertEquals(registerPage({ words: PRINTED, ...TEMPLATE }, { words: scanWords, ...scan }), null);
+});
+
 Deno.test("only words that appear once on both pages are paired, ignoring case and punctuation", () => {
   // Catches pairing an ambiguous word: "the" is printed twice, and the student wrote "lookup"
   // a second time on the scan, so either could be paired with the wrong copy.
