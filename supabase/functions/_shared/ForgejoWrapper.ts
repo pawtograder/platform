@@ -125,6 +125,15 @@ export function coderTokenName(repositoryId: number, mintedAt: number): string {
   return `${repoTokenPrefix(repositoryId)}${mintedAt}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
+/**
+ * Forgejo tokens don't expire. A repository whose newest token is this old hasn't been opened in that time, so its
+ * tokens are revoked: by the next open of another repository (revokeIdleTokens), or by the reconciler for a student
+ * who doesn't open one again. Must match the interval in forgejo_repo_tokens_to_revoke.
+ */
+export const IDLE_TOKEN_MS = 14 * 24 * 60 * 60_000;
+
+const CODER_TOKEN_NAME = /^pawtograder-coder-(\d+)-(\d+)-/;
+
 function tokenMintedAt(name: string, repositoryId: number): number | null {
   const prefix = repoTokenPrefix(repositoryId);
   if (!name.startsWith(prefix)) return null;
@@ -200,6 +209,37 @@ export async function revokeRepoToken(
   });
   for (const name of names) await deleteToken(config, login, name);
   return names.length;
+}
+
+/**
+ * Revokes the tokens of every repository other than `keep` whose newest token was minted IDLE_TOKEN_MS or more
+ * before `now`. Returns the ids of the repositories that still have a token. A name without a readable repository
+ * and mint time is left alone.
+ */
+export async function revokeIdleTokens(
+  config: ForgejoConfig,
+  login: string,
+  keep: number,
+  now: number = Date.now()
+): Promise<Set<number>> {
+  const byRepository = new Map<number, { name: string; at: number }[]>();
+  for (const name of await listCoderTokenNames(config, login)) {
+    const m = name.match(CODER_TOKEN_NAME);
+    if (!m || !Number.isSafeInteger(Number(m[1])) || !Number.isSafeInteger(Number(m[2]))) continue;
+    const id = Number(m[1]);
+    const list = byRepository.get(id) ?? [];
+    list.push({ name, at: Number(m[2]) });
+    byRepository.set(id, list);
+  }
+  const live = new Set<number>();
+  for (const [id, tokens] of byRepository) {
+    if (id === keep || Math.max(...tokens.map((t) => t.at)) > now - IDLE_TOKEN_MS) {
+      live.add(id);
+      continue;
+    }
+    for (const t of tokens) await deleteToken(config, login, t.name);
+  }
+  return live;
 }
 
 async function deleteToken(config: ForgejoConfig, login: string, tokenName: string): Promise<void> {
@@ -353,6 +393,81 @@ export async function ensureRepoFromTemplate(
   });
   if (res.ok || res.status === 409) return;
   throw await failure(res, "repo generate from template");
+}
+
+/**
+ * Sets up a handout as a private template repo on main, and returns main's head sha. A file with
+ * `content` is added, and one with null content is removed. A retry, or a handout staff made by hand, is
+ * adopted: an existing repo is made private and a template, and a file already there is kept, since
+ * staff may have edited it. An adopted repo with no commits gets a README, and one whose default branch
+ * isn't main is refused.
+ */
+export async function ensureHandoutRepo(
+  config: ForgejoConfig,
+  repository: string,
+  files: { path: string; content: string | null }[]
+): Promise<string> {
+  const path = repoPath(repository);
+  const [org, name] = repository.split("/");
+  await ensureOrg(config, org);
+  const writes = [...files];
+  const created = await forgejo(config, "POST", `/orgs/${encodeURIComponent(org)}/repos`, {
+    name,
+    private: true,
+    auto_init: true,
+    default_branch: "main",
+    template: true
+  });
+  if (created.status === 409) {
+    await created.body?.cancel();
+    // Student repos are generated from the handout, which Forgejo allows only from a template.
+    const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true, private: true });
+    if (!marked.ok) throw await failure(marked, "repo template update");
+    const adopted = (await marked.json()) as { empty: boolean; default_branch: string };
+    // An empty repo has no main until its first file, which Forgejo then commits to main.
+    if (adopted.empty) writes.unshift({ path: "README.md", content: `# ${name}\n` });
+    else if (adopted.default_branch !== "main")
+      throw new Error("The existing handout repo's default branch isn't main");
+  } else if (!created.ok) {
+    throw await failure(created, "repo create");
+  } else {
+    await created.body?.cancel();
+  }
+  for (const file of writes) {
+    const contents = `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+    if (file.content === null) {
+      const found = await forgejo(config, "GET", `${contents}?ref=main`);
+      if (found.status === 404) {
+        await found.body?.cancel();
+        continue;
+      }
+      if (!found.ok) throw await failure(found, "file read");
+      const { sha } = (await found.json()) as { sha: string };
+      const deleted = await forgejo(config, "DELETE", contents, {
+        sha,
+        message: `Remove ${file.path}`,
+        branch: "main"
+      });
+      if (!deleted.ok) throw await failure(deleted, "file delete");
+      await deleted.body?.cancel();
+      continue;
+    }
+    const bytes = new TextEncoder().encode(file.content);
+    const res = await forgejo(config, "POST", contents, {
+      content: btoa(String.fromCharCode(...bytes)),
+      message: `Add ${file.path}`,
+      branch: "main"
+    });
+    if (res.ok) {
+      await res.body?.cancel();
+      continue;
+    }
+    const message = await res.text();
+    if (res.status !== 422 || !/file already exists/i.test(message)) {
+      throw new Error(`Forgejo file create failed: ${res.status} ${reason(message)}`);
+    }
+  }
+  return (await getCommit(config, repository, "main")).sha;
 }
 
 /** A file's text at `ref` (default branch when omitted), or null when the repo has no such file there. */

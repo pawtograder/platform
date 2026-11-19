@@ -270,7 +270,6 @@ test("course deletion explains the restriction and preserves the course", async 
 });
 for (const endpoint of [
   "assignment-create-all-repos",
-  "assignment-create-handout-repo",
   "assignment-create-solution-repo",
   "assignment-sync-autograder-workflow",
   "github-repo-configure-webhook"
@@ -298,5 +297,25 @@ for (const endpoint of [
     expect(error?.context.status).toBe(400);
     expect(await error.context.text()).toContain("This assignment uses Forgejo");
     expect(await ok(reposFor(assignment.id))).toHaveLength(0);
+  });
+}
+// assignment-create-handout-repo creates Forgejo handouts (#1253). This lane runs no Forgejo, so only its
+// refusals are checked here. The Forgejo calls are unit-tested in ForgejoWrapper.test.ts.
+for (const [repoMode, status, message] of [
+  ["template_with_student_forks", 400, "Forgejo assignments can only use a template handout"],
+  ["template_only_staff", 503, "Forgejo is not set up on this deployment"]
+] as const) {
+  test(`assignment-create-handout-repo refuses a Forgejo ${repoMode} assignment it can't set up`, async () => {
+    const { course, assignment } = await fixture("forgejo");
+    const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
+    await ok(supabase.from("assignments").update({ repo_mode: repoMode }).eq("id", assignment.id));
+    const { error } = await supabase.functions.invoke("assignment-create-handout-repo", {
+      headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
+      body: { class_id: course.id, assignment_id: assignment.id }
+    });
+    expect(error?.context.status).toBe(status);
+    expect(await error.context.text()).toContain(message);
+    const saved = await ok(supabase.from("assignments").select("template_repo").eq("id", assignment.id).single());
+    expect(saved.template_repo).toBeNull();
   });
 }

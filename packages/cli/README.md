@@ -19,7 +19,7 @@ npm install -g @pawtograder/cli
 pawtograder --help
 ```
 
-Requires Node.js 20 or later.
+Requires Node.js 20.16 or later.
 
 ## Authenticate
 
@@ -58,6 +58,9 @@ The web host serves the application; the CLI talks to the `cli` Edge Function be
 | `rubrics list` / `rubrics export`             | Rubrics, and YAML export                          |
 | `flashcards list`                             | Flashcard decks                                   |
 | `repos list -c <class> -a <assignment>`       | Student repositories for an assignment            |
+| `exams list -c <class>`                       | Paper exams in a class                            |
+| `exams questions -c <class> -a <assignment>`  | Exam questions with their rubric check IDs        |
+| `exams scans status -c <class> --batch <id>`  | A scan batch's state and match counts             |
 
 Every `list` command accepts `--json`, so output can be piped into `jq`:
 
@@ -76,6 +79,8 @@ pawtograder submissions list -c cs3500-fall-2026 -a hw-1 --json | jq '.submissio
 | `flashcards copy` / `surveys copy`        | Copy decks or surveys between classes              |
 | `submissions comments import` / `sync`    | Batch comment ingestion                            |
 | `submissions artifacts import`            | Import artifact blobs from a manifest              |
+| `exams scans upload` / `process`          | Upload a scanned PDF as a batch; start OCR         |
+| `exams scans finalize`                    | Create submissions for confirmed matches           |
 
 Commands that write accept `--dry-run` where a preview is meaningful.
 
@@ -109,6 +114,23 @@ Re-running is safe: existing assignments are reused rather than duplicated, and 
 A bare `--due-date` is the **end of that day in the class's time zone** — `2026-09-15` for a New York course means 23:59:59 Eastern, not midnight UTC. Append a time (`2026-09-15T17:00`) for something specific, or pass a timestamp with an offset to bypass the class zone entirely.
 
 Explicit manifests are held to the same rules as the round-robin: a `--file` entry that would assign someone their own submission, or a student they have a `grading_conflicts` entry for, is rejected rather than written.
+
+### Paper exams
+
+`exams scans` follows the exam's Scans page. The course must have paper exams turned on.
+
+```bash
+pawtograder exams scans upload -c cs3500-fall-2026 -a midterm --file scans.pdf --pages-per-exam 2
+pawtograder exams scans process -c cs3500-fall-2026 --batch 42
+pawtograder exams scans status -c cs3500-fall-2026 --batch 42
+# confirm the name matches on the Scans page, then
+pawtograder exams scans finalize -c cs3500-fall-2026 --batch 42 --dry-run
+pawtograder exams scans finalize -c cs3500-fall-2026 --batch 42
+```
+
+`upload` renders the PDF on your machine and refuses a `--pages-per-exam` that does not match the
+template before uploading anything. `exams questions` gives the `rubric_check_id` for each question,
+for use with `submissions comments import`.
 
 ### Bulk export
 

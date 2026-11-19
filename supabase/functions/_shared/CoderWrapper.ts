@@ -71,6 +71,7 @@ export type CoderWorkspace = {
   name: string;
   owner_id: string;
   owner_name: string;
+  template_active_version_id: string;
   latest_build: {
     status: string;
     transition: string;
@@ -260,18 +261,23 @@ export async function createWorkspace(
   return { workspace: data, error };
 }
 
-/** Starts or stops a workspace. 409 means another build is already active, which the caller decides about. */
+/**
+ * Starts or stops a workspace. 409 means another build is already active, which the caller decides about.
+ * Without `templateVersionId`, Coder builds on the last build's template version, so a start that
+ * should pick up template changes passes the template's active version.
+ */
 export async function postBuild(
   config: CoderConfig,
   workspaceId: string,
-  transition: "start" | "stop"
+  transition: "start" | "stop",
+  templateVersionId?: string
 ): Promise<CoderApiError | null> {
   const { error } = await coder(
     config,
     `workspace ${transition}`,
     "POST",
     `/workspaces/${encodeURIComponent(workspaceId)}/builds`,
-    { transition }
+    templateVersionId ? { transition, template_version_id: templateVersionId } : { transition }
   );
   return error;
 }
@@ -329,6 +335,22 @@ export async function deleteUserKey(config: CoderConfig, userId: string, keyId: 
     "API key delete",
     "DELETE",
     `/users/${encodeURIComponent(userId)}/keys/${encodeURIComponent(keyId)}`
+  );
+  if (error && status !== 404) throw error;
+}
+
+export type CoderSecret = { name: string; updated_at: string };
+
+export async function listOwnSecrets(config: CoderConfig): Promise<CoderSecret[]> {
+  return await get<CoderSecret[]>(config, "secret list", "/users/me/secrets");
+}
+
+export async function deleteOwnSecret(config: CoderConfig, name: string): Promise<void> {
+  const { status, error } = await coder(
+    config,
+    "secret delete",
+    "DELETE",
+    `/users/me/secrets/${encodeURIComponent(name)}`
   );
   if (error && status !== 404) throw error;
 }

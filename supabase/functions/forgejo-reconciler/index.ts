@@ -18,7 +18,8 @@ import { reconcileForgejo } from "./reconcile.ts";
  * first signs in. Invoked hourly via pg_cron, and kicked when someone joins such a class, a class
  * turns the flag on (20261112120100_forgejo_reconciler.sql) or a Forgejo assignment is released
  * (20261118140000_forgejo_repos.sql). Each pass then revokes the workspace tokens of students who have
- * left the repo's class (20261118160000_forgejo_repo_tokens.sql).
+ * left the repo's class (20261118160000_forgejo_repo_tokens.sql), and tokens no open has re-minted for
+ * 14 days (20261119190000_forgejo_repo_tokens_idle.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
