@@ -126,7 +126,13 @@ test("picking a student and skipping apply only to the exam as shown, and a miss
   review();
   await screen.findByText("Dana Lee", { selector: "p" });
   mockWriteResult = async () => ({ data: [], error: null });
-  await act(async () => fireEvent.change(screen.getByRole("combobox"), { target: { value: "p2" } }));
+  // #1270's searchable picker: type, then choose with Enter.
+  const picker = screen.getByRole("combobox");
+  await waitFor(() => expect(picker).not.toBeDisabled());
+  fireEvent.focus(picker);
+  fireEvent.change(picker, { target: { value: "Dana" } });
+  await screen.findAllByRole("option");
+  await act(async () => fireEvent.keyDown(picker, { key: "Enter", code: "Enter" }));
   await waitFor(() => expect(mockWrites).toHaveLength(1));
   expect(mockWrites[0]).toEqual(
     expect.arrayContaining([

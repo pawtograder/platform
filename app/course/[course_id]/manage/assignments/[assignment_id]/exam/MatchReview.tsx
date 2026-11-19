@@ -11,20 +11,8 @@ import {
 import { toaster } from "@/components/ui/toaster";
 import { namesEquivalent, normalizeName } from "@/lib/exam/nameAgreement";
 import { createClient } from "@/utils/supabase/client";
-import {
-  Badge,
-  Box,
-  Button,
-  Flex,
-  Heading,
-  HStack,
-  Image,
-  NativeSelect,
-  Spinner,
-  Table,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { createFilter, Select } from "chakra-react-select";
+import { Badge, Box, Button, Flex, Heading, HStack, Image, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Scanned = {
@@ -39,7 +27,11 @@ type Scanned = {
   submission_id: number | null;
   finalized_at: string | null;
 };
-type RosterStudent = { profile_id: string; name: string | null };
+type RosterStudent = { profile_id: string; name: string | null; sortable_name: string | null; email: string | null };
+type StudentOption = { value: string; label: string };
+// Search the student's name only. react-select's default also searches the option's value, which
+// here is the profile UUID, so "ed" would match every student whose id contains "ed".
+const filterByName = createFilter<StudentOption>({ stringify: (option) => option.label });
 
 const POLL_MS = 4000;
 
@@ -126,7 +118,9 @@ export default function MatchReview({
     const seq = ++rosterSeq.current;
     const { data: students, error } = await createClient()
       .from("user_roles")
-      .select("private_profile_id, profiles!user_roles_private_profile_id_fkey(name)")
+      .select(
+        "private_profile_id, profiles!user_roles_private_profile_id_fkey(name, sortable_name), users!user_roles_user_id_fkey1(email)"
+      )
       .eq("class_id", classId)
       .eq("role", "student");
     if (!mounted.current || seq !== rosterSeq.current) return;
@@ -137,7 +131,9 @@ export default function MatchReview({
         .filter((s) => s.private_profile_id)
         .map((s) => ({
           profile_id: s.private_profile_id as string,
-          name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null
+          name: (s.profiles as unknown as { name: string | null } | null)?.name ?? null,
+          sortable_name: (s.profiles as unknown as { sortable_name: string | null } | null)?.sortable_name ?? null,
+          email: (s.users as unknown as { email: string | null } | null)?.email ?? null
         }))
     );
   }, [classId]);
@@ -200,6 +196,7 @@ export default function MatchReview({
     [rows, load]
   );
 
+  // One searchable option list for every row, sorted the way the roster is (#1270).
   // How many roster students share each name, compared the way namesEquivalent compares them. Built
   // once per roster, so the per-row ambiguity check is a lookup instead of a scan of the roster.
   const nameCounts = useMemo(() => {
@@ -217,6 +214,22 @@ export default function MatchReview({
     },
     [nameCounts]
   );
+  // Two students with the same name would be two identical options, and picking the wrong one gives
+  // one student's exam to the other. Those labels carry the email staff already see on the
+  // enrollments page; every other label is just the name.
+  const studentOptions = useMemo<StudentOption[]>(
+    () =>
+      roster
+        .map((s) => ({
+          value: s.profile_id,
+          label: sharesName(s.name) ? `${s.name} (${s.email ?? "no email"})` : (s.name ?? s.profile_id),
+          sort: s.sortable_name || s.name || ""
+        }))
+        .sort((a, b) => a.sort.localeCompare(b.sort))
+        .map(({ value, label }) => ({ value, label })),
+    [roster, sharesName]
+  );
+  const needStudent = rows.filter((r) => !r.matched_profile_id && r.match_status !== "skipped").length;
 
   const rosterName = useCallback(
     (profileId: string | null) => roster.find((s) => s.profile_id === profileId)?.name ?? null,
@@ -367,8 +380,13 @@ export default function MatchReview({
   const unfinalizedCount = rows.filter((r) => r.match_status === "confirmed" && !r.finalized_at).length;
   const confirmedCount = rows.filter((r) => r.match_status === "confirmed").length;
   // The database refuses match edits once the batch is finalizing or completed
-  // (exam_scanned_submission_freeze_match), so the page does not offer them either.
-  const matchesFrozen = batchStatus === "finalizing" || batchStatus === "completed";
+  // (exam_scanned_submission_freeze_match), so the page does not offer them either. An errored batch
+  // is shown read-only too (#1270): its finalize messages may still be running, and the way back to
+  // editing is Retry processing, which returns it to review.
+  const matchesFrozen = batchStatus === "finalizing" || batchStatus === "completed" || batchStatus === "error";
+
+  // An errored batch that never got as far as matching has nothing to review.
+  if (batchStatus === "error" && loaded && rows.length === 0) return null;
 
   return (
     <VStack align="stretch" gap={3}>
@@ -400,6 +418,12 @@ export default function MatchReview({
       {rowsError && (
         <Text fontSize="xs" color="fg.error">
           Couldn&apos;t refresh the matches ({rowsError}). What you see may be out of date.
+        </Text>
+      )}
+      {needStudent > 0 && !matchesFrozen && (
+        <Text fontSize="sm">
+          {needStudent} exam(s) need a student. Pick one in the Student column (type to search), then Confirm. Skip a
+          sheet that is not a student&apos;s exam.
         </Text>
       )}
       {rosterError && (
@@ -442,7 +466,7 @@ export default function MatchReview({
                 ) : r.match_status === "skipped" ? (
                   <Badge>skipped</Badge>
                 ) : (
-                  <Badge colorPalette="red">unmatched</Badge>
+                  <Badge colorPalette="orange">Needs a student</Badge>
                 )}
                 {r.matched_profile_id && needsAcknowledgment(r) && (
                   <Text fontSize="xs" color="fg.warning" mt={1}>
@@ -455,20 +479,32 @@ export default function MatchReview({
                 )}
               </Table.Cell>
               <Table.Cell>
-                <NativeSelect.Root size="xs" width="200px" disabled={!!r.submission_id || matchesFrozen}>
-                  <NativeSelect.Field
-                    value={r.matched_profile_id ?? ""}
-                    onChange={(e) => setMatch(r.id, e.target.value || null)}
-                  >
-                    <option value="">— none —</option>
-                    {roster.map((s) => (
-                      <option key={s.profile_id} value={s.profile_id}>
-                        {s.name ?? s.profile_id}
-                      </option>
-                    ))}
-                  </NativeSelect.Field>
-                  <NativeSelect.Indicator />
-                </NativeSelect.Root>
+                <Box width="220px">
+                  <Select<StudentOption, false>
+                    size="sm"
+                    aria-label={`Student for exam #${r.exam_index + 1}`}
+                    placeholder="Search students…"
+                    isClearable
+                    isDisabled={!!r.submission_id || matchesFrozen}
+                    options={studentOptions}
+                    filterOption={filterByName}
+                    value={
+                      studentOptions.find((o) => o.value === r.matched_profile_id) ??
+                      // Matched to someone not (or not yet) in the roster list: say so, don't look empty.
+                      (r.matched_profile_id
+                        ? { value: r.matched_profile_id, label: "Student not on the roster" }
+                        : null)
+                    }
+                    // Re-choosing the same student would un-confirm the row; ignore it.
+                    onChange={(opt) => {
+                      if ((opt?.value ?? null) !== r.matched_profile_id) void setMatch(r.id, opt?.value ?? null);
+                    }}
+                    // The table cell clips the menu; render it on the page instead.
+                    menuPortalTarget={typeof document === "undefined" ? undefined : document.body}
+                    chakraStyles={{ menuList: (base) => ({ ...base, maxHeight: "240px" }) }}
+                    styles={{ menuPortal: (base) => ({ ...base, zIndex: 2000 }) }}
+                  />
+                </Box>
               </Table.Cell>
               <Table.Cell>
                 {pendingAck?.id === r.id ? (

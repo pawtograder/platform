@@ -8,7 +8,20 @@ import { createAuthenticatedClient, createClass, createUserInClass, loginAsUser,
 /** The review table's row for exam #n (exams are numbered in page order: Alice #1, Bob #2). Rows are
  * found by their exam cell because every row's student picker lists every name. */
 function examRow(page: Page, n: number) {
-  return page.locator("tr").filter({ has: page.getByRole("cell", { name: `#${n}`, exact: true }) });
+  // Visible rows only: the page also renders a hidden copy of the table for another layout.
+  return page
+    .locator("tr")
+    .filter({ visible: true })
+    .filter({ has: page.getByRole("cell", { name: `#${n}`, exact: true }) });
+}
+
+/** Chooses a student in exam #n's picker the way an instructor does: type part of the name, then Enter. */
+async function pickStudent(page: Page, n: number, name: string) {
+  const picker = page.getByLabel(`Student for exam #${n}`).filter({ visible: true });
+  await picker.click();
+  await picker.pressSequentially(name.slice(0, 4));
+  await expect(page.getByRole("option", { name, exact: true })).toBeVisible();
+  await page.keyboard.press("Enter");
 }
 
 /** Counts full page loads from here on, so a test can show the page updated without a reload. */
@@ -90,7 +103,11 @@ test.describe("Scan & Match progress and refresh (#1262)", () => {
     await expect(page.getByRole("button", { name: /Create \d+ submission/ })).toBeDisabled();
     for (const button of await page.getByRole("button", { name: "Confirm" }).all()) await expect(button).toBeDisabled();
     for (const button of await page.getByRole("button", { name: "Skip" }).all()) await expect(button).toBeDisabled();
-    for (const select of await page.getByRole("combobox").all()) await expect(select).toBeDisabled();
+    // One picker per scanned exam, all disabled; counted, so the check cannot pass on an empty list.
+    // Looked up inside the visible rows: a disabled picker's input has no size and no role.
+    const pickers = page.locator("tr").filter({ visible: true }).locator('input[aria-label^="Student for exam #"]');
+    await expect(pickers).toHaveCount(3);
+    for (const picker of await pickers.all()) await expect(picker).toBeDisabled();
   });
 
   test("Create submissions refreshes the rows and the batch until it is completed, without a reload", async ({
@@ -159,7 +176,7 @@ test.describe("Confirming a student the scan does not name (#1265)", () => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/exam/scans`);
     const row = examRow(page, 1);
-    await row.getByRole("combobox").selectOption({ label: "Clark Johnson" });
+    await pickStudent(page, 1, "Clark Johnson");
     await expect(row.getByText("Scan: “ALPHA TESTER” · Selected: “Clark Johnson”")).toBeVisible();
     // The worker's score was for no one in particular; it must not be shown as Clark's.
     await expect.poll(async () => (await scannedRow(batchId, 0)).matched_profile_id).toBe(clark.private_profile_id);
@@ -278,5 +295,82 @@ test.describe("Confirming a student the scan does not name (#1265)", () => {
         signed: c.allowed
       });
     }
+  });
+});
+
+test.describe("Match review after an error (#1270)", () => {
+  /** A batch whose matches were confirmed and whose finalize then ran out of retries. */
+  async function erroredBatch(label: string, confirmWho: "both" | "alice") {
+    const seeded = await seedUploadedBatch(label);
+    await processToReview(seeded.batchId);
+    const confirm = supabase
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", seeded.batchId);
+    const { error: confirmErr } =
+      confirmWho === "both"
+        ? await confirm.not("matched_profile_id", "is", null)
+        : await confirm.eq("matched_profile_id", seeded.alice.private_profile_id);
+    expect(confirmErr).toBeNull();
+    const { error } = await supabase
+      .from("exam_scan_batches")
+      .update({ status: "error", error: "finalize failed after 5 retries" })
+      .eq("id", seeded.batchId);
+    expect(error).toBeNull();
+    return seeded;
+  }
+
+  test("an errored batch shows its matches, and Create finishes the confirmed exams", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { course, instructor, assignment, batchId } = await erroredBatch("error create", "both");
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/exam/scans`);
+    const loads = countLoads(page);
+    await expect(page.getByText("Failed", { exact: true }).filter({ visible: true })).toBeVisible();
+    await expect(page.getByText("finalize failed after 5 retries").filter({ visible: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry processing" })).toBeVisible();
+    await expect(examRow(page, 1).getByText("confirmed")).toBeVisible();
+    await expect(examRow(page, 2).getByText("confirmed")).toBeVisible();
+    // Read-only while errored: finalize messages from the failed run may still be in the queue.
+    await expect(examRow(page, 1).locator('input[aria-label="Student for exam #1"]')).toBeDisabled();
+    await expect(examRow(page, 1).getByRole("button", { name: "Confirm" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Create 2 submission(s)" }).click();
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return batchStatus(batchId);
+        },
+        { timeout: 90_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("completed");
+    for (const n of [1, 2]) await expect(examRow(page, n).getByText("created")).toBeVisible({ timeout: 15_000 });
+    expect(loads.n).toBe(0);
+  });
+
+  test("Retry processing goes back to review and keeps the confirmed match", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { course, instructor, alice, bob, assignment, batchId } = await erroredBatch("error retry", "alice");
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/exam/scans`);
+    await page.getByRole("button", { name: "Retry processing" }).click();
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          return batchStatus(batchId);
+        },
+        { timeout: 90_000, intervals: [1000, 2000, 3000] }
+      )
+      .toBe("review");
+    await expect(page.getByText("Needs review").filter({ visible: true })).toBeVisible({ timeout: 15_000 });
+    expect(await scannedRow(batchId, 0)).toMatchObject({
+      matched_profile_id: alice.private_profile_id,
+      match_status: "confirmed"
+    });
+    expect((await scannedRow(batchId, 1)).matched_profile_id).toBe(bob.private_profile_id);
+    // Back in review, the rows can be worked on again.
+    await expect(page.getByLabel("Student for exam #2").filter({ visible: true })).toBeEnabled();
   });
 });
