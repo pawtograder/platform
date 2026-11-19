@@ -424,7 +424,7 @@ Deno.test(
       ok({ username: "cs4535" }),
       ...ownedBy("pawtograder-admin"),
       new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 }),
-      ok({}),
+      ok({ empty: false, default_branch: "main" }),
       unprocessable("repository file already exists [path: .github/workflows/grade.yml]"),
       ok(head)
     ];
@@ -435,6 +435,45 @@ Deno.test(
         "PATCH https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1"
       );
       assertEquals(calls[5].body, { template: true, private: true });
+    });
+  }
+);
+
+Deno.test(
+  "ensureHandoutRepo: an adopted empty repo gets a README on main; another default branch is refused",
+  async () => {
+    const exists = () =>
+      new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 });
+    const gone = { path: ".github/workflows/grade.yml", content: null };
+    const empty = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      exists(),
+      ok({ empty: true, default_branch: "main" }),
+      ok({}, 201),
+      status(404),
+      ok(head)
+    ];
+    await withForgejo(empty, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+      assertEquals(
+        `${calls[6].method} ${calls[6].url}`,
+        "POST https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/README.md"
+      );
+      assertEquals(calls[6].body!.branch, "main");
+    });
+    const trunk = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      exists(),
+      ok({ empty: false, default_branch: "trunk" })
+    ];
+    await withForgejo(trunk, async () => {
+      await assertRejects(
+        () => ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]),
+        Error,
+        "default branch isn't main"
+      );
     });
   }
 );

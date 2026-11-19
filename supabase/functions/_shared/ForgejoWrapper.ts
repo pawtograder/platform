@@ -229,7 +229,8 @@ export async function ensureRepoFromTemplate(
  * Sets up a handout as a private template repo on main, and returns main's head sha. A file with
  * `content` is added, and one with null content is removed. A retry, or a handout staff made by hand, is
  * adopted: an existing repo is made private and a template, and a file already there is kept, since
- * staff may have edited it.
+ * staff may have edited it. An adopted repo with no commits gets a README, and one whose default branch
+ * isn't main is refused.
  */
 export async function ensureHandoutRepo(
   config: ForgejoConfig,
@@ -239,6 +240,7 @@ export async function ensureHandoutRepo(
   const path = repoPath(repository);
   const [org, name] = repository.split("/");
   await ensureOrg(config, org);
+  const writes = [...files];
   const created = await forgejo(config, "POST", `/orgs/${encodeURIComponent(org)}/repos`, {
     name,
     private: true,
@@ -251,13 +253,17 @@ export async function ensureHandoutRepo(
     // Student repos are generated from the handout, which Forgejo allows only from a template.
     const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true, private: true });
     if (!marked.ok) throw await failure(marked, "repo template update");
-    await marked.body?.cancel();
+    const adopted = (await marked.json()) as { empty: boolean; default_branch: string };
+    // An empty repo has no main until its first file, which Forgejo then commits to main.
+    if (adopted.empty) writes.unshift({ path: "README.md", content: `# ${name}\n` });
+    else if (adopted.default_branch !== "main")
+      throw new Error("The existing handout repo's default branch isn't main");
   } else if (!created.ok) {
     throw await failure(created, "repo create");
   } else {
     await created.body?.cancel();
   }
-  for (const file of files) {
+  for (const file of writes) {
     const contents = `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`;
     if (file.content === null) {
       const found = await forgejo(config, "GET", `${contents}?ref=main`);
