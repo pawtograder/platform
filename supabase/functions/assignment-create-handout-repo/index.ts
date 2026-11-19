@@ -6,8 +6,11 @@ import {
   deleteFileFromRepo,
   getDefaultBranchHeadSha,
   GRADE_WORKFLOW_PATH,
+  publicSupabaseUrl,
   updateAutograderWorkflowHash
 } from "../_shared/GitHubWrapper.ts";
+import { ensureHandoutRepo, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { forgejoGradeWorkflow } from "../_shared/forgejoGradeWorkflow.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserHasCapabilityOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
@@ -38,7 +41,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // error. One extra row's worth of columns is a fine trade for real types.
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("*, classes(slug,github_org)")
+    .select("*, classes(slug,github_org,forgejo_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -46,14 +49,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!assignment) {
     throw new UserVisibleError("Assignment not found", 400);
   }
-  if (assignment.git_provider !== "github") {
-    throw new UserVisibleError("This assignment uses Forgejo. GitHub repository setup is unavailable.", 400);
-  }
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }
   const handoutRepoOrg = assignment.classes.github_org;
-  if (!handoutRepoOrg && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission") {
+  if (
+    !handoutRepoOrg &&
+    assignment.git_provider === "github" &&
+    assignment.repo_mode !== "none" &&
+    assignment.repo_mode !== "no_submission"
+  ) {
     throw new UserVisibleError("Class does not have a GitHub organization", 400);
   }
   scope.setTag("repo_mode", assignment.repo_mode);
@@ -109,6 +114,37 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       skipped: true,
       repo_mode: assignment.repo_mode
     };
+  }
+
+  if (assignment.git_provider === "forgejo") {
+    // Student repos are generated from the handout. Forgejo has no fork path yet (FORGEJO_UNSUPPORTED_REPO_MODES).
+    if (assignment.repo_mode !== "template_only_staff") {
+      throw new UserVisibleError("Forgejo assignments can only use a template handout for now.", 400);
+    }
+    const config = forgejoConfig();
+    if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
+    // Lowercased like every Forgejo repository Pawtograder stores (#1093), since Forgejo names are case-insensitive.
+    const org = (assignment.classes.forgejo_org || assignment.classes.slug).toLowerCase();
+    const name = `${assignment.classes.slug}-handout-${assignment.slug}`.toLowerCase();
+    scope.setTag("handout_repo_name", name);
+    scope.setTag("handout_repo_org", org);
+    // Without an autograder, grade.yml would fail in every student repo with nothing to report to.
+    const files =
+      assignment.has_autograder === false
+        ? []
+        : [{ path: GRADE_WORKFLOW_PATH, content: forgejoGradeWorkflow(publicSupabaseUrl()) }];
+    const sha = await ensureHandoutRepo(config, `${org}/${name}`, files);
+    // The forgejo-reconciler sets autograder.workflow_sha from this handout's grade.yml once it's released.
+    // Matching on the provider means an assignment switched to GitHub meanwhile never points at this repo.
+    const { data: saved, error } = await adminSupabase
+      .from("assignments")
+      .update({ template_repo: `${org}/${name}`, latest_template_sha: sha })
+      .eq("id", assignment_id)
+      .eq("git_provider", "forgejo")
+      .select("id");
+    if (error) throw error;
+    if (!saved.length) throw new UserVisibleError("This assignment no longer uses Forgejo.", 409);
+    return { repo_name: name, org_name: org, repo_mode: assignment.repo_mode };
   }
 
   if (action.kind === "inherit_from_source") {

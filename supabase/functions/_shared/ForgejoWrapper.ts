@@ -225,6 +225,61 @@ export async function ensureRepoFromTemplate(
   throw await failure(res, "repo generate from template");
 }
 
+/**
+ * Sets up a handout as a private template repo with `files` on main, and returns main's head sha. A
+ * retry, or a handout staff made by hand, is adopted: an existing repo is marked as a template, and a
+ * file already there is kept, since staff may have edited it.
+ */
+export async function ensureHandoutRepo(
+  config: ForgejoConfig,
+  repository: string,
+  files: { path: string; content: string }[]
+): Promise<string> {
+  const path = repoPath(repository);
+  const [org, name] = repository.split("/");
+  await ensureOrg(config, org);
+  const created = await forgejo(config, "POST", `/orgs/${encodeURIComponent(org)}/repos`, {
+    name,
+    private: true,
+    auto_init: true,
+    default_branch: "main",
+    template: true
+  });
+  if (created.status === 409) {
+    await created.body?.cancel();
+    // Student repos are generated from the handout, which Forgejo allows only from a template.
+    const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true });
+    if (!marked.ok) throw await failure(marked, "repo template update");
+    await marked.body?.cancel();
+  } else if (!created.ok) {
+    throw await failure(created, "repo create");
+  } else {
+    await created.body?.cancel();
+  }
+  for (const file of files) {
+    const bytes = new TextEncoder().encode(file.content);
+    const res = await forgejo(
+      config,
+      "POST",
+      `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`,
+      {
+        content: btoa(String.fromCharCode(...bytes)),
+        message: `Add ${file.path}`,
+        branch: "main"
+      }
+    );
+    if (res.ok) {
+      await res.body?.cancel();
+      continue;
+    }
+    const message = await res.text();
+    if (res.status !== 422 || !/file already exists/i.test(message)) {
+      throw new Error(`Forgejo file create failed: ${res.status} ${reason(message)}`);
+    }
+  }
+  return (await getCommit(config, repository, "main")).sha;
+}
+
 /** A file's text at `ref` (default branch when omitted), or null when the repo has no such file there. */
 export async function readFile(
   config: ForgejoConfig,
