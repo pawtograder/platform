@@ -4,8 +4,9 @@
  * into the text a grader reads.
  *
  * The implementation lives in _shared/examRegionText.ts and examVision.ts re-exports
- * it. lib/exam/regionMath.ts re-exports the same function, so this file and
- * tests/unit/exam-region-math.test.ts both test the code the worker runs (#1188).
+ * it. lib/exam/regionMath.ts re-exports the same function for the seeder and the UI;
+ * tests/unit/exam-region-math.test.ts only checks that re-export, so this file is
+ * where wordsInRegion's behavior is tested (#1188).
  *
  * Coordinates are normalized 0..1 with the origin at the top-left of the page.
  *
