@@ -1,5 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 
+import { isRefusedWriteError } from "./refusedWriteError";
+
 /** Who is reading the message. Changes only where to send them for help. */
 export type ErrorAudienceRole = "student" | "grader" | "instructor" | "admin";
 
@@ -47,9 +49,11 @@ export function getUserFacingErrorMessage(error: unknown, context?: StudentFacin
   }
 
   const code = getErrorCode(error);
-  // A write that changed 0 rows (lib/refineDataProvider.ts). RLS may have refused it, so the
-  // self-review and released-review contexts still get their specific 42501 messages.
-  const refusedWrite = isRefusedWrite(error);
+  // A write that changed 0 rows. The refine data provider and TableController both throw this
+  // (lib/refusedWriteError.ts). TableController turns the PGRST116 from an update's `.single()` into
+  // it, which is how editing a comment on a released review or after the self-review deadline fails:
+  // the UPDATE policy's USING clause matches 0 rows. So these contexts check it as well as 42501.
+  const refusedWrite = isRefusedWriteError(error);
   const permissionDenied = refusedWrite || code === "42501";
 
   if (permissionDenied && context?.releasedReviewGraderBlocked) {
@@ -64,8 +68,8 @@ export function getUserFacingErrorMessage(error: unknown, context?: StudentFacin
   const details = getErrorProperty(error, "details");
   const hint = getErrorProperty(error, "hint");
 
-  // Otherwise keep the data provider's own message. A 0-row write can also mean the row was
-  // deleted, and that message says so. The plain 42501 wording only mentions permissions.
+  // Otherwise keep the refusal's own message. A 0-row update can also mean the row was deleted,
+  // and that message says so. The plain 42501 wording only mentions permissions.
   if (refusedWrite) {
     return message?.trim() || permissionDeniedMessage(context?.role);
   }
@@ -176,14 +180,6 @@ function permissionDeniedMessage(role: ErrorAudienceRole | undefined): string {
 }
 
 /**
- * A write that RLS refused without a PostgREST error (0 rows changed). The refine data provider
- * marks these with `refusedWrite: true` (lib/refineDataProvider.ts).
- */
-function isRefusedWrite(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { refusedWrite?: unknown }).refusedWrite === true;
-}
-
-/**
  * Error codes that are expected on any request: an expired session, a conflict with existing data,
  * a check constraint, or a check a database function raised on purpose. The message already tells
  * the user what to do, so Sentry doesn't need them.
@@ -200,11 +196,11 @@ export type ExpectedErrorOptions = {
 };
 
 /**
- * True when `error` is one the user caused and the message explains, not an app bug. A write the
- * data provider refused (0 rows changed) always counts.
+ * True when `error` is one the user caused and the message explains, not an app bug. A refused
+ * write (0 rows changed, see lib/refusedWriteError.ts) always counts.
  */
 export function isExpectedUserError(error: unknown, options?: ExpectedErrorOptions): boolean {
-  if (isRefusedWrite(error)) return true;
+  if (isRefusedWriteError(error)) return true;
   const code = getErrorCode(error);
   if (code === undefined) return false;
   return DEFAULT_EXPECTED_ERROR_CODES.includes(code) || (options?.expected?.includes(code) ?? false);
