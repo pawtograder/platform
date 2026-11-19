@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { registerRowSource, unregisterRowSource, type IngestRowSource } from "@/lib/bugReport/ingestGate";
 import useAuthState from "./useAuthState";
 import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -95,6 +96,11 @@ export function useIsGraderOrInstructor() {
 }
 
 /** Whether the viewer is a student in the **effective** course identity (including view-as). */
+/** The effective course role, or `undefined` outside a `ClassProfileProvider`. Never throws. */
+export function useOptionalCourseRole(): string | undefined {
+  return useContext(ClassProfileContext)?.role.role;
+}
+
 export function useIsStudent() {
   const { role } = useClassProfiles();
   return role.role === "student";
@@ -244,7 +250,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
           return;
         } catch (error) {
           if (cleanedUp) return;
-          const message = error instanceof Error ? error.message : String(error);
+          // No course role yet: this loads the roles. The default (student) wording is used.
+          const message = getUserFacingErrorMessage(error);
           if (attempt === maxAttempts) {
             console.error("Error fetching user roles:", error);
             setLoadError(message);

@@ -5,10 +5,17 @@ import {
   useRubricCheck,
   useRubricCriteria,
   useRubricChecksByRubric,
-  useRubricCriteriaByRubric
+  useRubricCriteriaByRubric,
+  useRubricById
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmissionController, useSubmissionFileComment } from "@/hooks/useSubmission";
+import { useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import {
+  useSubmissionController,
+  useSubmissionFileComment,
+  useSubmissionReviewOrGradingReview
+} from "@/hooks/useSubmission";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   Json,
@@ -420,9 +427,15 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const submissionController = useSubmissionController();
 
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isStudent = useIsStudent();
+  const errorRole = useViewerErrorRole();
 
   const rubricCheck = useRubricCheck(comment?.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
+  const rubricForCriteria = useRubricById(rubricCriteria?.rubric_id);
+  // The comment's own review, for the released-review message (issue #446).
+  const submissionReviewForComment = useSubmissionReviewOrGradingReview(comment?.submission_review_id ?? undefined);
 
   if (!rubricCheck || !rubricCriteria || !comment) {
     return <Skeleton height="100px" width="100%" />;
@@ -573,7 +586,23 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                         setIsEditing(false);
                       }}
                       sendMessage={async (message) => {
-                        await submissionController.submission_file_comments.update(comment.id, { comment: message });
+                        try {
+                          await submissionController.submission_file_comments.update(comment.id, {
+                            comment: message
+                          });
+                        } catch (error) {
+                          // MessageInput toasts what we throw and keeps the editor open. Same context
+                          // as handleEditComment in rubric-sidebar.tsx.
+                          throw new Error(
+                            getUserFacingErrorMessage(error, {
+                              role: errorRole,
+                              isStudent,
+                              rubricReviewRound: rubricForCriteria?.review_round ?? null,
+                              releasedReviewGraderBlocked:
+                                isGraderOrInstructor && !isInstructor && Boolean(submissionReviewForComment?.released)
+                            })
+                          );
+                        }
                         setIsEditing(false);
                       }}
                     />

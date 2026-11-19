@@ -1126,6 +1126,7 @@ function ConvertMissingToZeroDialog({ columnId, onClose }: { columnId: number; o
 }
 
 function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: () => void }) {
+  const errorRole = useStaffErrorRole();
   const supabase = createClient();
   const [isDeleting, setIsDeleting] = useState(false);
   const columns = useGradebookColumns();
@@ -1193,7 +1194,7 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
                         } catch (error) {
                           toaster.error({
                             title: "Error deleting gradebook column",
-                            description: getErrorMessage(error)
+                            description: getErrorMessage(error, { role: errorRole })
                           });
                         } finally {
                           setIsDeleting(false);

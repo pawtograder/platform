@@ -69,6 +69,7 @@ import { formatDistanceToNow } from "date-fns";
 import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Office hours form and UI helper types
@@ -976,6 +977,7 @@ const HelpRequestStudents = ({
  * @returns JSX element for the chat interface with controls
  */
 export default function HelpRequestChat({ request_id }: { request_id: number }) {
+  const errorRole = useViewerErrorRole();
   const request = useHelpRequest(request_id);
   const { private_profile_id } = useClassProfiles();
   const isStudent = useIsStudent();
@@ -1169,11 +1171,11 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       } catch (error) {
         toaster.error({
           title: "Action Failed",
-          description: `Failed to resolve the request: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to resolve the request: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
       }
     },
-    [helpRequests, request, private_profile_id, logActivityForAllStudents, resolutionModal]
+    [helpRequests, request, private_profile_id, logActivityForAllStudents, resolutionModal, errorRole]
   );
 
   const resolveRequest = useCallback(async () => {

@@ -12,6 +12,8 @@ import { AlertCircle, CheckCircle, ChevronDown, ChevronRight, ChevronUp, XCircle
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import EnrollmentsTable from "./enrollmentsTable";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ClassWithSyncStatus = GetResult<
   Database["public"],
@@ -161,6 +163,7 @@ function SyncStatusIndicator({ syncStatus }: { syncStatus: SisSyncStatus }) {
 }
 
 function LinkedSectionsTab() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const [classWithSyncStatus, setClassWithSyncStatus] = useState<ClassWithSyncStatus>();
   const [isAccordionOpen, setIsAccordionOpen] = useState(false);
@@ -197,7 +200,7 @@ function LinkedSectionsTab() {
         }
       } catch (exception) {
         // Handle any thrown exceptions
-        const errorMessage = exception instanceof Error ? exception.message : String(exception);
+        const errorMessage = getUserFacingErrorMessage(exception, { role: errorRole });
         toaster.create({
           title: "Error fetching section sync status",
           description: `Unexpected error: ${errorMessage}`,
@@ -206,7 +209,7 @@ function LinkedSectionsTab() {
       }
     };
     fetchSections();
-  }, [course_id]);
+  }, [course_id, errorRole]);
 
   const syncStatusForClassSection = useCallback(
     (section: { id: number }) => {

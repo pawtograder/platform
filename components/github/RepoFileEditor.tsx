@@ -16,6 +16,8 @@ import { configureMonacoYaml } from "monaco-yaml";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as YAML from "yaml";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type RepoFileEditorProps = {
   courseId: number;
@@ -105,6 +107,7 @@ function isKnownSchemaUrl(url: string, kind: "pawtograder" | "workflow"): boolea
  *   stale-sha conflict it re-fetches and warns.
  */
 export default function RepoFileEditor({ courseId, orgName, repoName, path, paths, onSaved }: RepoFileEditorProps) {
+  const errorRole = useViewerErrorRole();
   const { colorMode } = useColorMode();
   const monacoRef = useRef<Monaco | null>(null);
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
@@ -334,7 +337,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     try {
       parsed = YAML.parse(content);
     } catch (err) {
-      return `Invalid YAML: ${err instanceof Error ? err.message : String(err)}`;
+      return `Invalid YAML: ${getUserFacingErrorMessage(err, { role: errorRole })}`;
     }
     if (isPawtograderYml(currentPath)) {
       const result = validatePawtograderConfig(parsed);
@@ -343,7 +346,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
       }
     }
     return undefined;
-  }, [content, currentPath, loading, loadError]);
+  }, [content, currentPath, loading, loadError, errorRole]);
 
   const blockingErrors = useMemo(() => {
     const errs = [...markerErrors];

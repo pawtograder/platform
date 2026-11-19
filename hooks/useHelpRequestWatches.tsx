@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useIsReadOnly } from "./useClassProfiles";
 import { useCourseController } from "./useCourseController";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Hook for managing help request watch status for the current user.
@@ -17,6 +18,7 @@ import { useCourseController } from "./useCourseController";
  * @returns Object containing watch status and setter function
  */
 export function useHelpRequestWatchStatus(helpRequestId: number) {
+  const errorRole = useViewerErrorRole();
   const controller = useCourseController();
   const isReadOnly = useIsReadOnly();
   const [curWatch, setCurWatch] = useState<HelpRequestWatcher | undefined>(undefined);
@@ -77,11 +79,11 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
       } catch (error) {
         toaster.error({
           title: status ? "Failed to watch help request" : "Failed to unwatch help request",
-          description: getErrorMessage(error)
+          description: getErrorMessage(error, { role: errorRole })
         });
       }
     },
-    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher, isReadOnly]
+    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher, isReadOnly, errorRole]
   );
 
   return {

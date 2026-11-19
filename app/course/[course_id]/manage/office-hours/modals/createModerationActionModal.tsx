@@ -12,6 +12,8 @@ import { useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHour
 import { useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ModerationActionFormData = {
   student_profile_id: string;
@@ -35,6 +37,7 @@ type CreateModerationActionModalProps = {
  * Uses real-time data for help requests to ensure current information.
  */
 export default function CreateModerationActionModal({ isOpen, onClose, onSuccess }: CreateModerationActionModalProps) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { private_profile_id } = useClassProfiles();
 
@@ -122,7 +125,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create moderation action: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to create moderation action: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

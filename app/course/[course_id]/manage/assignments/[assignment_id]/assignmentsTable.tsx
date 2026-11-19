@@ -2199,6 +2199,7 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
 }
 
 function DownloadAllButton() {
+  const errorRole = useStaffErrorRole();
   const { assignment_id, course_id } = useParams();
   const supabase = useMemo(() => createClient(), []);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -2325,7 +2326,7 @@ function DownloadAllButton() {
       URL.revokeObjectURL(url);
       toaster.success({ title: "Download started", description: "Your ZIP is being downloaded." });
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = getUserFacingErrorMessage(e, { role: errorRole });
       toaster.error({ title: "Unexpected error", description: message });
     } finally {
       setIsDownloading(false);
