@@ -27,6 +27,7 @@ import {
   coderEmail,
   coderUsername,
   type Deps,
+  gitCredentialsFile,
   linkUrl,
   OPEN_BUDGET_MS,
   openWorkspace,
@@ -41,6 +42,7 @@ import {
 } from "./CoderWorkspace.ts";
 import { budgetClient, supabaseWorkspaceDb } from "./CoderWorkspaceDb.ts";
 import type { CoderAgent, CoderWorkspace } from "./CoderWrapper.ts";
+import { IDLE_TOKEN_MS, REPLACED_TOKEN_GRACE_MS } from "./ForgejoWrapper.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 const CODER_URL = "https://coder.example.com";
@@ -131,6 +133,7 @@ class FakeCoder {
   private seq = 0;
   keys: { key: string; id: string; userId: string; name: string; expiresAt: number; deleted: boolean }[] = [];
   secrets: Record<string, Record<string, { value: string; file_path: string }>> = {};
+  secretUpdatedAt: Record<string, Record<string, string>> = {};
   failSecretWrite = false;
   failKeyDelete = false;
   noProviders = false;
@@ -222,11 +225,26 @@ class FakeCoder {
       assert(path.startsWith("/users/me/secrets"), `a student key used for ${method} ${path}`);
       if (this.failSecretWrite) return json(500, { message: "Internal error writing secret." });
       const secrets = (this.secrets[key.userId] ??= {});
+      const updatedAt = (this.secretUpdatedAt[key.userId] ??= {});
+      if (path === "/users/me/secrets" && method === "GET") {
+        return json(
+          200,
+          Object.keys(secrets).map((name) => ({ name, updated_at: updatedAt[name] }))
+        );
+      }
+      if ((m = path.match(/^\/users\/me\/secrets\/([^/]+)$/)) && method === "DELETE") {
+        const name = decodeURIComponent(m[1]);
+        if (!secrets[name]) return json(404, { message: "Resource not found" });
+        delete secrets[name];
+        delete updatedAt[name];
+        return new Response(null, { status: 204 });
+      }
       if ((m = path.match(/^\/users\/me\/secrets\/([^/]+)$/)) && method === "PATCH") {
         const name = decodeURIComponent(m[1]);
         if (!secrets[name])
           return json(404, { message: "Resource not found or you do not have access to this resource" });
         secrets[name] = { ...secrets[name], ...body };
+        updatedAt[name] = this.clock.iso();
         return json(200, { name, file_path: secrets[name].file_path });
       }
       if (path === "/users/me/secrets" && method === "POST") {
@@ -237,6 +255,7 @@ class FakeCoder {
           });
         }
         secrets[body.name] = { value: body.value, file_path: body.file_path };
+        updatedAt[body.name] = this.clock.iso();
         return json(201, { name: body.name, file_path: body.file_path });
       }
       throw new Error(`fake Coder: no student-key route for ${method} ${path}`);
@@ -1065,7 +1084,9 @@ Deno.test("repo_url is <FORGEJO_URL>/<owner>/<repo>.git, and a name the template
     "cs3500/.coder-modules",
     "cs3500/hw1/extra",
     "cs 3500/hw1",
-    "cs3500/hw1?x=1"
+    "cs3500/hw1?x=1",
+    "cs--3500/hw1",
+    "cs3500-/hw1"
   ]) {
     const t = setup();
     t.db.repos[0] = repo(501, "prof-alex", null, name);
@@ -1076,6 +1097,21 @@ Deno.test("repo_url is <FORGEJO_URL>/<owner>/<repo>.git, and a name the template
       `nothing is created for "${name}"`
     );
     assertEquals(t.db.rows.length, 0);
+  }
+});
+
+Deno.test("gitCredentialsFile: distinct repositories get distinct files, split at the first --", () => {
+  assertEquals(gitCredentialsFile("cs3500/hw1-alex"), "/home/coder/.git-credentials-cs3500--hw1-alex");
+  // The only owner/name pair that could share a file with a/b--c is a--b/c, and no Forgejo owner has "--".
+  assertEquals(gitCredentialsFile("a/b--c"), "/home/coder/.git-credentials-a--b--c");
+  for (const owner of ["a--b", "a-_b", "a..b", "a-", "a."]) {
+    let threw = false;
+    try {
+      gitCredentialsFile(`${owner}/c`);
+    } catch (e) {
+      threw = e instanceof IllegalArgumentError;
+    }
+    assert(threw, owner);
   }
 });
 
@@ -2400,4 +2436,86 @@ Deno.test("credentials: each open's key has its own name, so a live key never bl
     names.every((n) => n.startsWith("pawtograder-secret-write-501-")),
     names.join(", ")
   );
+});
+
+/** A second Forgejo assignment, 43, with Alex's repository 504 on it. */
+function addSecondRepository(db: FakeDb) {
+  db.assignments.push({ id: 43, class_id: 7, git_provider: "forgejo" });
+  db.repos.push({ ...repo(504, "prof-alex", null, "cs3500/hw2-alex"), assignment_id: 43 });
+}
+
+function tokenIn(coder: FakeCoder, coderUserId: string, secret: string): string {
+  const m = (coder.secrets[coderUserId]?.[secret]?.value ?? "").match(/^https:\/\/x:([0-9a-f]+)@/);
+  assert(m, `no credentials in ${secret}`);
+  return m[1];
+}
+
+Deno.test(
+  "credentials: a repository no open has re-minted for IDLE_TOKEN_MS loses its token and secret at the next open of another",
+  async () => {
+    const { clock, coder, db, forgejo, deps, coderUserId } = await runningWorkspace();
+    addSecondRepository(db);
+    const hw1 = storedToken(coder, coderUserId);
+
+    clock.t += IDLE_TOKEN_MS - 60_000;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assert(forgejo.live("alex.kim", hw1), "hw1 was opened less than IDLE_TOKEN_MS ago");
+    assertEquals(storedToken(coder, coderUserId), hw1);
+    const hw2 = tokenIn(coder, coderUserId, "git_credentials_repo_504");
+
+    const hw2Workspace = coder.workspaces.find((w) => w.id !== coder.workspaces[0].id)!;
+    stop(hw2Workspace);
+    clock.t += 60 * 60_000;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assertEquals(forgejo.live("alex.kim", hw1), null, "hw1's token is revoked");
+    assertEquals(coder.secrets[coderUserId][SECRET], undefined, "hw1's secret is deleted");
+    const hw2Again = tokenIn(coder, coderUserId, "git_credentials_repo_504");
+    assert(forgejo.live("alex.kim", hw2Again), "the opened repository keeps its new token");
+    assertEquals(forgejo.live("alex.kim", hw2), null, "and its replaced one goes as before");
+    assert(coder.secrets[coderUserId].git_email);
+
+    // Opening hw1 again gives it a new token and secret.
+    stop(coder.workspaces[0]);
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+    assert(forgejo.live("alex.kim", storedToken(coder, coderUserId)));
+    assert(forgejo.live("alex.kim", hw2Again), "hw2 was opened an hour ago");
+  }
+);
+
+Deno.test(
+  "credentials: the secret of a repository whose token the reconciler revoked is deleted, past the grace window",
+  async () => {
+    const { clock, coder, db, forgejo, deps, coderUserId } = await runningWorkspace();
+    addSecondRepository(db);
+    // What revokeDroppedTokens does to hw1's tokens.
+    forgejo.tokens["alex.kim"] = forgejo.tokens["alex.kim"].filter((t) => !t.name.startsWith("pawtograder-coder-501-"));
+
+    // Written moments ago: it may hold a concurrent open's new token that the token list missed.
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assert(coder.secrets[coderUserId][SECRET], "a secret written inside the grace window is kept");
+
+    const hw2Workspace = coder.workspaces.find((w) => w.id !== coder.workspaces[0].id)!;
+    stop(hw2Workspace);
+    clock.t += REPLACED_TOKEN_GRACE_MS;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assertEquals(coder.secrets[coderUserId][SECRET], undefined);
+    assert(coder.secrets[coderUserId].git_credentials_repo_504);
+  }
+);
+
+Deno.test("credentials: a failed cleanup of idle credentials doesn't stop the open", async () => {
+  const { clock, coder, db, forgejo, deps, coderUserId } = await runningWorkspace();
+  addSecondRepository(db);
+  const hw1 = storedToken(coder, coderUserId);
+  clock.t += IDLE_TOKEN_MS;
+  const realFetch = coder.fetch;
+  coder.fetch = (input, init) =>
+    new URL(String(input)).pathname === "/api/v2/users/me/secrets" && (init?.method ?? "GET") === "GET"
+      ? Promise.resolve(new Response(JSON.stringify({ message: "boom" }), { status: 500 }))
+      : realFetch(input, init);
+  deps.coder = { ...deps.coder, fetch: coder.fetch };
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+  assertEquals(forgejo.live("alex.kim", hw1), null, "the token is revoked before the secret list fails");
+  assert(coder.secrets[coderUserId][SECRET], "the secret is left for the next open");
+  assert(coder.secrets[coderUserId].git_credentials_repo_504);
 });

@@ -21,6 +21,7 @@ import {
   type CoderWorkspace,
   createOidcUser,
   createWorkspace,
+  deleteOwnSecret,
   deleteUserKey,
   findUserByEmail,
   getAgentLogs,
@@ -32,13 +33,20 @@ import {
   getUser,
   getWorkspace,
   getWorkspaceByName,
+  listOwnSecrets,
   listUserKeys,
   mintUserKey,
   postBuild,
   writeOwnSecret
 } from "./CoderWrapper.ts";
 import { CLOUD_WORKSPACES_FEATURE, courseFeatureEffectiveEnabled } from "./courseFeatures.ts";
-import { type ForgejoConfig, mintRepoToken, revokeReplacedTokens } from "./ForgejoWrapper.ts";
+import {
+  type ForgejoConfig,
+  mintRepoToken,
+  REPLACED_TOKEN_GRACE_MS,
+  revokeIdleTokens,
+  revokeReplacedTokens
+} from "./ForgejoWrapper.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 export const CODER_ORGANIZATION = "default";
@@ -243,29 +251,46 @@ export function linkUrl(coderUrl: string, providerId?: string): string {
 const CLONE_PATH = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)$/;
 
 /**
+ * Forgejo refuses an owner with two `-`, `_` or `.` in a row or one at the end, so no owner contains `--` or
+ * ends in `-`. gitCredentialsFile relies on that, so an owner that breaks it is refused too.
+ */
+function clonePath(repository: string): { owner: string; name: string } {
+  const m = repository.match(CLONE_PATH);
+  if (!m || /[-._]{2}|[-._]$/.test(m[1])) {
+    throw new IllegalArgumentError("This repository can't be opened in a workspace");
+  }
+  return { owner: m[1], name: m[2] };
+}
+
+/**
  * The template's repo_url, `<FORGEJO_URL>/<owner>/<repo>.git`. Coder refuses any other shape with a
  * 400, so a repository whose name doesn't fit is refused before anything is created.
  */
 export function cloneUrl(forgejoUrl: string, repository: string): string {
-  const m = repository.match(CLONE_PATH);
-  if (!m) throw new IllegalArgumentError("This repository can't be opened in a workspace");
-  return `${forgejoUrl}/${m[1]}/${m[2]}.git`;
-}
-
-/** Must match `git_credentials` in the template's main.tf. */
-export function gitCredentialsFile(repository: string): string {
-  const m = repository.match(CLONE_PATH);
-  if (!m) throw new IllegalArgumentError("This repository can't be opened in a workspace");
-  return `/home/coder/.git-credentials-${m[1]}--${m[2]}`;
+  const { owner, name } = clonePath(repository);
+  return `${forgejoUrl}/${owner}/${name}.git`;
 }
 
 /**
- * Per repository: Coder applies all of an owner's secrets to every workspace. Coder caps a user at
- * 50 secrets and nothing deletes these yet; the workspace cleanup from #1223 should remove this
- * secret with the workspace (as the student, through a short-lived key, like the write).
+ * Must match `git_credentials` in the template's main.tf. The first `--` separates the owner from the name,
+ * since no owner contains `--` or ends in `-` (clonePath), so two repositories never share a file.
+ */
+export function gitCredentialsFile(repository: string): string {
+  const { owner, name } = clonePath(repository);
+  return `/home/coder/.git-credentials-${owner}--${name}`;
+}
+
+/**
+ * Per repository: Coder applies all of an owner's secrets to every workspace, and caps a user at 50
+ * secrets. removeIdleCredentials deletes the secret of a repository that has no live token.
  */
 export function gitCredentialsSecretName(repositoryId: number): string {
   return `git_credentials_repo_${repositoryId}`;
+}
+
+function secretRepositoryId(name: string): number | null {
+  const m = name.match(/^git_credentials_repo_(\d+)$/);
+  return m && Number.isSafeInteger(Number(m[1])) ? Number(m[1]) : null;
 }
 
 export function gitCredentialsLine(forgejoUrl: string, token: string): string {
@@ -326,6 +351,9 @@ async function deliverGitCredentials(
         { ...coder, token: key },
         { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
       ).catch((e) => console.error("[workspace-open] Commit email secret write failed", e));
+      await removeIdleCredentials(deps, { ...coder, token: key }, login, repo.id, now).catch((e) =>
+        console.error("[workspace-open] Idle credentials cleanup failed; the next open retries it", e)
+      );
     } finally {
       try {
         await deleteUserKey(coder, user.id, keyId);
@@ -346,6 +374,30 @@ async function deliverGitCredentials(
     return credentialsUnavailable(
       "Pawtograder couldn't give the workspace access to your repository. Try again in a minute."
     );
+  }
+}
+
+/**
+ * Forgejo tokens don't expire, and Coder writes every secret into every workspace, so without this a student
+ * who opened six repositories would carry six live tokens into each later workspace (#1303 review). Revokes
+ * the tokens of the student's other repositories that no open has replaced for IDLE_TOKEN_MS, then deletes
+ * the secret of each other repository that has no token left, whether revoked here or by the reconciler.
+ * `studentCoder` holds the student's short-lived key: the owner gets a 403 on another user's secrets.
+ */
+async function removeIdleCredentials(
+  deps: Deps,
+  studentCoder: CoderConfig,
+  login: string,
+  keep: number,
+  now: number
+): Promise<void> {
+  const live = await revokeIdleTokens(deps.forgejo, login, keep, now);
+  for (const secret of await listOwnSecrets(studentCoder)) {
+    const id = secretRepositoryId(secret.name);
+    if (id === null || id === keep || live.has(id)) continue;
+    // A concurrent open of that repository may have written it after the token list above was read.
+    if (!(Date.parse(secret.updated_at) <= now - REPLACED_TOKEN_GRACE_MS)) continue;
+    await deleteOwnSecret(studentCoder, secret.name);
   }
 }
 

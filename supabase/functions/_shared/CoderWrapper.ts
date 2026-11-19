@@ -339,6 +339,22 @@ export async function deleteUserKey(config: CoderConfig, userId: string, keyId: 
   if (error && status !== 404) throw error;
 }
 
+export type CoderSecret = { name: string; updated_at: string };
+
+export async function listOwnSecrets(config: CoderConfig): Promise<CoderSecret[]> {
+  return await get<CoderSecret[]>(config, "secret list", "/users/me/secrets");
+}
+
+export async function deleteOwnSecret(config: CoderConfig, name: string): Promise<void> {
+  const { status, error } = await coder(
+    config,
+    "secret delete",
+    "DELETE",
+    `/users/me/secrets/${encodeURIComponent(name)}`
+  );
+  if (error && status !== 404) throw error;
+}
+
 export async function writeOwnSecret(
   config: CoderConfig,
   secret: { name: string; value: string; file_path: string }

@@ -125,6 +125,15 @@ export function coderTokenName(repositoryId: number, mintedAt: number): string {
   return `${repoTokenPrefix(repositoryId)}${mintedAt}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
+/**
+ * Forgejo tokens don't expire. A repository whose newest token is this old hasn't been opened in that time, so its
+ * tokens are revoked: by the next open of another repository (revokeIdleTokens), or by the reconciler for a student
+ * who doesn't open one again. Must match the interval in forgejo_repo_tokens_to_revoke.
+ */
+export const IDLE_TOKEN_MS = 14 * 24 * 60 * 60_000;
+
+const CODER_TOKEN_NAME = /^pawtograder-coder-(\d+)-(\d+)-/;
+
 function tokenMintedAt(name: string, repositoryId: number): number | null {
   const prefix = repoTokenPrefix(repositoryId);
   if (!name.startsWith(prefix)) return null;
@@ -200,6 +209,37 @@ export async function revokeRepoToken(
   });
   for (const name of names) await deleteToken(config, login, name);
   return names.length;
+}
+
+/**
+ * Revokes the tokens of every repository other than `keep` whose newest token was minted IDLE_TOKEN_MS or more
+ * before `now`. Returns the ids of the repositories that still have a token. A name without a readable repository
+ * and mint time is left alone.
+ */
+export async function revokeIdleTokens(
+  config: ForgejoConfig,
+  login: string,
+  keep: number,
+  now: number = Date.now()
+): Promise<Set<number>> {
+  const byRepository = new Map<number, { name: string; at: number }[]>();
+  for (const name of await listCoderTokenNames(config, login)) {
+    const m = name.match(CODER_TOKEN_NAME);
+    if (!m || !Number.isSafeInteger(Number(m[1])) || !Number.isSafeInteger(Number(m[2]))) continue;
+    const id = Number(m[1]);
+    const list = byRepository.get(id) ?? [];
+    list.push({ name, at: Number(m[2]) });
+    byRepository.set(id, list);
+  }
+  const live = new Set<number>();
+  for (const [id, tokens] of byRepository) {
+    if (id === keep || Math.max(...tokens.map((t) => t.at)) > now - IDLE_TOKEN_MS) {
+      live.add(id);
+      continue;
+    }
+    for (const t of tokens) await deleteToken(config, login, t.name);
+  }
+  return live;
 }
 
 async function deleteToken(config: ForgejoConfig, login: string, tokenName: string): Promise<void> {

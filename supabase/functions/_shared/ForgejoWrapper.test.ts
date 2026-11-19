@@ -17,11 +17,13 @@ import {
   type ForgejoConfig,
   getCommit,
   grantWrite,
+  IDLE_TOKEN_MS,
   mintRepoToken,
   readFile,
   REPLACED_TOKEN_GRACE_MS,
   repoPath,
   revokeAllCoderTokens,
+  revokeIdleTokens,
   revokeReplacedTokens,
   revokeRepoToken,
   startGrading,
@@ -305,6 +307,31 @@ Deno.test("revokeRepoToken: keeps a token minted after the cutoff, so a re-mint 
     );
   });
 });
+
+Deno.test(
+  "revokeIdleTokens: revokes other repositories whose newest token is IDLE_TOKEN_MS old, never the kept one",
+  async () => {
+    const idleOld = tokenAt(420, NOW - IDLE_TOKEN_MS - 1);
+    const idle = tokenAt(420, NOW - IDLE_TOKEN_MS, "bbbb0000");
+    const usedOld = tokenAt(421, NOW - 2 * IDLE_TOKEN_MS);
+    const used = tokenAt(421, NOW - IDLE_TOKEN_MS + 1);
+    const kept = tokenAt(42, NOW - 3 * IDLE_TOKEN_MS);
+    const list = [idleOld, idle, usedOld, used, kept, "pawtograder-coder-422-garbage", "laptop"].map((name) => ({
+      name
+    }));
+    await withForgejo([ok(list), noContent(), notFound()], async (calls) => {
+      const live = await revokeIdleTokens(config, "alex.kim", 42, NOW);
+      assertEquals([...live].sort(), [42, 421]);
+      assertEquals(
+        calls.slice(1).map((c) => [c.method, decodeURIComponent(c.url.split("/tokens/")[1])]),
+        [
+          ["DELETE", idleOld],
+          ["DELETE", idle]
+        ]
+      );
+    });
+  }
+);
 
 Deno.test("revokeAllCoderTokens: deletes only workspace tokens, across pages", async () => {
   const page1 = Array.from({ length: 50 }, (_, i) => ({ name: i % 2 ? `pawtograder-coder-${i}` : `laptop-${i}` }));
