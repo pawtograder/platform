@@ -247,6 +247,10 @@ class FakeCoder {
       const userId = decodeURIComponent(m[1]);
       if (method === "POST") {
         assertEquals(body.scope, "all");
+        // UniqueIndexAPIKeyName: a name stays taken until its key is deleted, expired or not.
+        if (this.keys.some((k) => k.userId === userId && k.name === body.token_name && !k.deleted)) {
+          return json(409, { message: `A token with name "${body.token_name}" already exists.` });
+        }
         const key = `${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}-${"s".repeat(22)}`;
         this.keys.push({
           key,
@@ -261,7 +265,9 @@ class FakeCoder {
       return json(
         200,
         this.keys
+          // v2.37.3 leaves expired keys out unless include_expired is set.
           .filter((k) => k.userId === userId && !k.deleted)
+          .filter((k) => url.searchParams.get("include_expired") === "true" || k.expiresAt > this.clock.now())
           .map((k) => ({ id: k.id, token_name: k.name, expires_at: new Date(k.expiresAt).toISOString() }))
       );
     }
@@ -2347,4 +2353,20 @@ Deno.test("credentials: a key that couldn't be deleted doesn't stop the start, a
   await openWorkspace(deps, ALEX, { assignment_id: 41 });
   assertEquals(coder.keys.filter((k) => !k.deleted).length, 0, "the expired leftover and the new key are both gone");
   assert(storedToken(coder, coderUserId));
+});
+
+Deno.test("credentials: each open's key has its own name, so a live key never blocks the next open", async () => {
+  const { coder, deps, coderUserId } = await runningWorkspace();
+  coder.failKeyDelete = true;
+  stop(coder.workspaces[0]);
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  stop(coder.workspaces[0]);
+  // The first key is still live and undeleted; a fixed name per repository would get Coder's 409.
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  const names = coder.keys.filter((k) => k.userId === coderUserId).map((k) => k.name);
+  assertEquals(new Set(names).size, names.length, names.join(", "));
+  assert(
+    names.every((n) => n.startsWith("pawtograder-secret-write-501-")),
+    names.join(", ")
+  );
 });
