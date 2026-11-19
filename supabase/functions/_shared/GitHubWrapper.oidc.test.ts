@@ -10,7 +10,7 @@ import { JobTokenRejectedError, UserVisibleError } from "./HandlerUtils.ts";
 
 // GitHubWrapper builds a GitHub App at import time, which needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { assertJobTokenMatchesRepository, validateOIDCToken } = await import("./GitHubWrapper.ts");
+const { assertJobTokenMatchesRepository, findActorUserId, validateOIDCToken } = await import("./GitHubWrapper.ts");
 // Callers accept only GitHub unless they opt in; the Forgejo cases below opt in.
 const validateEither = (token: string) => validateOIDCToken(token, ["github", "forgejo"]);
 
@@ -357,4 +357,67 @@ Deno.test("assertJobTokenMatchesRepository: a failed lookup is an error, not a r
     assertJobTokenMatchesRepository(client, { repository: "demo-class/hw1-student1", provider: "github" })
   );
   assertInstanceOf(err, UserVisibleError);
+});
+
+/** A client that answers one lookup on `table` with `row`, recording the filters it was given. */
+function actorClient(table: string, row: { user_id: string } | null) {
+  const asked: unknown[] = [];
+  let queried = false;
+  const query = {
+    select: () => query,
+    eq: (column: string, value: unknown) => (asked.push(["eq", column, value]), query),
+    ilike: (column: string, value: unknown) => (asked.push(["ilike", column, value]), query),
+    maybeSingle: () => Promise.resolve({ data: row, error: null })
+  };
+  const client = {
+    from: (name: string) => {
+      queried = true;
+      assertEquals(name, table);
+      return query;
+    }
+  };
+  return {
+    client: client as unknown as Parameters<typeof findActorUserId>[0],
+    asked,
+    queried: () => queried
+  };
+}
+
+Deno.test("findActorUserId: a Forgejo actor is the account with that login on the configured instance", async () => {
+  const { client, asked } = actorClient("git_accounts", { user_id: "u-1" });
+  assertEquals(
+    await findActorUserId(client, { actor: "pat.lee", provider: "forgejo" }, "https://git.example.edu"),
+    "u-1"
+  );
+  assertEquals(asked, [
+    ["eq", "provider", "forgejo"],
+    ["eq", "instance_url", "https://git.example.edu"],
+    ["eq", "login", "pat.lee"]
+  ]);
+});
+
+Deno.test(
+  "findActorUserId: with FORGEJO_URL unset, a Forgejo actor matches nobody and nothing is queried",
+  async () => {
+    const { client, queried } = actorClient("git_accounts", { user_id: "u-1" });
+    assertEquals(await findActorUserId(client, { actor: "pat.lee", provider: "forgejo" }, undefined), null);
+    assertEquals(queried(), false);
+  }
+);
+
+Deno.test("findActorUserId: an unknown Forgejo login matches nobody", async () => {
+  const { client } = actorClient("git_accounts", null);
+  assertEquals(
+    await findActorUserId(client, { actor: "forgejo-admin", provider: "forgejo" }, "https://git.example.edu"),
+    null
+  );
+});
+
+Deno.test("findActorUserId: a GitHub actor is still looked up by GitHub username", async () => {
+  const { client, asked } = actorClient("users", { user_id: "u-2" });
+  assertEquals(
+    await findActorUserId(client, { actor: "PatLee", provider: "github" }, "https://git.example.edu"),
+    "u-2"
+  );
+  assertEquals(asked, [["ilike", "github_username", "PatLee"]]);
 });
