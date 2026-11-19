@@ -2,6 +2,7 @@
 
 import HelpQueueManagement from "../../helpQueueManagement";
 import { Box, Button, Field, Heading, HStack, Input, Stack, Text, Textarea } from "@chakra-ui/react";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useCourseFeature } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -149,21 +150,23 @@ export default function QueuesSettingsPage() {
   const onSubmit = async (data: OfficeHoursDescriptionFormData) => {
     if (!course) return;
 
-    await updateCourse({
-      resource: "classes",
-      id: course.id,
-      values: {
-        office_hours_description: data.office_hours_description || null
-      },
-      successNotification: {
-        message: "Office hours description updated successfully",
-        type: "success"
-      },
-      errorNotification: {
-        message: "Failed to update office hours description",
-        type: "error"
-      }
-    });
+    // refine's success/errorNotification options do nothing here (no notificationProvider), so report
+    // the outcome with the toaster directly. Catching also keeps react-hook-form from rethrowing.
+    try {
+      await updateCourse({
+        resource: "classes",
+        id: course.id,
+        values: {
+          office_hours_description: data.office_hours_description || null
+        }
+      });
+      toaster.success({ title: "Office hours description updated successfully" });
+    } catch (error) {
+      toaster.error({
+        title: "Failed to update office hours description",
+        description: getErrorMessage(error)
+      });
+    }
   };
 
   return (
