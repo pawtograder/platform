@@ -42,9 +42,17 @@ Deno.test("a center exactly on the edge counts as inside", () => {
 });
 
 Deno.test("words come back in reading order: top to bottom, then left to right", () => {
-  // Deliberately shuffled: the first row is y = 0.3, the second is y = 0.4.
-  const words = [word("world", 0.4, 0.3), word("line", 0.4, 0.4), word("hello", 0.25, 0.3), word("second", 0.25, 0.4)];
-  assertEquals(wordsInRegion(words, REGION), "hello world second line");
+  // Deliberately shuffled across three lines at y = 0.3, 0.4 and 0.5. Catches rows emitted in the
+  // order their first word was seen rather than top to bottom.
+  const words = [
+    word("world", 0.4, 0.3),
+    word("third", 0.25, 0.5),
+    word("line", 0.4, 0.4),
+    word("hello", 0.25, 0.3),
+    word("row", 0.4, 0.5),
+    word("second", 0.25, 0.4)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "hello world second line third row");
 });
 
 Deno.test("words on one line sort left to right", () => {
@@ -52,19 +60,41 @@ Deno.test("words on one line sort left to right", () => {
   assertEquals(wordsInRegion(words, REGION), "a b c");
 });
 
-Deno.test("rows are bucketed, so a small vertical wobble stays on one line", () => {
-  // Both centers round into the same 0.02-tall band, so x decides the order.
-  // A larger tilt can split one printed line across two bands and reorder it: see #1089.
-  const words = [word("right", 0.45, 0.3005), word("left", 0.25, 0.3)];
-  assertEquals(wordsInRegion(words, REGION), "left right");
-});
+// Each case is one printed line that has to come back left to right.
+const ONE_LINE: { name: string; words: WordBox[]; text: string }[] = [
+  {
+    // Centers 0.311 and 0.309 straddle the old 0.31 band edge. Catches rows cut at fixed
+    // positions, which read "right left".
+    name: "centers either side of a fixed band edge",
+    words: [word("right", 0.45, 0.299), word("left", 0.25, 0.301)],
+    text: "left right"
+  },
+  {
+    // Both centers sit at y 0.301; the tall box (a long word on a tilted scan) has its top edge
+    // higher. Catches rows keyed on the top edge (#1292).
+    name: "boxes of different heights on one center line",
+    words: [word("long", 0.45, 0.281, 0.15, 0.04), word("short", 0.25, 0.291, 0.05, 0.02)],
+    text: "short long"
+  },
+  {
+    // Centers rise 0.004 across the line, the noise left after a scan is lined up. Catches a
+    // tolerance so tight that OCR jitter splits a line.
+    name: "a line drifting slightly upward",
+    words: [word("d", 0.5, 0.296), word("b", 0.3, 0.2987), word("a", 0.2, 0.3), word("c", 0.4, 0.2973)],
+    text: "a b c d"
+  }
+];
+for (const c of ONE_LINE) {
+  Deno.test(`one line stays in order: ${c.name}`, () => {
+    assertEquals(wordsInRegion(c.words, REGION), c.text);
+  });
+}
 
-Deno.test("words on one line stay in order when their boxes are different heights", () => {
-  // Both centers sit at y 0.301. The tall box (a long word on a tilted scan) has its top edge at
-  // 0.281 and the short one at 0.291, which round into different bands. Catches banding on the
-  // top edge, which read the long word on the right first (#1292).
-  const words = [word("long", 0.45, 0.281, 0.15, 0.04), word("short", 0.25, 0.291, 0.05, 0.02)];
-  assertEquals(wordsInRegion(words, REGION), "short long");
+Deno.test("lines 1.2 word heights apart stay separate", () => {
+  // Line two's words sit between line one's across the page. Catches a tolerance loose enough to
+  // merge neighbouring lines, which would read "a c b d".
+  const words = [word("d", 0.5, 0.324), word("b", 0.45, 0.3), word("c", 0.3, 0.324), word("a", 0.25, 0.3)];
+  assertEquals(wordsInRegion(words, REGION), "a b c d");
 });
 
 Deno.test("an empty word list returns empty text", () => {

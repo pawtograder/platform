@@ -32,13 +32,49 @@ describe("wordsInRegion", () => {
   it("returns words in top-to-bottom reading order", () => {
     expect(wordsInRegion(words, region)).toBe("hello world");
   });
-  it("keeps a line in order when its boxes are different heights", () => {
-    // Same center line, top edges in different 0.02 bands; catches banding on the top edge (#1292).
-    const line: WordBox[] = [
-      { text: "long", x: 0.25, y: 0.281, width: 0.15, height: 0.04 },
-      { text: "short", x: 0.05, y: 0.291, width: 0.05, height: 0.02 }
+  // Each case is one printed line that has to come back left to right.
+  it.each<[string, WordBox[], string]>([
+    [
+      // Centers 0.311 and 0.309 straddle the old 0.31 band edge; catches rows cut at fixed positions.
+      "centers either side of a fixed band edge",
+      [
+        { text: "right", x: 0.25, y: 0.299, width: 0.05, height: 0.02 },
+        { text: "left", x: 0.05, y: 0.301, width: 0.05, height: 0.02 }
+      ],
+      "left right"
+    ],
+    [
+      // Same center line, top edges at different heights; catches rows keyed on the top edge (#1292).
+      "boxes of different heights on one center line",
+      [
+        { text: "long", x: 0.25, y: 0.281, width: 0.15, height: 0.04 },
+        { text: "short", x: 0.05, y: 0.291, width: 0.05, height: 0.02 }
+      ],
+      "short long"
+    ],
+    [
+      // Centers rise 0.004 across the line; catches a tolerance so tight that OCR jitter splits it.
+      "a line drifting slightly upward",
+      [
+        { text: "d", x: 0.4, y: 0.296, width: 0.05, height: 0.02 },
+        { text: "b", x: 0.2, y: 0.2987, width: 0.05, height: 0.02 },
+        { text: "a", x: 0.1, y: 0.3, width: 0.05, height: 0.02 },
+        { text: "c", x: 0.3, y: 0.2973, width: 0.05, height: 0.02 }
+      ],
+      "a b c d"
+    ]
+  ])("keeps one line in order: %s", (_name, line, text) => {
+    expect(wordsInRegion(line, region)).toBe(text);
+  });
+  it("keeps lines 1.2 word heights apart separate", () => {
+    // Line two's words sit between line one's; catches a tolerance loose enough to merge lines.
+    const lines: WordBox[] = [
+      { text: "d", x: 0.35, y: 0.324, width: 0.05, height: 0.02 },
+      { text: "b", x: 0.3, y: 0.3, width: 0.05, height: 0.02 },
+      { text: "c", x: 0.15, y: 0.324, width: 0.05, height: 0.02 },
+      { text: "a", x: 0.1, y: 0.3, width: 0.05, height: 0.02 }
     ];
-    expect(wordsInRegion(line, region)).toBe("short long");
+    expect(wordsInRegion(lines, region)).toBe("a b c d");
   });
   it("returns empty string when nothing matches", () => {
     expect(wordsInRegion(words, { x: 0.9, y: 0.9, width: 0.05, height: 0.05 })).toBe("");

@@ -64,16 +64,25 @@ export function wordsInRegion(words: WordBox[], region: NormRect): string {
     const cy = w.y + w.height / 2;
     return cx >= region.x && cx <= region.x + region.width && cy >= region.y && cy <= region.y + region.height;
   });
-  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right. Rows are
-  // keyed on each word's center line: a word on a tilted scan has a taller box, so its top edge
-  // can sit a band above the shorter words on its line (#1292).
-  // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
-  // engine-defined ordering for words clustered within a row. Keep in sync with lib/exam/regionMath.ts.
-  inside.sort((a, b) => {
-    const band = Math.round((a.y + a.height / 2) / 0.02) - Math.round((b.y + b.height / 2) / 0.02);
-    return band !== 0 ? band : a.x - b.x;
-  });
-  return inside
+  // Rows are words whose center lines sit within half a word height of the row's average center
+  // line, using the smaller of the two heights so a tall box cannot pull in the line below. Grouping
+  // by distance rather than by fixed 0.02 bands keeps a line whole wherever it sits on the page, and
+  // centers rather than top edges keep a tilted word's taller box on the line it belongs to (#1292).
+  // Keep in sync with lib/exam/regionMath.ts.
+  const centerY = (w: WordBox) => w.y + w.height / 2;
+  const rows: { words: WordBox[]; centerSum: number; minHeight: number }[] = [];
+  for (const w of inside.sort((a, b) => centerY(a) - centerY(b))) {
+    const row = rows[rows.length - 1];
+    if (row && centerY(w) - row.centerSum / row.words.length <= Math.min(w.height, row.minHeight) / 2) {
+      row.words.push(w);
+      row.centerSum += centerY(w);
+      row.minHeight = Math.min(row.minHeight, w.height);
+    } else {
+      rows.push({ words: [w], centerSum: centerY(w), minHeight: w.height });
+    }
+  }
+  return rows
+    .flatMap((row) => row.words.sort((a, b) => a.x - b.x))
     .map((w) => w.text)
     .join(" ")
     .trim();
