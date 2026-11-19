@@ -2285,6 +2285,24 @@ Deno.test("github: a repository on GitHub clones from github.com and mints no Fo
   );
 });
 
+Deno.test("github: a commit email key that couldn't be deleted doesn't block the next open's", async () => {
+  const { coder, deps } = setup();
+  githubProvider(coder);
+  await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  signInAndLink(coder, ALEX);
+  coder.failKeyDelete = true;
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 42 })).status, "starting");
+  stop(coder.workspaces[0]);
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 42 })).status, "starting");
+  const names = coder.keys.map((k) => k.name);
+  assertEquals(names.length, 2, "the second open minted its own key instead of taking a 409");
+  assertEquals(new Set(names).size, 2, names.join(", "));
+  assert(
+    names.every((n) => n.startsWith("pawtograder-secret-write-email-")),
+    names.join(", ")
+  );
+});
+
 Deno.test("github: an unlinked optional provider stops a GitHub workspace, not a Forgejo one", async () => {
   const { coder, deps } = setup();
   githubProvider(coder);

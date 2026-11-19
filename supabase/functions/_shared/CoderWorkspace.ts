@@ -304,8 +304,8 @@ export const SECRET_KEY_PREFIX = "pawtograder-secret-write-";
 export const SECRET_KEY_LIFETIME_MS = 60_000;
 
 /** Coder's token names are unique per user, so two opens of one repository can't share one. */
-export function secretKeyName(repositoryId: number): string {
-  return `${SECRET_KEY_PREFIX}${repositoryId}-${crypto.randomUUID().slice(0, 8)}`;
+export function secretKeyName(purpose: number | "email"): string {
+  return `${SECRET_KEY_PREFIX}${purpose}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 /** GitHub refuses a student their own private repository until they are in the course's organization. */
@@ -393,7 +393,7 @@ async function deliverCommitEmail(deps: Deps, caller: Caller, coderUserId: strin
   await deleteExpiredKeys(deps, coderUserId).catch((e) =>
     console.error("[workspace-open] Expired key cleanup failed", e)
   );
-  const key = await mintUserKey(coder, coderUserId, `${SECRET_KEY_PREFIX}email`, SECRET_KEY_LIFETIME_MS);
+  const key = await mintUserKey(coder, coderUserId, secretKeyName("email"), SECRET_KEY_LIFETIME_MS);
   const keyId = apiKeyId(key);
   try {
     await writeOwnSecret(
