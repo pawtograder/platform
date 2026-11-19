@@ -23,7 +23,7 @@
  * Step 5 (20261108120000_review_assignments_by_capability.sql): seeing and deleting review
  * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
  *
- * 20261114120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
+ * 20261119120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
@@ -364,7 +364,7 @@ test.describe("custom class roles", () => {
         `adding a capability to the default ${app_role} role`
       );
     }
-    expectBlocked(
+    expectRlsBlocked(
       await instructor
         .from("role_capabilities")
         .insert({ role_id: graderRole.id, capability: "manage_roles" })
@@ -443,59 +443,92 @@ test.describe("custom class roles", () => {
 
   test("graders, students and other classes' instructors can't write class roles or their capabilities", async () => {
     const customId = await createCustomRole("Lab TA", ["publish_groups"]);
+    // The default grader role can be edited now too, so it is checked the same way. It gets one
+    // capability here so that a refused delete has a row to refuse.
+    const graderRoleId = defaultC("grader").id;
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: graderRoleId, capability: "publish_groups" })).error
+    ).toBeNull();
 
-    for (const [user, who] of [
-      [graderC, "a grader"],
-      [studentC, "a student"],
-      [instructorD, "another class's instructor"]
-    ] as const) {
-      const client = await createAuthenticatedClient(user);
-      expectBlocked(
-        await client
-          .from("class_roles")
-          .insert({ class_id: classC.id, name: `by ${who}` })
-          .select("id"),
-        `${who} creating a role`
-      );
-      expectBlocked(
-        await client
-          .from("class_roles")
-          .update({ name: `by ${who}` })
-          .eq("id", customId)
-          .select("id"),
-        `${who} renaming a role`
-      );
-      expectBlocked(
-        await client.from("class_roles").delete().eq("id", customId).select("id"),
-        `${who} deleting a role`
-      );
-      expectBlocked(
-        await client
-          .from("role_capabilities")
-          .insert({ role_id: customId, capability: "manage_assignments" })
-          .select("role_id"),
-        `${who} adding a capability`
-      );
-      expectBlocked(
-        await client
-          .from("role_capabilities")
-          .delete()
-          .eq("role_id", customId)
-          .eq("capability", "publish_groups")
-          .select("role_id"),
-        `${who} removing a capability`
-      );
+    try {
+      for (const [user, who] of [
+        [graderC, "a grader"],
+        [studentC, "a student"],
+        [instructorD, "another class's instructor"]
+      ] as const) {
+        const client = await createAuthenticatedClient(user);
+        expectBlocked(
+          await client
+            .from("class_roles")
+            .insert({ class_id: classC.id, name: `by ${who}` })
+            .select("id"),
+          `${who} creating a role`
+        );
+        expectBlocked(
+          await client
+            .from("class_roles")
+            .update({ name: `by ${who}` })
+            .eq("id", customId)
+            .select("id"),
+          `${who} renaming a role`
+        );
+        expectBlocked(
+          await client.from("class_roles").delete().eq("id", customId).select("id"),
+          `${who} deleting a role`
+        );
+        expectBlocked(
+          await client
+            .from("role_capabilities")
+            .insert({ role_id: customId, capability: "manage_assignments" })
+            .select("role_id"),
+          `${who} adding a capability`
+        );
+        expectBlocked(
+          await client
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", customId)
+            .eq("capability", "publish_groups")
+            .select("role_id"),
+          `${who} removing a capability`
+        );
+        expectRlsBlocked(
+          await client
+            .from("role_capabilities")
+            .insert({ role_id: graderRoleId, capability: "manage_assignments" })
+            .select("role_id"),
+          `${who} adding a capability to the default grader role`
+        );
+        expectBlocked(
+          await client
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", graderRoleId)
+            .eq("capability", "publish_groups")
+            .select("role_id"),
+          `${who} removing a capability from the default grader role`
+        );
+      }
+
+      expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
+      expect(await roleCapabilities(customId)).toEqual(["publish_groups"]);
+      expect(await roleCapabilities(graderRoleId)).toEqual(["publish_groups"]);
+      const { data: extra, error: extraError } = await supabase
+        .from("class_roles")
+        .select("id")
+        .eq("class_id", classC.id)
+        .like("name", "by %");
+      expect(extraError).toBeNull();
+      expect(extra).toHaveLength(0);
+    } finally {
+      // Other tests in this class expect the default grader role to be empty.
+      const { error } = await supabase
+        .from("role_capabilities")
+        .delete()
+        .eq("role_id", graderRoleId)
+        .eq("capability", "publish_groups");
+      expect(error).toBeNull();
     }
-
-    expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
-    expect(await roleCapabilities(customId)).toEqual(["publish_groups"]);
-    const { data: extra, error: extraError } = await supabase
-      .from("class_roles")
-      .select("id")
-      .eq("class_id", classC.id)
-      .like("name", "by %");
-    expect(extraError).toBeNull();
-    expect(extra).toHaveLength(0);
   });
 
   test("nobody can write capabilities", async () => {

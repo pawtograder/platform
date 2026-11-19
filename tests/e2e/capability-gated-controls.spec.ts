@@ -8,7 +8,7 @@
  *
  * Default roles only: the instructor role holds both capabilities, the grader role holds neither,
  * until the last test gives the default grader role manage_review_assignments (instructors can edit
- * it since 20261114120000_custom_roles_copy_grader_role.sql).
+ * it since 20261119120000_custom_roles_copy_grader_role.sql).
  */
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
