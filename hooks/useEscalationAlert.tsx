@@ -92,10 +92,14 @@ export function useCheckInAlert({ subject, status, checkInExpiresAt, enabled }: 
   }, [inPageMessage]);
 
   useEffect(() => {
+    // State remembered for a different request says nothing about this one, and this has to happen
+    // before any early return. Opening a request whose data has not loaded yet used to leave the
+    // last request's entry in the ref, so coming back to that request could alert for a check-in
+    // that was already pending when the page opened.
+    if (previous.current && previous.current.subject !== subject) previous.current = null;
     if (status === undefined) return;
     const pending = isCheckInPending({ status, check_in_expires_at: checkInExpiresAt ?? null });
-    // State remembered for a different request says nothing about this one.
-    const before = previous.current?.subject === subject ? previous.current : null;
+    const before = previous.current;
     // Seed once while the alert is off, then hold, so a check-in that opened during that window
     // still fires when the flag resolves. With the alert on, every render moves it forward.
     if (enabled || before === null) previous.current = { subject, pending };

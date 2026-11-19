@@ -208,6 +208,27 @@ describe("office hours escalation alerts", () => {
       expect(notes).toEqual([]);
     });
 
+    it("drops a request's history even when the next request's data has not loaded", () => {
+      // Opening a request whose status is still undefined must not leave the previous request's
+      // entry in place: coming back would then alert for a check-in already pending on arrival.
+      const { rerender } = renderHook(
+        (p: { subject: string; status: string | undefined; checkInExpiresAt: string | null }) =>
+          useCheckInAlert({ ...p, enabled: true }),
+        {
+          initialProps: {
+            subject: REQUEST_A,
+            status: "in_progress" as string | undefined,
+            checkInExpiresAt: null as string | null
+          }
+        }
+      );
+      // B is opened before its row arrives.
+      rerender({ subject: REQUEST_B, status: undefined, checkInExpiresAt: null });
+      // Back on A, already resolved and waiting on the check-in when the page opened.
+      rerender({ subject: REQUEST_A, status: "resolved", checkInExpiresAt: OPEN_WINDOW });
+      expect(notes).toEqual([]);
+    });
+
     it("alerts for a check-in that opened while the feature flag was still loading", () => {
       const { rerender } = renderHook(
         (p: { status: string; checkInExpiresAt: string | null; enabled: boolean }) =>
