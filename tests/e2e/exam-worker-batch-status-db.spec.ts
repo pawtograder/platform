@@ -257,19 +257,37 @@ test.describe("a worker that stops renewing hands its message back within the le
       expect(await vt(ours.msgId)).toBeLessThan(renewedAt + 5_000);
       // Reader A stops renewing (its worker died). Until the lease ends, B gets nothing.
       expect(await claimAs(b, ours.tag)).toBeNull();
-      // Then B claims it, as the next worker invocation would.
-      let theirs: Claim | null = null;
-      while (!theirs && Date.now() - renewedAt < 15_000) {
+      // Then the message is claimed again. Usually by B, as the next worker invocation would; on a
+      // stack whose cron runs the real worker, that worker can get there first. It then claims this
+      // message (read_ct goes up), fails to find scanned row -1 and re-queues a copy with the same
+      // tag, which B must not mistake for ours. Either way the message came back within the lease.
+      let reclaimedBy: "B" | "the running worker" | null = null;
+      while (!reclaimedBy && Date.now() - renewedAt < 15_000) {
         await new Promise((r) => setTimeout(r, 250));
-        theirs = await claimAs(b, ours.tag);
+        const theirs = await claimAs(b, ours.tag);
+        if (theirs?.msgId === ours.msgId) {
+          expect(theirs.readCt).toBe(ours.readCt + 1);
+          reclaimedBy = "B";
+        } else {
+          const { rows } = await a.query<{ read_ct: number }>(
+            "SELECT read_ct FROM pgmq.q_exam_processing WHERE msg_id = $1 " +
+              "UNION ALL SELECT read_ct FROM pgmq.a_exam_processing WHERE msg_id = $1",
+            [ours.msgId]
+          );
+          if (rows.some((r) => r.read_ct > ours.readCt)) reclaimedBy = "the running worker";
+        }
       }
-      expect(theirs).toEqual({ msgId: ours.msgId, readCt: ours.readCt + 1, tag: ours.tag });
+      expect(reclaimedBy).not.toBeNull();
       expect(Date.now() - renewedAt).toBeLessThan(15_000);
       // A's claim is dead: it can neither renew the lease nor move the batch.
       expect(await setVt(ours, 30)).toBe(false);
       expect(await setStatus(a, ours, batchId, "error", ["finalizing"], "from the dead reader")).toBe("not_owner");
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
-      await cleanup(a, ours.msgId);
+      // Ours, and any copy a running worker re-queued.
+      await a.query(
+        "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE message->>'test_tag' = $1",
+        [ours.tag]
+      );
     } finally {
       await a.end();
       await b.end();
