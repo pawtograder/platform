@@ -119,6 +119,31 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+- **What each role can do:** one column for the default grader role and one per custom role, one
+  row per capability, a checkbox in each cell. A change is one insert or delete on
+  `role_capabilities`, saved at once. `manage_roles` has no row, because it can't go on these roles.
+- **New role, rename, delete:** inserts, renames and deletes on `class_roles`. A role with people on
+  it can't be deleted, and the dialog says to move them first. Disabled enrollments still hold the
+  role for the foreign key, so the dialog blocks delete and says to re-enable them under Enrollments
+  when that is the only membership left.
+- **People:** every active grader with a role drop-down, which updates `user_roles.class_role_id`.
+
+A row's label is the capability's name in sentence case, and the line under it is the capability's
+`description`. Write the description as the sentence an instructor reads next to the checkbox.
+
+Capability changes and people moving between roles arrive live on the staff channel. A role another
+instructor creates, renames or deletes is not broadcast, so it appears on the next reload of the
+page (including when the staff channel rejoins after a gap).
+
+Updates and deletes ask for the rows they changed, because a policy can refuse those without an
+error; the page then reports the change as not saved and puts the control back. Inserts fail with
+an error, so they do not need a returning select.
+
 ## For the UI: useCapability
 
 ```tsx

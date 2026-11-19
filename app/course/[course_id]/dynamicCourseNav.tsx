@@ -38,6 +38,7 @@ import {
   FiMenu,
   FiMessageSquare,
   FiSettings,
+  FiShield,
   FiSliders,
   FiStar,
   FiUsers
@@ -141,6 +142,12 @@ const LinkItems = (courseID: number) => [
         icon: FiUsers,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/enrollments`
+      },
+      {
+        name: "Staff Roles",
+        icon: FiShield,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/roles`
       },
       {
         name: "LMS (LTI) Sync",
