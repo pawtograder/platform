@@ -6,6 +6,7 @@ import {
   isExpectedUserError,
   reportUnexpectedError
 } from "@/lib/studentFacingErrorMessages";
+import { refusedWriteError } from "@/lib/refusedWriteError";
 
 const mockScope = { setTag: jest.fn(), setContext: jest.fn() };
 jest.mock("@sentry/nextjs", () => ({
@@ -61,10 +62,9 @@ describe("getUserFacingErrorMessage", () => {
     }
   });
 
-  describe("refused writes from the data provider", () => {
-    const refusedMessage =
-      "You don't have permission to update this assignments record (id 5), or it no longer exists. Nothing was changed.";
-    const refused = Object.assign(new Error(refusedMessage), { statusCode: 403, refusedWrite: true });
+  describe("refused writes (refine data provider or TableController)", () => {
+    const refused = refusedWriteError("update");
+    const refusedMessage = refused.message;
 
     it("keep their own message, which allows for a deleted row", () => {
       expect(getUserFacingErrorMessage(refused)).toBe(refusedMessage);
@@ -82,7 +82,8 @@ describe("getUserFacingErrorMessage", () => {
     });
 
     it("fall back to the permission message when they have no message", () => {
-      expect(getUserFacingErrorMessage({ refusedWrite: true }, { role: "grader" })).toContain("ask an instructor");
+      const noMessage = Object.assign(refusedWriteError("update"), { message: "" });
+      expect(getUserFacingErrorMessage(noMessage, { role: "grader" })).toContain("ask an instructor");
     });
   });
 
@@ -98,7 +99,7 @@ describe("isExpectedUserError", () => {
     for (const code of ["PGRST301", "23505", "23514", "P0001"]) {
       expect(isExpectedUserError({ code, message: "x" })).toBe(true);
     }
-    expect(isExpectedUserError({ refusedWrite: true })).toBe(true);
+    expect(isExpectedUserError(refusedWriteError("delete"))).toBe(true);
   });
 
   it("is false by default for permission, no-row and foreign-key errors", () => {
@@ -130,7 +131,7 @@ describe("reportUnexpectedError", () => {
 
   it("does not send expected errors or refused writes to Sentry", () => {
     expect(reportUnexpectedError({ code: "23505", message: "duplicate key" })).toBeUndefined();
-    expect(reportUnexpectedError({ refusedWrite: true, message: "refused" })).toBeUndefined();
+    expect(reportUnexpectedError(refusedWriteError("update"))).toBeUndefined();
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
