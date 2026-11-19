@@ -40,7 +40,7 @@ import {
   withinBudget,
   workspaceStatus
 } from "./CoderWorkspace.ts";
-import { budgetClient, supabaseWorkspaceDb } from "./CoderWorkspaceDb.ts";
+import { budgetClient, githubConfig, supabaseWorkspaceDb } from "./CoderWorkspaceDb.ts";
 import type { CoderAgent, CoderWorkspace } from "./CoderWrapper.ts";
 import { IDLE_TOKEN_MS, REPLACED_TOKEN_GRACE_MS } from "./ForgejoWrapper.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
@@ -2380,6 +2380,70 @@ Deno.test("github: an unlinked optional provider stops a GitHub workspace, not a
   assertEquals(githubRes.authenticate_url, linkUrl(CODER_URL, "github"));
   assertEquals(githubRes.message, "Link your GitHub account in Coder, then open the workspace again.");
   assertEquals(coder.workspaces.length, 1, "only the Forgejo workspace was created");
+});
+
+Deno.test("github: without Coder's GitHub provider a GitHub repository is refused and nothing is created", async () => {
+  for (const confirmed of [true, false]) {
+    const { coder, db, deps } = setup();
+    deps.github = null;
+    db.enrollments[0].github_org_confirmed = confirmed;
+    const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 42 }), IllegalArgumentError);
+    assertEquals(err.details, "This deployment can't open GitHub repositories in a workspace");
+    assertEquals(coder.calls.length, 0, `nothing reaches Coder (org confirmed: ${confirmed})`);
+    assertEquals(db.rows.length, 0);
+  }
+  // Forgejo repositories still open.
+  const { coder, deps } = setup();
+  deps.github = null;
+  coder.noProviders = true;
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.findUser("alex-kim-1a2b3c4d5e6f")!.subject = ALEX.userId;
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+});
+
+Deno.test("githubConfig: null unless the chart set CODER_GITHUB_AUTH_ID", () => {
+  const saved = { id: Deno.env.get("CODER_GITHUB_AUTH_ID"), url: Deno.env.get("GITHUB_URL") };
+  try {
+    Deno.env.delete("CODER_GITHUB_AUTH_ID");
+    Deno.env.delete("GITHUB_URL");
+    assertEquals(githubConfig(), null);
+    Deno.env.set("CODER_GITHUB_AUTH_ID", "");
+    assertEquals(githubConfig(), null);
+    Deno.env.set("CODER_GITHUB_AUTH_ID", "gh");
+    assertEquals(githubConfig(), { url: "https://github.com", externalAuthId: "gh" });
+    Deno.env.set("GITHUB_URL", "https://github.example.edu/");
+    assertEquals(githubConfig(), { url: "https://github.example.edu", externalAuthId: "gh" });
+  } finally {
+    for (const [name, value] of [
+      ["CODER_GITHUB_AUTH_ID", saved.id],
+      ["GITHUB_URL", saved.url]
+    ] as const) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  }
+});
+
+Deno.test("no Forgejo: a GitHub repository opens, and a Forgejo one is refused with a 503", async () => {
+  const { coder, db, deps } = setup();
+  deps.forgejo = null;
+  githubProvider(coder);
+  await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  signInAndLink(coder, ALEX);
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  assertEquals(res.status, "starting");
+  assertEquals(coder.workspaces.length, 1);
+  assertEquals(Object.keys(coder.secrets[res.coder_user_id!]), ["git_email"]);
+
+  const posts = coder.calls.filter((c) => c.method === "POST").length;
+  const rows = db.rows.length;
+  const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
+  assertEquals(
+    [err.message, (err as UserVisibleError).status],
+    ["Forgejo workspaces are not set up on this deployment", 503]
+  );
+  assertEquals(coder.calls.filter((c) => c.method === "POST").length, posts, "nothing is created");
+  assertEquals(db.rows.length, rows);
 });
 
 Deno.test("github: an unaccepted organization invitation is refused before Coder is called", async () => {

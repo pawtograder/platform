@@ -170,8 +170,9 @@ export interface WorkspaceDb {
 export type Deps = {
   db: WorkspaceDb;
   coder: CoderConfig;
-  forgejo: ForgejoConfig;
-  github: GithubConfig;
+  /** Null on a deployment without Forgejo, or without Coder's GitHub provider: those repositories are refused. */
+  forgejo: ForgejoConfig | null;
+  github: GithubConfig | null;
   report?: (error: unknown) => void;
   /** The request's budget; `db` and `coder` make their calls through budgetFetch with it. */
   budget?: Budget;
@@ -189,7 +190,6 @@ export type GithubConfig = {
 };
 
 export const GITHUB_URL = "https://github.com";
-export const GITHUB_EXTERNAL_AUTH_ID = "github";
 
 /** When the request has to have answered, and the signal that cuts its calls off before that. */
 export type Budget = { deadline: number; signal: AbortSignal };
@@ -290,9 +290,25 @@ export function cloneUrl(hostUrl: string, repository: string, provider: string =
   return `${hostUrl.replace(/\/+$/, "")}/${owner}/${name}.git`;
 }
 
-/** Where a repository's clone URL and credentials come from. */
+function requireForgejo(deps: Deps): ForgejoConfig {
+  if (!deps.forgejo) throw new UserVisibleError("Forgejo workspaces are not set up on this deployment", 503);
+  return deps.forgejo;
+}
+
+/** Without Coder's GitHub provider the template has no credentials to clone with. */
+function requireGithub(deps: Deps): GithubConfig {
+  if (!deps.github) {
+    throw new IllegalArgumentError("This deployment can't open GitHub repositories in a workspace");
+  }
+  return deps.github;
+}
+
+/**
+ * Where a repository's clone URL and credentials come from. Throws for a provider this deployment hasn't set
+ * up, so openWorkspace refuses the repository before anything is created.
+ */
 export function providerUrl(deps: Deps, provider: string): string {
-  return provider === "github" ? deps.github.url : deps.forgejo.url;
+  return provider === "github" ? requireGithub(deps).url : requireForgejo(deps).url;
 }
 
 /**
@@ -361,7 +377,8 @@ async function deliverGitCredentials(
     return null;
   }
   const userId = caller.userId;
-  const { db, coder, forgejo } = deps;
+  const { db, coder } = deps;
+  const forgejo = requireForgejo(deps);
   const login = await db.getForgejoLogin(userId, forgejo.url);
   if (!login) {
     return credentialsUnavailable("Your Forgejo account isn't set up yet. Try again in a few minutes.");
@@ -452,7 +469,7 @@ async function removeIdleCredentials(
   keep: number,
   now: number
 ): Promise<void> {
-  const live = await revokeIdleTokens(deps.forgejo, login, keep, now);
+  const live = await revokeIdleTokens(requireForgejo(deps), login, keep, now);
   for (const secret of await listOwnSecrets(studentCoder)) {
     const id = secretRepositoryId(secret.name);
     if (id === null || id === keep || live.has(id)) continue;
@@ -961,8 +978,9 @@ export async function openWorkspace(
   const { db, coder } = deps;
   const deadline = deps.budget?.deadline ?? clock(deps)() + OPEN_BUDGET_MS;
   const { repo, profileId, classId, githubOrgConfirmed } = await resolveRepository(db, caller, request);
-  if (repo.git_provider === "github" && !githubOrgConfirmed) return needsOrgInvite();
+  // Before the invitation check: a deployment without the provider can't open the repository at all.
   const repoUrl = cloneUrl(providerUrl(deps, repo.git_provider), repo.repository, repo.git_provider);
+  if (repo.git_provider === "github" && !githubOrgConfirmed) return needsOrgInvite();
   let user: CoderUser;
   try {
     user = await ensureCoderUser(deps, caller);
@@ -989,7 +1007,7 @@ export async function openWorkspace(
   const missing =
     providers.find((e) => !e.optional && !e.authenticated) ??
     (repo.git_provider === "github"
-      ? providers.find((e) => e.id === deps.github.externalAuthId && !e.authenticated)
+      ? providers.find((e) => e.id === requireGithub(deps).externalAuthId && !e.authenticated)
       : undefined);
   if (subject === null || missing) {
     const authenticate_url = linkUrl(coder.url, missing?.id);
