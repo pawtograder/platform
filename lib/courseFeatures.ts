@@ -21,7 +21,8 @@ export const COURSE_FEATURES = {
   CLOUD_WORKSPACES: "cloud-workspaces",
   OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
   OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert",
-  OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health"
+  OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health",
+  OFFICE_HOURS_ESCALATION_ALERT: "office-hours-escalation-alert"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -217,6 +218,15 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     defaultWhenMissing: false,
     switchLabel: "Show queue health on staff office hours cards",
     ariaLabel: "Show queue health on staff office hours cards"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_ESCALATION_ALERT,
+    title: "Office hours: escalation alerts",
+    description:
+      "Staff get a browser alert when a ticket is escalated, and a student gets one when staff resolve their ticket and the check-in is waiting. Both only interrupt while the tab is in the background. When off, escalation and check-in work as they do now, with no alerts.",
+    defaultWhenMissing: false,
+    switchLabel: "Alert staff and students about office hours escalations",
+    ariaLabel: "Alert staff and students about office hours escalations"
   }
 ];
 
