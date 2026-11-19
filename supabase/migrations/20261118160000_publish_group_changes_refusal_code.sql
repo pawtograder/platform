@@ -10,14 +10,17 @@
 -- treats P0001.
 --
 -- Only that one statement changes. The body below is the latest definition, from
--- 20261031120000_fail_safe_group_repo_deletes.sql, copied verbatim otherwise. To check:
---   diff <(sed -n '75,490p' supabase/migrations/20261031120000_fail_safe_group_repo_deletes.sql) \
+-- 20261118140200_forgejo_group_repos.sql (CW-13), copied verbatim otherwise. This migration was
+-- 20261115120000 until CW-13 landed: CW-13 re-creates the function after it, so at the old
+-- timestamp the 42501 was silently undone. It never ran on a shared database (fork PR, no
+-- preview). To check the body:
+--   diff <(sed -n '363,780p' supabase/migrations/20261118140200_forgejo_group_repos.sql) \
 --        <(sed -n '/^create or replace function/,$p' <this file>)
 --
 -- Who may publish doesn't change (instructors and admins). Moving this check to the publish_groups
 -- capability belongs to #1010.
 --
--- Rollback: a migration that re-creates the function from 20261031120000 (the raise without
+-- Rollback: a migration that re-creates the function from 20261118140200 (the raise without
 -- `using errcode`). The client side keeps working either way: it maps P0001 and 42501.
 
 create or replace function public.publish_assignment_group_changes(
@@ -342,13 +345,13 @@ begin
         where assignment_group_id = v_empty_gid;
 
         for v_repo_record in
-            select r.id, r.repository
+            select r.id, r.repository, r.git_provider
             from public.repositories r
             where r.assignment_group_id = v_empty_gid
               and r.repository is not null
               and position('/' in r.repository) > 0
         loop
-            if v_github_org is not null then
+            if v_github_org is not null and v_repo_record.git_provider = 'github' then
                 perform public.enqueue_github_archive_repo(
                     p_class_id,
                     v_github_org,
@@ -385,6 +388,8 @@ begin
         from   unnest(v_affected_groups) as gid(g)
         join   public.repositories r on r.assignment_group_id = gid.g
         where  not (gid.g = any(v_deleted_groups))
+          -- Forgejo grants come from forgejo-reconciler, which the member insert trigger kicks
+          and  r.git_provider = 'github'
     loop
         begin
             declare
