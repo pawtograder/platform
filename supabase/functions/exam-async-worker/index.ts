@@ -10,6 +10,7 @@ import {
   errorFrom,
   isTransitionOutcome,
   MATCHING_FROM,
+  REJECTED_SCAN_ERROR_FROM,
   REVIEW_FROM,
   type BatchStatus,
   type TransitionOutcome
@@ -200,7 +201,7 @@ async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, e
 async function setBatchError(
   admin: Admin,
   fence: Fence,
-  method: string | undefined,
+  from: readonly BatchStatus[],
   batchId: number,
   message: string
 ): Promise<TransitionOutcome> {
@@ -212,9 +213,10 @@ async function setBatchError(
   // redeliver a message that had already been dead-lettered, appending a duplicate DLQ message
   // and audit row on every attempt.
   //
-  // Only from the phase this message belongs to, and only while this reader holds it: a former
-  // holder, or a leftover message from a run Retry reopened, must not error a batch that moved on.
-  return await setBatchStatus(admin, fence, batchId, "error", errorFrom(method), message);
+  // Only from the states the caller allows (errorFrom: the phase this message belongs to), and only
+  // while this reader holds it: a former holder, or a leftover message from a run Retry reopened,
+  // must not error a batch that moved on.
+  return await setBatchStatus(admin, fence, batchId, "error", from, message);
 }
 
 async function downloadImage(admin: Admin, bucket: string, path: string): Promise<Uint8Array> {
@@ -869,10 +871,10 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   // A message that used up its budget errors its batch, then goes to the DLQ. If the batch write
   // finds that another reader holds the message now, everything is left to that reader: it is
   // running the same work, and dead-lettering or archiving here would end its message under it.
-  const giveUp = async (error: unknown) => {
+  const giveUp = async (error: unknown, from: readonly BatchStatus[] = errorFrom(env.method)) => {
     if (env.batch_id) {
       const message = error instanceof Error ? error.message : String(error);
-      if ((await setBatchError(admin, fence, env.method, env.batch_id, message)) === "not_owner") {
+      if ((await setBatchError(admin, fence, from, env.batch_id, message)) === "not_owner") {
         console.warn(`exam-async-worker: msg ${msg.msg_id} was taken over; leaving its failure to the new holder`);
         return;
       }
@@ -910,9 +912,10 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
     if (error instanceof ScanPathRejectedError) {
       // A rejected scan path rejects again on every retry, so surface it on the batch now
       // instead of after five retries. Through giveUp, so a reader that lost the message leaves
-      // the batch, the DLQ and the archive to the one that holds it.
+      // the batch, the DLQ and the archive to the one that holds it. A rejection is shown on the
+      // batch whatever phase it is in (not only this message's), except over 'completed' (#1078).
       Sentry.captureException(error, scope);
-      await giveUp(error);
+      await giveUp(error, REJECTED_SCAN_ERROR_FROM);
       return;
     }
     if (error instanceof ProviderRateLimitError) {

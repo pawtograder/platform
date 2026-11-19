@@ -50,6 +50,21 @@ export function errorFrom(method: string | undefined): readonly BatchStatus[] {
 }
 
 /**
+ * A scan the worker rejected (a page or row that names another course, batch or exam, #1078) is
+ * shown on its batch at once, whatever phase the batch is in, since the rejection is about the data,
+ * not about this message being stale. Never over 'completed': every confirmed exam was finalized
+ * from validated pages, so a later rejection describes stale work. Still fenced on the claim.
+ */
+export const REJECTED_SCAN_ERROR_FROM: readonly BatchStatus[] = [
+  "uploaded",
+  "ocr",
+  "matching",
+  "review",
+  "finalizing",
+  "error"
+];
+
+/**
  * exam_worker_set_batch_status's answer.
  * - applied: the write happened.
  * - state_changed: this reader holds the message, but the batch is no longer in an allowed state.

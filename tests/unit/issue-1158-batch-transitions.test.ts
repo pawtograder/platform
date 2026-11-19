@@ -13,6 +13,7 @@ import {
   COMPLETED_FROM,
   errorFrom,
   MATCHING_FROM,
+  REJECTED_SCAN_ERROR_FROM,
   REVIEW_FROM,
   type BatchStatus
 } from "../../supabase/functions/exam-async-worker/batchTransitions";
@@ -53,6 +54,10 @@ describe("issue #1158: worker batch status transitions", () => {
     expect(ALL).toEqual(expect.arrayContaining([...errorFrom(undefined)]));
   });
 
+  test("a rejected scan errors its batch from any phase except completed (#1078)", () => {
+    expect([...REJECTED_SCAN_ERROR_FROM].sort()).toEqual(ALL.filter((s) => s !== "completed").sort());
+  });
+
   describe("the worker writes batch status only through setBatchStatus", () => {
     const source = readFileSync(WORKER, "utf8");
     const helperStart = source.indexOf("async function setBatchStatus(");
@@ -75,7 +80,11 @@ describe("issue #1158: worker batch status transitions", () => {
       expect(source).toMatch(/setBatchStatus\(admin, fence, batch\.id, "matching", MATCHING_FROM\)/);
       expect(source.match(/setBatchStatus\(admin, fence, batch\.id, "review", REVIEW_FROM\)/g)).toHaveLength(2);
       expect(source).toMatch(/setBatchStatus\(admin, fence, batchId, "completed", COMPLETED_FROM\)/);
-      expect(source).toMatch(/setBatchStatus\(admin, fence, batchId, "error", errorFrom\(method\), message\)/);
+      expect(source).toMatch(/setBatchStatus\(admin, fence, batchId, "error", from, message\)/);
+      expect(source).toMatch(
+        /const giveUp = async \(error: unknown, from: readonly BatchStatus\[\] = errorFrom\(env\.method\)\)/
+      );
+      expect(source).toMatch(/await giveUp\(error, REJECTED_SCAN_ERROR_FROM\)/);
     });
   });
 });
