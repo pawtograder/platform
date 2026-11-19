@@ -6,6 +6,7 @@ import {
   createClass,
   createUserInClass,
   insertHelpRequest,
+  insertOfficeHoursQueue,
   supabase
 } from "@/tests/e2e/TestingUtils";
 import type { TestingUser } from "@/tests/e2e/TestingUtils";
@@ -31,9 +32,14 @@ test.describe("help request escalation RPCs", () => {
   let studentClient: SupabaseClient<Database>;
   let outsiderClient: SupabaseClient<Database>;
 
+  // Each ticket gets its own queue. The student is the same in every test, and the
+  // one-solo-request-per-queue rule would otherwise make each test depend on tickets the
+  // earlier ones left open.
   async function freshRequest(status: "open" | "in_progress" = "in_progress"): Promise<number> {
+    const queue = await insertOfficeHoursQueue({ class_id: classId, name: `Escalation queue ${Date.now()}` });
     const { id } = await insertHelpRequest({
       class_id: classId,
+      help_queue_id: queue.id,
       student_profile_id: student.private_profile_id,
       request: `Escalation contract ${Date.now()}`
     });
@@ -175,6 +181,37 @@ test.describe("help request escalation RPCs", () => {
       (await studentClient.rpc("answer_help_request_check_in", { p_help_request_id: id, p_fixed: false, p_note: "n" }))
         .error
     ).not.toBeNull();
+  });
+
+  test("'not fixed' can't reopen a solo ticket while another is open in the same queue", async () => {
+    const first = await freshRequest();
+    expect(
+      (await taClient.rpc("finish_help_request", { p_help_request_id: first, p_end_ticket: false })).error
+    ).toBeNull();
+
+    // The first ticket is resolved with its check-in pending, so it doesn't count against the
+    // one-solo-request rule and the student can open a second one in the same queue.
+    await insertHelpRequest({
+      class_id: classId,
+      help_queue_id: (await row(first)).help_queue,
+      student_profile_id: student.private_profile_id,
+      request: `Second ticket ${Date.now()}`
+    });
+
+    const { error } = await studentClient.rpc("answer_help_request_check_in", {
+      p_help_request_id: first,
+      p_fixed: false,
+      p_note: "Still stuck"
+    });
+    expect(error?.code).toBe("23505");
+    const r = await row(first);
+    expect(r).toMatchObject({ status: "resolved", escalation_count: 0 });
+    expect(r.check_in_expires_at).not.toBeNull();
+
+    // Saying it was fixed still works.
+    expect(
+      (await studentClient.rpc("answer_help_request_check_in", { p_help_request_id: first, p_fixed: true })).error
+    ).toBeNull();
   });
 
   test("'fixed' clears the check-in and leaves the ticket resolved", async () => {
