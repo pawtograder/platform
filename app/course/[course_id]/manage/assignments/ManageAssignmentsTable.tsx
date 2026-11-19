@@ -7,7 +7,7 @@ import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { fetchManageAssignmentsOverview } from "@/lib/ssr-course-dashboard";
 import { createClient } from "@/utils/supabase/server";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Alert, Table, Text } from "@chakra-ui/react";
+import { Alert, Badge, Table, Text } from "@chakra-ui/react";
 
 export async function ManageAssignmentsTable({ courseId }: { courseId: number }) {
   const supabase = await createClient();
@@ -15,10 +15,18 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
   // `course:<id>` is now emitted by the `classes` invalidation trigger (it was emitted by nothing
   // at all before #937), but that delivery is best-effort pg_net with no retry, and a flag toggle
   // showing up an hour late here is not worth the saved query.
-  const [{ data: assignmentRows, error: overviewError }, { data: courseRow, error: courseError }] = await Promise.all([
+  const [
+    { data: assignmentRows, error: overviewError },
+    { data: courseRow, error: courseError },
+    { data: forgejoRows }
+  ] = await Promise.all([
     fetchManageAssignmentsOverview(supabase, courseId),
-    supabase.from("classes").select("features").eq("id", courseId).single()
+    supabase.from("classes").select("features").eq("id", courseId).single(),
+    // assignment_overview has no git_provider. Only Forgejo assignments get a badge, so GitHub-only
+    // courses look as before; a failed read just leaves the badges off.
+    supabase.from("assignments").select("id").eq("class_id", courseId).eq("git_provider", "forgejo")
   ]);
+  const forgejoIds = new Set((forgejoRows ?? []).map((row) => row.id));
 
   if (overviewError) {
     return (
@@ -73,6 +81,11 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
               <Table.Row key={assignment.id}>
                 <Table.Cell>
                   <Link href={`/course/${courseId}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
+                  {assignment.id !== null && forgejoIds.has(assignment.id) && (
+                    <Badge colorPalette="orange" ml={2}>
+                      Forgejo
+                    </Badge>
+                  )}
                 </Table.Cell>
                 <Table.Cell>
                   {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}

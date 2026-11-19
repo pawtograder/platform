@@ -21,6 +21,7 @@ import { useCallback, useRef, useState } from "react";
 import { FaPaperclip, FaSmile, FaUserSecret } from "react-icons/fa";
 import { TbMathFunction } from "react-icons/tb";
 import { Checkbox } from "./checkbox";
+import { hideToolbarIcon } from "./md-editor-a11y";
 import GiphyPicker from "./giphy-picker";
 import { MentionDropdown } from "./mention-dropdown";
 import { toaster } from "./toaster";
@@ -712,7 +713,9 @@ export default function MessageInput(props: MessageInputProps) {
             await onFileTransfer(event.clipboardData);
           }
         }}
+        commandsFilter={hideToolbarIcon}
         textareaProps={{
+          "aria-label": ariaLabel ?? placeholder ?? "Reply...",
           disabled: isSending || disabledProp,
           onKeyDown: handleKeyDown,
           onInput: (e) => {
