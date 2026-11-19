@@ -10,10 +10,12 @@ import {
   ProviderRateLimitError,
   wordsInRegion,
   type NormRect,
-  type PageImage,
-  type WordBox
+  type PageImage
 } from "../_shared/examVision.ts";
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
+import { AS_DRAWN, mapRectToScan, wordsToTemplate } from "../_shared/examRegistration.ts";
+import { alignBatch, alignExam, loadTemplatePages, ocrWords, toOcrData } from "./pageAlignment.ts";
+import { downloadImage, downloadImageCached } from "./storage.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -150,30 +152,6 @@ async function setBatchError(admin: Admin, batchId: number, message: string): Pr
   if (updErr) throw new Error(`mark batch ${batchId} errored failed: ${updErr.message}`);
 }
 
-async function downloadImage(admin: Admin, bucket: string, path: string): Promise<Uint8Array> {
-  const { data, error } = await admin.storage.from(bucket).download(path);
-  if (error || !data) throw new Error(`download ${bucket}/${path} failed: ${error?.message}`);
-  return new Uint8Array(await data.arrayBuffer());
-}
-
-// Download an image at most once per cache. Lets a single doMatch group / finalize pass
-// reuse the same page bytes (e.g. SIS-id and name regions on one page, or a page that is
-// both copied to submission-files and read for answer structuring) instead of re-fetching.
-// Caches the in-flight promise so even concurrent reads of one path share a single fetch.
-function downloadImageCached(
-  admin: Admin,
-  cache: Map<string, Promise<Uint8Array>>,
-  bucket: string,
-  path: string
-): Promise<Uint8Array> {
-  let pending = cache.get(path);
-  if (!pending) {
-    pending = downloadImage(admin, bucket, path);
-    cache.set(path, pending);
-  }
-  return pending;
-}
-
 // Which class, exam and batch a page's image_path must name (#1078). Taken from the batch row:
 // staff write image_path, and the page's own exam_id is not tied to its batch's exam.
 async function loadScanScope(admin: Admin, batchId: number): Promise<ScanScope> {
@@ -218,7 +196,7 @@ async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs)
   // belongs to no queued work and is dropped (a zero-row update is not an error).
   const { error: updErr } = await admin
     .from("exam_scan_pages")
-    .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
+    .update({ ocr_text: result.text, ocr_data: toOcrData(result.words) })
     .eq("id", args.scan_page_id)
     .eq("batch_id", batchId);
   // Throw on write failure so the message is requeued, not archived (would lose the OCR).
@@ -413,6 +391,15 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   const scanScope: ScanScope = { classId: batch.class_id, examId: batch.exam_id, batchId: batch.id };
   for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
 
+  // Line every page up with its template page before reading any region; a page that cannot be
+  // refuses the batch (#1292). Before linking, so a refused batch creates no scanned exams.
+  const groupCount = Math.ceil(pages.length / perExam);
+  const groups = await alignBatch(
+    admin,
+    scanScope,
+    Array.from({ length: groupCount }, (_, g) => pages.slice(g * perExam, g * perExam + perExam))
+  );
+
   // identity regions (kind name/student_id) defined on the template. A template may
   // define one of each; when both exist we read each independently (they can sit on
   // different pages) and combine the two signals to disambiguate the student.
@@ -434,7 +421,7 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // Read the identity within one region (or the whole first page when region is null).
   const readRegionIdentity = async (
     region: IdRegion | undefined,
-    groupPages: typeof pages,
+    groupPages: (typeof groups)[number],
     cache: Map<string, Promise<Uint8Array>>
   ) => {
     const pageNumber = region?.page_number ?? 1;
@@ -453,15 +440,11 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     }
     const bytes = await downloadImageCached(admin, cache, "exam-scans", page.image_path);
     const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
-    const rect: NormRect | null = region
-      ? { x: region.x, y: region.y, width: region.width, height: region.height }
-      : null;
+    const rect: NormRect | null = region ? mapRectToScan(region, page.reg) : null;
     return provider.readIdentity(img, rect);
   };
 
   const roster = await loadRoster(admin, classId);
-  const groupCount = Math.ceil(pages.length / perExam);
-  const groups = Array.from({ length: groupCount }, (_, g) => pages.slice(g * perExam, g * perExam + perExam));
 
   // Create the scanned exams and link every group in one transaction (exam_link_scan_groups). It
   // refuses, as a whole, a grouping that would change the pages of an exam a human confirmed or
@@ -671,7 +654,9 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   // a crash) re-runs them safely. pageBytes fetches each page image at most once.
   {
     const pageBytes = new Map<string, Promise<Uint8Array>>();
-    const groupPages = pages;
+    // Match refused any page that should have lined up and did not, so a page without a
+    // registration here is read as drawn (#1292).
+    const groupPages = alignExam(pages, await loadTemplatePages(admin, scanned.exam_id));
 
     // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the
     // submission's files would fail once a grader has commented on a page (the
@@ -741,9 +726,12 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
       const examPageNo = Math.max(1, r.page_number);
       const page = groupPages[examPageNo - 1];
       if (!page) continue;
-      const words = ((page.ocr_data as { words?: WordBox[] } | null)?.words ?? []) as WordBox[];
-      const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
-      const ocrText = wordsInRegion(words, rect);
+      // Read the region as drawn, against this scan's words moved into template space. `rect` is
+      // where the region sits on the scan, for the model and the grader's crop.
+      const drawn: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
+      const reg = page.reg ?? AS_DRAWN;
+      const ocrText = wordsInRegion(wordsToTemplate(ocrWords(page.ocr_data), reg), drawn);
+      const rect = mapRectToScan(drawn, reg);
       let structuredValue: unknown = ocrText;
       const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
       if (answerType && answerType !== "free_text" && ocrText) {
