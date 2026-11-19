@@ -10,8 +10,10 @@
 //
 // No npm deps — everything is REST (fetch).
 
-export type NormRect = { x: number; y: number; width: number; height: number };
-export type WordBox = NormRect & { text: string };
+import type { NormRect, WordBox } from "./examRegionText.ts";
+export type { NormRect, WordBox } from "./examRegionText.ts";
+export { wordsInRegion } from "./examRegionText.ts";
+
 export type PageImage = { name: string; bytes: Uint8Array; width: number; height: number };
 
 export type ProposedQuestion = {
@@ -77,26 +79,6 @@ export class ProviderTransientError extends Error {
     super(`${provider} request failed: category=${category}${status === undefined ? "" : ` status=${status}`}`);
     this.name = "ProviderTransientError";
   }
-}
-
-/** Text of the words whose center falls inside `region` (reading order: top-to-bottom, left-to-right). */
-export function wordsInRegion(words: WordBox[], region: NormRect): string {
-  const inside = words.filter((w) => {
-    const cx = w.x + w.width / 2;
-    const cy = w.y + w.height / 2;
-    return cx >= region.x && cx <= region.x + region.width && cy >= region.y && cy <= region.y + region.height;
-  });
-  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right.
-  // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
-  // engine-defined ordering for words clustered within a row. Keep in sync with lib/exam/regionMath.ts.
-  inside.sort((a, b) => {
-    const band = Math.round(a.y / 0.02) - Math.round(b.y / 0.02);
-    return band !== 0 ? band : a.x - b.x;
-  });
-  return inside
-    .map((w) => w.text)
-    .join(" ")
-    .trim();
 }
 
 function toBase64(bytes: Uint8Array): string {
