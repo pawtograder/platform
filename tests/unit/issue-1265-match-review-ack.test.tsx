@@ -127,23 +127,26 @@ function rosterOf(...names: string[]) {
       : { data: [{ ...row(), detected_name: "SMITH, Alice" }], error: null };
 }
 
-async function clickConfirm() {
+// Until the roster loads, the row's hint says the scan does not name "unknown". Waiting on the hint
+// rather than on the picker keeps these tests independent of which picker the page uses.
+async function clickConfirm(rosterLoaded: () => Promise<unknown>) {
   render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
-  // The roster and the row are both loaded once p1 is selected in the row's picker.
-  await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("p1"));
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Confirm" })));
+  const confirm = await screen.findByRole("button", { name: "Confirm" });
+  await rosterLoaded();
+  await act(async () => fireEvent.click(confirm));
 }
 
 test("two students whose names compare equal make a matching scan ask first", async () => {
   rosterOf("Alice Smith", "alice  SMITH", "Dana Lee");
-  await clickConfirm();
+  await clickConfirm(() => screen.findByText(/Selected: “Alice Smith”/));
   expect(await screen.findByRole("alert")).toHaveTextContent("More than one student is named “Alice Smith”");
   expect(mockWrites).toHaveLength(0);
 });
 
 test("a scan that names the only student with that name confirms in one click", async () => {
   rosterOf("Alice Smith", "Alice Smithson", "Dana Lee");
-  await clickConfirm();
+  // The row is on screen, so no hint means the roster is in and the names agree.
+  await clickConfirm(() => waitFor(() => expect(screen.queryByText(/Selected:/)).toBeNull()));
   await waitFor(() => expect(mockWrites).toHaveLength(1));
   expect(screen.queryByRole("alert")).toBeNull();
 });
