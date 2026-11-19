@@ -168,6 +168,7 @@ class FakeCoder {
       name,
       owner_id: owner.id,
       owner_name: owner.username,
+      template_active_version_id: TEMPLATE.active_version_id,
       latest_build: {
         status: this.nextBuildStatus,
         transition: "start",
@@ -367,7 +368,14 @@ class FakeCoder {
       if (["pending", "starting", "stopping"].includes(ws.latest_build.status)) {
         return json(409, { message: "A workspace build is already active." });
       }
-      ws.latest_build = { ...ws.latest_build, status: "pending", transition: body.transition, resources: [] };
+      ws.latest_build = {
+        ...ws.latest_build,
+        status: "pending",
+        transition: body.transition,
+        // Coder builds on the last build's version unless the request names one.
+        template_version_id: body.template_version_id ?? ws.latest_build.template_version_id,
+        resources: []
+      };
       return json(201, ws.latest_build);
     }
     if ((m = path.match(/^\/workspaces\/([^/]+)$/))) {
@@ -838,6 +846,29 @@ Deno.test("creates the workspace from the template with the repo URL and TTL, th
   assertEquals(coder.posts(/\/builds$/).length, 0, "a running workspace isn't rebuilt");
 });
 
+Deno.test("a workspace built on an older template version starts on the active one", async () => {
+  const { coder, deps } = setup();
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  signInAndLink(coder, ALEX);
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  const ws = coder.workspaces[0];
+  ws.latest_build = {
+    ...ws.latest_build,
+    template_version_id: "ver-0",
+    transition: "stop",
+    status: "stopped",
+    resources: []
+  };
+
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "starting");
+  // Without a version, Coder would rebuild on ver-0 and template fixes would never reach this workspace.
+  assertEquals(
+    coder.posts(/\/builds$/).map((c) => c.body!.template_version_id),
+    [TEMPLATE.active_version_id]
+  );
+});
+
 Deno.test("a stopped workspace is started", async () => {
   const { coder, deps } = setup();
   await openWorkspace(deps, ALEX, { assignment_id: 41 });
@@ -851,7 +882,7 @@ Deno.test("a stopped workspace is started", async () => {
   assertEquals(res.workspace_id, first.workspace_id);
   assertEquals(
     coder.posts(/\/builds$/).map((c) => c.body),
-    [{ transition: "start" }]
+    [{ transition: "start", template_version_id: TEMPLATE.active_version_id }]
   );
   assertEquals(res.status, "starting");
   assertEquals(res.step, "build");
@@ -1223,7 +1254,7 @@ Deno.test("open restarts a workspace whose startup failed (stop, then start); a 
     const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
     assertEquals(
       coder.posts(/\/builds$/).map((c) => c.body),
-      [{ transition: "stop" }, { transition: "start" }]
+      [{ transition: "stop" }, { transition: "start", template_version_id: TEMPLATE.active_version_id }]
     );
     assertEquals(res.workspace_id, failed.workspace_id, "the same workspace, so the same home volume");
     assertEquals(res.status, "ready");
@@ -1246,7 +1277,7 @@ Deno.test("two opens of a failed workspace restart it once", async () => {
   assertEquals(db.restartClaims, 1);
   assertEquals(
     coder.posts(/\/builds$/).map((c) => c.body),
-    [{ transition: "stop" }, { transition: "start" }]
+    [{ transition: "stop" }, { transition: "start", template_version_id: TEMPLATE.active_version_id }]
   );
   assertEquals(new Set([a.status, b.status]), new Set(["ready", "restarting"]), "the other call says restarting");
 });
@@ -2154,7 +2185,7 @@ Deno.test("ready needs a connected agent: a lost agent is failed, and open resta
     const reopened = await openWorkspace(deps, ALEX, { assignment_id: 41 });
     assertEquals(
       coder.posts(/\/builds$/).map((c) => c.body),
-      [{ transition: "stop" }, { transition: "start" }]
+      [{ transition: "stop" }, { transition: "start", template_version_id: TEMPLATE.active_version_id }]
     );
     assertEquals(reopened.status, "ready");
   }

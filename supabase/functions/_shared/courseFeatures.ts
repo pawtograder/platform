@@ -4,6 +4,9 @@
 /** Turns on Forgejo assignments and Coder workspaces (#1128's assignments_validate_git_provider). */
 export const CLOUD_WORKSPACES_FEATURE = "cloud-workspaces";
 
+/** Paper exams (COURSE_FEATURES.EXAMS in lib/courseFeatures.ts); off unless a course opts in. */
+export const EXAMS_FEATURE = "exams";
+
 /**
  * Whether `features` turns `name` on. The first entry with that name decides, and only a JSON
  * boolean `enabled` counts: no entry, a non-array column, or `"true"` gives `defaultWhenMissing`.

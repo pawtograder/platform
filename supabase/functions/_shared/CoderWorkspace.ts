@@ -732,7 +732,7 @@ async function startRestart(
       await db.releaseRestart(rowId, starting);
       return { ws, restarting: false, refused };
     }
-    const error = await postBuild(coder, ws.id, "start");
+    const error = await postBuild(coder, ws.id, "start", ws.template_active_version_id);
     await db.releaseRestart(rowId, starting);
     if (error && error.status !== 409) throw error;
     return { ws: (await getWorkspace(coder, ws.id)) ?? ws, restarting: false };
@@ -958,7 +958,7 @@ export async function openWorkspace(
     // A build that failed (Retry). An abandoned claim goes too.
     refused = await beforeStart();
     if (refused) return refused;
-    const error = await postBuild(coder, ws.id, "start");
+    const error = await postBuild(coder, ws.id, "start", ws.template_active_version_id);
     if (row.restart_token) await db.releaseRestart(row.id, row.restart_token);
     if (error && error.status !== 409) throw error;
     ws = (await getWorkspace(coder, ws.id)) ?? ws;
