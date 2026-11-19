@@ -174,7 +174,7 @@ locals {
   repo_url_regex = "^(${var.forgejo_url == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : replace(trimsuffix(var.forgejo_url, "/"), "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")}/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
   repo_dir       = "/home/coder/${trimsuffix(basename(data.coder_parameter.repo_url.value), ".git")}"
   # Must match gitCredentialsFile in supabase/functions/_shared/CoderWorkspace.ts.
-  repo_path       = try(regex("^https?://[^/]+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
+  repo_path       = try(regex("^https?://.+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
   git_credentials = "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}"
   clone_timeout   = 300
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
