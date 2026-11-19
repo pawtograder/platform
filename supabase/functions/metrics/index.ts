@@ -83,6 +83,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  */
 type DiscordCircuitRow = { scope: string; key: string; is_open: boolean; state: string; trip_count: number };
 
+/** One row of metrics_office_hours_queue_health(): office hours queue health for one class. */
+type OfficeHoursQueueHealthRow = {
+  class_id: number;
+  queues_active: number;
+  queues_red: number;
+  queues_unstaffed: number;
+  requests_waiting: number;
+  oldest_wait_minutes: number;
+};
+
 type RpcRowResult<T> = { data: T | null; error: { message: string } | null };
 
 /** Call RPCs not yet present on generated `Database` / unwrap thenable builders for `withTimeout`. */
@@ -137,6 +147,25 @@ async function generatePrometheusMetrics(): Promise<Response> {
       }
     } catch (e) {
       console.error("Error fetching Discord circuit breaker statuses:", e);
+    }
+
+    // Office hours queue health, read the same way as the Discord breaker above and for the same
+    // reason: a deployment that has not applied 20261119130000 has no such function, and losing one
+    // gauge must not cost the scrape every other metric in it.
+    let officeHoursQueueHealth: OfficeHoursQueueHealthRow[] = [];
+    try {
+      const oh = await withTimeout(
+        rpcUntyped<OfficeHoursQueueHealthRow[]>(supabase, "metrics_office_hours_queue_health"),
+        RPC_TIMEOUT_MS,
+        "metrics_office_hours_queue_health"
+      );
+      if (oh.error) {
+        console.error("Error fetching office hours queue health:", oh.error);
+      } else {
+        officeHoursQueueHealth = oh.data ?? [];
+      }
+    } catch (e) {
+      console.error("Error fetching office hours queue health:", e);
     }
 
     let bottleneckSnapshots: BottleneckLimiterSnapshot[] = [];
@@ -315,6 +344,32 @@ ${queueDepths.map((q) => `pawtograder_queue_depth{queue="${escapeLabel(q.queue)}
     // postgres_exporter's queries.yaml in charts/pawtograder/templates/monitoring.yaml, scraped once
     // instead of once per functions pod. Connections and table sizes were already exported there as
     // pawtograder_db_connections_{used,max,reserved} and pawtograder_table_sizes_{total,heap}_bytes.
+
+    // Office hours queue health. queues_red is the one to alert on: it is the same condition the
+    // staff dashboard paints red, evaluated against each class's own thresholds, so a page nobody
+    // has open still reports. The rest are here to make a red queue diagnosable without a login.
+    if (officeHoursQueueHealth.length > 0) {
+      output += `
+# HELP pawtograder_office_hours_queues_red Active office hours queues at or over their class's waiting or oldest-wait threshold
+# TYPE pawtograder_office_hours_queues_red gauge
+# HELP pawtograder_office_hours_queues_unstaffed Active office hours queues with nobody on shift
+# TYPE pawtograder_office_hours_queues_unstaffed gauge
+# HELP pawtograder_office_hours_queues_active Active office hours queues
+# TYPE pawtograder_office_hours_queues_active gauge
+# HELP pawtograder_office_hours_requests_waiting Open office hours requests across a class's active queues
+# TYPE pawtograder_office_hours_requests_waiting gauge
+# HELP pawtograder_office_hours_oldest_wait_minutes Age in minutes of the oldest open office hours request in a class
+# TYPE pawtograder_office_hours_oldest_wait_minutes gauge
+`;
+      for (const q of officeHoursQueueHealth) {
+        const labels = `class_id="${escapeLabel(String(q.class_id))}"`;
+        output += `pawtograder_office_hours_queues_red{${labels}} ${q.queues_red} ${timestamp}\n`;
+        output += `pawtograder_office_hours_queues_unstaffed{${labels}} ${q.queues_unstaffed} ${timestamp}\n`;
+        output += `pawtograder_office_hours_queues_active{${labels}} ${q.queues_active} ${timestamp}\n`;
+        output += `pawtograder_office_hours_requests_waiting{${labels}} ${q.requests_waiting} ${timestamp}\n`;
+        output += `pawtograder_office_hours_oldest_wait_minutes{${labels}} ${q.oldest_wait_minutes} ${timestamp}\n`;
+      }
+    }
 
     output += "\n";
 
