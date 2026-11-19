@@ -24,6 +24,7 @@ import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 export type { CodeFileHandle, CodeFileProps };
 
@@ -191,7 +192,7 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
         } catch (err) {
           toaster.error({
             title: "Error saving annotation",
-            description: err instanceof Error ? err.message : "Unknown error"
+            description: getUserFacingErrorMessage(err)
           });
         }
       },

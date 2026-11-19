@@ -17,6 +17,8 @@ import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SurveyFormData = {
   title: string;
@@ -37,6 +39,7 @@ type SurveyFormData = {
 type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "closed"
 
 export default function NewSurveyPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const revalidateServerCaches = useRevalidateServerCaches(Number(course_id));
@@ -293,7 +296,7 @@ export default function NewSurveyPage() {
           jsonToStore = validateJson ? JSON.stringify(parsedJson) : (values.json as string);
         } catch (err) {
           validationErrors = validateJson
-            ? `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`
+            ? `Invalid JSON configuration: ${getUserFacingErrorMessage(err, { role: errorRole })}`
             : null;
           jsonToStore = values.json as string; // keep raw for drafts
         }
@@ -444,6 +447,7 @@ export default function NewSurveyPage() {
       return { data, error };
     },
     [
+      errorRole,
       course_id,
       private_profile_id,
       trackEvent,
@@ -537,12 +541,12 @@ export default function NewSurveyPage() {
         toaster.dismiss(loadingToast);
         toaster.error({
           title: "Error creating survey",
-          description: err instanceof Error ? err.message : "An unexpected error occurred"
+          description: getUserFacingErrorMessage(err, { role: errorRole })
         });
         throw err;
       }
     },
-    [saveSurvey, convertDueDateToISO]
+    [errorRole, saveSurvey, convertDueDateToISO]
   );
 
   return (

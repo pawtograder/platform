@@ -34,6 +34,8 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { SubmissionReviewProvider } from "./useSubmissionReview";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 class SubmissionController {
   private _submission?: SubmissionWithGraderResultsAndFiles;
@@ -548,7 +550,9 @@ function SubmissionControllerCreator({
   });
 
   const [submissionFiles, setSubmissionFiles] = useState<SubmissionWithGraderResultsAndFiles["submission_files"]>();
-  const [filesError, setFilesError] = useState<string | null>(null);
+  // The raw error; the message is built where it is shown, with the viewer's role.
+  const [filesError, setFilesError] = useState<unknown>(null);
+  const errorRole = useViewerErrorRole();
   useEffect(() => {
     let cancelled = false;
     setSubmissionFiles(undefined);
@@ -564,7 +568,7 @@ function SubmissionControllerCreator({
       .catch((e) => {
         if (cancelled) return;
         // Don't block the whole submission view on the files: surface the error and show none.
-        setFilesError(e instanceof Error ? e.message : String(e));
+        setFilesError(e);
         setSubmissionFiles([]);
       });
     return () => {
@@ -593,9 +597,12 @@ function SubmissionControllerCreator({
 
   useEffect(() => {
     if (filesError) {
-      toaster.error({ title: "Error loading submission files", description: filesError });
+      toaster.error({
+        title: "Error loading submission files",
+        description: getUserFacingErrorMessage(filesError, { role: errorRole })
+      });
     }
-  }, [filesError]);
+  }, [filesError, errorRole]);
 
   if (query.isLoading || !submissionFiles) {
     return (

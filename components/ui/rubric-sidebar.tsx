@@ -83,8 +83,10 @@ import {
   useIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 import {
   getStudentFacingErrorMessage,
+  getUserFacingErrorMessage,
   GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE
 } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
@@ -158,6 +160,8 @@ export function CommentActions({
 
   // Get the submission review to check completion and release (issue #446: no grader edits after release)
   const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id ?? undefined);
+  const reviewRubric = useRubricById(submissionReview?.rubric_id);
+  const errorRole = useViewerErrorRole();
 
   // Check if current user can edit/delete this comment
   // 1. Instructors can edit all comments
@@ -194,12 +198,26 @@ export function CommentActions({
               return;
             }
 
-            if (isLineComment(comment)) {
-              submissionController.submission_file_comments.delete(comment.id);
-            } else if (isArtifactComment(comment)) {
-              submissionController.submission_artifact_comments.delete(comment.id);
-            } else {
-              submissionController.submission_comments.delete(comment.id);
+            // A delete RLS refuses (review released, or the self-review deadline passed since the
+            // page loaded) puts the comment back and rejects; say why instead of failing silently.
+            try {
+              if (isLineComment(comment)) {
+                await submissionController.submission_file_comments.delete(comment.id);
+              } else if (isArtifactComment(comment)) {
+                await submissionController.submission_artifact_comments.delete(comment.id);
+              } else {
+                await submissionController.submission_comments.delete(comment.id);
+              }
+            } catch (error) {
+              toaster.error({
+                title: "Couldn't delete comment",
+                description: getUserFacingErrorMessage(error, {
+                  role: errorRole,
+                  isStudent,
+                  rubricReviewRound: reviewRubric?.review_round ?? null,
+                  releasedReviewGraderBlocked: isGraderOrInstructor && !isInstructor && isReviewReleased
+                })
+              });
             }
           }
         }}

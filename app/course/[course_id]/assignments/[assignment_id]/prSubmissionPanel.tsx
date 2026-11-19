@@ -7,6 +7,7 @@ import { Assignment, SubmissionPrLink } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Badge, Box, Heading, HStack, Link, Spinner, Stack, Table, Text } from "@chakra-ui/react";
 import { CrudFilter, useList } from "@refinedev/core";
 import { useMemo, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * Student-facing panel for pr-mode assignments: explains how to submit (open a
@@ -68,7 +69,7 @@ export default function PrSubmissionPanel({
     } catch (e) {
       toaster.error({
         title: "Could not confirm pull request",
-        description: e instanceof Error ? e.message : "Unknown error"
+        description: getUserFacingErrorMessage(e)
       });
     } finally {
       setConfirmingId(null);

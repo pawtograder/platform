@@ -9,6 +9,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { BsPencil, BsTrash, BsX, BsPlus } from "react-icons/bs";
 import { ErrorPinModal } from "./ErrorPinModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface ErrorPinManageModalProps {
   isOpen: boolean;
@@ -30,6 +32,7 @@ export function ErrorPinManageModal({
   discussion_thread_id,
   defaultAssignmentId
 }: ErrorPinManageModalProps) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const assignments = useAssignments();
   const [pins, setPins] = useState<ErrorPinWithRules[]>([]);
@@ -81,12 +84,12 @@ export function ErrorPinManageModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to load error pins: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to load error pins: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setLoading(false);
     }
-  }, [discussion_thread_id, course_id]);
+  }, [discussion_thread_id, course_id, errorRole]);
 
   useEffect(() => {
     if (isOpen) {
@@ -122,13 +125,13 @@ export function ErrorPinManageModal({
       } catch (error) {
         toaster.error({
           title: "Error",
-          description: `Failed to delete error pin: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to delete error pin: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
       } finally {
         setDeletingPinId(null);
       }
     },
-    [fetchPins, onSuccess]
+    [fetchPins, onSuccess, errorRole]
   );
 
   const handleEdit = useCallback((pinId: number) => {

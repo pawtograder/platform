@@ -9,6 +9,8 @@ import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import * as Sentry from "@sentry/nextjs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type FormData = {
   email: string;
@@ -18,6 +20,7 @@ type FormData = {
 };
 
 export default function AddSingleCourseMember() {
+  const errorRole = useStaffErrorRole();
   const [open, setOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { course_id } = useParams();
@@ -45,13 +48,13 @@ export default function AddSingleCourseMember() {
         Sentry.captureException(error);
         toaster.error({
           title: "Error adding course member",
-          description: error instanceof Error ? error.message : "An unexpected error occurred."
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setIsSubmitting(false);
       }
     },
-    [course_id]
+    [errorRole, course_id]
   );
   return (
     <Dialog.Root aria-label="Add Course Member Dialog" lazyMount open={open} onOpenChange={(e) => setOpen(e.open)}>

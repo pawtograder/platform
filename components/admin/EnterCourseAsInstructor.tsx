@@ -7,6 +7,7 @@ import { createClient } from "@/utils/supabase/client";
 import { HStack, NativeSelect, Spinner } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /** Provisions an instructor enrollment for the admin (idempotent), then opens the course. */
 async function enterCourse(classId: number, router: ReturnType<typeof useRouter>, onError: () => void) {
@@ -24,7 +25,7 @@ async function enterCourse(classId: number, router: ReturnType<typeof useRouter>
     router.push(`/course/${classId}/manage/assignments`);
     router.refresh();
   } catch (err) {
-    const description = err instanceof Error ? err.message : "Unknown error";
+    const description = getUserFacingErrorMessage(err, { role: "admin" });
     toaster.error({ title: "Failed to enter course", description });
     onError();
   }

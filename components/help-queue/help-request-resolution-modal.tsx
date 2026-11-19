@@ -9,6 +9,8 @@ import { IoIosThumbsUp, IoIosThumbsDown } from "react-icons/io";
 import { useState } from "react";
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestFeedback, HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ResolutionOption = {
   value: HelpRequestResolutionStatus;
@@ -90,6 +92,7 @@ export default function HelpRequestResolutionModal({
   showFeedback = true,
   title = "Resolve Help Request"
 }: HelpRequestResolutionModalProps) {
+  const errorRole = useViewerErrorRole();
   const [selectedResolution, setSelectedResolution] = useState<HelpRequestResolutionStatus | null>(null);
   const [selectedRating, setSelectedRating] = useState<boolean | null>(null);
 
@@ -158,7 +161,7 @@ export default function HelpRequestResolutionModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to resolve request: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to resolve request: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
       // Don't call handleClose() here so user can retry with selections intact
     }
@@ -180,7 +183,7 @@ export default function HelpRequestResolutionModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to resolve request: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to resolve request: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
       // Don't call handleClose() here so user can retry with selections intact
     }

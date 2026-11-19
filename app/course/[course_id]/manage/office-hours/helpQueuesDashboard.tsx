@@ -30,6 +30,8 @@ import QueueHealthStats, {
   queueHealthTone,
   type QueueHealthTone
 } from "@/components/help-queue/queue-health-stats";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const TONE_RANK: Record<QueueHealthTone, number> = { alert: 0, ok: 1 };
 
@@ -49,6 +51,7 @@ export default function HelpQueuesDashboard({
   health: ReturnType<typeof useQueueHealth>;
   healthOn: boolean;
 }) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { byQueue: healthByQueue, thresholds: healthThresholds } = health;
 
@@ -257,7 +260,7 @@ export default function HelpQueuesDashboard({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to start working on queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };
@@ -276,7 +279,7 @@ export default function HelpQueuesDashboard({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to stop working on queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to stop working on queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

@@ -22,6 +22,8 @@ import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { BsBan, BsClock, BsExclamationTriangle, BsEye, BsPlus, BsShield, BsTrash } from "react-icons/bs";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ModerationActionWithDetails = HelpRequestModeration & {
   student_profile?: UserProfile;
@@ -36,6 +38,7 @@ type ModerationActionWithDetails = HelpRequestModeration & {
  * Uses real-time updates to show moderation changes immediately across all staff.
  */
 export default function ModerationManagement() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
   const isInstructor = useIsInstructor();
@@ -100,7 +103,7 @@ export default function ModerationManagement() {
         onError: (error) => {
           toaster.error({
             title: "Failed to delete moderation action",
-            description: error instanceof Error ? error.message : "An unexpected error occurred"
+            description: getUserFacingErrorMessage(error, { role: errorRole })
           });
         }
       }

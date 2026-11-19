@@ -28,6 +28,8 @@ import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from
 import { useIsStudent, useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
 import { calculateEventLayouts, formatTime, EventLayout } from "./calendar-layout-utils";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ViewMode = "today" | "week" | "month";
 
@@ -122,6 +124,7 @@ interface QueueButtonProps {
 }
 
 function QueueButton({ queueName, accentColor, isVeryShort, context, isAbsolute = true }: QueueButtonProps) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const isStudent = useIsStudent();
@@ -166,7 +169,7 @@ function QueueButton({ queueName, accentColor, isVeryShort, context, isAbsolute 
         } catch (error) {
           toaster.error({
             title: "Error",
-            description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+            description: `Failed to start working on queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
