@@ -137,6 +137,28 @@ Deno.test("validateOIDCToken: Forgejo token verifies when FORGEJO_URL is set -> 
   );
 });
 
+Deno.test("validateOIDCToken: a Forgejo repository comes back lowercased; a GitHub one keeps its case", async () => {
+  const key = await signingKey("fj-1");
+  const cased = { repository: "Demo-Class/HW1-Student1", repository_owner: "Demo-Class" };
+  await withForgejoUrl(FORGEJO_URL, () =>
+    withJwks({ [FORGEJO_JWKS_URL]: [key] }, async () => {
+      const claims = await validateEither(
+        await sign(key, { ...forgejoClaims, ...cased, aud: `${FORGEJO_URL}/Demo-Class` })
+      );
+      assertEquals(claims.repository, "demo-class/hw1-student1");
+    })
+  );
+  const ghKey = await signingKey("gh-1");
+  await withForgejoUrl(undefined, () =>
+    withJwks({ [GITHUB_JWKS_URL]: [ghKey] }, async () => {
+      const claims = await validateOIDCToken(
+        await sign(ghKey, { ...githubClaims, ...cased, aud: "https://github.com/Demo-Class" })
+      );
+      assertEquals(claims.repository, "Demo-Class/HW1-Student1");
+    })
+  );
+});
+
 Deno.test("validateOIDCToken: Forgejo token is rejected when FORGEJO_URL is unset, before any fetch", async () => {
   const key = await signingKey("fj-1");
   await withForgejoUrl(undefined, () =>
