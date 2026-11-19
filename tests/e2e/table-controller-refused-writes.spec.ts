@@ -35,12 +35,19 @@ type Table = "assignments" | "submission_comments" | "review_assignments";
 
 /** A controller over one row the grader can read, loaded through the grader's own session. */
 async function controllerFor<T extends Table>(client: SupabaseClient<Database>, table: T, id: number) {
-  const { data, error } = await client.from(table).select("*").eq("id", id);
+  // TypeScript can't resolve the `id` column type for a generic table name, so `id` is cast.
+  const { data, error } = await client
+    .from(table)
+    .select("*")
+    .eq("id", id as never);
   expect(error).toBeNull();
   expect(data).toHaveLength(1);
   return new TableController({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    query: client.from(table).select("*").eq("id", id) as any,
+    query: client
+      .from(table)
+      .select("*")
+      .eq("id", id as never) as any,
     client,
     table,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
