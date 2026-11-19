@@ -39,6 +39,8 @@ import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
 import RequireManageReviews from "../RequireManageReviews";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 // Main Page Component
 export default function ReassignGradingPage() {
@@ -70,6 +72,7 @@ export default function ReassignGradingPage() {
 }
 
 function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
+  const errorRole = useStaffErrorRole();
   const { course_id, assignment_id } = useParams();
   const assignmentController = useAssignmentController();
   const allActiveSubmissions = useActiveSubmissions();
@@ -430,7 +433,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       Sentry.captureException(e);
       toaster.error({
         title: "Error drafting reviews",
-        description: e instanceof Error ? e.message : String(e)
+        description: getUserFacingErrorMessage(e, { role: errorRole })
       });
     } finally {
       setIsGeneratingReviews(false);

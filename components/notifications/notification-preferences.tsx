@@ -13,6 +13,8 @@ import { useCreate, useList, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BsBell, BsVolumeUp } from "react-icons/bs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Component for managing user notification preferences.
@@ -23,6 +25,7 @@ export default function NotificationPreferencesPanel({
 }: {
   initialDiscussionNotification?: "immediate" | "digest" | "disabled" | null;
 }) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const { user } = useAuthState();
   const { identities } = useIdentity();
@@ -119,12 +122,12 @@ export default function NotificationPreferencesPanel({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to save preferences: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to save preferences: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setIsLoading(false);
     }
-  }, [user?.id, preferences, classId, updatePreferences, createPreferences]);
+  }, [user?.id, preferences, classId, updatePreferences, createPreferences, errorRole]);
 
   // Load existing preferences when data is available
   useEffect(() => {

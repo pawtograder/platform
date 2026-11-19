@@ -8,6 +8,8 @@ import { useEffect } from "react";
 import { BsX } from "react-icons/bs";
 import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type HelpQueueFormData = {
   name: string;
@@ -34,6 +36,7 @@ type EditHelpQueueModalProps = {
  * Allows instructors to modify all queue properties.
  */
 export default function EditHelpQueueModal({ isOpen, onClose, onSuccess, queue }: EditHelpQueueModalProps) {
+  const errorRole = useStaffErrorRole();
   const {
     register,
     handleSubmit,
@@ -99,7 +102,7 @@ export default function EditHelpQueueModal({ isOpen, onClose, onSuccess, queue }
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to update help queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to update help queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

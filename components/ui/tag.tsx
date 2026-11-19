@@ -6,8 +6,10 @@ import { toaster } from "./toaster";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { Tooltip } from "./tooltip";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 export default function TagDisplay({ tag, showRemove }: { tag: TagType; showRemove?: boolean }) {
+  const errorRole = useViewerErrorRole();
   const { mutateAsync: removeTag } = useDelete<Tag>({});
   return (
     <ChakraTag.Root
@@ -26,7 +28,10 @@ export default function TagDisplay({ tag, showRemove }: { tag: TagType; showRemo
               h={"1em"}
               onClick={() =>
                 removeTag({ id: tag.id, resource: "tags" }).catch((error: unknown) => {
-                  toaster.error({ title: "Failed to remove tag", description: getErrorMessage(error) });
+                  toaster.error({
+                    title: "Failed to remove tag",
+                    description: getErrorMessage(error, { role: errorRole })
+                  });
                 })
               }
               variant="surface"

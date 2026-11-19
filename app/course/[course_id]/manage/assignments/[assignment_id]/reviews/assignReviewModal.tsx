@@ -25,6 +25,8 @@ import { TZDate } from "@date-fns/tz";
 import { PopulatedReviewAssignment } from "./ReviewsTable";
 import { useCourseController } from "@/hooks/useCourseController";
 import TableController from "@/lib/TableController";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -77,6 +79,7 @@ export default function AssignReviewModal({
   initialData,
   isEditing
 }: AssignReviewModalProps) {
+  const errorRole = useStaffErrorRole();
   const {
     reset: resetForm,
     control,
@@ -568,7 +571,7 @@ export default function AssignReviewModal({
                   creationErrorsInLoop = true;
                   toaster.error({
                     title: `Error associating rubric part (ID: ${partToCreate.rubric_part_id})`,
-                    description: `${partCreateError instanceof Error ? partCreateError.message : String(partCreateError)}`
+                    description: `${getUserFacingErrorMessage(partCreateError, { role: errorRole })}`
                   });
                 }
               }

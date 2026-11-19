@@ -19,11 +19,14 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
 import useModalManager from "@/hooks/useModalManager";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 const HelpRequestResolutionModal = dynamic(() => import("@/components/help-queue/help-request-resolution-modal"), {
   ssr: false
 });
 export function FloatingHelpRequestWidget() {
+  const errorRole = useViewerErrorRole();
   const activeRequest = useActiveHelpRequest();
   const router = useRouter();
   const pathname = usePathname();
@@ -145,11 +148,11 @@ export function FloatingHelpRequestWidget() {
       } catch (error) {
         toaster.error({
           title: "Error",
-          description: `Failed to resolve request: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to resolve request: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
       }
     },
-    [activeRequest, private_profile_id, helpRequests, studentHelpActivity, allHelpRequestStudents]
+    [activeRequest, private_profile_id, helpRequests, studentHelpActivity, allHelpRequestStudents, errorRole]
   );
 
   const handleToggleExpand = useCallback(() => {

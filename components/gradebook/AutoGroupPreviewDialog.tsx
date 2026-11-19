@@ -4,6 +4,8 @@ import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Button, Dialog, HStack, Portal, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 /** Shape returned by `gradebook_columns_auto_group_preview`. */
 export type AutoGroupPlan = {
@@ -57,6 +59,7 @@ export function AutoGroupPreviewDialog({
   onConfirm: () => Promise<void>;
   onClose: () => void;
 }) {
+  const errorRole = useViewerErrorRole();
   const supabase = useMemo(() => createClient(), []);
   const [plan, setPlan] = useState<AutoGroupPlan | null>(null);
   const [columnNames, setColumnNames] = useState<Map<number, string>>(new Map());
@@ -92,7 +95,10 @@ export function AutoGroupPreviewDialog({
       await onConfirm();
       onClose();
     } catch (e) {
-      toaster.error({ title: "Could not apply groups", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({
+        title: "Could not apply groups",
+        description: getUserFacingErrorMessage(e, { role: errorRole })
+      });
     } finally {
       setIsSaving(false);
     }

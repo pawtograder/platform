@@ -314,7 +314,7 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
           failures.length === 1
             ? "Failed to save a regression test change"
             : `Failed to save ${failures.length} regression test changes`,
-        description: getErrorMessage(failures[0].reason)
+        description: getErrorMessage(failures[0].reason, { role: errorRole })
       });
     }
     await refetchRegressionTestRepos();
@@ -325,7 +325,8 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     assignment_id,
     createRegressionTest,
     deleteRegressionTest,
-    refetchRegressionTestRepos
+    refetchRegressionTestRepos,
+    errorRole
   ]);
   const toggleRepo = useCallback(
     (repo: string) => {

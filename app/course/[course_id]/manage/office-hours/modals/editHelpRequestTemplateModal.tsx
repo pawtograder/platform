@@ -8,6 +8,8 @@ import { useEffect } from "react";
 import { BsX } from "react-icons/bs";
 import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type HelpRequestTemplateFormData = {
   name: string;
@@ -34,6 +36,7 @@ export default function EditHelpRequestTemplateModal({
   onSuccess,
   template
 }: EditHelpRequestTemplateModalProps) {
+  const errorRole = useStaffErrorRole();
   const {
     register,
     handleSubmit,
@@ -89,7 +92,7 @@ export default function EditHelpRequestTemplateModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to update template: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to update template: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

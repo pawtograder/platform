@@ -1,4 +1,4 @@
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useOptionalCourseRole } from "@/hooks/useClassProfiles";
 import type { ErrorAudienceRole } from "@/lib/studentFacingErrorMessages";
 
 /**
@@ -8,4 +8,14 @@ import type { ErrorAudienceRole } from "@/lib/studentFacingErrorMessages";
  */
 export function useStaffErrorRole(): Extract<ErrorAudienceRole, "instructor" | "grader"> {
   return useIsInstructor() ? "instructor" : "grader";
+}
+
+/**
+ * The `role` to pass to `getUserFacingErrorMessage` on screens any course member can see: the
+ * viewer's effective course role. Outside a course (no `ClassProfileProvider`) it is `undefined`,
+ * which gives the student wording. Staff-only screens can use `useStaffErrorRole` instead.
+ */
+export function useViewerErrorRole(): ErrorAudienceRole | undefined {
+  const role = useOptionalCourseRole();
+  return role === "instructor" || role === "grader" || role === "student" ? role : undefined;
 }

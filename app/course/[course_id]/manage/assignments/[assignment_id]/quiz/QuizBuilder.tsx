@@ -12,10 +12,13 @@ import { createClient } from "@/utils/supabase/client";
 import { Alert, Badge, Box, Button, Heading, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type DeliveryMode = "in_app" | "paper";
 
 export default function QuizBuilder() {
+  const errorRole = useStaffErrorRole();
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -113,10 +116,10 @@ export default function QuizBuilder() {
   useEffect(() => {
     setLoadError(null);
     load().catch((e) => {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setLoadError(getUserFacingErrorMessage(e, { role: errorRole }));
       setLoading(false);
     });
-  }, [load]);
+  }, [load, errorRole]);
 
   const save = useCallback(async () => {
     if (!questions.length) {
@@ -174,11 +177,11 @@ export default function QuizBuilder() {
         description: `Generated ${result.pages.length} page(s) and ${result.regions} region(s).`
       });
     } catch (e) {
-      toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Save failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     } finally {
       setSaving(false);
     }
-  }, [questions, courseId, assignmentId, assignmentTitle, gradingRubricId, load]);
+  }, [questions, courseId, assignmentId, assignmentTitle, gradingRubricId, load, errorRole]);
 
   const downloadPdf = useCallback(async () => {
     if (!pdfPath) return;

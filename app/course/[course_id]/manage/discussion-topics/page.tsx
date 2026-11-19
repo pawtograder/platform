@@ -32,6 +32,8 @@ import CreateTopicModal from "./modals/createTopicModal";
 import EditTopicModal from "./modals/editTopicModal";
 import { useCourse } from "@/hooks/useCourseController";
 import { getDiscordChannelUrl } from "@/lib/discordUtils";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Draggable and droppable topic item component.
@@ -204,6 +206,7 @@ function DraggableTopicItem({
  */
 export default function DiscussionTopicsPage() {
   // Modal management using the useModalManager hook pattern
+  const errorRole = useStaffErrorRole();
   const createModal = useModalManager();
   const editModal = useModalManager<DiscussionTopic>();
 
@@ -286,7 +289,7 @@ export default function DiscussionTopicsPage() {
     } catch (error) {
       // Handle foreign key constraint violation gracefully
       // This can occur if a thread was created between the check above and the delete operation
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getUserFacingErrorMessage(error, { role: errorRole });
       const isForeignKeyViolation =
         errorMessage.includes("foreign key") ||
         errorMessage.includes("violates foreign key constraint") ||
@@ -379,7 +382,7 @@ export default function DiscussionTopicsPage() {
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to update topic order: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to update topic order: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

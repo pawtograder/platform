@@ -10,8 +10,11 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RegionEditor from "../RegionEditor";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 function ExamTemplatePageContent() {
+  const errorRole = useStaffErrorRole();
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -57,11 +60,11 @@ function ExamTemplatePageContent() {
       setTemplateRevision((r) => r + 1);
       toaster.success({ title: `Uploaded ${result.pages.length} template page(s)` });
     } catch (e) {
-      toaster.error({ title: "Upload failed", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Upload failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     } finally {
       setUploading(false);
     }
-  }, [courseId, assignmentId]);
+  }, [courseId, assignmentId, errorRole]);
 
   if (loading) return <Spinner />;
 
