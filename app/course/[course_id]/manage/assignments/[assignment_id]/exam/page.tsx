@@ -22,7 +22,7 @@ function ExamOverviewPageContent() {
       try {
         const { data, error } = await supabase
           .from("exams")
-          .select("status, num_pages")
+          .select("num_pages")
           .eq("assignment_id", assignmentId)
           .maybeSingle();
         if (!active) return;
@@ -31,7 +31,8 @@ function ExamOverviewPageContent() {
           return;
         }
         setStatus(
-          data ? `Template configured (${data.num_pages} page(s), status: ${data.status})` : "No exam template yet"
+          // exams.status is never moved off 'draft' (nothing writes 'ready'), so it is not shown (#1269).
+          data ? `Template configured: ${data.num_pages} page(s).` : "No exam template yet"
         );
       } catch {
         if (active) setStatus("Unable to load exam status");

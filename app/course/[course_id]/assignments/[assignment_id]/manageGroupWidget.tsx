@@ -873,8 +873,44 @@ function GroupDetails({
   );
 }
 
+// The repo's Forgejo host is the instance of the newest Forgejo account the viewer can see (#1092):
+// their own for a student, and after a FORGEJO_URL change the newest is on the current instance.
+function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
+  const { data } = useList<{ instance_url: string }>({
+    resource: "git_accounts",
+    meta: { select: "instance_url" },
+    filters: [
+      { field: "provider", operator: "eq", value: "forgejo" },
+      { field: "login", operator: "nnull", value: null }
+    ],
+    sorters: [{ field: "created_at", order: "desc" }],
+    pagination: { pageSize: 1 }
+  });
+  const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
+  const instanceUrl = data?.data?.[0]?.instance_url;
+  if (!instanceUrl) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {label}
+      </Text>
+    );
+  }
+  return (
+    <Link
+      href={`${instanceUrl}/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {label}
+    </Link>
+  );
+}
+
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
+  if (repository.git_provider === "forgejo") {
+    return <ForgejoRepositoryLabel repository={repository} />;
+  }
   if (!role.github_org_confirmed) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">

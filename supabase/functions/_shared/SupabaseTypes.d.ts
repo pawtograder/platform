@@ -2088,6 +2088,7 @@ export type Database = {
           late_tokens_per_student: number;
           name: string | null;
           office_hours_description: string | null;
+          office_hours_health_thresholds: Json;
           office_hours_ics_url: string | null;
           slug: string | null;
           solution_template_repo: string | null;
@@ -2117,6 +2118,7 @@ export type Database = {
           late_tokens_per_student?: number;
           name?: string | null;
           office_hours_description?: string | null;
+          office_hours_health_thresholds?: Json;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           solution_template_repo?: string | null;
@@ -2146,6 +2148,7 @@ export type Database = {
           late_tokens_per_student?: number;
           name?: string | null;
           office_hours_description?: string | null;
+          office_hours_health_thresholds?: Json;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           solution_template_repo?: string | null;
@@ -3963,11 +3966,11 @@ export type Database = {
         };
         Relationships: [
           {
-            foreignKeyName: "exam_scanned_submissions_batch_id_fkey";
-            columns: ["batch_id"];
+            foreignKeyName: "exam_scanned_submissions_batch_scope_fkey";
+            columns: ["batch_id", "exam_id", "class_id"];
             isOneToOne: false;
             referencedRelation: "exam_scan_batches";
-            referencedColumns: ["id"];
+            referencedColumns: ["id", "exam_id", "class_id"];
           },
           {
             foreignKeyName: "exam_scanned_submissions_class_id_fkey";
@@ -4372,6 +4375,7 @@ export type Database = {
           instance_url: string;
           recorded_at: string;
           repository_id: number;
+          revoke_claim_id: number | null;
           revoke_claimed_at: string | null;
           user_id: string;
         };
@@ -4380,6 +4384,7 @@ export type Database = {
           instance_url: string;
           recorded_at?: string;
           repository_id: number;
+          revoke_claim_id?: number | null;
           revoke_claimed_at?: string | null;
           user_id: string;
         };
@@ -4388,6 +4393,7 @@ export type Database = {
           instance_url?: string;
           recorded_at?: string;
           repository_id?: number;
+          revoke_claim_id?: number | null;
           revoke_claimed_at?: string | null;
           user_id?: string;
         };
@@ -13761,7 +13767,7 @@ export type Database = {
       };
       claim_forgejo_repo_token_revocation: {
         Args: { p_id: number; p_stale_minutes: number };
-        Returns: boolean;
+        Returns: number;
       };
       claim_git_account: {
         Args: {
@@ -14301,8 +14307,15 @@ export type Database = {
         Returns: number;
       };
       exam_create_submission: {
-        Args: { p_scanned_submission_id: number };
+        Args: {
+          p_expected_profile_id?: string;
+          p_scanned_submission_id: number;
+        };
         Returns: number;
+      };
+      exam_link_scan_groups: {
+        Args: { p_batch_id: number; p_groups: Json };
+        Returns: Json;
       };
       exam_sync_rubric_from_questions: {
         Args: { p_exam_id: number; p_rubric_id: number };
@@ -14336,6 +14349,19 @@ export type Database = {
           user_id: string;
         }[];
       };
+      forgejo_group_repos_needed: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          all_members_have_logins: boolean;
+          assignment_group_id: number;
+          assignment_id: number;
+          class_id: number;
+          logins: string[];
+          name: string;
+          owner: string;
+          template_repo: string;
+        }[];
+      };
       forgejo_repo_token_revocable: {
         Args: { p_repository_id: number; p_user_id: string };
         Returns: boolean;
@@ -14351,6 +14377,18 @@ export type Database = {
           login: string;
           repository_id: number;
           user_id: string;
+        }[];
+      };
+      forgejo_repos_needed: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          assignment_id: number;
+          class_id: number;
+          login: string;
+          name: string;
+          owner: string;
+          profile_id: string;
+          template_repo: string;
         }[];
       };
       generate_anon_name: { Args: never; Returns: string };
@@ -15130,6 +15168,20 @@ export type Database = {
         Returns: undefined;
       };
       invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
+      office_hours_queue_health: {
+        Args: { p_class_id: number };
+        Returns: {
+          helping: number;
+          median_wait_seconds_today: number;
+          oldest_wait_seconds: number;
+          queue_id: number;
+          queue_name: string;
+          resolved_today: number;
+          staffed_tas: number;
+          unstaffed_seconds: number | null;
+          waiting: number;
+        }[];
+      };
       invoke_bug_report_retention_purge_background_task: {
         Args: never;
         Returns: undefined;
@@ -15590,6 +15642,15 @@ export type Database = {
       save_error_pin: {
         Args: { p_error_pin: Json; p_rules: Json };
         Returns: Json;
+      };
+      save_forgejo_group_repo: {
+        Args: {
+          p_assignment_group_id: number;
+          p_granted: string[];
+          p_instance_url: string;
+          p_repository: string;
+        };
+        Returns: boolean;
       };
       seed_default_class_roles: {
         Args: { p_class_id: number };

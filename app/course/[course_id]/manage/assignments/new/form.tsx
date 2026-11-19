@@ -41,6 +41,13 @@ import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useFeatureEnabled, useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
+import {
+  FORGEJO_UNSUPPORTED_SETTINGS,
+  forgejoSettingState,
+  repoModeUnavailableReason,
+  submissionModeUnavailableReason
+} from "@/lib/gitProviderOptions";
+import RepositoryHostPicker, { useSavedAssignment, useSelectedGitProvider } from "./repositoryHostPicker";
 
 /**
  * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
@@ -584,6 +591,20 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
 
   const repoMode = watch("repo_mode") ?? "template_only_staff";
   const requirePR = watch("protect_require_pull_request") ?? false;
+  // Forgejo (#1091) disables what staging only does on GitHub. A saved Forgejo assignment keeps
+  // showing its stored values instead of having them changed here.
+  const provider = useSelectedGitProvider(form);
+  const saved = useSavedAssignment(form);
+  const forgejoSetting = forgejoSettingState(provider, saved);
+  const repoModeOption = (mode: string, label: string) => {
+    const reason = repoModeUnavailableReason(provider, mode, saved);
+    return (
+      <option value={mode} disabled={!!reason}>
+        {label}
+        {reason ? ` (${reason})` : ""}
+      </option>
+    );
+  };
 
   // Source assignment options for the fork-from-prior mode (issue #700).
   // Exclude the current assignment when editing to prevent self-references,
@@ -598,15 +619,16 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
     filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }],
     pagination: { pageSize: 1000 }
   });
+  // The provider trigger refuses a fork source on another host (#1091).
   const eligibleSourceAssignments = priorAssignments?.data?.filter(
-    (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
+    (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission" && (a.git_provider ?? "github") === provider
   );
 
   // Branch protection only makes sense when a repository is actually created, and
   // the same is true of the autograder: it runs as a GitHub Actions workflow inside
   // the student repo, so there is nowhere for it to run without one.
   const noRepoMode = repoMode === "none" || repoMode === "no_submission";
-  const protectionDisabled = noRepoMode;
+  const protectionDisabled = noRepoMode || forgejoSetting.disabled;
   // PR submissions are ingested by the PR webhook and never produce grader_results,
   // so PR mode cannot have an autograder either. Both save paths coerce the persisted
   // value; mirroring it here keeps the checkbox and the fork-agreement warning below
@@ -618,6 +640,8 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   // turning a mode experiment into a repo-only assignment. Both save paths already coerce
   // the persisted value, so display is all that is needed here.
   const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
+  // Forgejo runs grade.yml in Forgejo Actions (#1239), so the GitHub wording below doesn't apply.
+  const isForgejo = provider === "forgejo";
   // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
   // student's source-assignment repo, so the two assignments share one handout
   // and cannot disagree about the autograder. Surface the clash here rather than
@@ -635,6 +659,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
         <CardTitle>Student Repositories</CardTitle>
       </CardHeader>
       <CardBody gap="5px">
+        <RepositoryHostPicker form={form} />
         <Fieldset.Content>
           <Field
             label="Repository configuration"
@@ -646,16 +671,16 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
             <NativeSelectRoot>
               <NativeSelectField {...register("repo_mode", { required: true })}>
                 <option value="template_only_staff">Template repo (staff-only) — students get fresh copies</option>
-                <option value="template_with_student_forks">
-                  Template repo (visible to students) — students fork it
-                </option>
-                <option value="fork_from_prior_assignment">
-                  Fork from prior assignment — multi-checkpoint workflow
-                </option>
-                <option value="none">No repository — students upload submission files directly</option>
-                <option value="no_submission">
-                  No submission — graded manually, no artifact (e.g. presentations, oral exams)
-                </option>
+                {repoModeOption(
+                  "template_with_student_forks",
+                  "Template repo (visible to students) — students fork it"
+                )}
+                {repoModeOption("fork_from_prior_assignment", "Fork from prior assignment — multi-checkpoint workflow")}
+                {repoModeOption("none", "No repository — students upload submission files directly")}
+                {repoModeOption(
+                  "no_submission",
+                  "No submission — graded manually, no artifact (e.g. presentations, oral exams)"
+                )}
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
@@ -698,12 +723,14 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
               ? "The autograder runs as a GitHub Actions workflow in the student repository, so it is unavailable for assignments with no repository."
               : autograderDisabled
                 ? "Pull-request submissions are graded without GitHub Actions, so the autograder is unavailable in pull-request mode."
-                : "Whether student pushes are graded automatically by GitHub Actions."}
+                : isForgejo
+                  ? "Whether student pushes are graded automatically."
+                  : "Whether student pushes are graded automatically by GitHub Actions."}
           </Text>
           <Fieldset.Content>
             <Field
               helperText={
-                autograderDisabled
+                autograderDisabled || isForgejo
                   ? undefined
                   : autograderChecked
                     ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
@@ -733,7 +760,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                     <Checkbox.Control>
                       <LuCheck />
                     </Checkbox.Control>
-                    <Checkbox.Label>Enable autograder (GitHub Actions)</Checkbox.Label>
+                    <Checkbox.Label>
+                      {isForgejo ? "Enable autograder" : "Enable autograder (GitHub Actions)"}
+                    </Checkbox.Label>
                   </Checkbox.Root>
                 )}
               />
@@ -748,7 +777,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
             {protectionDisabled
               ? repoMode === "no_submission"
                 ? "Branch protection is unavailable: this assignment has no repository and no student submission."
-                : "Branch protection is unavailable when the assignment has no repository."
+                : noRepoMode
+                  ? "Branch protection is unavailable when the assignment has no repository."
+                  : FORGEJO_UNSUPPORTED_SETTINGS.branch_protection
               : "Rules applied to the default branch of every student/group repository for this assignment."}
           </Text>
           <Fieldset.Content>
@@ -758,7 +789,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                 control={control}
                 render={({ field }) => (
                   <Checkbox.Root
-                    checked={field.value !== false}
+                    checked={!forgejoSetting.forceOff && field.value !== false}
                     disabled={protectionDisabled}
                     onCheckedChange={(checked) => field.onChange(!!checked.checked)}
                   >
@@ -779,7 +810,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                 control={control}
                 render={({ field }) => (
                   <Checkbox.Root
-                    checked={field.value === true}
+                    checked={!forgejoSetting.forceOff && field.value === true}
                     disabled={protectionDisabled}
                     onCheckedChange={(checked) => field.onChange(!!checked.checked)}
                   >
@@ -857,6 +888,9 @@ function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }
   const noRepo = repoMode === "none" || repoMode === "no_submission";
   const canPr = repoMode === "template_with_student_forks" || repoMode === "fork_from_prior_assignment";
   const isPr = canPr && submissionMode === "pr";
+  const provider = useSelectedGitProvider(form);
+  const saved = useSavedAssignment(form);
+  const prUnavailableReason = submissionModeUnavailableReason(provider, "pr", saved);
 
   // Keep submission_mode consistent with the repo mode: if the repo mode can't
   // support PR (template-only or no repo), force 'push' so a stale 'pr' value —
@@ -896,7 +930,12 @@ function SubmissionModeSubform({ form }: { form: UseFormReturnType<Assignment> }
             <NativeSelectRoot>
               <NativeSelectField {...register("submission_mode")}>
                 <option value="push">Push to student repository</option>
-                {canPr && <option value="pr">Pull request against an upstream repository</option>}
+                {canPr && (
+                  <option value="pr" disabled={!!prUnavailableReason}>
+                    Pull request against an upstream repository
+                    {prUnavailableReason ? ` (${prUnavailableReason})` : ""}
+                  </option>
+                )}
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
@@ -1030,6 +1069,9 @@ export default function AssignmentForm({
   // course later turns the flag off.
   const examsEnabled = useFeatureEnabled(COURSE_FEATURES.EXAMS);
   const examTypeAvailable = isEditing || examsEnabled;
+  const provider = useSelectedGitProvider(form);
+  const saved = useSavedAssignment(form);
+  const forgejoSetting = forgejoSettingState(provider, saved);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -1507,13 +1549,20 @@ export default function AssignmentForm({
                         </Field>
                       </Fieldset.Content>
                       <Fieldset.Content>
-                        <Field helperText="When enabled, GitHub repository analytics (commits, PRs, issues, comments) will be collected and visible to graders/instructors on each submission.">
+                        <Field
+                          helperText={
+                            forgejoSetting.disabled
+                              ? FORGEJO_UNSUPPORTED_SETTINGS.enable_repo_analytics
+                              : "When enabled, GitHub repository analytics (commits, PRs, issues, comments) will be collected and visible to graders/instructors on each submission."
+                          }
+                        >
                           <Controller
                             name="enable_repo_analytics"
                             control={control}
                             render={({ field }) => (
                               <Checkbox.Root
-                                checked={field.value || false}
+                                checked={!forgejoSetting.forceOff && (field.value || false)}
+                                disabled={forgejoSetting.disabled}
                                 onCheckedChange={(checked) => field.onChange(!!checked.checked)}
                               >
                                 <Checkbox.HiddenInput />

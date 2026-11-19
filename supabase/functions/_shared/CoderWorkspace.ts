@@ -282,7 +282,11 @@ export function gitCredentialsFile(repository: string): string {
   return `/home/coder/.git-credentials-${m[1]}--${m[2]}`;
 }
 
-/** Per repository: Coder applies all of an owner's secrets to every workspace. */
+/**
+ * Per repository: Coder applies all of an owner's secrets to every workspace. Coder caps a user at
+ * 50 secrets and nothing deletes these yet; the workspace cleanup from #1223 should remove this
+ * secret with the workspace (as the student, through a short-lived key, like the write).
+ */
 export function gitCredentialsSecretName(repositoryId: number): string {
   return `git_credentials_repo_${repositoryId}`;
 }
@@ -298,6 +302,11 @@ const GIT_EMAIL_SECRET = "git_email";
 
 export const SECRET_KEY_PREFIX = "pawtograder-secret-write-";
 export const SECRET_KEY_LIFETIME_MS = 60_000;
+
+/** Coder's token names are unique per user, so two opens of one repository can't share one. */
+export function secretKeyName(repositoryId: number): string {
+  return `${SECRET_KEY_PREFIX}${repositoryId}-${crypto.randomUUID().slice(0, 8)}`;
+}
 
 /** GitHub refuses a student their own private repository until they are in the course's organization. */
 function needsOrgInvite(): WorkspaceOpenResponse {
@@ -339,7 +348,7 @@ async function deliverGitCredentials(
     await deleteExpiredKeys(deps, user.id).catch((e) =>
       console.error("[workspace-open] Expired key cleanup failed", e)
     );
-    const key = await mintUserKey(coder, user.id, `${SECRET_KEY_PREFIX}${repo.id}`, SECRET_KEY_LIFETIME_MS);
+    const key = await mintUserKey(coder, user.id, secretKeyName(repo.id), SECRET_KEY_LIFETIME_MS);
     const keyId = apiKeyId(key);
     try {
       await writeOwnSecret(
@@ -363,6 +372,8 @@ async function deliverGitCredentials(
       }
     }
     // Only once the new token is stored: the workspace may still start with an older one until then.
+    // A start from Coder's dashboard racing this open can still load the old secret just before the
+    // write above; that session loses push access here until the workspace restarts. Rare, accepted.
     await revokeReplacedTokens(forgejo, login, repo.id, minted.name, now).catch((e) =>
       console.error("[workspace-open] Replaced token cleanup failed; the next open retries it", e)
     );

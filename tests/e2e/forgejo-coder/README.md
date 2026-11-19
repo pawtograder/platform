@@ -72,6 +72,13 @@ stopped the flow. `run-remote.sh` reads both settings from the release and runs 
 8. A third client named `Coder` with its own callback still gets the consent page, and Deny sends
    `error=access_denied` back to it.
 
+`tests/e2e/sso/forgejo-provisioning.forgejo-coder.spec.ts` (#1092, #1093) runs first:
+
+1. One `forgejo-reconciler` pass creates a student's Forgejo account and their repo for a released
+   Forgejo assignment, with write access. A second pass changes nothing. The lane has no edge
+   runtime, so the spec runs the pass with `deno` (`supabase/functions/forgejo-reconciler/run-pass.ts`).
+2. The student's first sign-in lands on that account and shows the repo.
+
 The lane's Coder uses the chart's OIDC settings (`charts/pawtograder/templates/app-databases.yaml`):
 sign-ups off, and the email read from the access token's `coder_email` claim
 (`CODER_OIDC_EMAIL_FIELD`, `CODER_OIDC_ACCESS_TOKEN_CLAIMS`, `CODER_OIDC_IGNORE_USERINFO`,
@@ -106,5 +113,4 @@ apps' cookie names don't collide.
 ## Out of scope
 
 Coder workspaces (the chart's template needs Kubernetes), mapping course roles to Forgejo teams or
-Coder groups (`custom_access_token_hook` adds no role claims yet), binding the accounts that #1083
-pre-provisions, and single sign-out.
+Coder groups (`custom_access_token_hook` adds no role claims yet), and single sign-out.

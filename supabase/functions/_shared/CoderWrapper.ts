@@ -314,8 +314,13 @@ export function apiKeyId(key: string): string {
   return key.slice(0, 10);
 }
 
+/** Expired keys too: v2.37.3 leaves them out unless asked, and they still hold their names. */
 export async function listUserKeys(config: CoderConfig, userId: string): Promise<CoderApiKey[]> {
-  return await get<CoderApiKey[]>(config, "API key list", `/users/${encodeURIComponent(userId)}/keys/tokens`);
+  return await get<CoderApiKey[]>(
+    config,
+    "API key list",
+    `/users/${encodeURIComponent(userId)}/keys/tokens?include_expired=true`
+  );
 }
 
 export async function deleteUserKey(config: CoderConfig, userId: string, keyId: string): Promise<void> {

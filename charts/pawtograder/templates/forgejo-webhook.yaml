@@ -9,8 +9,16 @@
 {{- if or (contains "*" $host) (contains "?" $host) (contains "[" $host) (contains "," $host) (has (lower $host) (list "private" "loopback")) }}
 {{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: anyone who can add a webhook to a repository could then send requests into the cluster" (toString .)) }}
 {{- end }}
-{{- if and (contains "/" $host) (ne (include "pawtograder.forgejo.webhookCidrAllowed" $host) "true") }}
-{{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: use a CIDR that does not include restricted addresses" (toString .)) }}
+{{- $cidr := "" }}
+{{- if contains "/" $host }}
+{{- $cidr = $host }}
+{{- else if regexMatch "^[0-9]+([.][0-9]+){3}$" $host }}
+{{- $cidr = printf "%s/32" $host }}
+{{- else if and (contains ":" $host) (regexMatch "(?i)^[0-9a-f:.]+$" $host) }}
+{{- $cidr = printf "%s/128" $host }}
+{{- end }}
+{{- if and $cidr (ne (include "pawtograder.forgejo.webhookCidrAllowed" $cidr) "true") }}
+{{- fail (printf "forgejo.webhookAllowedHosts can't contain %q: it reaches a restricted address" (toString .)) }}
 {{- end }}
 {{- end }}
 {{- $ref := dict }}

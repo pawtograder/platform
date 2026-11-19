@@ -1,5 +1,7 @@
 -- Forgejo tokens never expire, so revocation is the only way they end.
 
+CREATE SEQUENCE public.forgejo_repo_token_claims AS bigint;
+
 CREATE TABLE public.forgejo_repo_tokens (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   -- Keep the user until the reconciler has revoked every token.
@@ -9,6 +11,8 @@ CREATE TABLE public.forgejo_repo_tokens (
   instance_url text NOT NULL,
   recorded_at timestamptz NOT NULL DEFAULT now(),
   revoke_claimed_at timestamptz,
+  -- Which claim holds the row. Wall time can repeat, so the stamp above can't identify a claim.
+  revoke_claim_id bigint,
   UNIQUE (user_id, repository_id, instance_url)
 );
 
@@ -19,6 +23,7 @@ COMMENT ON TABLE public.forgejo_repo_tokens IS
 
 ALTER TABLE public.forgejo_repo_tokens ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.forgejo_repo_tokens FROM public, anon, authenticated;
+REVOKE ALL ON SEQUENCE public.forgejo_repo_token_claims FROM public, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.forgejo_repo_token_revocable(p_user_id uuid, p_repository_id bigint)
 RETURNS boolean
@@ -49,7 +54,7 @@ AS $$
   INSERT INTO public.forgejo_repo_tokens AS t (user_id, repository_id, instance_url)
   VALUES (p_user_id, p_repository_id, p_instance_url)
   ON CONFLICT (user_id, repository_id, instance_url)
-    DO UPDATE SET recorded_at = now(), revoke_claimed_at = NULL;
+    DO UPDATE SET recorded_at = now(), revoke_claimed_at = NULL, revoke_claim_id = NULL;
 $$;
 
 CREATE OR REPLACE FUNCTION public.forgejo_repo_tokens_to_revoke(
@@ -67,29 +72,33 @@ AS $$
   LEFT JOIN public.git_accounts ga
     ON ga.user_id = t.user_id AND ga.provider = 'forgejo' AND ga.instance_url = t.instance_url
   WHERE t.instance_url = p_instance_url
+    -- The row is recorded before the mint. Wait out any mint still in flight, so the revoke can't run
+    -- before the token exists and delete the only row tracking it. Same grace as REPLACED_TOKEN_GRACE_MS.
+    AND t.recorded_at <= now() - interval '10 minutes'
     AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
     AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
   ORDER BY t.revoke_claimed_at ASC NULLS FIRST, t.id
   LIMIT p_limit;
 $$;
 
+-- Returns the claim generation for the caller's delete to match; the stamp only ages the claim out.
 CREATE OR REPLACE FUNCTION public.claim_forgejo_repo_token_revocation(
   p_id bigint,
   p_stale_minutes integer
-) RETURNS boolean
+) RETURNS bigint
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  WITH claimed AS (
-    UPDATE public.forgejo_repo_tokens t
-    SET revoke_claimed_at = now()
-    WHERE t.id = p_id
-      AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
-      AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
-    RETURNING 1
-  )
-  SELECT EXISTS (SELECT 1 FROM claimed);
+  UPDATE public.forgejo_repo_tokens t
+  SET revoke_claimed_at = now(),
+      revoke_claim_id = nextval('public.forgejo_repo_token_claims')
+  WHERE t.id = p_id
+    -- A re-mint between listing and claiming moves recorded_at; skip the row until that mint has settled.
+    AND t.recorded_at <= now() - interval '10 minutes'
+    AND (t.revoke_claimed_at IS NULL OR t.revoke_claimed_at <= now() - make_interval(mins => p_stale_minutes))
+    AND public.forgejo_repo_token_revocable(t.user_id, t.repository_id)
+  RETURNING t.revoke_claim_id;
 $$;
 
 REVOKE ALL ON FUNCTION public.forgejo_repo_token_revocable(uuid, bigint) FROM public, anon, authenticated;
