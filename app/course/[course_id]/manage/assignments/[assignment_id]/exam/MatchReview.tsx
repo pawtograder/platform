@@ -9,7 +9,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
-import { namesEquivalent } from "@/lib/exam/nameAgreement";
+import { namesEquivalent, normalizeName } from "@/lib/exam/nameAgreement";
 import { createClient } from "@/utils/supabase/client";
 import {
   Badge,
@@ -25,7 +25,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Scanned = {
   id: number;
@@ -200,16 +200,31 @@ export default function MatchReview({
     [rows, load]
   );
 
+  // How many roster students share each name, compared the way namesEquivalent compares them. Built
+  // once per roster, so the per-row ambiguity check is a lookup instead of a scan of the roster.
+  const nameCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of roster) {
+      const key = normalizeName(s.name).join(" ");
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [roster]);
+  const sharesName = useCallback(
+    (name: string | null) => {
+      const key = normalizeName(name).join(" ");
+      return key !== "" && (nameCounts.get(key) ?? 0) > 1;
+    },
+    [nameCounts]
+  );
+
   const rosterName = useCallback(
     (profileId: string | null) => roster.find((s) => s.profile_id === profileId)?.name ?? null,
     [roster]
   );
 
   // Two roster students with the same name: matching the scanned name says nothing about which one.
-  const nameIsAmbiguous = useCallback(
-    (name: string | null) => roster.filter((s) => namesEquivalent(s.name, name)).length > 1,
-    [roster]
-  );
+  const nameIsAmbiguous = sharesName;
   const needsAcknowledgment = useCallback(
     (row: Scanned) => {
       const selected = rosterName(row.matched_profile_id);
