@@ -226,14 +226,15 @@ export async function ensureRepoFromTemplate(
 }
 
 /**
- * Sets up a handout as a private template repo with `files` on main, and returns main's head sha. A
- * retry, or a handout staff made by hand, is adopted: an existing repo is marked as a template, and a
- * file already there is kept, since staff may have edited it.
+ * Sets up a handout as a private template repo on main, and returns main's head sha. A file with
+ * `content` is added, and one with null content is removed. A retry, or a handout staff made by hand, is
+ * adopted: an existing repo is made private and a template, and a file already there is kept, since
+ * staff may have edited it.
  */
 export async function ensureHandoutRepo(
   config: ForgejoConfig,
   repository: string,
-  files: { path: string; content: string }[]
+  files: { path: string; content: string | null }[]
 ): Promise<string> {
   const path = repoPath(repository);
   const [org, name] = repository.split("/");
@@ -248,7 +249,7 @@ export async function ensureHandoutRepo(
   if (created.status === 409) {
     await created.body?.cancel();
     // Student repos are generated from the handout, which Forgejo allows only from a template.
-    const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true });
+    const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true, private: true });
     if (!marked.ok) throw await failure(marked, "repo template update");
     await marked.body?.cancel();
   } else if (!created.ok) {
@@ -257,17 +258,30 @@ export async function ensureHandoutRepo(
     await created.body?.cancel();
   }
   for (const file of files) {
-    const bytes = new TextEncoder().encode(file.content);
-    const res = await forgejo(
-      config,
-      "POST",
-      `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`,
-      {
-        content: btoa(String.fromCharCode(...bytes)),
-        message: `Add ${file.path}`,
-        branch: "main"
+    const contents = `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+    if (file.content === null) {
+      const found = await forgejo(config, "GET", `${contents}?ref=main`);
+      if (found.status === 404) {
+        await found.body?.cancel();
+        continue;
       }
-    );
+      if (!found.ok) throw await failure(found, "file read");
+      const { sha } = (await found.json()) as { sha: string };
+      const deleted = await forgejo(config, "DELETE", contents, {
+        sha,
+        message: `Remove ${file.path}`,
+        branch: "main"
+      });
+      if (!deleted.ok) throw await failure(deleted, "file delete");
+      await deleted.body?.cancel();
+      continue;
+    }
+    const bytes = new TextEncoder().encode(file.content);
+    const res = await forgejo(config, "POST", contents, {
+      content: btoa(String.fromCharCode(...bytes)),
+      message: `Add ${file.path}`,
+      branch: "main"
+    });
     if (res.ok) {
       await res.body?.cancel();
       continue;

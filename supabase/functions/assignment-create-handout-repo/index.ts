@@ -128,22 +128,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const name = `${assignment.classes.slug}-handout-${assignment.slug}`.toLowerCase();
     scope.setTag("handout_repo_name", name);
     scope.setTag("handout_repo_org", org);
-    // Without an autograder, grade.yml would fail in every student repo with nothing to report to.
-    const files =
-      assignment.has_autograder === false
-        ? []
-        : [{ path: GRADE_WORKFLOW_PATH, content: forgejoGradeWorkflow(publicSupabaseUrl()) }];
-    const sha = await ensureHandoutRepo(config, `${org}/${name}`, files);
+    // Without an autograder, grade.yml would fail in every student repo with nothing to report to, so one
+    // already in an adopted handout is removed.
+    const content = assignment.has_autograder === false ? null : forgejoGradeWorkflow(publicSupabaseUrl());
+    const sha = await ensureHandoutRepo(config, `${org}/${name}`, [{ path: GRADE_WORKFLOW_PATH, content }]);
     // The forgejo-reconciler sets autograder.workflow_sha from this handout's grade.yml once it's released.
-    // Matching on the provider means an assignment switched to GitHub meanwhile never points at this repo.
+    // Matching on the provider and mode means an assignment switched to GitHub, or to a mode without a handout,
+    // while the repo was set up never points at it.
     const { data: saved, error } = await adminSupabase
       .from("assignments")
       .update({ template_repo: `${org}/${name}`, latest_template_sha: sha })
       .eq("id", assignment_id)
       .eq("git_provider", "forgejo")
+      .eq("repo_mode", "template_only_staff")
       .select("id");
     if (error) throw error;
-    if (!saved.length) throw new UserVisibleError("This assignment no longer uses Forgejo.", 409);
+    if (!saved.length)
+      throw new UserVisibleError("This assignment's repository host or configuration changed. Try again.", 409);
     return { repo_name: name, org_name: org, repo_mode: assignment.repo_mode };
   }
 

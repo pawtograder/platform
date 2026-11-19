@@ -417,22 +417,51 @@ Deno.test(
   }
 );
 
-Deno.test("ensureHandoutRepo: adopts an existing repo as a template and keeps a file already there", async () => {
+Deno.test(
+  "ensureHandoutRepo: adopts an existing repo as a private template and keeps a file already there",
+  async () => {
+    const responses = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 }),
+      ok({}),
+      unprocessable("repository file already exists [path: .github/workflows/grade.yml]"),
+      ok(head)
+    ];
+    await withForgejo(responses, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]), head.sha);
+      assertEquals(
+        `${calls[5].method} ${calls[5].url}`,
+        "PATCH https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1"
+      );
+      assertEquals(calls[5].body, { template: true, private: true });
+    });
+  }
+);
+
+Deno.test("ensureHandoutRepo: removes a file with null content, and a file already gone changes nothing", async () => {
+  const gone = { path: ".github/workflows/grade.yml", content: null };
   const responses = [
     ok({ username: "cs4535" }),
     ...ownedBy("pawtograder-admin"),
-    new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 }),
+    ok({}, 201),
+    ok({ sha: "1f0e2a" }),
     ok({}),
-    unprocessable("repository file already exists [path: .github/workflows/grade.yml]"),
     ok(head)
   ];
   await withForgejo(responses, async (calls) => {
-    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]), head.sha);
+    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+    const file = "https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/.github/workflows/grade.yml";
     assertEquals(
-      `${calls[5].method} ${calls[5].url}`,
-      "PATCH https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1"
+      calls.slice(5, 7).map((c) => `${c.method} ${c.url}`),
+      [`GET ${file}?ref=main`, `DELETE ${file}`]
     );
-    assertEquals(calls[5].body, { template: true });
+    assertEquals(calls[6].body, { sha: "1f0e2a", message: "Remove .github/workflows/grade.yml", branch: "main" });
+  });
+  const again = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), status(404), ok(head)];
+  await withForgejo(again, async (calls) => {
+    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+    assert(!calls.some((c) => c.method === "DELETE"));
   });
 });
 
