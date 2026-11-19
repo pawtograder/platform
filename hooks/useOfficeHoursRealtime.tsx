@@ -551,6 +551,21 @@ export function OfficeHoursControllerProvider({
   );
 }
 
+/**
+ * Joins the realtime channel for one help queue while the caller is mounted.
+ *
+ * The controller joins the queues a user is already in when it starts. A student who creates a
+ * request after that, which is the normal flow, would otherwise never join the queue they are
+ * looking at, and their position would not update until they reloaded.
+ */
+export function useHelpQueueChannel(helpQueueId: number | undefined): void {
+  const controller = useOfficeHoursController();
+  useEffect(() => {
+    if (helpQueueId === undefined || !Number.isFinite(helpQueueId)) return;
+    return controller.officeHoursRealTimeController.subscribeToHelpQueue(helpQueueId, () => {});
+  }, [controller, helpQueueId]);
+}
+
 export function useOfficeHoursController() {
   const controller = useContext(OfficeHoursControllerContext);
   if (!controller) {

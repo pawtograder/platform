@@ -3,7 +3,8 @@ import {
   useHelpQueues,
   useStudentVisibleHelpRequests,
   useHelpRequestStudents,
-  useConnectionStatus
+  useConnectionStatus,
+  useHelpQueueChannel
 } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
@@ -27,6 +28,9 @@ interface UseQueueDataParams {
  */
 export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
   const { private_profile_id } = useClassProfiles();
+
+  // Queue changes for this queue, including other students' requests, arrive on its own channel.
+  useHelpQueueChannel(queueId);
 
   // Use individual hooks for better performance and maintainability
   const allHelpQueues = useHelpQueues();

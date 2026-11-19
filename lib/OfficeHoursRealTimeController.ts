@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
@@ -113,6 +114,8 @@ export class OfficeHoursRealTimeController implements PawtograderRealTimeControl
 
     this._channelUnsubscribers.set(`help_queues:${this._classId}`, helpQueuesUnsubscriber);
 
+    void this._joinQueueChannels();
+
     // Initialize office-hours staff channel if user is staff
     // This channel receives broadcasts for student_karma_notes and help_request_moderation
     if (this._isStaff) {
@@ -158,6 +161,46 @@ export class OfficeHoursRealTimeController implements PawtograderRealTimeControl
     }
 
     // Staff data for help requests is delivered via class:<class_id>:staff channel, which is initialized above
+  }
+
+  /**
+   * Joins the queue channels this user needs at startup. Staff join every queue of the class. A student
+   * joins the queues where they already have a request, so their position updates without waiting for
+   * them to open the queue page; `useHelpQueueChannel` covers the queue they are looking at.
+   */
+  private async _joinQueueChannels() {
+    if (this._isStaff) {
+      const { data, error } = await this._client.from("help_queues").select("id").eq("class_id", this._classId);
+      if (error) {
+        Sentry.captureException(error, { tags: { area: "office-hours-queue-join" } });
+        return;
+      }
+      for (const queue of data ?? []) {
+        this._ensureHelpQueueChannel(queue.id);
+      }
+      return;
+    }
+    // RLS limits these rows to the student's own requests, and the filters keep it to this class's
+    // live ones. The cast is for the embedded row, which supabase-js types as a union here.
+    const { data, error } = await this._client
+      .from("help_request_students")
+      .select("help_requests!inner(help_queue, status, class_id)")
+      .eq("help_requests.class_id", this._classId)
+      .in("help_requests.status", ["open", "in_progress"]);
+    if (error) {
+      Sentry.captureException(error, { tags: { area: "office-hours-queue-join" } });
+      return;
+    }
+    const queueIds = new Set<number>();
+    for (const row of data ?? []) {
+      const request = row.help_requests as unknown as { help_queue: number } | null;
+      if (request) {
+        queueIds.add(request.help_queue);
+      }
+    }
+    for (const queueId of queueIds) {
+      this._ensureHelpQueueChannel(queueId);
+    }
   }
 
   /**
