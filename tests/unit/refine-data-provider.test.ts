@@ -79,12 +79,14 @@ describe("withMissingRowErrors", () => {
       await expect(provider.update(params)).rejects.toMatchObject({ statusCode: 403 });
     });
 
-    it("tells the user nothing was saved, naming the resource and id", async () => {
+    it("tells the user nothing was saved, without naming the table or id", async () => {
       const provider = withMissingRowErrors(baseProviderReturning({ data: { id: 1 } }, { data: undefined }));
 
-      await expect(provider.update(params)).rejects.toThrow(
-        /permission to update this assignments record \(id 42\).*Nothing was changed/
+      const error = await rejectionOf(provider.update(params));
+      expect((error as Error).message).toBe(
+        "You don't have permission to change this, or it no longer exists. Nothing was changed."
       );
+      expect((error as Error).message).not.toMatch(/assignments|42/);
     });
 
     it("passes a real update straight through", async () => {
@@ -200,7 +202,8 @@ describe("withBlockedDeleteErrors", () => {
 
       const error = await rejectionOf(provider.deleteOne({ resource: "review_assignments", id: 7 }));
       expect(error).toMatchObject({ statusCode: 403 });
-      expect((error as Error).message).toMatch(/permission to delete this review_assignments record \(id 7\)/);
+      // The select found the row, so the message doesn't suggest it might be gone.
+      expect((error as Error).message).toBe("You don't have permission to delete this. Nothing was changed.");
       expect(isRefusedWriteError(error)).toBe(true);
     });
 

@@ -65,22 +65,27 @@ export function withMissingRowErrors(base: DataProvider): DataProvider {
     ): Promise<UpdateResponse<TData>> => {
       const response = await base.update<TData, TVariables>(params);
       if (response?.data === undefined || response?.data === null) {
-        throw refusedWriteError("update", params.resource, params.id);
+        throw refusedWriteError("update");
       }
       return response;
     }
   };
 }
 
-/** Error for a write that RLS silently refused (0 rows affected, no PostgREST error). */
-function refusedWriteError(action: "update" | "delete", resource: string, id: unknown) {
+/**
+ * Error for a write that RLS silently refused (0 rows affected, no PostgREST error).
+ *
+ * The message is shown to the user as is, so it names no table or id. An update that matched
+ * nothing may also mean the row was deleted; a refused delete is only reported after the
+ * follow-up select found the row, so its message doesn't offer that possibility.
+ */
+function refusedWriteError(action: "update" | "delete") {
+  const message =
+    action === "update"
+      ? "You don't have permission to change this, or it no longer exists. Nothing was changed."
+      : "You don't have permission to delete this. Nothing was changed.";
   // Shaped like a refine HttpError so mutation `onError` handlers see a status.
-  return Object.assign(
-    new Error(
-      `You don't have permission to ${action} this ${resource} record (id ${String(id)}), or it no longer exists. Nothing was changed.`
-    ),
-    { statusCode: 403, refusedWrite: true as const }
-  );
+  return Object.assign(new Error(message), { statusCode: 403, refusedWrite: true as const });
 }
 
 /**
@@ -137,11 +142,15 @@ function postgrestError(error: { message: string; code: string }) {
  *
  * - **Still visible:** the session can read the row but was not allowed to
  *   delete it. Thrown as a 403 (`isRefusedWriteError`).
- * - **Not visible:** the row is gone, or the session can't see it at all.
- *   Resolves as a success, which is what upstream always did. A delete that
- *   RLS refused ends up here only on tables whose SELECT policy is no wider
- *   than their DELETE policy (e.g. `notifications`), where the user could not
- *   have seen the row to begin with.
+ * - **Not visible:** the session can't read the row now. Resolves as a
+ *   success, which is what upstream always did. Usually the row is gone, but a
+ *   refused delete also lands here when the page is stale: the user saw the row
+ *   when the page loaded and has since lost the right to read it. For example,
+ *   a grader who loses `manage_review_assignments` while Manage Review
+ *   Assignments is open can still read only their own review assignments, so
+ *   deleting someone else's matches 0 rows in both queries and `deleteOne`
+ *   reports success. This provider can't tell that apart from "already gone";
+ *   that needs a delete RPC that raises when it is refused.
  */
 export function withBlockedDeleteErrors(base: DataProvider, client: DeleteClient): DataProvider {
   return {
@@ -169,7 +178,7 @@ export function withBlockedDeleteErrors(base: DataProvider, client: DeleteClient
         throw postgrestError(selectError);
       }
       if (remaining && remaining.length > 0) {
-        throw refusedWriteError("delete", resource, id);
+        throw refusedWriteError("delete");
       }
       return { data: { [idColumn]: id } as unknown as TData };
     }

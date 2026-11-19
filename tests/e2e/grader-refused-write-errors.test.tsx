@@ -181,9 +181,9 @@ test.describe("Writes refused by RLS surface an error", () => {
       .first()
       .click();
 
-    // The refusal is reported, with the provider's message naming what was refused.
+    // The refusal is reported with the provider's message.
     await expect(page.getByText("Update Error").first()).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(/don't have permission to update this assignments record/).first()).toBeVisible();
+    await expect(page.getByText(/don't have permission to change this/).first()).toBeVisible();
     // ...and the false success the bug produced is gone.
     await expect(page.getByText("Assignment Updated")).toHaveCount(0);
 
@@ -219,7 +219,7 @@ test.describe("Writes refused by RLS surface an error", () => {
     // provider reports a refusal and the page's onError shows it.
     await expect(page.getByText("Error deleting review assignment").first()).toBeVisible({ timeout: 20_000 });
     await expect(
-      page.getByText(/don't have permission to delete this review_assignments record/).first()
+      page.getByText("You don't have permission to delete this. Nothing was changed.").first()
     ).toBeVisible();
     await expect(page.getByText("Review assignment deleted")).toHaveCount(0);
 

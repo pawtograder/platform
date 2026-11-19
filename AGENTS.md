@@ -148,7 +148,7 @@ Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Ad
 
 ### Errors from refine updates and deletes
 
-`lib/refineDataProvider.ts` wraps the refine Supabase data provider. When RLS refuses an `update` or `deleteOne`, PostgREST changes 0 rows and returns no error. The wrapper then throws an `Error` with `statusCode: 403` and a message that names the table and id. Deleting a row that is already gone (another tab, a double click) still succeeds: when `deleteOne` changes nothing, the wrapper selects the row and throws only if the session can still see it. `updateMany` and `deleteMany` are not wrapped.
+`lib/refineDataProvider.ts` wraps the refine Supabase data provider. When RLS refuses an `update` or `deleteOne`, PostgREST changes 0 rows and returns no error. The wrapper then throws an `Error` with `statusCode: 403` and a plain message meant for the user (no table name or id). Deleting a row that is already gone (another tab, a double click) still succeeds: when `deleteOne` changes nothing, the wrapper selects the row and throws only if the session can still see it. So a refused delete of a row the session can no longer read, such as one seen on a stale page before a capability was removed, still reports success. `updateMany` and `deleteMany` are not wrapped.
 
 refine never shows these errors itself. The `notificationProvider` in `components/ui/provider.tsx` is turned off, so the `successNotification` and `errorNotification` options of refine hooks do nothing, and `PopConfirm` only logs a rejected `onConfirm` to the console. Every call to `useUpdate` or `useDelete` has to report failures itself:
 
