@@ -113,3 +113,40 @@ test("the confirm write is conditional on the student the instructor saw, and a 
     })
   );
 });
+
+// Names are counted once per roster (Aryan's review of #1318), so these pin the result: two students
+// whose names compare equal make a matching scan ambiguous; one student with that name does not.
+function rosterOf(...names: string[]) {
+  mockResults.user_roles = () => ({
+    data: names.map((name, i) => ({ private_profile_id: `p${i + 1}`, profiles: { name } })),
+    error: null
+  });
+  mockResults.exam_scanned_submissions = (ops) =>
+    ops.some(([m]) => m === "update")
+      ? { data: [{ id: 1 }], error: null }
+      : { data: [{ ...row(), detected_name: "SMITH, Alice" }], error: null };
+}
+
+// Until the roster loads, the row's hint says the scan does not name "unknown". Waiting on the hint
+// rather than on the picker keeps these tests independent of which picker the page uses.
+async function clickConfirm(rosterLoaded: () => Promise<unknown>) {
+  render(wrap(<MatchReview batchId={5} classId={7} batchStatus="review" onBatchChanged={jest.fn()} />));
+  const confirm = await screen.findByRole("button", { name: "Confirm" });
+  await rosterLoaded();
+  await act(async () => fireEvent.click(confirm));
+}
+
+test("two students whose names compare equal make a matching scan ask first", async () => {
+  rosterOf("Alice Smith", "alice  SMITH", "Dana Lee");
+  await clickConfirm(() => screen.findByText(/Selected: “Alice Smith”/));
+  expect(await screen.findByRole("alert")).toHaveTextContent("More than one student is named “Alice Smith”");
+  expect(mockWrites).toHaveLength(0);
+});
+
+test("a scan that names the only student with that name confirms in one click", async () => {
+  rosterOf("Alice Smith", "Alice Smithson", "Dana Lee");
+  // The row is on screen, so no hint means the roster is in and the names agree.
+  await clickConfirm(() => waitFor(() => expect(screen.queryByText(/Selected:/)).toBeNull()));
+  await waitFor(() => expect(mockWrites).toHaveLength(1));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
