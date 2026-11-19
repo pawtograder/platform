@@ -79,10 +79,11 @@ export function useConnectionStatus(): UseConnectionStatusReturn {
   }, [controller]);
 
   // A channel that is retrying passes back through "joining", which would make a
-  // warning flicker on every attempt. Hold the failure until the channels rejoin.
+  // warning flicker on every attempt. Hold the failure until the channels rejoin,
+  // or until there are no channels left to fail.
   const [connectionFailed, setConnectionFailed] = useState(false);
   useEffect(() => {
-    if (connectionStatus?.overall === "connected") {
+    if (connectionStatus?.overall === "connected" || connectionStatus?.channels.length === 0) {
       setConnectionFailed(false);
     } else if (connectionStatus?.channels.some((c) => c.state === "errored" || c.state === "closed")) {
       setConnectionFailed(true);
