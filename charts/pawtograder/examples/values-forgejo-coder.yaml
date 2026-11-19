@@ -16,6 +16,7 @@ kong:
 forgejo:
   enabled: true
   database: pawtograder
+  authSourceId: 1
   ingress:
     hosts:
       - host: git.example.com
@@ -39,6 +40,9 @@ forgejo:
       - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
+      - name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-webhook, key: ALLOWED_HOST_LIST }
       - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID }

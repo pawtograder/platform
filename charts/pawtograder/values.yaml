@@ -2792,6 +2792,10 @@ forgejo:
     hosts: []
   # true: /user/login goes straight to the Pawtograder login source. /user/login?password_login=1 keeps the password form.
   signInRedirect: true
+  # ID of the pawtograder row in `forgejo admin auth list` (Forgejo's API can't list sources).
+  authSourceId: ""
+  # The chart appends the API host: "external" alone refuses it when it resolves to an in-cluster address.
+  webhookAllowedHosts: [external]
   # Subchart values aren't templated: the ConfigMap name is <release>-forgejo-templates.
   extraVolumes:
     - name: pawtograder-templates
@@ -2819,6 +2823,9 @@ forgejo:
       - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
+      - name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-webhook, key: ALLOWED_HOST_LIST }
     config:
       server:
         DISABLE_SSH: true

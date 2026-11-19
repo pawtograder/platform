@@ -17,7 +17,8 @@ import { reconcileForgejo } from "./reconcile.ts";
  * for each student in each released Forgejo assignment (#1093), so both exist before the student
  * first signs in. Invoked hourly via pg_cron, and kicked when someone joins such a class, a class
  * turns the flag on (20261112120100_forgejo_reconciler.sql) or a Forgejo assignment is released
- * (20261118140000_forgejo_repos.sql).
+ * (20261118140000_forgejo_repos.sql). Each pass then revokes the workspace tokens of students who have
+ * left the repo's class (20261118160000_forgejo_repo_tokens.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
@@ -30,6 +31,17 @@ if (Deno.env.get("SENTRY_DSN")) {
     tracesSampleRate: 0,
     ignoreErrors: ["Deno.core.runMicrotasks() is not supported in this environment"]
   });
+}
+
+function reportFailures(scope: Sentry.Scope, step: string, failures: { userId: string; error: unknown }[]) {
+  if (failures.length === 0) return;
+  const stepScope = scope.clone();
+  stepScope.setFingerprint(["forgejo-reconciler", step]);
+  stepScope.setContext("failures", {
+    count: failures.length,
+    user_ids: failures.slice(0, 20).map((f) => f.userId)
+  });
+  Sentry.captureException(failures[0].error, stepScope);
 }
 
 function json(body: unknown, status = 200): Response {
@@ -61,23 +73,16 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos, groupRepos, hashes } = await reconcileForgejo(supabase, config);
+    const { accounts, repos, groupRepos, hashes, revocation } = await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
         `workflow hashes ${hashes.set} (failed ${hashes.failures.length})`
     );
+    console.log(`[forgejo-reconciler] Revoked ${revocation.revoked} tokens, failed ${revocation.failures.length}`);
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
-    if (accounts.failures.length > 0) {
-      const accountScope = scope.clone();
-      accountScope.setFingerprint(["forgejo-reconciler", "provision-failed"]);
-      accountScope.setContext("failures", {
-        count: accounts.failures.length,
-        user_ids: accounts.failures.slice(0, 20).map((f) => f.userId)
-      });
-      Sentry.captureException(accounts.failures[0].error, accountScope);
-    }
+    reportFailures(scope, "provision-failed", accounts.failures);
     if (repos.failures.length > 0) {
       const repoScope = scope.clone();
       repoScope.setFingerprint(["forgejo-reconciler", "repo-failed"]);
@@ -107,6 +112,7 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(hashes.failures[0].error, hashScope);
     }
+    reportFailures(scope, "revoke-failed", revocation.failures);
     await Sentry.flush(2000);
     return json({
       provisioned: accounts.provisioned,
@@ -116,7 +122,9 @@ Deno.serve(async (req) => {
       group_repos_created: groupRepos.created,
       group_repos_failed: groupRepos.failures.length,
       workflow_hashes_set: hashes.set,
-      workflow_hashes_failed: hashes.failures.length
+      workflow_hashes_failed: hashes.failures.length,
+      revoked: revocation.revoked,
+      revoke_failed: revocation.failures.length
     });
   } catch (error) {
     console.error("[forgejo-reconciler] Error:", error);
