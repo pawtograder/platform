@@ -199,7 +199,7 @@ locals {
   # Only Forgejo repositories get a minted token; GitHub's comes from external auth through the agent's GIT_ASKPASS.
   on_forgejo = var.forgejo_url != "" && local.repo_origin == lower(try(regex("^[^:/]+://[^/]+", var.forgejo_url), ""))
   # Must match gitCredentialsFile in supabase/functions/_shared/CoderWorkspace.ts.
-  repo_path       = try(regex("^https?://[^/]+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
+  repo_path       = try(regex("^https?://.+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
   git_credentials = local.on_forgejo ? "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}" : ""
   clone_auth_id   = local.on_forgejo ? "" : var.github_external_auth_id
   clone_timeout   = 300
