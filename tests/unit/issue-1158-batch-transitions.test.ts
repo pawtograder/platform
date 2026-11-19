@@ -17,6 +17,7 @@ import {
   REVIEW_FROM,
   type BatchStatus
 } from "../../supabase/functions/exam-async-worker/batchTransitions";
+import { MAX_OCR_WAIT_MS, MAX_OCR_WAITS, ocrWaitExhausted } from "../../supabase/functions/exam-async-worker/ocrWait";
 
 const ALL: BatchStatus[] = ["uploaded", "ocr", "matching", "review", "finalizing", "completed", "error"];
 const WORKER = join(__dirname, "..", "..", "supabase", "functions", "exam-async-worker", "index.ts");
@@ -85,6 +86,31 @@ describe("issue #1158: worker batch status transitions", () => {
         /const giveUp = async \(error: unknown, from: readonly BatchStatus\[\] = errorFrom\(env\.method\)\)/
       );
       expect(source).toMatch(/await giveUp\(error, REJECTED_SCAN_ERROR_FROM\)/);
+    });
+  });
+
+  // Aryan's question on #1308: is 15 minutes of wall time enough for a large class? The limit is
+  // never sooner than the 30 waits of 30s it replaced: it needs 30 waits AND 15 minutes, so waits
+  // that a backlog slows down stretch it the way they stretched the old count.
+  describe("match gives up on OCR no sooner than before #1158", () => {
+    const MIN = 60_000;
+    test.each([
+      [0, 0, false],
+      [29, 60 * MIN, false], // a backlog: few, slow waits keep it waiting past 15 minutes
+      [30, 14 * MIN, false],
+      [200, 10 * MIN, false], // a draining batch: many quick waits are not enough on their own
+      [30, 15 * MIN, true],
+      [180, 15 * MIN, true]
+    ])("%i waits over %i ms exhausted: %s", (waits, waitedMs, exhausted) => {
+      expect(ocrWaitExhausted(waits, waitedMs)).toBe(exhausted);
+    });
+
+    test("the limits are the old count and 15 minutes, and doMatch uses them", () => {
+      expect(MAX_OCR_WAITS).toBe(30);
+      expect(MAX_OCR_WAIT_MS).toBe(15 * MIN);
+      const source = readFileSync(WORKER, "utf8");
+      expect(source).toMatch(/if \(ocrWaitExhausted\(waits, waitedMs\)\) \{/);
+      expect(source).not.toMatch(/MAX_OCR_WAIT/);
     });
   });
 });

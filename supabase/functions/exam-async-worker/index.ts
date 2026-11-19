@@ -25,6 +25,7 @@ import {
 } from "../_shared/examVision.ts";
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
 import { holdLease } from "../_shared/examWorkerLease.ts";
+import { ocrWaitExhausted } from "./ocrWait.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -41,14 +42,9 @@ const MAX_RATE_LIMIT_RETRIES = 20;
 // because runBatch claims one message at a time, so overlapping invocations often get `match`
 // while its own pages are still in OCR (#1158), and the batch reaches review one delay later.
 //
-// The limit is wall time since the first wait, not a count of waits. One wait lasts until a
-// reader next picks the message up: about OCR_WAIT_SECONDS while other invocations are still
-// draining the batch, up to a cron tick (60s) once they have exited. A count of 5s waits would
-// therefore give a large batch's OCR anything from minutes to hours. 15 min is comfortably longer
-// than OCR of a large batch; after it the wait is treated as a real failure so the batch surfaces
-// an error instead of waiting forever.
+// When the wait counts as a failure, so the batch surfaces an error instead of waiting forever, is
+// ocrWaitExhausted in ./ocrWait.ts: at least as long as the 30 waits of 30s before #1158.
 const OCR_WAIT_SECONDS = 5;
-const MAX_OCR_WAIT_MS = 15 * 60 * 1000;
 
 type QueueMessage = {
   msg_id: number;
@@ -410,7 +406,7 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs, fe
   if ((pendingOcr ?? 0) > 0) {
     const waits = env.ocr_waits ?? 0;
     const waitedMs = env.ocr_wait_started_ms === undefined ? 0 : Date.now() - env.ocr_wait_started_ms;
-    if (waitedMs >= MAX_OCR_WAIT_MS) {
+    if (ocrWaitExhausted(waits, waitedMs)) {
       throw new Error(
         `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits over ` +
           `${Math.round(waitedMs / 1000)}s; not advancing to review`
