@@ -12,11 +12,12 @@ import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { isOwnRepositoryForAssignment } from "@/lib/ownRepositoryForAssignment";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
+  CourseWithFeatures,
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
@@ -35,6 +36,8 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
+import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
+import { cloudWorkspacesEnabled, createWorkspaceClient } from "@/lib/workspaceStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -170,6 +173,26 @@ export default function AssignmentPage() {
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
 
+  // Open in Coder (#1095): a student's Forgejo repository, in a course with Cloud Workspaces on.
+  // workspace-open checks enrollment and the repository on the server; this only decides whether to
+  // offer it. Not while staff view as a student: the requests would carry the staff session and act
+  // on the staff member's own repository, not the student's.
+  const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
+  // useCourse(), not the controller's course: it re-renders when the flag changes.
+  const liveCourse = useCourse() as CourseWithFeatures;
+  // Wait for Forgejo to finish creating the repo, or the clone step fails. The IDs key the card, so
+  // a student who joins or leaves a group gets a fresh card instead of the old repo's state.
+  const workspaceRepoKey = (repositories ?? [])
+    .filter((r) => r.git_provider === "forgejo" && r.is_github_ready)
+    .map((r) => r.id)
+    .join(",");
+  const showWorkspace =
+    !isReadOnly &&
+    enrollment?.role === "student" &&
+    assignment?.git_provider === "forgejo" &&
+    cloudWorkspacesEnabled(liveCourse.features) &&
+    workspaceRepoKey !== "";
+
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
@@ -275,6 +298,11 @@ export default function AssignmentPage() {
               }
             />
           </Box>
+          {showWorkspace && (
+            <Box m={4}>
+              <WorkspaceStatus key={workspaceRepoKey} assignmentId={Number(assignment_id)} client={workspaceClient} />
+            </Box>
+          )}
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}
             assignment={assignment}
