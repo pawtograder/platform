@@ -225,6 +225,81 @@ export async function ensureRepoFromTemplate(
   throw await failure(res, "repo generate from template");
 }
 
+/**
+ * Sets up a handout as a private template repo on main, and returns main's head sha. A file with
+ * `content` is added, and one with null content is removed. A retry, or a handout staff made by hand, is
+ * adopted: an existing repo is made private and a template, and a file already there is kept, since
+ * staff may have edited it. An adopted repo with no commits gets a README, and one whose default branch
+ * isn't main is refused.
+ */
+export async function ensureHandoutRepo(
+  config: ForgejoConfig,
+  repository: string,
+  files: { path: string; content: string | null }[]
+): Promise<string> {
+  const path = repoPath(repository);
+  const [org, name] = repository.split("/");
+  await ensureOrg(config, org);
+  const writes = [...files];
+  const created = await forgejo(config, "POST", `/orgs/${encodeURIComponent(org)}/repos`, {
+    name,
+    private: true,
+    auto_init: true,
+    default_branch: "main",
+    template: true
+  });
+  if (created.status === 409) {
+    await created.body?.cancel();
+    // Student repos are generated from the handout, which Forgejo allows only from a template.
+    const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true, private: true });
+    if (!marked.ok) throw await failure(marked, "repo template update");
+    const adopted = (await marked.json()) as { empty: boolean; default_branch: string };
+    // An empty repo has no main until its first file, which Forgejo then commits to main.
+    if (adopted.empty) writes.unshift({ path: "README.md", content: `# ${name}\n` });
+    else if (adopted.default_branch !== "main")
+      throw new Error("The existing handout repo's default branch isn't main");
+  } else if (!created.ok) {
+    throw await failure(created, "repo create");
+  } else {
+    await created.body?.cancel();
+  }
+  for (const file of writes) {
+    const contents = `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+    if (file.content === null) {
+      const found = await forgejo(config, "GET", `${contents}?ref=main`);
+      if (found.status === 404) {
+        await found.body?.cancel();
+        continue;
+      }
+      if (!found.ok) throw await failure(found, "file read");
+      const { sha } = (await found.json()) as { sha: string };
+      const deleted = await forgejo(config, "DELETE", contents, {
+        sha,
+        message: `Remove ${file.path}`,
+        branch: "main"
+      });
+      if (!deleted.ok) throw await failure(deleted, "file delete");
+      await deleted.body?.cancel();
+      continue;
+    }
+    const bytes = new TextEncoder().encode(file.content);
+    const res = await forgejo(config, "POST", contents, {
+      content: btoa(String.fromCharCode(...bytes)),
+      message: `Add ${file.path}`,
+      branch: "main"
+    });
+    if (res.ok) {
+      await res.body?.cancel();
+      continue;
+    }
+    const message = await res.text();
+    if (res.status !== 422 || !/file already exists/i.test(message)) {
+      throw new Error(`Forgejo file create failed: ${res.status} ${reason(message)}`);
+    }
+  }
+  return (await getCommit(config, repository, "main")).sha;
+}
+
 /** A file's text at `ref` (default branch when omitted), or null when the repo has no such file there. */
 export async function readFile(
   config: ForgejoConfig,

@@ -9,6 +9,7 @@ import {
   ArchiveTooLargeError,
   downloadArchive,
   ensureAccountForUser,
+  ensureHandoutRepo,
   ensureOrg,
   ensureRepoFromTemplate,
   forgejoConfig,
@@ -379,6 +380,141 @@ Deno.test("readFile: asks for the file at a given ref", async () => {
       calls[0].url,
       "https://git.example.edu/api/v1/repos/cs4535/hw1-alex.kim/contents/.github/workflows/grade.yml?ref=27d062d9"
     );
+  });
+});
+
+const head = {
+  sha: "5140bf4621ac400f7c2fedd86cfac63e189069c4",
+  commit: { message: "Add .github/workflows/grade.yml" }
+};
+const gradeYml = { path: ".github/workflows/grade.yml", content: "name: Grade\n# \u00e9\n" };
+
+Deno.test(
+  "ensureHandoutRepo: creates a private template repo on main with the files, and returns main's head",
+  async () => {
+    const responses = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), ok({}, 201), ok(head)];
+    await withForgejo(responses, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]), head.sha);
+      assertEquals(
+        calls.slice(4).map((c) => `${c.method} ${c.url}`),
+        [
+          "POST https://git.example.edu/api/v1/orgs/cs4535/repos",
+          "POST https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/.github/workflows/grade.yml",
+          "GET https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/git/commits/main"
+        ]
+      );
+      assertEquals(calls[4].body, {
+        name: "cs4535-handout-hw1",
+        private: true,
+        auto_init: true,
+        default_branch: "main",
+        template: true
+      });
+      const content = calls[5].body!.content as string;
+      assertEquals(new TextDecoder().decode(Uint8Array.from(atob(content), (c) => c.charCodeAt(0))), gradeYml.content);
+      assertEquals(calls[5].body!.branch, "main");
+    });
+  }
+);
+
+Deno.test(
+  "ensureHandoutRepo: adopts an existing repo as a private template and keeps a file already there",
+  async () => {
+    const responses = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 }),
+      ok({ empty: false, default_branch: "main" }),
+      unprocessable("repository file already exists [path: .github/workflows/grade.yml]"),
+      ok(head)
+    ];
+    await withForgejo(responses, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]), head.sha);
+      assertEquals(
+        `${calls[5].method} ${calls[5].url}`,
+        "PATCH https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1"
+      );
+      assertEquals(calls[5].body, { template: true, private: true });
+    });
+  }
+);
+
+Deno.test(
+  "ensureHandoutRepo: an adopted empty repo gets a README on main; another default branch is refused",
+  async () => {
+    const exists = () =>
+      new Response(JSON.stringify({ message: "The repository with the same name already exists." }), { status: 409 });
+    const gone = { path: ".github/workflows/grade.yml", content: null };
+    const empty = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      exists(),
+      ok({ empty: true, default_branch: "main" }),
+      ok({}, 201),
+      status(404),
+      ok(head)
+    ];
+    await withForgejo(empty, async (calls) => {
+      assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+      assertEquals(
+        `${calls[6].method} ${calls[6].url}`,
+        "POST https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/README.md"
+      );
+      assertEquals(calls[6].body!.branch, "main");
+    });
+    const trunk = [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      exists(),
+      ok({ empty: false, default_branch: "trunk" })
+    ];
+    await withForgejo(trunk, async () => {
+      await assertRejects(
+        () => ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]),
+        Error,
+        "default branch isn't main"
+      );
+    });
+  }
+);
+
+Deno.test("ensureHandoutRepo: removes a file with null content, and a file already gone changes nothing", async () => {
+  const gone = { path: ".github/workflows/grade.yml", content: null };
+  const responses = [
+    ok({ username: "cs4535" }),
+    ...ownedBy("pawtograder-admin"),
+    ok({}, 201),
+    ok({ sha: "1f0e2a" }),
+    ok({}),
+    ok(head)
+  ];
+  await withForgejo(responses, async (calls) => {
+    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+    const file = "https://git.example.edu/api/v1/repos/cs4535/cs4535-handout-hw1/contents/.github/workflows/grade.yml";
+    assertEquals(
+      calls.slice(5, 7).map((c) => `${c.method} ${c.url}`),
+      [`GET ${file}?ref=main`, `DELETE ${file}`]
+    );
+    assertEquals(calls[6].body, { sha: "1f0e2a", message: "Remove .github/workflows/grade.yml", branch: "main" });
+  });
+  const again = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), status(404), ok(head)];
+  await withForgejo(again, async (calls) => {
+    assertEquals(await ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gone]), head.sha);
+    assert(!calls.some((c) => c.method === "DELETE"));
+  });
+});
+
+Deno.test("ensureHandoutRepo: any other file error fails, and a bad name never reaches Forgejo", async () => {
+  const responses = [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok({}, 201), status(403)];
+  await withForgejo(responses, async () => {
+    await assertRejects(
+      () => ensureHandoutRepo(config, "cs4535/cs4535-handout-hw1", [gradeYml]),
+      Error,
+      "file create failed: 403"
+    );
+  });
+  await withForgejo([], async () => {
+    await assertRejects(() => ensureHandoutRepo(config, "cs4535/../admin", []), Error, "Not a Forgejo owner/name");
   });
 });
 
