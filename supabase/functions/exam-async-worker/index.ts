@@ -26,7 +26,7 @@ import {
 } from "../_shared/examVision.ts";
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
 import { holdLease } from "../_shared/examWorkerLease.ts";
-import { ocrWaitExhausted } from "./ocrWait.ts";
+import { nextOcrWait } from "./ocrWait.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -44,7 +44,7 @@ const MAX_RATE_LIMIT_RETRIES = 20;
 // while its own pages are still in OCR (#1158), and the batch reaches review one delay later.
 //
 // When the wait counts as a failure, so the batch surfaces an error instead of waiting forever, is
-// ocrWaitExhausted in ./ocrWait.ts: at least as long as the 30 waits of 30s before #1158.
+// nextOcrWait in ./ocrWait.ts: never sooner than the 30 waits of 30s before #1158.
 const OCR_WAIT_SECONDS = 5;
 
 type QueueMessage = {
@@ -129,12 +129,19 @@ async function requeue(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: numbe
   await sendEnvelope(admin, next, delaySeconds);
 }
 
-// Park a message without spending its transient-error budget: bumps ocr_waits, not retry_count.
-async function requeueWaitingForOcr(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
+// Park a message without spending its transient-error budget: carries the OCR-wait count
+// (ocrWait.ts), not retry_count.
+async function requeueWaitingForOcr(
+  admin: Admin,
+  env: ExamAsyncEnvelope,
+  wait: { waits: number; countedMs: number | undefined; startedMs: number },
+  delaySeconds: number
+): Promise<void> {
   const next = {
     ...env,
-    ocr_waits: (env.ocr_waits ?? 0) + 1,
-    ocr_wait_started_ms: env.ocr_wait_started_ms ?? Date.now()
+    ocr_waits: wait.waits,
+    ocr_wait_counted_ms: wait.countedMs,
+    ocr_wait_started_ms: wait.startedMs
   };
   await sendEnvelope(admin, next, delaySeconds);
 }
@@ -405,17 +412,23 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs, fe
     .is("ocr_data", null);
   if (pendingErr) throw new Error(`count pending OCR for batch ${batch.id} failed: ${pendingErr.message}`);
   if ((pendingOcr ?? 0) > 0) {
-    const waits = env.ocr_waits ?? 0;
-    const waitedMs = env.ocr_wait_started_ms === undefined ? 0 : Date.now() - env.ocr_wait_started_ms;
-    if (ocrWaitExhausted(waits, waitedMs)) {
+    const now = Date.now();
+    const startedMs = env.ocr_wait_started_ms ?? now;
+    const step = nextOcrWait(env.ocr_waits ?? 0, env.ocr_wait_counted_ms, now);
+    if (step.exhausted) {
       throw new Error(
-        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits over ` +
-          `${Math.round(waitedMs / 1000)}s; not advancing to review`
+        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${env.ocr_waits ?? 0} waits over ` +
+          `${Math.round((now - startedMs) / 1000)}s; not advancing to review`
       );
     }
     // Fresh message, then the dispatcher archives this copy on our normal return. Leave the
     // batch status alone so the scans page keeps showing it as still processing.
-    await requeueWaitingForOcr(admin, env, OCR_WAIT_SECONDS);
+    await requeueWaitingForOcr(
+      admin,
+      env,
+      { waits: step.waits, countedMs: step.countedMs, startedMs },
+      OCR_WAIT_SECONDS
+    );
     return;
   }
 

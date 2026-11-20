@@ -17,7 +17,7 @@ import {
   REVIEW_FROM,
   type BatchStatus
 } from "../../supabase/functions/exam-async-worker/batchTransitions";
-import { MAX_OCR_WAIT_MS, MAX_OCR_WAITS, ocrWaitExhausted } from "../../supabase/functions/exam-async-worker/ocrWait";
+import { MAX_OCR_WAITS, nextOcrWait, OCR_WAIT_COUNT_MS } from "../../supabase/functions/exam-async-worker/ocrWait";
 
 const ALL: BatchStatus[] = ["uploaded", "ocr", "matching", "review", "finalizing", "completed", "error"];
 const WORKER = join(__dirname, "..", "..", "supabase", "functions", "exam-async-worker", "index.ts");
@@ -89,28 +89,103 @@ describe("issue #1158: worker batch status transitions", () => {
     });
   });
 
-  // Aryan's question on #1308: is 15 minutes of wall time enough for a large class? The limit is
-  // never sooner than the 30 waits of 30s it replaced: it needs 30 waits AND 15 minutes, so waits
-  // that a backlog slows down stretch it the way they stretched the old count.
+  // Aryan's question on #1308, and Jon's and CodeRabbit's counterexample: with a reader reaching the
+  // message every 25s, the old rule (a 30s re-queue delay, error on the 31st read) waits 25 minutes,
+  // so "30 waits and 15 minutes" with 5s waits errored 10 minutes sooner. nextOcrWait counts a wait
+  // only 30s after the last counted one, which is never sooner than the old rule.
   describe("match gives up on OCR no sooner than before #1158", () => {
-    const MIN = 60_000;
+    const S = 1000;
+    const MIN = 60 * S;
+
     test.each([
-      [0, 0, false],
-      [29, 60 * MIN, false], // a backlog: few, slow waits keep it waiting past 15 minutes
-      [30, 14 * MIN, false],
-      [200, 10 * MIN, false], // a draining batch: many quick waits are not enough on their own
-      [30, 15 * MIN, true],
-      [180, 15 * MIN, true]
-    ])("%i waits over %i ms exhausted: %s", (waits, waitedMs, exhausted) => {
-      expect(ocrWaitExhausted(waits, waitedMs)).toBe(exhausted);
+      // waits, countedMs, nowMs -> result
+      [0, undefined, 0, { exhausted: false, waits: 1, countedMs: 0 }], // the first wait counts
+      [5, 100 * S, 120 * S, { exhausted: false, waits: 5, countedMs: 100 * S }], // too soon: not counted
+      [5, 100 * S, 130 * S, { exhausted: false, waits: 6, countedMs: 130 * S }], // 30s on: counted
+      [29, 0, 30 * S, { exhausted: false, waits: 30, countedMs: 30 * S }],
+      [30, 0, 29 * S, { exhausted: false, waits: 30, countedMs: 0 }], // limit reached, but too soon
+      [30, 0, 30 * S, { exhausted: true }],
+      [30, undefined, 0, { exhausted: true }] // a message queued by the old worker, already at 30
+    ])("nextOcrWait(%p, %p, %p)", (waits, countedMs, nowMs, expected) => {
+      expect(nextOcrWait(waits, countedMs, nowMs)).toEqual(expected);
     });
 
-    test("the limits are the old count and 15 minutes, and doMatch uses them", () => {
+    // When the batch errors, given when readers reach the waiting message. `firstReadAt(t)` is the
+    // first moment at or after t that a reader takes the message if it is visible.
+    type Readers = (t: number) => number;
+    const every =
+      (gap: number): Readers =>
+      (t) =>
+        Math.ceil(t / gap) * gap;
+    const irregular = (seed: number): Readers => {
+      const times: number[] = [0];
+      let x = seed;
+      while (times[times.length - 1] < 4 * 60 * MIN) {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        times.push(times[times.length - 1] + 1 * S + (x % (90 * S)));
+      }
+      return (t) => times.find((r) => r >= t)!;
+    };
+    /** Before #1158: re-queued with a 30s delay; the read that finds 30 waits errors. */
+    const stagingErrorsAt = (firstReadAt: Readers) => {
+      let t = firstReadAt(0);
+      for (let waits = 0; waits < MAX_OCR_WAITS; waits++) t = firstReadAt(t + 30 * S);
+      return t;
+    };
+    /** Now: re-queued with a 5s delay, counted by nextOcrWait. */
+    const nowErrorsAt = (firstReadAt: Readers) => {
+      let t = firstReadAt(0);
+      let waits = 0;
+      let countedMs: number | undefined;
+      for (let reads = 0; reads < 10_000; reads++) {
+        const step = nextOcrWait(waits, countedMs, t);
+        if (step.exhausted) return t;
+        ({ waits, countedMs } = step);
+        t = firstReadAt(t + 5 * S);
+      }
+      throw new Error("never gave up");
+    };
+    /** The rule this replaces: 5s waits, error once 30 waits AND 15 minutes have passed. */
+    const previousErrorsAt = (firstReadAt: Readers) => {
+      let t = firstReadAt(0);
+      for (let waits = 0; ; waits++) {
+        if (waits >= 30 && t >= 15 * MIN) return t;
+        t = firstReadAt(t + 5 * S);
+      }
+    };
+
+    test.each([
+      ["idle readers (every 1s)", every(1 * S)],
+      ["every 5s", every(5 * S)],
+      ["every 25s (the review's case)", every(25 * S)],
+      ["every 31s", every(31 * S)],
+      ["every 45s", every(45 * S)],
+      ["every 60s (cron only)", every(60 * S)],
+      ["irregular, seed 1", irregular(1)],
+      ["irregular, seed 42", irregular(42)]
+    ])("%s: never sooner than before #1158", (_name, readers) => {
+      expect(nowErrorsAt(readers)).toBeGreaterThanOrEqual(stagingErrorsAt(readers));
+    });
+
+    test("the review's case: the previous rule erred at 15 minutes, now it waits the old 25", () => {
+      const readers = every(25 * S);
+      expect(stagingErrorsAt(readers)).toBe(25 * MIN);
+      expect(previousErrorsAt(readers)).toBe(15 * MIN);
+      expect(nowErrorsAt(readers)).toBeGreaterThanOrEqual(25 * MIN);
+    });
+
+    test("with idle readers it still gives up in about 15 minutes, not later than 18", () => {
+      expect(nowErrorsAt(every(1 * S))).toBeLessThanOrEqual(18 * MIN);
+      expect(nowErrorsAt(every(1 * S))).toBeGreaterThanOrEqual(15 * MIN);
+    });
+
+    test("the limits are the old count and delay, and doMatch uses them", () => {
       expect(MAX_OCR_WAITS).toBe(30);
-      expect(MAX_OCR_WAIT_MS).toBe(15 * MIN);
+      expect(OCR_WAIT_COUNT_MS).toBe(30 * S);
       const source = readFileSync(WORKER, "utf8");
-      expect(source).toMatch(/if \(ocrWaitExhausted\(waits, waitedMs\)\) \{/);
-      expect(source).not.toMatch(/MAX_OCR_WAIT/);
+      expect(source).toMatch(/const step = nextOcrWait\(env\.ocr_waits \?\? 0, env\.ocr_wait_counted_ms, now\);/);
+      expect(source).toMatch(/if \(step\.exhausted\) \{/);
+      expect(source).not.toMatch(/ocrWaitExhausted/);
     });
   });
 });
