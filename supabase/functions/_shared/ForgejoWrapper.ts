@@ -271,7 +271,8 @@ async function listCoderTokenNames(config: ForgejoConfig, login: string): Promis
   throw new Error("Forgejo token list failed: it kept changing while it was read");
 }
 
-type TokenPage = { count: string | null; names: string[] } | "missing";
+/** `ids` are Forgejo's token ids, which only grow; NaN when a response has none. */
+type TokenPage = { count: string | null; names: string[]; ids: number[] } | "missing";
 
 async function readTokenPage(config: ForgejoConfig, login: string, page: number, limit: number): Promise<TokenPage> {
   const query = new URLSearchParams({ page: String(page), limit: String(limit) });
@@ -281,8 +282,12 @@ async function readTokenPage(config: ForgejoConfig, login: string, page: number,
     return "missing";
   }
   if (!res.ok) throw await failure(res, "token list");
-  const tokens = (await res.json()) as { name: string }[];
-  return { count: res.headers.get("X-Total-Count"), names: tokens.map((t) => t.name) };
+  const tokens = (await res.json()) as { id?: number; name: string }[];
+  return {
+    count: res.headers.get("X-Total-Count"),
+    names: tokens.map((t) => t.name),
+    ids: tokens.map((t) => (typeof t.id === "number" ? t.id : NaN))
+  };
 }
 
 const sameNames = (a: string[], b: string[]) =>
@@ -299,6 +304,10 @@ const sameNames = (a: string[], b: string[]) =>
  *   counts see every other deletion, so the list held the same `count` tokens throughout.
  * - So the scan must have seen `count` different names. Fewer means two pages ordered tied tokens differently,
  *   repeating one and leaving out another.
+ * The order is by created_unix alone, so a token minted in the same second as the ones at a page boundary could
+ * land past page 1 (#1303 review). Token ids only grow, so a later page's token with an id above all of page 1's
+ * was minted during the scan, or ties more than a page of tokens to one second. Either way the scan is read
+ * again. A mint that hides a token is always on a page read after it, so this sees it.
  */
 async function scanCoderTokenNames(config: ForgejoConfig, login: string, pageSize: number): Promise<string[] | null> {
   const first = await readTokenPage(config, login, 1, pageSize);
@@ -310,9 +319,11 @@ async function scanCoderTokenNames(config: ForgejoConfig, login: string, pageSiz
     // Pages as long as Forgejo actually made page 1.
     const served = first.names.length;
     if (served === 0) return null;
+    const newestOnPage1 = Math.max(...first.ids);
     for (let page = 2; ; page++) {
       const next = await readTokenPage(config, login, page, pageSize);
       if (next === "missing" || next.count !== first.count) return null;
+      if (next.ids.some((id) => id > newestOnPage1)) return null;
       for (const name of next.names) names.add(name);
       if (next.names.length < served) break;
     }

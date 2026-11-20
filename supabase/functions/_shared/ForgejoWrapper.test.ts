@@ -823,6 +823,12 @@ async function withTokenList(
 ) {
   const realFetch = globalThis.fetch;
   const pagesRead: number[] = [];
+  // Forgejo's ids only grow: the oldest token, last in the list, has the lowest, and a later mint the next one.
+  const ids = new Map(tokens.map((name, i) => [name, tokens.length - i]));
+  const idOf = (name: string) => {
+    if (!ids.has(name)) ids.set(name, Math.max(0, ...ids.values()) + 1);
+    return ids.get(name)!;
+  };
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
@@ -836,7 +842,7 @@ async function withTokenList(
     const limit = Number(url.searchParams.get("limit"));
     beforePage(page, tokens);
     pagesRead.push(page);
-    const body = order(page, limit, tokens).map((name) => ({ name }));
+    const body = order(page, limit, tokens).map((name) => ({ id: idOf(name), name }));
     beforeCount(page, tokens);
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "X-Total-Count": String(tokens.length) } }));
   }) as typeof fetch;
@@ -980,6 +986,61 @@ Deno.test("token list: a MAX_RESPONSE_ITEMS below the page size asked for still 
     },
     () => {},
     (page, _limit, tokens) => tokens.slice((page - 1) * 20, page * 20)
+  );
+});
+
+// The review's interleaving: 101 tokens created in one second. After pages 1 and 2 are read, token 51 is revoked
+// and a token is minted in the same second, which Forgejo's page-3 query places last. Token 101 moves onto page 2,
+// read already, and page 3 holds the new token instead. The count, page 1 and the number of names all match.
+const TIED = 101;
+
+Deno.test("token list: a mint tied with the tokens at a page boundary, past page 1, doesn't hide a token", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: TIED }, (_, i) => coderTokenName(7, now - 60_000 - i));
+  const last = names[TIED - 1];
+  const minted = coderTokenName(7, now);
+  let raced = false;
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 3 && !raced) {
+        raced = true;
+        tokens.splice(50, 1);
+        tokens.unshift(minted);
+      }
+    },
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeAllCoderTokens(config, "alex.kim"), TIED);
+      assert(!tokens.includes(last), "token 101 is revoked");
+      assertEquals(tokens, []);
+      assertEquals(pagesRead.slice(0, 4), [1, 2, 3, 1], "the new token's id sends the scan round again");
+    },
+    () => {},
+    // The first scan's queries (50 a page) order the tie with the new token last; the retry's put it first.
+    (page, limit, tokens) => {
+      const view = limit === 50 && tokens[0] === minted ? [...tokens.slice(1), minted] : tokens;
+      return view.slice((page - 1) * limit, page * limit);
+    }
+  );
+});
+
+Deno.test("token list: a mint that every query places past page 1 is an error, and nothing is revoked", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: TIED }, (_, i) => coderTokenName(7, now - 60_000 - i));
+  let raced = false;
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 3 && !raced) {
+        raced = true;
+        tokens.splice(50, 1);
+        tokens.push(coderTokenName(7, now));
+      }
+    },
+    async (tokens) => {
+      await assertRejects(() => revokeAllCoderTokens(config, "alex.kim"), Error, "kept changing");
+      assertEquals(tokens.length, TIED, "nothing deleted from a list that couldn't be shown whole");
+    }
   );
 });
 
