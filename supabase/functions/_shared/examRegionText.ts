@@ -27,29 +27,43 @@ export function wordsInRegion(words: WordBox[], region: NormRect): string {
   // line, using the smaller of the two heights so a tall box cannot pull in the line below. Grouping
   // by distance rather than by fixed 0.02 bands keeps a line whole wherever it sits on the page, and
   // centers rather than top edges keep a tilted word's taller box on the line it belongs to (#1292).
-  // Marks under half the median height (punctuation, quote marks) sit at the baseline or the top of
-  // a line rather than on its center line, so they join the row whose span is nearest them instead.
   const centerY = (w: WordBox) => w.y + w.height / 2;
+  type Row = { words: WordBox[]; centerSum: number; minHeight: number; top: number; bottom: number };
+  const groupRows = (ws: WordBox[]): Row[] => {
+    const rows: Row[] = [];
+    for (const w of [...ws].sort((a, b) => centerY(a) - centerY(b))) {
+      const row = rows[rows.length - 1];
+      if (row && centerY(w) - row.centerSum / row.words.length <= Math.min(w.height, row.minHeight) / 2) {
+        row.words.push(w);
+        row.centerSum += centerY(w);
+        row.minHeight = Math.min(row.minHeight, w.height);
+        row.top = Math.min(row.top, w.y);
+        row.bottom = Math.max(row.bottom, w.y + w.height);
+      } else {
+        rows.push({ words: [w], centerSum: centerY(w), minHeight: w.height, top: w.y, bottom: w.y + w.height });
+      }
+    }
+    return rows;
+  };
+  // Marks under half the median height (punctuation, quote marks) sit at the baseline or the top of
+  // a line rather than on its center line, so they join the row whose span they are within half a
+  // word height of. Small words near no row (a line of smaller text) form rows of their own.
   const heights = inside.map((w) => w.height).sort((a, b) => a - b);
   const isMark = (w: WordBox) => w.height < heights[Math.floor(heights.length / 2)] / 2;
-  const rows: { words: WordBox[]; centerSum: number; minHeight: number; top: number; bottom: number }[] = [];
-  for (const w of inside.filter((w) => !isMark(w)).sort((a, b) => centerY(a) - centerY(b))) {
-    const row = rows[rows.length - 1];
-    if (row && centerY(w) - row.centerSum / row.words.length <= Math.min(w.height, row.minHeight) / 2) {
-      row.words.push(w);
-      row.centerSum += centerY(w);
-      row.minHeight = Math.min(row.minHeight, w.height);
-      row.top = Math.min(row.top, w.y);
-      row.bottom = Math.max(row.bottom, w.y + w.height);
-    } else {
-      rows.push({ words: [w], centerSum: centerY(w), minHeight: w.height, top: w.y, bottom: w.y + w.height });
-    }
-  }
-  // A mark is never the median, so whenever there is one there is a row of words to put it on.
+  const rows = groupRows(inside.filter((w) => !isMark(w)));
+  const unplaced: WordBox[] = [];
   for (const mark of inside.filter(isMark)) {
-    const gap = (row: (typeof rows)[number]) => Math.max(row.top - centerY(mark), centerY(mark) - row.bottom, 0);
-    rows.reduce((best, row) => (gap(row) < gap(best) ? row : best)).words.push(mark);
+    const gap = (row: Row) => Math.max(row.top - centerY(mark), centerY(mark) - row.bottom, 0);
+    const nearest = rows.reduce<Row | undefined>(
+      (best, row) => (!best || gap(row) < gap(best) ? row : best),
+      undefined
+    );
+    if (nearest && gap(nearest) <= nearest.minHeight / 2) nearest.words.push(mark);
+    else unplaced.push(mark);
   }
+  rows.push(...groupRows(unplaced));
+  // By the middle of each row's span, which marks did not change, so the smaller lines fall into place.
+  rows.sort((a, b) => a.top + a.bottom - (b.top + b.bottom));
   return rows
     .flatMap((row) => row.words.sort((a, b) => a.x - b.x))
     .map((w) => w.text)

@@ -101,6 +101,13 @@ const MARKS: { name: string; words: WordBox[]; text: string }[] = [
     text: "first , second"
   },
   {
+    // The comma's center is 0.001 below the line's bottom edge. Catches requiring a mark to sit
+    // strictly inside a line, which would put it on a row of its own and read "first second ,".
+    name: "a comma hanging just below the baseline",
+    words: [word("second", 0.4, 0.291), word(",", 0.33, 0.31, 0.01, 0.004), word("first", 0.25, 0.291)],
+    text: "first , second"
+  },
+  {
     // The quote mark hangs from the top of the second line, nearer the first line's bottom edge than
     // the second's. Catches marks measured only against the edge below them, which read "a ' b it s".
     name: "a quote mark at the top of the line",
@@ -125,6 +132,32 @@ for (const c of MARKS) {
     assertEquals(wordsInRegion(c.words, REGION), c.text);
   });
 }
+
+Deno.test("lines of smaller text stay lines of their own", () => {
+  // CodeRabbit's example on #1331: two lines of smaller text, each under half the region's median
+  // height, below one line of full-size words. Catches small words glued onto the nearest full-size
+  // line however far away it is, which read "A two B one C", and the two small lines merging,
+  // which read "A B C two one".
+  const words = [
+    word("A", 0.22, 0.25, 0.05, 0.04),
+    word("B", 0.34, 0.25, 0.05, 0.04),
+    word("C", 0.46, 0.25, 0.05, 0.04),
+    word("one", 0.42, 0.4, 0.05, 0.015),
+    word("two", 0.28, 0.44, 0.05, 0.015)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "A B C one two");
+});
+
+Deno.test("a line of smaller text above full-size words is read first", () => {
+  // Catches the smaller line's row being appended after the full-size rows instead of being put
+  // back in page order, which would read "A B note".
+  const words = [
+    word("A", 0.25, 0.4, 0.05, 0.04),
+    word("B", 0.35, 0.4, 0.05, 0.04),
+    word("note", 0.45, 0.3, 0.05, 0.015)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "note A B");
+});
 
 Deno.test("lines 1.2 word heights apart stay separate", () => {
   // Line two's words sit between line one's across the page. Catches a tolerance loose enough to
