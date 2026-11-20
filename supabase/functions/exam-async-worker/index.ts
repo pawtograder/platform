@@ -900,6 +900,12 @@ async function runBatch(): Promise<number> {
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let processed = 0;
+  // Counted separately because `processed` is incremented outside the try below, so it is really
+  // an attempt count. Reporting the two as one number would have the completion line claim work
+  // that threw and was left queued for redelivery, which is the opposite of what this ticket is
+  // for. Raised by CodeRabbit in review; the counter placement itself predates this change, so
+  // this reports around it rather than moving it.
+  let failed = 0;
   for (let pass = 0; pass < 50; pass++) {
     const { data, error } = await admin.schema("pgmq_public").rpc("read", {
       queue_name: QUEUE,
@@ -943,11 +949,12 @@ async function runBatch(): Promise<number> {
       } catch (error) {
         Sentry.captureException(error, scope.clone());
         console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
+        failed++;
       }
       processed++;
     }
   }
-  log(`run done: processed ${processed} message(s) in ${Date.now() - startedAt}ms`);
+  log(`run done: ${processed} message(s) attempted, ${failed} failed, in ${Date.now() - startedAt}ms`);
   return processed;
 }
 
