@@ -554,9 +554,9 @@ export function OfficeHoursControllerProvider({
 /**
  * Joins the realtime channel for one help queue while the caller is mounted.
  *
- * The controller joins the queues a user is already in when it starts. A student who creates a
- * request after that, which is the normal flow, would otherwise never join the queue they are
- * looking at, and their position would not update until they reloaded.
+ * This carries help_queues changes, not help_requests: a queue renamed or reconfigured while a
+ * student is looking at it reaches them live (#1082). Request changes, including their position,
+ * already arrive on class:<id>:students and do not depend on this.
  */
 export function useHelpQueueChannel(helpQueueId: number | undefined): void {
   const controller = useOfficeHoursController();

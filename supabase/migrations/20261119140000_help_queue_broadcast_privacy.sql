@@ -1,9 +1,12 @@
 -- Privacy: the queue-level broadcast sent the full help_requests row to every subscriber of the
--- queue channel, including private requests. Private rows now send only their id, the same way the
--- class students broadcast already does, so the table controller refetches them under RLS.
+-- queue channel, including private requests. Private rows now send only their id.
 --
--- Students start joining queue channels in the same change, so the two must ship together: without
--- this redaction they would receive other students' private requests in full.
+-- No client reads the request messages on help_queue:<id>. The helpRequests TableController is
+-- wired to classRealTimeController, and students get request changes from
+-- broadcast_help_requests_to_class on class:<id>:students, which is the path that refetches under
+-- RLS. The id is sent for the same shape as that broadcast, and because the channel is reachable:
+-- students join it in this change, and anyone holding a token can join it by hand. Redacting here
+-- is what stops a subscriber reading a private request, not what keeps the UI correct.
 CREATE OR REPLACE FUNCTION public.broadcast_help_queue_data_change()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -72,7 +75,8 @@ BEGIN
             'help_queue_id', help_queue_id,
             'class_id', class_id,
             'data', CASE
-                -- Private requests carry only their id; students then refetch the row under RLS.
+                -- Private requests carry only their id. Nothing on this channel renders them;
+                -- the row a client is entitled to arrives on class:<id>:students.
                 WHEN TG_TABLE_NAME = 'help_requests' AND COALESCE((to_jsonb(CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END)->>'is_private')::boolean, false) THEN
                     jsonb_build_object('id', row_id)
                 WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)

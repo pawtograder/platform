@@ -14,8 +14,9 @@ import type { Database } from "@/utils/supabase/SupabaseTypes";
  * The queue-channel broadcast from 20261119140000_help_queue_broadcast_privacy.sql.
  *
  * Every subscriber of a queue's channel receives its requests, including students who are not on
- * them. A private request must therefore carry only its id and let the subscriber refetch the row
- * under RLS. A public request still carries the full row, which is what the queue list renders.
+ * them. A private request must therefore carry only its id. Nothing renders from this channel —
+ * the row a client is entitled to arrives on class:<id>:students — so this pins what the channel
+ * discloses, not what the page shows. A public request still carries the full row, which is what the queue list renders.
  *
  * The subscriber here is a second student who is on no request in the queue, which is the case
  * that leaked before.
