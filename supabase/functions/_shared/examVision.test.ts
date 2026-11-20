@@ -148,6 +148,34 @@ Deno.test("lines of smaller text stay lines of their own", () => {
   assertEquals(wordsInRegion(words, REGION), "A B C one two");
 });
 
+Deno.test("punctuation stays on its line when it outnumbers the words", () => {
+  // CodeRabbit's example on #1331: four marks and three words, so the region's median height is a
+  // mark's. Catches marks judged only against that median, which put the punctuation on a row of
+  // its own and read "a b c , , , .".
+  const words = [
+    word("a", 0.22, 0.291),
+    word(",", 0.28, 0.307, 0.01, 0.004),
+    word("b", 0.3, 0.291),
+    word(",", 0.36, 0.307, 0.01, 0.004),
+    word("c", 0.38, 0.291),
+    word(",", 0.44, 0.307, 0.01, 0.004),
+    word(".", 0.46, 0.307, 0.01, 0.004)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "a , b , c , .");
+});
+
+Deno.test("a line of smaller text just below full-size words stays its own line", () => {
+  // CodeRabbit's example on #1331: "note" sits 0.0175 below the line, inside half the line's height
+  // but not half its own. Catches a tolerance taken from the line alone, which read "note A B C".
+  const words = [
+    word("A", 0.25, 0.25, 0.05, 0.04),
+    word("B", 0.35, 0.25, 0.05, 0.04),
+    word("C", 0.45, 0.25, 0.05, 0.04),
+    word("note", 0.21, 0.3, 0.05, 0.015)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "A B C note");
+});
+
 Deno.test("a line of smaller text above full-size words is read first", () => {
   // Catches the smaller line's row being appended after the full-size rows instead of being put
   // back in page order, which would read "A B note".
