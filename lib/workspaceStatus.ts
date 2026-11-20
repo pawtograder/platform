@@ -30,7 +30,8 @@ export type WorkspaceState =
   | { status: "starting"; step: WorkspaceStepId; restarting?: boolean }
   | { status: "ready"; url: string }
   | { status: "failed"; step: WorkspaceStepId; message: string }
-  // The student has to link their Forgejo account in Coder once, at `url`, before the clone can run.
+  // The student has to link their Git host account (Forgejo or GitHub) in Coder once, at `url`, before the
+  // clone can run.
   | { status: "needs_linking"; url: string; message: string }
   // The student's Coder account isn't bound to their Pawtograder login; only staff can fix it.
   | { status: "account_conflict"; message: string };
@@ -69,11 +70,11 @@ export function toWorkspaceState(res: WorkspaceOpenResponse): WorkspaceState {
       return { status: "failed", step, message: res.message || "The workspace could not start." };
     case "needs_linking": {
       const url = res.authenticate_url ?? res.redirect_url;
-      if (!url) throw new Error("The workspace needs your Forgejo account linked, but sent no link.");
+      if (!url) throw new Error("The workspace needs your account linked, but sent no link.");
       return {
         status: "needs_linking",
         url,
-        message: res.message || "Link your Forgejo account in Coder, then open the workspace again."
+        message: res.message || "Link your account in Coder, then open the workspace again."
       };
     }
     case "credentials_unavailable":
@@ -122,5 +123,57 @@ export function cloudWorkspacesEnabled(features: unknown): boolean {
     features as { name: string; enabled: boolean }[] | null | undefined,
     COURSE_FEATURES.CLOUD_WORKSPACES,
     false
+  );
+}
+
+/**
+ * The Git hosts a workspace can clone from. Mirrors `WORKSPACE_PROVIDERS` in
+ * supabase/functions/_shared/CoderWorkspace.ts, which the edge functions enforce.
+ */
+export const WORKSPACE_GIT_PROVIDERS = ["forgejo", "github"] as const;
+export type WorkspaceGitProvider = (typeof WORKSPACE_GIT_PROVIDERS)[number];
+
+export function isWorkspaceGitProvider(value: unknown): value is WorkspaceGitProvider {
+  return WORKSPACE_GIT_PROVIDERS.includes(value as WorkspaceGitProvider);
+}
+
+/** How the card names the account a student links in Coder. */
+export function gitProviderLabel(provider: WorkspaceGitProvider): string {
+  return provider === "github" ? "GitHub" : "Forgejo";
+}
+
+/**
+ * The repositories the card would open, as a key: IDs of the student's ready repositories on a host
+ * Coder can clone from, or "" when there are none. Waits for the host to finish creating the repo,
+ * or the clone step fails. The IDs key the card, so a student who joins or leaves a group gets a
+ * fresh card instead of the old repo's state.
+ */
+export function workspaceRepoKey(
+  repositories: readonly { id: number; git_provider: string; is_github_ready: boolean }[] | null | undefined
+): string {
+  return (repositories ?? [])
+    .filter((r) => isWorkspaceGitProvider(r.git_provider) && r.is_github_ready)
+    .map((r) => r.id)
+    .join(",");
+}
+
+/**
+ * Whether to offer Open in Coder: a student (not staff viewing as one) with a ready repository on
+ * Forgejo or GitHub, in a course with Cloud Workspaces on. workspace-open checks enrollment and the
+ * repository again on the server.
+ */
+export function shouldShowWorkspace(opts: {
+  isReadOnly: boolean;
+  role: string | null | undefined;
+  assignmentGitProvider: string | null | undefined;
+  features: unknown;
+  repoKey: string;
+}): boolean {
+  return (
+    !opts.isReadOnly &&
+    opts.role === "student" &&
+    isWorkspaceGitProvider(opts.assignmentGitProvider) &&
+    cloudWorkspacesEnabled(opts.features) &&
+    opts.repoKey !== ""
   );
 }
