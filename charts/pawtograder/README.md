@@ -160,7 +160,7 @@ time you want a clean slate — it's idempotent on a missing release.
 | Secret name (default)        | Required keys                                                                                                                                                                                                                                                |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                                                                                                                                                                                                                  |
-| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `JWT_SIGNING_JWK` (MCP/CLI only), `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
+| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `JWT_SIGNING_JWK` + `MCP_JWT_SECRET` (MCP/CLI only), `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
 | `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL` (if `auth.smtp.enabled=true`; also mount into `edgeFunctions.envFromSecrets` to enable notification email)                                                                                                                                                          |
 | `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage)                                                                                                                                                                                                 |
 | `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for GitHub App, Discord, Canvas, LLM credentials, etc.                                                                                                                                              |
@@ -185,7 +185,8 @@ The full set of keys consumed from `pawtograder-jwt`:
   PostgREST / storage-api verification.
 - `JWT_REALTIME_JWKS` — EC-only JWK Set (Joken can't accept `oct` JWK maps);
   Realtime falls back to `JWT_SECRET` for HS256 verification.
-- `JWT_SIGNING_JWK` — **required for MCP and the CLI**, optional otherwise. The
+- `JWT_SIGNING_JWK` — **required for MCP and the CLI** (together with
+  `MCP_JWT_SECRET`, below), optional otherwise. The
   single EC private JWK (a bare JWK object, *not* a set) that
   `_shared/MCPAuth.ts` signs short-lived per-user RLS JWTs with, using ES256. It
   must be the **same EC entry that appears in `JWT_PRIVATE_JWKS`** — its public
@@ -228,6 +229,28 @@ The full set of keys consumed from `pawtograder-jwt`:
   `https://api.<hostname>/functions/v1/cli` (with `apiOnSeparateHost`, the
   default) — the app shows the exact URL for your deployment in the **user menu →
   API Tokens**, alongside the MCP server URL for Claude Desktop.
+- `MCP_JWT_SECRET` — **also required for MCP and the CLI**, optional otherwise.
+  The HMAC secret (≥ 32 chars) that signs the long-lived `mcp_` API tokens
+  themselves. `JWT_SIGNING_JWK` signs the short-lived per-user JWTs a token is
+  exchanged for; this signs the token. MCP/CLI need both: with only the JWK,
+  creating an API token fails with `MCP_JWT_SECRET must be set and at least 32
+  characters`. It is a plain random string with no relationship to any other
+  key, so unlike `JWT_SIGNING_JWK` there is nothing to extract — just generate
+  one. Rotating it revokes every API token users have issued.
+
+  - **`secrets.autogenerate=true`** — handled for you; the bootstrap Job
+    backfills it into an existing `pawtograder-jwt` on upgrade.
+  - **`secrets.create=true`** — set `secrets.values.jwt.mcpJwtSecret`
+    (`GenerateJwtKeys.ts --helm-values` emits it).
+  - **ESO / OpenBao** — `GenerateJwtKeys.ts` emits `MCP_JWT_SECRET` into the JWT
+    bundle and `examples/externalsecrets/pawtograder-jwt.yaml` maps it. For a
+    bundle provisioned earlier:
+    `bao kv patch <path> MCP_JWT_SECRET="$(openssl rand -hex 32)"`, then force
+    an ESO sync.
+  - **SealedSecrets / hand-made Secrets** — add the key yourself.
+
+  Restart the functions Deployment afterwards; the edge runtime reads it from
+  `pawtograder-jwt` via an optional `secretKeyRef`, like `JWT_SIGNING_JWK`.
 - `REALTIME_ENC_KEY` — AES-128 (exactly 16 bytes) for realtime tenant
   secret encryption.
 - `PG_META_CRYPTO_KEY` — AES-256 (base64) shared between postgres-meta and

@@ -357,6 +357,18 @@ spec:
                   name: {{ $ctx.Values.secrets.names.jwt }}
                   key: JWT_SIGNING_JWK
                   optional: true
+            # MCP_JWT_SECRET is the OTHER half of MCP/CLI auth: the HMAC secret
+            # that signs the long-lived `mcp_` API tokens themselves (JWT_SECRET
+            # above signs the short-lived per-user JWTs a token is exchanged
+            # for). Without it, creating an API token fails with
+            # "MCP_JWT_SECRET must be set". Optional for the same reason as
+            # JWT_SECRET: a missing key degrades MCP/CLI only.
+            - name: MCP_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ctx.Values.secrets.names.jwt }}
+                  key: MCP_JWT_SECRET
+                  optional: true
             # Sentry identity, consumed by supabase/functions/_shared/SentryContext.ts. ENVIRONMENT was
             # previously unset for edge functions, so Sentry labelled their events by whatever each
             # Sentry.init happened to pass — the same deploy reported some events as "development" and

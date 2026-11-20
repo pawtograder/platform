@@ -14,6 +14,10 @@
 //   JWT_SIGNING_JWK              — the EC private key ALONE (bare JWK, not a set);
 //                                  MCP/CLI signing key, consumed as JWT_SECRET by
 //                                  the edge runtime. Same key as in JWT_PRIVATE_JWKS.
+//   MCP_JWT_SECRET               — random HS256 secret that signs the long-lived
+//                                  `mcp_` API tokens themselves (MCP + CLI).
+//                                  Independent of every other key; rotating it
+//                                  revokes every issued API token.
 //   JWT_PUBLIC_JWKS              — JSON object {"keys":[…]} for verifiers
 //   JWT_REALTIME_JWKS            — EC-only JWKS for realtime's Joken pin
 //   ANON_KEY                     — HS256 JWT, role=anon
@@ -140,6 +144,11 @@ const privateJwks = JSON.stringify([ecPrivate, octPublic]);
 // the one in privateJwks above, because its public half in publicJwks is what
 // PostgREST verifies the minted tokens against.
 const signingJwk = JSON.stringify(ecPrivate);
+// HMAC secret for the long-lived `mcp_` API tokens (_shared/MCPAuth.ts,
+// getMcpJwtKey). Unrelated to the EC key above: that one signs the short-lived
+// per-user JWTs a token is exchanged for; this one signs the token itself.
+// MCPAuth requires >= 32 chars.
+const mcpJwtSecret = randomBytes(32).toString("hex");
 // Verifiers take a JWK Set object {"keys":[…]} with public material only.
 const publicJwks = JSON.stringify({ keys: [ecPublic, octPublic] });
 // Realtime gets EC-only: its Joken pin (v2.5.0) doesn't accept JWK maps for
@@ -202,6 +211,7 @@ if (mode === "env") {
   console.log(`JWT_SECRET=${hsSecret}`);
   console.log(`JWT_PRIVATE_JWKS=${privateJwks}`);
   console.log(`JWT_SIGNING_JWK=${signingJwk}`);
+  console.log(`MCP_JWT_SECRET=${mcpJwtSecret}`); // codeql[js/clear-text-logging]
   console.log(`JWT_PUBLIC_JWKS=${publicJwks}`);
   console.log(`JWT_REALTIME_JWKS=${realtimeJwks}`);
   console.log(`ANON_KEY=${anonKey}`);
@@ -240,6 +250,7 @@ if (mode === "env") {
   console.log(`      serviceRoleKey: '${escSingle(serviceRoleKey)}'`);
   console.log(`      privateJwks: '${escSingle(privateJwks)}'`);
   console.log(`      signingJwk: '${escSingle(signingJwk)}'`);
+  console.log(`      mcpJwtSecret: '${escSingle(mcpJwtSecret)}'`); // codeql[js/clear-text-logging]
   console.log(`      publicJwks: '${escSingle(publicJwks)}'`);
   console.log(`      realtimeJwks: '${escSingle(realtimeJwks)}'`);
   console.log(`      realtimeEncKey: '${escSingle(realtimeEncKey)}'`);
@@ -278,6 +289,7 @@ if (mode === "env") {
   console.log(`  SERVICE_ROLE_KEY='${serviceRoleKey}' \\`); // codeql[js/clear-text-logging]
   console.log(`  JWT_PRIVATE_JWKS='${privateJwks}' \\`); // codeql[js/clear-text-logging]
   console.log(`  JWT_SIGNING_JWK='${signingJwk}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  MCP_JWT_SECRET='${mcpJwtSecret}' \\`); // codeql[js/clear-text-logging]
   console.log(`  JWT_PUBLIC_JWKS='${publicJwks}' \\`); // codeql[js/clear-text-logging]
   console.log(`  JWT_REALTIME_JWKS='${realtimeJwks}' \\`); // codeql[js/clear-text-logging]
   console.log(`  REALTIME_ENC_KEY='${realtimeEncKey}' \\`); // codeql[js/clear-text-logging]
@@ -299,6 +311,9 @@ if (mode === "env") {
   console.log("");
   console.log("JWT_SIGNING_JWK (MCP/CLI ES256 signing key — keep secret):");
   console.log(`  ${signingJwk}`);
+  console.log("");
+  console.log("MCP_JWT_SECRET (signs long-lived MCP/CLI API tokens — keep secret):");
+  console.log(`  ${mcpJwtSecret}`); // codeql[js/clear-text-logging]
   console.log("");
   console.log("JWT_PUBLIC_JWKS (verifiers — public, mountable as file):");
   console.log(`  ${publicJwks}`);
