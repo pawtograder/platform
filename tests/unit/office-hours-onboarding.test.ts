@@ -90,6 +90,8 @@ describe("newRequestFormHelperText", () => {
     const text = newRequestFormHelperText({ featureEnabled: true, hasTemplates: true });
     expect(text.helpQueue).toMatch(/Read the queue's description/);
     expect(text.template).toMatch(/Pick the template closest to your question/);
+    // The form only fills an empty description (newRequestForm.tsx), so the text says so.
+    expect(text.template).toMatch(/If the description is empty/);
     expect(text.description).toMatch(/Answer each question from the template/);
   });
 

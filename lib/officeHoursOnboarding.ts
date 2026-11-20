@@ -79,7 +79,10 @@ export function newRequestFormHelperText({
   return {
     helpQueue:
       "Each course splits its queues differently. Read the queue's description, then pick the one that fits your question.",
-    template: "Pick the template closest to your question. It fills in the description with questions to answer.",
+    // The form fills the description from the template only while the description is empty, so a
+    // student who switches templates keeps what they already wrote.
+    template:
+      "Pick the template closest to your question. If the description is empty, the template fills it in with questions to answer.",
     description: hasTemplates
       ? "Answer each question from the template. Your TA reads this before they start helping you."
       : "Say what you're working on, what you tried, and what happened instead of what you expected."
