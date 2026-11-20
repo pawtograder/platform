@@ -105,7 +105,18 @@ export function useTurnAlert({ subject, status, assignee, position, enabled }: T
 export function TurnAlertBanner({ message }: { message: string | null }) {
   if (!message) return null;
   return (
-    <Text fontSize="sm" fontWeight="semibold" color="fg" bg="bg.emphasized" px={3} py={2} borderRadius="md" mb={3}>
+    // Same live region as CheckInAlertBanner, and for the same reason.
+    <Text
+      role="status"
+      fontSize="sm"
+      fontWeight="semibold"
+      color="fg"
+      bg="bg.emphasized"
+      px={3}
+      py={2}
+      borderRadius="md"
+      mb={3}
+    >
       {message}
     </Text>
   );

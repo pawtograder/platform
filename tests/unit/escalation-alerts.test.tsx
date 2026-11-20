@@ -6,8 +6,9 @@
  * flag, both only interrupt while the tab is in the background, and neither fires for state that
  * was already there when the page opened.
  */
-import { renderHook } from "@testing-library/react";
-import { useCheckInAlert, useStaffEscalationAlert } from "@/hooks/useEscalationAlert";
+import { render, renderHook, screen } from "@testing-library/react";
+import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
+import { CheckInAlertBanner, useCheckInAlert, useStaffEscalationAlert } from "@/hooks/useEscalationAlert";
 import { getNotificationManager } from "@/lib/notifications/NotificationManager";
 
 type Notes = { title: string; body?: string }[];
@@ -206,6 +207,16 @@ describe("office hours escalation alerts", () => {
       );
       rerender({ subject: REQUEST_B, status: "resolved", checkInExpiresAt: OPEN_WINDOW });
       expect(notes).toEqual([]);
+    });
+
+    it("announces the in-page banner to a screen reader", () => {
+      // With the page focused, notify() returns early, so the banner is the only alert there is.
+      render(
+        <ChakraProvider value={defaultSystem}>
+          <CheckInAlertBanner message="Your ticket was resolved. Did your problem get fixed?" />
+        </ChakraProvider>
+      );
+      expect(screen.getByRole("status")).toHaveTextContent("Your ticket was resolved.");
     });
 
     it("drops a request's history even when the next request's data has not loaded", () => {

@@ -129,7 +129,19 @@ export function useCheckInAlert({ subject, status, checkInExpiresAt, enabled }: 
 export function CheckInAlertBanner({ message }: { message: string | null }) {
   if (!message) return null;
   return (
-    <Text fontSize="sm" fontWeight="semibold" color="fg" bg="bg.emphasized" px={3} py={2} borderRadius="md" mb={3}>
+    // role="status": with the page focused, notify() returns early and shows nothing, so this
+    // banner is the whole alert. Without a live region a screen reader never announces it.
+    <Text
+      role="status"
+      fontSize="sm"
+      fontWeight="semibold"
+      color="fg"
+      bg="bg.emphasized"
+      px={3}
+      py={2}
+      borderRadius="md"
+      mb={3}
+    >
       {message}
     </Text>
   );
