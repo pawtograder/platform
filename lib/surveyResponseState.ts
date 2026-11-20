@@ -101,6 +101,27 @@ export function shouldAutosaveResponse(args: {
 }
 
 /**
+ * Whether a response row read back from the server holds the answers the page sent.
+ *
+ * The page uses it after a Complete that ran out of time, to learn whether the submit landed.
+ * It compares answers rather than times on purpose: on a first submit the
+ * `set_survey_submitted_at` trigger stamps `submitted_at` with the server's clock, which need
+ * not agree with the browser's. `response` is jsonb, which does not keep key order, so the
+ * comparison ignores it.
+ */
+export function isSameResponseData(stored: unknown, sent: unknown): boolean {
+  return canonicalJson(stored) === canonicalJson(sent);
+}
+
+function canonicalJson(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, nested: unknown) =>
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? Object.fromEntries(Object.entries(nested).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : nested
+  );
+}
+
+/**
  * Whether the survey form renders read-only.
  *
  * A submitted response locks only when the survey does not allow editing; on an editable

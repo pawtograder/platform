@@ -186,6 +186,8 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       .filter({ hasText: "Opened a Pull Request and asked my team for feedback on my code" })
       .click();
 
+    // The save status sits above the form. Without this wait the picture could catch either text.
+    await expect(page.getByRole("status").filter({ hasText: "All changes saved" })).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 1 Filled");
 
     // Navigate to page 2
@@ -200,6 +202,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       .filter({ hasText: /^Strongly agree$/ })
       .first()
       .click();
+    await expect(page.getByRole("status").filter({ hasText: "All changes saved" })).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 2 Partially Filled");
 
     // Navigate to page 3

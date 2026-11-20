@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { Model, ValueChangedEvent } from "survey-core";
+import { useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { CompleteEvent, Model, ValueChangedEvent } from "survey-core";
 import { Survey, PopupSurvey } from "survey-react-ui";
 import { useColorMode } from "@/components/ui/color-mode";
 import { DefaultDark, DefaultLight } from "survey-core/themes";
@@ -23,10 +23,16 @@ interface SurveyComponentProps {
   titleTag?: "h1" | "div";
   isPopup?: boolean;
   isExpanded?: boolean;
-  onComplete?: (survey: Model) => void;
+  onComplete?: (survey: Model, options: CompleteEvent) => void;
   onValueChanged?: (survey: Model, options: ValueChangedEvent) => void;
   initialData?: Json;
   readOnly?: boolean;
+  /**
+   * Holds the live SurveyJS model so the parent can set `data` explicitly (for example after
+   * fetching a submitted row that this tab may no longer edit). Becoming read-only never updates
+   * the model by itself.
+   */
+  surveyModelRef?: MutableRefObject<Model | null>;
 }
 
 export default function SurveyComponent({
@@ -38,7 +44,8 @@ export default function SurveyComponent({
   onComplete,
   onValueChanged,
   initialData,
-  readOnly = false
+  readOnly = false,
+  surveyModelRef
 }: SurveyComponentProps) {
   // Get color mode to determine theme
   const { colorMode } = useColorMode();
@@ -129,11 +136,9 @@ export default function SurveyComponent({
   //     behind them, so a late-arriving one must never win. This is the race
   //     the page hits on load: the survey renders before the student's saved
   //     response has been fetched, so answers given in that window would be
-  //     overwritten when it lands.
-  //
-  // Read-only renderers (staff viewing a submitted response) are exempt from
-  // guard 2 — there are no local edits to protect and the viewer legitimately
-  // swaps between responses.
+  //     overwritten when it lands. The same guard applies when the form becomes
+  //     read-only (including the temporary lock while Complete is in flight):
+  //     locking alone must not change the model's data.
   const appliedDataKeyRef = useRef<string | null>(null);
   const hasLocalEditsRef = useRef(false);
 
@@ -143,6 +148,14 @@ export default function SurveyComponent({
     appliedDataKeyRef.current = null;
     hasLocalEditsRef.current = false;
   }, [survey]);
+
+  useEffect(() => {
+    if (!surveyModelRef) return;
+    surveyModelRef.current = survey;
+    return () => {
+      if (surveyModelRef.current === survey) surveyModelRef.current = null;
+    };
+  }, [survey, surveyModelRef]);
 
   useEffect(() => {
     const markEdited = () => {
@@ -158,10 +171,10 @@ export default function SurveyComponent({
     if (initialData === undefined) return;
     const dataKey = JSON.stringify(initialData);
     if (dataKey === appliedDataKeyRef.current) return;
-    if (hasLocalEditsRef.current && !readOnly) return;
+    if (hasLocalEditsRef.current) return;
     appliedDataKeyRef.current = dataKey;
     survey.data = initialData;
-  }, [initialData, survey, readOnly]);
+  }, [initialData, survey]);
 
   useEffect(() => {
     survey.readOnly = !!readOnly;
