@@ -61,11 +61,17 @@ test.describe("Exam grading OCR pipeline", () => {
     expect(examErr).toBeNull();
     expect(examId).toBeTruthy();
 
+    // The worker OCRs the template page before matching (#1292), so the image has to exist.
+    const templatePath = `classes/${course.id}/exams/${examId}/template/page-1.png`;
+    const templateUp = await supabase.storage
+      .from("exam-templates")
+      .upload(templatePath, PNG_1x1, { contentType: "image/png", upsert: true });
+    expect(templateUp.error).toBeNull();
     await supabase.from("exam_template_pages").insert({
       class_id: course.id,
       exam_id: examId as number,
       page_number: 1,
-      image_path: `classes/${course.id}/exams/${examId}/template/page-1.png`,
+      image_path: templatePath,
       width: 1000,
       height: 1400
     });
