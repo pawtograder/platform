@@ -53,15 +53,24 @@ describe("useOnboardingHint", () => {
     expect(result.current.newRequest.open).toBe(true);
   });
 
-  it("opens the staff-on-duty hint when staff come on duty while the page is open", () => {
-    // The header asks for "no-staff-on-duty" until a shift starts, then for "staff-on-duty".
-    const { result, rerender } = renderHook(({ id }: { id: OnboardingHintId }) => useOnboardingHint(id), {
-      initialProps: { id: "no-staff-on-duty" as OnboardingHintId }
-    });
+  it("keeps the New Request hint open on every render when staff come on duty while the page is open", () => {
+    // The header asks for "no-staff-on-duty" until a shift starts, then for "staff-on-duty". If one
+    // render in between reported the hint closed, the popover would close and not open again.
+    const opens: boolean[] = [];
+    const { result, rerender } = renderHook(
+      ({ id }: { id: OnboardingHintId }) => {
+        const hint = useOnboardingHint(id);
+        opens.push(hint.open);
+        return hint;
+      },
+      { initialProps: { id: "no-staff-on-duty" as OnboardingHintId } }
+    );
     expect(result.current.open).toBe(true);
 
+    const rendersBeforeSwitch = opens.length;
     rerender({ id: "staff-on-duty" });
     expect(result.current.open).toBe(true);
+    expect(opens.slice(rendersBeforeSwitch)).not.toContain(false);
   });
 
   it("closes every hint once the student clicks New Request, and saves that", () => {

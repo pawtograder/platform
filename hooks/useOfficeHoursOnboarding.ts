@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useConnectionStatus, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import {
@@ -98,11 +98,20 @@ export function useOnboardingHint(id: OnboardingHintId | null): { open: boolean;
     () => 0
   );
 
+  // The id that this component's effect registered last. When `id` changes, for example from
+  // "no-staff-on-duty" to "staff-on-duty" when a TA starts working, the store still holds the old
+  // id until the effect runs again. Counting the store alone, the old id would win for one render
+  // and `open` would be false. The popover closes on that render and doesn't open again. So `open`
+  // counts this component's new id in place of its old one.
+  const registeredId = useRef<OnboardingHintId | null>(null);
+
   useEffect(() => {
     if (id === null) return;
+    registeredId.current = id;
     wanted.set(id, (wanted.get(id) ?? 0) + 1);
     notify();
     return () => {
+      registeredId.current = null;
       const remaining = (wanted.get(id) ?? 1) - 1;
       if (remaining <= 0) wanted.delete(id);
       else wanted.set(id, remaining);
@@ -116,6 +125,9 @@ export function useOnboardingHint(id: OnboardingHintId | null): { open: boolean;
     notify();
   }, [id]);
 
-  const open = id !== null && hintToShow(new Set(wanted.keys()), dismissed) === id;
+  const candidates = new Set(wanted.keys());
+  if (registeredId.current !== null && registeredId.current !== id) candidates.delete(registeredId.current);
+  if (id !== null) candidates.add(id);
+  const open = id !== null && hintToShow(candidates, dismissed) === id;
   return { open, dismiss };
 }
