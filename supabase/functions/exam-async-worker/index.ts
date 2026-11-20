@@ -290,11 +290,20 @@ async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs)
   const result = await provider.ocrImage(img);
   // Only while the page is still in this batch: if staff moved it during the OCR call, the result
   // belongs to no queued work and is dropped (a zero-row update is not an error).
+  //
+  // And only while the page has no OCR yet: the first result written for a page is the one kept
+  // (#1158). A reader whose lease lapsed during the provider call, or a second process_page for the
+  // same page, may finish after another result was stored and match or finalize read it; replacing
+  // it would change, under them, the words they grouped, identified and graded on. The same rule the
+  // page guard (20261118150200) applies to staff. This is not claim ownership: an expired holder that
+  // finishes first still writes. Every result is OCR of the same image, so which one is kept does
+  // not matter; that it then stays the same does.
   const { error: updErr } = await admin
     .from("exam_scan_pages")
     .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
     .eq("id", args.scan_page_id)
-    .eq("batch_id", batchId);
+    .eq("batch_id", batchId)
+    .is("ocr_data", null);
   // Throw on write failure so the message is requeued, not archived (would lose the OCR).
   if (updErr) throw new Error(`persist OCR for scan page ${args.scan_page_id} failed: ${updErr.message}`);
 }
