@@ -3,6 +3,7 @@
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { WorkspaceOpenRequest } from "./FunctionTypes.d.ts";
 import { coderConfig } from "./CoderWrapper.ts";
+import { forgejoConfig } from "./ForgejoWrapper.ts";
 import {
   type Budget,
   budgetFetch,
@@ -219,6 +220,29 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
         await admin.rpc("coder_workspace_deletion_date", { p_workspace_id: workspaceRowId }),
         "Deletion date"
       );
+    },
+    async getForgejoLogin(userId, instanceUrl) {
+      const row = check(
+        await admin
+          .from("git_accounts")
+          .select("login")
+          .eq("user_id", userId)
+          .eq("provider", "forgejo")
+          .eq("instance_url", instanceUrl)
+          .maybeSingle(),
+        "Forgejo account lookup"
+      );
+      return row?.login ?? null;
+    },
+    async recordForgejoToken(userId, repositoryId, instanceUrl) {
+      check(
+        await admin.rpc("record_forgejo_repo_token", {
+          p_user_id: userId,
+          p_repository_id: repositoryId,
+          p_instance_url: instanceUrl
+        }),
+        "Forgejo token record"
+      );
     }
   };
 }
@@ -248,8 +272,8 @@ export async function workspaceRequestContext(
   if (!data?.user?.email) throw new SecurityError("User not found");
 
   const config = coderConfig();
-  const forgejoUrl = Deno.env.get("FORGEJO_URL")?.replace(/\/+$/, "");
-  if (!config || !forgejoUrl) {
+  const forgejo = forgejoConfig();
+  if (!config || !forgejo) {
     throw new UserVisibleError("Coder workspaces are not set up on this deployment", 503);
   }
   const admin = budgetClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, budget);
@@ -258,7 +282,12 @@ export async function workspaceRequestContext(
     "User lookup"
   )?.name;
   return {
-    deps: { db: supabaseWorkspaceDb(admin), coder: { ...config, fetch: budgetFetch(budget) }, forgejoUrl, budget },
+    deps: {
+      db: supabaseWorkspaceDb(admin),
+      coder: { ...config, fetch: budgetFetch(budget) },
+      forgejo: { ...forgejo, fetch: budgetFetch(budget) },
+      budget
+    },
     caller: { userId: data.user.id, email: data.user.email, name: name ?? null },
     request
   };

@@ -3456,11 +3456,10 @@ apps_has "coder oidc: that claim is read from the access token" yes 'CODER_OIDC_
 
 apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'" \
   --show-only templates/coder-bootstrap.yaml
-apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
+apps_has "template: no external auth variable, since Forgejo tokens come from Coder secrets" no 'external_auth_id' \
   --show-only templates/coder-bootstrap.yaml
-apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
-  --set coderBootstrap.workspaces.externalAuthId=git-school --set coder.externalAuth.forgejo.id=git-school \
-  --show-only templates/coder-bootstrap.yaml
+apps_refused "template: the removed externalAuthId setting is refused" \
+  "coderBootstrap.workspaces.externalAuthId was removed" --set coderBootstrap.workspaces.externalAuthId=forgejo
 apps_has "template: workspaces default to the chart's coder-workspace image" yes \
   "image: \"ghcr.io/pawtograder/coder-workspace:$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART/Chart.yaml")\"" \
   --show-only templates/coder-bootstrap.yaml
@@ -3542,7 +3541,7 @@ apps_has "external auth: scopes are spelled out, without Coder's stray space" ye
   'CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"' "${EA[@]}" \
   --show-only templates/app-databases.yaml
 apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: "git-school"' "${EA[@]}" \
-  --set coder.externalAuth.forgejo.id=git-school --set coderBootstrap.workspaces.externalAuthId=git-school \
+  --set coder.externalAuth.forgejo.id=git-school \
   --show-only templates/app-databases.yaml
 apps_has "external auth: the ExternalSecret maps OpenBao's client to Coder's env" yes \
   "secretKey: CODER_EXTERNAL_AUTH_0_CLIENT_SECRET" "${EA[@]}" "${EA_ES[@]}" \
@@ -3559,9 +3558,6 @@ apps_refused "external auth: with Forgejo's OAuth2 provider off is refused" \
   "needs Forgejo's OAuth2 provider" "${EA[@]}" --set forgejo.gitea.config.oauth2.ENABLED=false
 apps_refused "external auth: an id that isn't a path segment is refused" \
   "coder.externalAuth.forgejo.id must be lowercase letters" "${EA[@]}" --set coder.externalAuth.forgejo.id=Forgejo/x
-apps_refused "external auth: a template asking for another provider is refused" \
-  "workspaces would ask Coder for a provider that doesn't exist" "${EA[@]}" \
-  --set coderBootstrap.workspaces.externalAuthId=gitea
 apps_refused "external auth: an overlay dropping the Secret from envFrom is refused" \
   "coder.coder.envFrom is missing pawtograder-coder-external-auth" "${EA[@]}" \
   --set 'coder.coder.envFrom[0].configMapRef.name=pawtograder-coder-env' \

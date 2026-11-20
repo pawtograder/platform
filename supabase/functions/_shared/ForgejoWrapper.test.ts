@@ -17,11 +17,13 @@ import {
   type ForgejoConfig,
   getCommit,
   grantWrite,
+  IDLE_TOKEN_MS,
   mintRepoToken,
   readFile,
   REPLACED_TOKEN_GRACE_MS,
   repoPath,
   revokeAllCoderTokens,
+  revokeIdleTokens,
   revokeReplacedTokens,
   revokeRepoToken,
   startGrading,
@@ -306,14 +308,42 @@ Deno.test("revokeRepoToken: keeps a token minted after the cutoff, so a re-mint 
   });
 });
 
+Deno.test(
+  "revokeIdleTokens: revokes other repositories whose newest token is IDLE_TOKEN_MS old, never the kept one",
+  async () => {
+    const idleOld = tokenAt(420, NOW - IDLE_TOKEN_MS - 1);
+    const idle = tokenAt(420, NOW - IDLE_TOKEN_MS, "bbbb0000");
+    const usedOld = tokenAt(421, NOW - 2 * IDLE_TOKEN_MS);
+    const used = tokenAt(421, NOW - IDLE_TOKEN_MS + 1);
+    const kept = tokenAt(42, NOW - 3 * IDLE_TOKEN_MS);
+    const list = [idleOld, idle, usedOld, used, kept, "pawtograder-coder-422-garbage", "laptop"].map((name) => ({
+      name
+    }));
+    await withForgejo([ok(list), noContent(), notFound()], async (calls) => {
+      const live = await revokeIdleTokens(config, "alex.kim", 42, NOW);
+      assertEquals([...live].sort(), [42, 421]);
+      assertEquals(
+        calls.slice(1).map((c) => [c.method, decodeURIComponent(c.url.split("/tokens/")[1])]),
+        [
+          ["DELETE", idleOld],
+          ["DELETE", idle]
+        ]
+      );
+    });
+  }
+);
+
 Deno.test("revokeAllCoderTokens: deletes only workspace tokens, across pages", async () => {
   const page1 = Array.from({ length: 50 }, (_, i) => ({ name: i % 2 ? `pawtograder-coder-${i}` : `laptop-${i}` }));
   const page2 = [{ name: "pawtograder-coder-900" }, { name: "my-own-token" }];
-  await withForgejo([ok(page1), ok(page2), ...Array.from({ length: 26 }, noContent)], async (calls) => {
+  // Page 1 is read again after the last page, to confirm nothing changed during the scan.
+  await withForgejo([ok(page1), ok(page2), ok(page1), ...Array.from({ length: 26 }, noContent)], async (calls) => {
     assertEquals(await revokeAllCoderTokens(config, "alex.kim"), 26);
-    assertEquals(new URL(calls[0].url).searchParams.get("page"), "1");
-    assertEquals(new URL(calls[1].url).searchParams.get("page"), "2");
-    const deleted = calls.slice(2).map((c) => decodeURIComponent(c.url.split("/tokens/")[1]));
+    assertEquals(
+      calls.slice(0, 3).map((c) => new URL(c.url).searchParams.get("page")),
+      ["1", "2", "1"]
+    );
+    const deleted = calls.slice(3).map((c) => decodeURIComponent(c.url.split("/tokens/")[1]));
     assertEquals(deleted.length, 26);
     assertEquals(
       deleted.every((n) => n.startsWith("pawtograder-coder-")),
@@ -321,7 +351,7 @@ Deno.test("revokeAllCoderTokens: deletes only workspace tokens, across pages", a
     );
     assertEquals(deleted.includes("pawtograder-coder-900"), true);
     assertEquals(
-      calls.slice(2).every((c) => c.method === "DELETE"),
+      calls.slice(3).every((c) => c.method === "DELETE"),
       true
     );
   });
@@ -774,6 +804,258 @@ Deno.test("startGrading: reuses an existing tag at the commit, and replaces one 
         "The submission tag points at another commit"
       );
       assert(!calls.some((c) => c.url.endsWith("/dispatches")), "dispatched at the wrong commit");
+    }
+  );
+});
+
+/**
+ * A Forgejo token list paged like the real one: newest first, with X-Total-Count. `beforePage` runs before a
+ * page is answered, as a concurrent request would. `beforeCount` runs between a page's rows and its count, which
+ * Forgejo's FindAndCount reads in two queries. `order` picks a page's rows, by default the list's own order.
+ */
+async function withTokenList(
+  tokens: string[],
+  beforePage: (page: number, tokens: string[]) => void,
+  fn: (tokens: string[], pagesRead: number[]) => Promise<void>,
+  beforeCount: (page: number, tokens: string[]) => void = () => {},
+  order: (page: number, limit: number, tokens: string[]) => string[] = (page, limit, tokens) =>
+    tokens.slice((page - 1) * limit, page * limit)
+) {
+  const realFetch = globalThis.fetch;
+  const pagesRead: number[] = [];
+  // Forgejo's ids only grow: the oldest token, last in the list, has the lowest, and a later mint the next one.
+  const ids = new Map(tokens.map((name, i) => [name, tokens.length - i]));
+  const idOf = (name: string) => {
+    if (!ids.has(name)) ids.set(name, Math.max(0, ...ids.values()) + 1);
+    return ids.get(name)!;
+  };
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const del = url.pathname.match(/\/tokens\/([^/]+)$/);
+    if (method === "DELETE" && del) {
+      const i = tokens.indexOf(decodeURIComponent(del[1]));
+      if (i >= 0) tokens.splice(i, 1);
+      return Promise.resolve(new Response(null, { status: i >= 0 ? 204 : 404 }));
+    }
+    const page = Number(url.searchParams.get("page"));
+    const limit = Number(url.searchParams.get("limit"));
+    beforePage(page, tokens);
+    pagesRead.push(page);
+    const body = order(page, limit, tokens).map((name) => ({ id: idOf(name), name }));
+    beforeCount(page, tokens);
+    return Promise.resolve(new Response(JSON.stringify(body), { headers: { "X-Total-Count": String(tokens.length) } }));
+  }) as typeof fetch;
+  try {
+    await fn(tokens, pagesRead);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+Deno.test("token list: a deletion between page reads doesn't hide a token; the list is read again", async () => {
+  const now = Date.now();
+  // Newest first: 50 of repository 7's tokens, then repository 9's, the 51st.
+  const others = Array.from({ length: 50 }, (_, i) => coderTokenName(7, now - i));
+  const target = coderTokenName(9, now - 60_000);
+  let raced = false;
+  await withTokenList(
+    [...others, target],
+    (page, tokens) => {
+      // Another request revokes repository 7's tokens after page 1 was read: page 2 would be empty.
+      if (page === 2 && !raced) {
+        raced = true;
+        tokens.splice(0, 50);
+      }
+    },
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assertEquals(tokens, [], "repository 9's token is revoked");
+      assertEquals(pagesRead, [1, 2, 1]);
+    }
+  );
+});
+
+Deno.test("token list: a deletion between page 1's rows and its count doesn't hide a token", async () => {
+  const now = Date.now();
+  // The review's case: page 1 reads 50 of 51 tokens, then those 50 are revoked before its count is read, so
+  // page 1 and page 2 both report a count of 1.
+  const others = Array.from({ length: 50 }, (_, i) => coderTokenName(7, now - i));
+  const target = coderTokenName(9, now - 60_000);
+  let raced = false;
+  await withTokenList(
+    [...others, target],
+    () => {},
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assertEquals(tokens, [], "repository 9's token is revoked");
+      assertEquals(pagesRead, [1, 2, 1, 1], "page 1 read again shows the change, and the list is read again");
+    },
+    (page, tokens) => {
+      if (page === 1 && !raced) {
+        raced = true;
+        tokens.splice(0, 50);
+      }
+    }
+  );
+});
+
+Deno.test("token list: a deletion that a mint hides from the count doesn't hide a token", async () => {
+  const now = Date.now();
+  // 101 tokens, the target 51st. Before page 2 one of page 1's tokens is revoked, so the target moves onto
+  // page 1's end, already read. A mint lands before page 2's count, which is 101 again.
+  const names = Array.from({ length: 101 }, (_, i) => coderTokenName(i === 50 ? 9 : 7, now - 60_000 - i));
+  const target = names[50];
+  let raced = false;
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 2 && !raced) tokens.splice(0, 1);
+    },
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assert(!tokens.includes(target), "repository 9's token is revoked");
+      assertEquals(pagesRead.slice(0, 4), [1, 2, 3, 1], "the changed page 1 sends the scan round again");
+    },
+    (page, tokens) => {
+      if (page === 2 && !raced) {
+        raced = true;
+        tokens.unshift(coderTokenName(7, now));
+      }
+    }
+  );
+});
+
+Deno.test("token list: tokens tied on created_unix, ordered differently by two pages, don't hide one", async () => {
+  const now = Date.now();
+  // The 50th and 51st tokens were created in the same second. Page 1 puts the 50th last; page 2's query
+  // orders the tie the other way, so it repeats the 50th and leaves out the 51st, the one to revoke. The
+  // count and the re-read of page 1 both match.
+  const names = Array.from({ length: 51 }, (_, i) => coderTokenName(i === 50 ? 9 : 7, now - 60_000 - i));
+  const target = names[50];
+  const limits: number[] = [];
+  await withTokenList(
+    names,
+    () => {},
+    async (tokens) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assert(!tokens.includes(target), "repository 9's token is revoked");
+      assertEquals(limits.slice(0, 3), [50, 50, 50], "the first scan reads pages 1, 2 and 1 again");
+      assertEquals(limits[3], 49, "the scan that saw 50 names of 51 is read again with other page boundaries");
+    },
+    () => {},
+    (page, limit, tokens) => {
+      limits.push(limit);
+      const rows = tokens.slice((page - 1) * limit, page * limit);
+      return page === 2 && limit === 50 ? [tokens[49]] : rows;
+    }
+  );
+});
+
+Deno.test("token list: a tie that splits every page boundary tried is an error, and nothing is revoked", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: 120 }, (_, i) => coderTokenName(9, now - 60_000 - i));
+  await withTokenList(
+    names,
+    () => {},
+    async (tokens) => {
+      await assertRejects(() => revokeRepoToken(config, "alex.kim", 9), Error, "kept changing");
+      assertEquals(tokens.length, 120, "nothing deleted from a list that wasn't read whole");
+    },
+    () => {},
+    // Every later page repeats the last row of the page before in place of its own first one.
+    (page, limit, tokens) => {
+      const rows = tokens.slice((page - 1) * limit, page * limit);
+      return page === 1 ? rows : [tokens[(page - 1) * limit - 1], ...rows.slice(1)];
+    }
+  );
+});
+
+Deno.test("token list: a MAX_RESPONSE_ITEMS below the page size asked for still reads the whole list", async () => {
+  const now = Date.now();
+  // Forgejo caps limit at 20 here: page 1 comes back short, but X-Total-Count says 21.
+  const names = Array.from({ length: 21 }, (_, i) => coderTokenName(i === 20 ? 9 : 7, now - 60_000 - i));
+  const target = names[20];
+  await withTokenList(
+    names,
+    () => {},
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assert(!tokens.includes(target), "repository 9's token, the 21st, is revoked");
+      assertEquals(pagesRead, [1, 2, 1]);
+    },
+    () => {},
+    (page, _limit, tokens) => tokens.slice((page - 1) * 20, page * 20)
+  );
+});
+
+// The review's interleaving: 101 tokens created in one second. After pages 1 and 2 are read, token 51 is revoked
+// and a token is minted in the same second, which Forgejo's page-3 query places last. Token 101 moves onto page 2,
+// read already, and page 3 holds the new token instead. The count, page 1 and the number of names all match.
+const TIED = 101;
+
+Deno.test("token list: a mint tied with the tokens at a page boundary, past page 1, doesn't hide a token", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: TIED }, (_, i) => coderTokenName(7, now - 60_000 - i));
+  const last = names[TIED - 1];
+  const minted = coderTokenName(7, now);
+  let raced = false;
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 3 && !raced) {
+        raced = true;
+        tokens.splice(50, 1);
+        tokens.unshift(minted);
+      }
+    },
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeAllCoderTokens(config, "alex.kim"), TIED);
+      assert(!tokens.includes(last), "token 101 is revoked");
+      assertEquals(tokens, []);
+      assertEquals(pagesRead.slice(0, 4), [1, 2, 3, 1], "the new token's id sends the scan round again");
+    },
+    () => {},
+    // The first scan's queries (50 a page) order the tie with the new token last; the retry's put it first.
+    (page, limit, tokens) => {
+      const view = limit === 50 && tokens[0] === minted ? [...tokens.slice(1), minted] : tokens;
+      return view.slice((page - 1) * limit, page * limit);
+    }
+  );
+});
+
+Deno.test("token list: a mint that every query places past page 1 is an error, and nothing is revoked", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: TIED }, (_, i) => coderTokenName(7, now - 60_000 - i));
+  let raced = false;
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 3 && !raced) {
+        raced = true;
+        tokens.splice(50, 1);
+        tokens.push(coderTokenName(7, now));
+      }
+    },
+    async (tokens) => {
+      await assertRejects(() => revokeAllCoderTokens(config, "alex.kim"), Error, "kept changing");
+      assertEquals(tokens.length, TIED, "nothing deleted from a list that couldn't be shown whole");
+    }
+  );
+});
+
+Deno.test("token list: a list that keeps changing is an error, so nothing is taken as revoked", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: 60 }, (_, i) => coderTokenName(9, now - 60_000 - i));
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 2) tokens.pop();
+    },
+    async (tokens) => {
+      await assertRejects(() => revokeRepoToken(config, "alex.kim", 9), Error, "kept changing");
+      assertEquals(tokens.length, 57, "nothing deleted from a list that wasn't read whole");
+      await assertRejects(() => revokeIdleTokens(config, "alex.kim", 1, now + IDLE_TOKEN_MS), Error, "kept changing");
     }
   );
 });

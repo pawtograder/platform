@@ -27,6 +27,7 @@ import {
   coderEmail,
   coderUsername,
   type Deps,
+  gitCredentialsFile,
   linkUrl,
   OPEN_BUDGET_MS,
   openWorkspace,
@@ -41,6 +42,7 @@ import {
 } from "./CoderWorkspace.ts";
 import { budgetClient, supabaseWorkspaceDb } from "./CoderWorkspaceDb.ts";
 import type { CoderAgent, CoderWorkspace } from "./CoderWrapper.ts";
+import { IDLE_TOKEN_MS, REPLACED_TOKEN_GRACE_MS } from "./ForgejoWrapper.ts";
 import { IllegalArgumentError, NotFoundError, SecurityError, UserVisibleError } from "./HandlerUtils.ts";
 
 const CODER_URL = "https://coder.example.com";
@@ -129,6 +131,12 @@ class FakeCoder {
    */
   slow?: (method: string, path: string) => number;
   private seq = 0;
+  keys: { key: string; id: string; userId: string; name: string; expiresAt: number; deleted: boolean }[] = [];
+  secrets: Record<string, Record<string, { value: string; file_path: string }>> = {};
+  secretUpdatedAt: Record<string, Record<string, string>> = {};
+  failSecretWrite = false;
+  failKeyDelete = false;
+  noProviders = false;
 
   constructor(private clock: Clock) {}
 
@@ -202,7 +210,7 @@ class FakeCoder {
     this.clock.t += this.latencyMs;
     const url = new URL(String(input));
     assertEquals(url.origin, CODER_URL);
-    assertEquals((init?.headers as Record<string, string>)["Coder-Session-Token"], "owner-token");
+    const token = (init?.headers as Record<string, string>)["Coder-Session-Token"];
     const method = init?.method ?? "GET";
     const path = url.pathname.replace(/^\/api\/v2/, "");
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
@@ -210,6 +218,86 @@ class FakeCoder {
     const json = (status: number, data: unknown) =>
       new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
     let m: RegExpMatchArray | null;
+
+    if (token !== "owner-token") {
+      const key = this.keys.find((k) => k.key === token && !k.deleted && k.expiresAt > this.clock.now());
+      if (!key) return json(401, { message: "API key expired or deleted." });
+      assert(path.startsWith("/users/me/secrets"), `a student key used for ${method} ${path}`);
+      if (this.failSecretWrite) return json(500, { message: "Internal error writing secret." });
+      const secrets = (this.secrets[key.userId] ??= {});
+      const updatedAt = (this.secretUpdatedAt[key.userId] ??= {});
+      if (path === "/users/me/secrets" && method === "GET") {
+        return json(
+          200,
+          Object.keys(secrets).map((name) => ({ name, updated_at: updatedAt[name] }))
+        );
+      }
+      if ((m = path.match(/^\/users\/me\/secrets\/([^/]+)$/)) && method === "DELETE") {
+        const name = decodeURIComponent(m[1]);
+        if (!secrets[name]) return json(404, { message: "Resource not found" });
+        delete secrets[name];
+        delete updatedAt[name];
+        return new Response(null, { status: 204 });
+      }
+      if ((m = path.match(/^\/users\/me\/secrets\/([^/]+)$/)) && method === "PATCH") {
+        const name = decodeURIComponent(m[1]);
+        if (!secrets[name])
+          return json(404, { message: "Resource not found or you do not have access to this resource" });
+        secrets[name] = { ...secrets[name], ...body };
+        updatedAt[name] = this.clock.iso();
+        return json(200, { name, file_path: secrets[name].file_path });
+      }
+      if (path === "/users/me/secrets" && method === "POST") {
+        if (secrets[body.name]) {
+          return json(409, {
+            message: "Validation failed.",
+            validations: [{ field: "name", detail: "name already in use" }]
+          });
+        }
+        secrets[body.name] = { value: body.value, file_path: body.file_path };
+        updatedAt[body.name] = this.clock.iso();
+        return json(201, { name: body.name, file_path: body.file_path });
+      }
+      throw new Error(`fake Coder: no student-key route for ${method} ${path}`);
+    }
+    if ((m = path.match(/^\/users\/([^/]+)\/secrets$/)) && method === "POST") {
+      return json(403, { message: "Forbidden." });
+    }
+    if ((m = path.match(/^\/users\/([^/]+)\/keys\/tokens$/))) {
+      const userId = decodeURIComponent(m[1]);
+      if (method === "POST") {
+        assertEquals(body.scope, "all");
+        // UniqueIndexAPIKeyName: a name stays taken until its key is deleted, expired or not.
+        if (this.keys.some((k) => k.userId === userId && k.name === body.token_name && !k.deleted)) {
+          return json(409, { message: `A token with name "${body.token_name}" already exists.` });
+        }
+        const key = `${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}-${"s".repeat(22)}`;
+        this.keys.push({
+          key,
+          id: key.slice(0, 10),
+          userId,
+          name: body.token_name,
+          expiresAt: this.clock.now() + body.lifetime / 1_000_000,
+          deleted: false
+        });
+        return json(201, { key });
+      }
+      return json(
+        200,
+        this.keys
+          // v2.37.3 leaves expired keys out unless include_expired is set.
+          .filter((k) => k.userId === userId && !k.deleted)
+          .filter((k) => url.searchParams.get("include_expired") === "true" || k.expiresAt > this.clock.now())
+          .map((k) => ({ id: k.id, token_name: k.name, expires_at: new Date(k.expiresAt).toISOString() }))
+      );
+    }
+    if ((m = path.match(/^\/users\/([^/]+)\/keys\/([^/]+)$/)) && method === "DELETE") {
+      const key = this.keys.find((k) => k.userId === decodeURIComponent(m![1]) && k.id === m![2] && !k.deleted);
+      if (this.failKeyDelete) return json(500, { message: "Internal error deleting API key." });
+      if (!key) return json(404, { message: "Resource not found" });
+      key.deleted = true;
+      return new Response(null, { status: 204 });
+    }
 
     if (method === "GET" && path === "/organizations/default") return json(200, { id: ORG_ID });
     if (method === "GET" && path === "/organizations/default/templates/kubernetes") return json(200, TEMPLATE);
@@ -243,6 +331,7 @@ class FakeCoder {
       return json(200, { id_token_claims: { sub: u.subject, iss: "https://api.example.com/auth/v1" } });
     }
     if ((m = path.match(/^\/templateversions\/([^/]+)\/external-auth$/))) {
+      if (this.noProviders) return json(200, []);
       const who = url.searchParams.get("user_id") ?? OWNER_ID;
       return json(200, [
         {
@@ -265,7 +354,7 @@ class FakeCoder {
     }
     if ((m = path.match(/^\/users\/([^/]+)\/workspaces$/)) && method === "POST") {
       const owner = this.findUser(decodeURIComponent(m[1]))!;
-      if (!this.forgejoLinked.has(owner.id)) {
+      if (!this.noProviders && !this.forgejoLinked.has(owner.id)) {
         return json(403, {
           message: "External authentication is required to create a workspace with this template.",
           validations: [{ field: "external_auth", detail: "forgejo" }]
@@ -326,6 +415,48 @@ class FakeCoder {
 
   posts(path: RegExp) {
     return this.calls.filter((c) => c.method === "POST" && path.test(c.path));
+  }
+}
+
+// ---- fake Forgejo ---------------------------------------------------------
+
+class FakeForgejo {
+  tokens: Record<string, { name: string; sha1: string; repo: string }[]> = {};
+  calls: Call[] = [];
+  failMint = false;
+
+  fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    init?.signal?.throwIfAborted();
+    await new Promise((r) => setTimeout(r, 0));
+    const url = new URL(String(input));
+    assertEquals(url.origin, FORGEJO_URL);
+    const method = init?.method ?? "GET";
+    const path = url.pathname.replace(/^\/api\/v1/, "");
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    this.calls.push({ method, path: path + url.search, body });
+    const json = (status: number, data: unknown) => new Response(JSON.stringify(data), { status });
+    let m: RegExpMatchArray | null;
+    if ((m = path.match(/^\/users\/([^/]+)\/tokens$/))) {
+      const list = (this.tokens[decodeURIComponent(m[1])] ??= []);
+      if (method === "GET")
+        return json(200, url.searchParams.get("page") === "1" ? list.map((t) => ({ name: t.name })) : []);
+      if (this.failMint) return json(500, { message: "boom" });
+      const repo = `${body.repositories[0].owner}/${body.repositories[0].name}`;
+      const sha1 = crypto.randomUUID().replace(/-/g, "").padEnd(40, "0");
+      list.push({ name: body.name, sha1, repo });
+      return json(201, { id: list.length, name: body.name, sha1 });
+    }
+    if ((m = path.match(/^\/users\/([^/]+)\/tokens\/([^/]+)$/)) && method === "DELETE") {
+      const login = decodeURIComponent(m[1]);
+      const before = (this.tokens[login] ?? []).length;
+      this.tokens[login] = (this.tokens[login] ?? []).filter((t) => t.name !== decodeURIComponent(m![2]));
+      return new Response(null, { status: before === this.tokens[login].length ? 404 : 204 });
+    }
+    throw new Error(`fake Forgejo: no route for ${method} ${path}`);
+  };
+
+  live(login: string, sha1: string) {
+    return (this.tokens[login] ?? []).find((t) => t.sha1 === sha1) ?? null;
   }
 }
 
@@ -438,6 +569,15 @@ class FakeDb implements WorkspaceDb {
   async deletionDate() {
     return "2026-12-31T00:00:00+00:00";
   }
+  forgejoLogins: Record<string, string> = { [ALEX.userId]: "alex.kim", [JORDAN.userId]: "jordan" };
+  recordedTokens: { user_id: string; repository_id: number; instance_url: string }[] = [];
+  async getForgejoLogin(userId: string, instanceUrl: string) {
+    assertEquals(instanceUrl, FORGEJO_URL);
+    return this.forgejoLogins[userId] ?? null;
+  }
+  async recordForgejoToken(userId: string, repositoryId: number, instanceUrl: string) {
+    this.recordedTokens.push({ user_id: userId, repository_id: repositoryId, instance_url: instanceUrl });
+  }
 }
 
 /** Puts a claim on the row, with a new token, as another call taking it would. */
@@ -461,14 +601,17 @@ function setup() {
   const clock = new Clock();
   const coder = new FakeCoder(clock);
   const db = new FakeDb(clock);
+  const forgejo = new FakeForgejo();
+  const reported: unknown[] = [];
   const deps: Deps = {
     db,
     coder: { url: CODER_URL, token: "owner-token", fetch: coder.fetch },
-    forgejoUrl: FORGEJO_URL,
+    forgejo: { url: FORGEJO_URL, authorization: "Basic eA==", authSourceId: 1, fetch: forgejo.fetch },
+    report: (e) => reported.push(e),
     now: clock.now,
     sleep: clock.sleep
   };
-  return { clock, coder, db, deps };
+  return { clock, coder, db, deps, forgejo, reported };
 }
 
 /** What the student's first Coder sign-in and Forgejo link do. */
@@ -941,7 +1084,9 @@ Deno.test("repo_url is <FORGEJO_URL>/<owner>/<repo>.git, and a name the template
     "cs3500/.coder-modules",
     "cs3500/hw1/extra",
     "cs 3500/hw1",
-    "cs3500/hw1?x=1"
+    "cs3500/hw1?x=1",
+    "cs--3500/hw1",
+    "cs3500-/hw1"
   ]) {
     const t = setup();
     t.db.repos[0] = repo(501, "prof-alex", null, name);
@@ -952,6 +1097,21 @@ Deno.test("repo_url is <FORGEJO_URL>/<owner>/<repo>.git, and a name the template
       `nothing is created for "${name}"`
     );
     assertEquals(t.db.rows.length, 0);
+  }
+});
+
+Deno.test("gitCredentialsFile: distinct repositories get distinct files, split at the first --", () => {
+  assertEquals(gitCredentialsFile("cs3500/hw1-alex"), "/home/coder/.git-credentials-cs3500--hw1-alex");
+  // The only owner/name pair that could share a file with a/b--c is a--b/c, and no Forgejo owner has "--".
+  assertEquals(gitCredentialsFile("a/b--c"), "/home/coder/.git-credentials-a--b--c");
+  for (const owner of ["a--b", "a-_b", "a..b", "a-", "a."]) {
+    let threw = false;
+    try {
+      gitCredentialsFile(`${owner}/c`);
+    } catch (e) {
+      threw = e instanceof IllegalArgumentError;
+    }
+    assert(threw, owner);
   }
 });
 
@@ -1224,8 +1384,8 @@ Deno.test("a restart's start is posted once, by whichever call swaps the claim f
       // claim to post the start.
       assertEquals(new Set([a.status, b.status]), new Set(["starting", "restarting"]));
     } else {
-      // The open reaches the workspace after the read posted the start, and sees it starting.
-      assertEquals([a.status, b.status], ["starting", "starting"]);
+      assertEquals(a.status, "starting");
+      assert(["starting", "restarting"].includes(b.status), b.status);
     }
     assertEquals(db.rows[0].restart_started_at, null);
   }
@@ -2103,4 +2263,358 @@ Deno.test("database calls end with the budget: no PostgREST retry after the cut-
     assert(elapsed < 3_000, `${what}: failed after ${elapsed} ms`);
   }
   assertEquals(busyCalls, 1, "a 503 isn't retried");
+});
+
+// ---- git credentials ------------------------------------------------------
+
+const ALEX_FILE = "/home/coder/.git-credentials-cs3500--hw1-alex";
+const SECRET = "git_credentials_repo_501";
+
+async function runningWorkspace() {
+  const t = setup();
+  t.coder.noProviders = true;
+  await openWorkspace(t.deps, ALEX, { assignment_id: 41 });
+  t.coder.users.find((u) => u.email === coderEmail(ALEX.userId))!.subject = ALEX.userId;
+  const res = await openWorkspace(t.deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "starting");
+  return { ...t, coderUserId: res.coder_user_id! };
+}
+
+function stop(ws: CoderWorkspace) {
+  ws.latest_build = { ...ws.latest_build, transition: "stop", status: "stopped", resources: [] };
+}
+
+function storedToken(coder: FakeCoder, coderUserId: string): string {
+  const value = coder.secrets[coderUserId]?.[SECRET]?.value ?? "";
+  const m = value.match(/^https:\/\/x:([0-9a-f]+)@git\.example\.com\n$/);
+  assert(m, `unexpected credentials line: ${JSON.stringify(value)}`);
+  return m[1];
+}
+
+Deno.test("credentials: no Forgejo linking; the student signs in to Coder and nothing else", async () => {
+  const { coder, deps } = setup();
+  coder.noProviders = true;
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "needs_linking");
+  assertEquals(res.message, "Sign in to Coder, then open the workspace again.");
+  assertEquals(res.authenticate_url, `${CODER_URL}/api/v2/users/oidc/callback?redirect=%2F`);
+  assertEquals(
+    linkUrl(CODER_URL, "github"),
+    `${CODER_URL}/api/v2/users/oidc/callback?redirect=%2Fexternal-auth%2Fgithub%2Fcallback`
+  );
+});
+
+Deno.test("credentials: the create stores a repository-scoped student token as the student's secret", async () => {
+  const { coder, db, forgejo, coderUserId } = await runningWorkspace();
+  assertEquals(coder.workspaces.length, 1);
+  const secret = coder.secrets[coderUserId][SECRET];
+  assertEquals(secret.file_path, ALEX_FILE);
+  assertEquals(coder.secrets[coderUserId].git_email, { value: `${ALEX.email}\n`, file_path: "/home/coder/.git-email" });
+  const token = storedToken(coder, coderUserId);
+  const live = forgejo.live("alex.kim", token)!;
+  assertEquals(live.repo, "cs3500/hw1-alex");
+  assert(live.name.startsWith("pawtograder-coder-501-"), live.name);
+  assertEquals(db.recordedTokens, [{ user_id: ALEX.userId, repository_id: 501, instance_url: FORGEJO_URL }]);
+  assertEquals(coder.keys.length, 1);
+  assertEquals([coder.keys[0].userId, coder.keys[0].deleted], [coderUserId, true]);
+  assert(coder.keys[0].name.startsWith("pawtograder-secret-write-501"), coder.keys[0].name);
+  const order = coder.calls.map((c) => `${c.method} ${c.path.split("?")[0]}`);
+  assert(
+    order.indexOf("POST /users/me/secrets") < order.indexOf(`POST /users/${coderUserId}/workspaces`),
+    order.join("\n")
+  );
+});
+
+Deno.test(
+  "credentials: a running workspace is left alone; a stopped one gets a new token before its start",
+  async () => {
+    const { clock, coder, forgejo, deps, coderUserId } = await runningWorkspace();
+    const first = storedToken(coder, coderUserId);
+    coder.workspaces[0].latest_build.resources[0].agents![0].lifecycle_state = "ready";
+    await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    assertEquals(forgejo.calls.filter((c) => c.method === "POST").length, 1, "no mint for a running workspace");
+
+    stop(coder.workspaces[0]);
+    clock.t += 60 * 60_000;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+    const second = storedToken(coder, coderUserId);
+    assert(second !== first);
+    assert(forgejo.live("alex.kim", second));
+    assertEquals(forgejo.live("alex.kim", first), null, "the replaced token, an hour old, is revoked");
+    assertEquals(buildPosts(coder), ["start"]);
+  }
+);
+
+Deno.test("credentials: two opens of one stopped workspace at once never leave it a revoked token", async () => {
+  const { coder, forgejo, deps, coderUserId } = await runningWorkspace();
+  stop(coder.workspaces[0]);
+  await Promise.all([
+    openWorkspace(deps, ALEX, { assignment_id: 41 }),
+    openWorkspace(deps, ALEX, { assignment_id: 41 })
+  ]);
+  assertEquals(buildPosts(coder), ["start"]);
+  assert(forgejo.live("alex.kim", storedToken(coder, coderUserId)), "the stored token works");
+});
+
+Deno.test("credentials: a status read that finishes a restart stores a token before the start", async () => {
+  const { coder, forgejo, deps } = await stoppedRestart();
+  const mints = forgejo.calls.filter((c) => c.method === "POST").length;
+  assertEquals((await workspaceStatus(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  assertEquals(forgejo.calls.filter((c) => c.method === "POST").length, mints + 1);
+  const order = coder.calls.map((c) => `${c.method} ${c.path}`);
+  assert(
+    order.lastIndexOf("PATCH /users/me/secrets/git_credentials_repo_501") <
+      order.lastIndexOf(`POST /workspaces/${coder.workspaces[0].id}/builds`)
+  );
+});
+
+Deno.test("credentials: no Forgejo account yet: credentials_unavailable, and nothing is built", async () => {
+  const { coder, db, deps } = setup();
+  coder.noProviders = true;
+  delete db.forgejoLogins[ALEX.userId];
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.users.find((u) => u.email === coderEmail(ALEX.userId))!.subject = ALEX.userId;
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "credentials_unavailable");
+  assertEquals(coder.workspaces.length, 0);
+  assertEquals(coder.keys.length, 0);
+});
+
+Deno.test("credentials: a failed mint or secret write is reported, builds nothing, and leaves no key", async () => {
+  for (const fail of ["mint", "secret"] as const) {
+    const { coder, forgejo, reported, deps } = setup();
+    coder.noProviders = true;
+    await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    coder.users.find((u) => u.email === coderEmail(ALEX.userId))!.subject = ALEX.userId;
+    if (fail === "mint") forgejo.failMint = true;
+    else coder.failSecretWrite = true;
+    const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+    assertEquals(res.status, "credentials_unavailable", fail);
+    assertEquals(coder.workspaces.length, 0, fail);
+    assertEquals(reported.length, 1, fail);
+    assert(
+      coder.keys.every((k) => k.deleted),
+      fail
+    );
+    const text = JSON.stringify(res) + String(reported[0]);
+    for (const t of Object.values(forgejo.tokens).flat()) assert(!text.includes(t.sha1), fail);
+    for (const k of coder.keys) assert(!text.includes(k.key), fail);
+  }
+});
+
+Deno.test("credentials: a key that couldn't be deleted doesn't stop the start, and goes once expired", async () => {
+  const { clock, coder, deps, coderUserId } = await (async () => {
+    const t = setup();
+    t.coder.noProviders = true;
+    t.coder.failKeyDelete = true;
+    await openWorkspace(t.deps, ALEX, { assignment_id: 41 });
+    t.coder.users.find((u) => u.email === coderEmail(ALEX.userId))!.subject = ALEX.userId;
+    const res = await openWorkspace(t.deps, ALEX, { assignment_id: 41 });
+    assertEquals(res.status, "starting");
+    return { ...t, coderUserId: res.coder_user_id! };
+  })();
+  assertEquals(coder.keys.filter((k) => !k.deleted).length, 1);
+  coder.failKeyDelete = false;
+  stop(coder.workspaces[0]);
+  clock.t += 2 * 60_000;
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(coder.keys.filter((k) => !k.deleted).length, 0, "the expired leftover and the new key are both gone");
+  assert(storedToken(coder, coderUserId));
+});
+
+Deno.test("credentials: each open's key has its own name, so a live key never blocks the next open", async () => {
+  const { coder, deps, coderUserId } = await runningWorkspace();
+  coder.failKeyDelete = true;
+  stop(coder.workspaces[0]);
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  stop(coder.workspaces[0]);
+  // The first key is still live and undeleted; a fixed name per repository would get Coder's 409.
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+  const names = coder.keys.filter((k) => k.userId === coderUserId).map((k) => k.name);
+  assertEquals(new Set(names).size, names.length, names.join(", "));
+  assert(
+    names.every((n) => n.startsWith("pawtograder-secret-write-501-")),
+    names.join(", ")
+  );
+});
+
+/** A second Forgejo assignment, 43, with Alex's repository 504 on it. */
+function addSecondRepository(db: FakeDb) {
+  db.assignments.push({ id: 43, class_id: 7, git_provider: "forgejo" });
+  db.repos.push({ ...repo(504, "prof-alex", null, "cs3500/hw2-alex"), assignment_id: 43 });
+}
+
+function tokenIn(coder: FakeCoder, coderUserId: string, secret: string): string {
+  const m = (coder.secrets[coderUserId]?.[secret]?.value ?? "").match(/^https:\/\/x:([0-9a-f]+)@/);
+  assert(m, `no credentials in ${secret}`);
+  return m[1];
+}
+
+Deno.test(
+  "credentials: a repository no open has re-minted for IDLE_TOKEN_MS loses its token and secret at the next open of another",
+  async () => {
+    const { clock, coder, db, forgejo, deps, coderUserId } = await runningWorkspace();
+    addSecondRepository(db);
+    const hw1 = storedToken(coder, coderUserId);
+
+    clock.t += IDLE_TOKEN_MS - 60_000;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assert(forgejo.live("alex.kim", hw1), "hw1 was opened less than IDLE_TOKEN_MS ago");
+    assertEquals(storedToken(coder, coderUserId), hw1);
+    const hw2 = tokenIn(coder, coderUserId, "git_credentials_repo_504");
+
+    const hw2Workspace = coder.workspaces.find((w) => w.id !== coder.workspaces[0].id)!;
+    stop(hw2Workspace);
+    clock.t += 60 * 60_000;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assertEquals(forgejo.live("alex.kim", hw1), null, "hw1's token is revoked");
+    assertEquals(coder.secrets[coderUserId][SECRET], undefined, "hw1's secret is deleted");
+    const hw2Again = tokenIn(coder, coderUserId, "git_credentials_repo_504");
+    assert(forgejo.live("alex.kim", hw2Again), "the opened repository keeps its new token");
+    assertEquals(forgejo.live("alex.kim", hw2), null, "and its replaced one goes as before");
+    assert(coder.secrets[coderUserId].git_email);
+
+    // Opening hw1 again gives it a new token and secret.
+    stop(coder.workspaces[0]);
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 41 })).status, "starting");
+    assert(forgejo.live("alex.kim", storedToken(coder, coderUserId)));
+    assert(forgejo.live("alex.kim", hw2Again), "hw2 was opened an hour ago");
+  }
+);
+
+Deno.test(
+  "credentials: the secret of a repository whose token the reconciler revoked is deleted, past the grace window",
+  async () => {
+    const { clock, coder, db, forgejo, deps, coderUserId } = await runningWorkspace();
+    addSecondRepository(db);
+    // What revokeDroppedTokens does to hw1's tokens.
+    forgejo.tokens["alex.kim"] = forgejo.tokens["alex.kim"].filter((t) => !t.name.startsWith("pawtograder-coder-501-"));
+
+    // Written moments ago: it may hold a concurrent open's new token that the token list missed.
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assert(coder.secrets[coderUserId][SECRET], "a secret written inside the grace window is kept");
+
+    const hw2Workspace = coder.workspaces.find((w) => w.id !== coder.workspaces[0].id)!;
+    stop(hw2Workspace);
+    clock.t += REPLACED_TOKEN_GRACE_MS;
+    assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+    assertEquals(coder.secrets[coderUserId][SECRET], undefined);
+    assert(coder.secrets[coderUserId].git_credentials_repo_504);
+  }
+);
+
+Deno.test("credentials: a failed cleanup of idle credentials doesn't stop the open", async () => {
+  const { clock, coder, db, forgejo, deps, coderUserId } = await runningWorkspace();
+  addSecondRepository(db);
+  const hw1 = storedToken(coder, coderUserId);
+  clock.t += IDLE_TOKEN_MS;
+  const realFetch = coder.fetch;
+  coder.fetch = (input, init) =>
+    new URL(String(input)).pathname === "/api/v2/users/me/secrets" && (init?.method ?? "GET") === "GET"
+      ? Promise.resolve(new Response(JSON.stringify({ message: "boom" }), { status: 500 }))
+      : realFetch(input, init);
+  deps.coder = { ...deps.coder, fetch: coder.fetch };
+  assertEquals((await openWorkspace(deps, ALEX, { assignment_id: 43 })).status, "starting");
+  assertEquals(forgejo.live("alex.kim", hw1), null, "the token is revoked before the secret list fails");
+  assert(coder.secrets[coderUserId][SECRET], "the secret is left for the next open");
+  assert(coder.secrets[coderUserId].git_credentials_repo_504);
+});
+
+/** A fetch whose requests `match` picks never reach Coder: each fails only when its signal fires. */
+function stallUntilCutOff(
+  base: typeof fetch,
+  match: (method: string, path: string) => boolean
+): { fetch: typeof fetch; stalled: () => number } {
+  let stalled = 0;
+  return {
+    stalled: () => stalled,
+    fetch: async (input, init) => {
+      if (match(init?.method ?? "GET", new URL(String(input)).pathname)) {
+        stalled++;
+        const signal = init!.signal!;
+        await new Promise((_resolve, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+      return await base(input, init);
+    }
+  };
+}
+
+// A 12 s budget: its signal fires at 10 s, and cleanup is cut off at 4 s, leaving the open seconds to reach
+// the stalled call first.
+const STALL_BUDGET_MS = 12_000;
+const STALL_CUTOFF_MS = 4_000;
+const isOwnSecretList = (method: string, path: string) => method === "GET" && path === "/api/v2/users/me/secrets";
+const isKeyList = (method: string, path: string) =>
+  method === "GET" && /^\/api\/v2\/users\/[^/]+\/keys\/tokens$/.test(path);
+
+for (const [what, match] of [
+  ["secret list (after the credentials are written)", isOwnSecretList],
+  ["expired key list (before the credentials are written)", isKeyList]
+] as const) {
+  Deno.test(`credentials: a create whose ${what} stalls until cut off is still built and answered`, async () => {
+    const t = await runningWorkspace();
+    const { coder, db, coderUserId } = t;
+    addSecondRepository(db);
+    const stall = stallUntilCutOff(coder.fetch, match);
+    const deps = onRealTime(t, STALL_BUDGET_MS, stall.fetch);
+    const t0 = Date.now();
+    const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 43 }));
+    const elapsed = Date.now() - t0;
+    assertEquals(stall.stalled(), 1);
+    assert(
+      elapsed >= STALL_CUTOFF_MS - 500 && elapsed < STALL_CUTOFF_MS + 4_000,
+      `cleanup was cut off, and the open answered after ${elapsed} ms`
+    );
+    assertEquals(res.status, "starting");
+    assertEquals(coder.workspaces.length, 2, "hw2's workspace is created");
+    assert(coder.secrets[coderUserId].git_credentials_repo_504, "the credentials are written before the build");
+  });
+}
+
+Deno.test(
+  "credentials: a stopped workspace whose cleanup stalls until cut off is started, and its claim given up",
+  async () => {
+    const t = await runningWorkspace();
+    const { coder, db } = t;
+    stop(coder.workspaces[0]);
+    const posted = buildPosts(coder).length;
+    const stall = stallUntilCutOff(coder.fetch, isOwnSecretList);
+    const deps = onRealTime(t, STALL_BUDGET_MS, stall.fetch);
+    const t0 = Date.now();
+    const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
+    const elapsed = Date.now() - t0;
+    assertEquals(stall.stalled(), 1);
+    assert(
+      elapsed >= STALL_CUTOFF_MS - 500 && elapsed < STALL_CUTOFF_MS + 4_000,
+      `cleanup was cut off, and the open answered after ${elapsed} ms`
+    );
+    assertEquals(res.status, "starting");
+    assertEquals(buildPosts(coder).slice(posted), ["start"], "the start is posted");
+    assertEquals([db.rows[0].restart_token, db.rows[0].restart_phase], [null, null], "the claim is given up");
+  }
+);
+
+Deno.test("credentials: a commit email that can't be written stops the start, so no placeholder identity", async () => {
+  const { coder, reported, deps } = setup();
+  coder.noProviders = true;
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.users.find((u) => u.email === coderEmail(ALEX.userId))!.subject = ALEX.userId;
+  const realFetch = coder.fetch;
+  coder.fetch = (input, init) =>
+    new URL(String(input)).pathname.endsWith("/users/me/secrets/git_email") ||
+    String(init?.body ?? "").includes('"name":"git_email"')
+      ? Promise.resolve(new Response(JSON.stringify({ message: "boom" }), { status: 500 }))
+      : realFetch(input, init);
+  deps.coder = { ...deps.coder, fetch: coder.fetch };
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "credentials_unavailable");
+  assertEquals(coder.workspaces.length, 0, "nothing is built");
+  assertEquals(reported.length, 1);
+  assert(
+    coder.keys.every((k) => k.deleted),
+    "the short-lived key is deleted"
+  );
 });

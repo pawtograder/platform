@@ -40,6 +40,10 @@ describe("toWorkspaceState", () => {
     [
       { status: "account_conflict", message: "Ask staff." },
       { status: "account_conflict", message: "Ask staff." }
+    ],
+    [
+      { status: "credentials_unavailable", message: "Try again in a few minutes." },
+      { status: "failed", step: "build", message: "Try again in a few minutes." }
     ]
   ] as [WorkspaceOpenResponse, WorkspaceState][])("maps %j", (res, expected) => {
     expect(toWorkspaceState(res)).toEqual(expected);
