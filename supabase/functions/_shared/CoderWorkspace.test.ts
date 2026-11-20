@@ -544,7 +544,10 @@ class FakeDb implements WorkspaceDb {
     return r ? { ...r } : null;
   }
   async updateWorkspaceRow(id: number, patch: Parameters<WorkspaceDb["updateWorkspaceRow"]>[1]) {
-    Object.assign(this.rows.find((r) => r.id === id)!, patch);
+    Object.assign(
+      this.rows.find((r) => r.id === id)!,
+      patch
+    );
   }
   restartClaims = 0;
   // Each is synchronous once called, like the single UPDATE it stands for.
@@ -2519,3 +2522,36 @@ Deno.test("credentials: a failed cleanup of idle credentials doesn't stop the op
   assert(coder.secrets[coderUserId][SECRET], "the secret is left for the next open");
   assert(coder.secrets[coderUserId].git_credentials_repo_504);
 });
+
+Deno.test(
+  "credentials: a cleanup call that stalls until it is cut off leaves the build and the answer their time",
+  async () => {
+    const t = await runningWorkspace();
+    const { coder, db, coderUserId } = t;
+    addSecondRepository(db);
+    // The student's secret list never answers: it fails only when its signal fires.
+    let stalled = 0;
+    const stall: typeof fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/v2/users/me/secrets" && (init?.method ?? "GET") === "GET") {
+        stalled++;
+        const signal = init!.signal!;
+        await new Promise((_resolve, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+      return await coder.fetch(input, init);
+    };
+    // A 10 s budget: its signal fires at 8 s, and cleanup is cut off at 2 s.
+    const deps = onRealTime(t, 10_000, stall);
+    const t0 = Date.now();
+    const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 43 }));
+    const elapsed = Date.now() - t0;
+    assertEquals(stalled, 1);
+    assert(elapsed >= 1_500 && elapsed < 6_000, `cleanup was cut off, and the open answered after ${elapsed} ms`);
+    assertEquals(res.status, "starting");
+    assertEquals(coder.workspaces.length, 2, "hw2's workspace is created");
+    assert(coder.secrets[coderUserId].git_credentials_repo_504, "the credentials are written before the build");
+  }
+);

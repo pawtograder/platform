@@ -71,6 +71,12 @@ const RESTART_POLL_MS = 2_000;
  */
 const CLAIM_MIN_LEFT_MS = 5_000;
 /**
+ * Optional cleanup before a start (expired keys, the commit email, idle and replaced tokens, the short-lived
+ * key) is cut off this long before the deadline, so a stalled cleanup call leaves the build, the claim and the
+ * answer their time. The next open retries what it skipped.
+ */
+const CLEANUP_RESERVE_MS = 8_000;
+/**
  * A restart claim older than this has no live holder, since every holder answers within its 20 s
  * budget; the margin covers clocks that differ between function instances. Its restart may then be
  * taken over: by an open, or by a status read once the workspace is stopped.
@@ -186,8 +192,33 @@ export function startBudget(ms: number): Budget {
 
 /** `fetch`, with every request aborted when the budget's signal fires. */
 export function budgetFetch(budget: Budget, base: typeof fetch = fetch): typeof fetch {
+  return signalFetch(budget.signal, base);
+}
+
+function signalFetch(signal: AbortSignal, base: typeof fetch = fetch): typeof fetch {
   return (input, init) =>
-    base(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, budget.signal]) : budget.signal });
+    base(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal });
+}
+
+/** `config`, its calls also cut off when `signal` fires. */
+function cutOff<C extends { fetch?: typeof fetch }>(config: C, signal: AbortSignal): C {
+  return { ...config, fetch: signalFetch(signal, config.fetch) };
+}
+
+/**
+ * Runs optional cleanup, logging rather than throwing. Nothing is started once `signal` has fired. Each step is
+ * retried by the next open, or, for the short-lived key, expires on its own.
+ */
+async function cleanUp(what: string, signal: AbortSignal, work: () => Promise<unknown>): Promise<void> {
+  if (signal.aborted) {
+    console.warn(`[workspace-open] ${what} skipped: too little time left`);
+    return;
+  }
+  try {
+    await work();
+  } catch (e) {
+    console.error(`[workspace-open] ${what} failed`, e);
+  }
 }
 
 /** Runs a request's work. A call the budget cut off, anywhere but a restart, is a 504 to retry. */
@@ -319,10 +350,14 @@ async function deliverGitCredentials(
   deps: Deps,
   caller: Caller,
   coderUserId: string,
-  repo: RepositoryRow
+  repo: RepositoryRow,
+  deadline: number
 ): Promise<WorkspaceOpenResponse | null> {
   const userId = caller.userId;
   const { db, coder, forgejo } = deps;
+  const cleanupMs = deadline - CLEANUP_RESERVE_MS - clock(deps)();
+  const cleanupSignal = cleanupMs > 0 ? AbortSignal.timeout(cleanupMs) : AbortSignal.abort();
+  const cleanupCoder = cutOff(coder, cleanupSignal);
   const login = await db.getForgejoLogin(userId, forgejo.url);
   if (!login) {
     return credentialsUnavailable("Your Forgejo account isn't set up yet. Try again in a few minutes.");
@@ -332,8 +367,8 @@ async function deliverGitCredentials(
     await db.recordForgejoToken(userId, repo.id, forgejo.url);
     const now = clock(deps)();
     const minted = await mintRepoToken(forgejo, login, repo.repository, repo.id, now);
-    await deleteExpiredKeys(deps, user.id).catch((e) =>
-      console.error("[workspace-open] Expired key cleanup failed", e)
+    await cleanUp("Expired key cleanup", cleanupSignal, () =>
+      deleteExpiredKeys({ ...deps, coder: cleanupCoder }, user.id)
     );
     const key = await mintUserKey(coder, user.id, secretKeyName(repo.id), SECRET_KEY_LIFETIME_MS);
     const keyId = apiKeyId(key);
@@ -347,25 +382,30 @@ async function deliverGitCredentials(
         }
       );
       // Forgejo refuses read:user on a repository-scoped token, so the workspace can't ask for the email.
-      await writeOwnSecret(
-        { ...coder, token: key },
-        { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
-      ).catch((e) => console.error("[workspace-open] Commit email secret write failed", e));
-      await removeIdleCredentials(deps, { ...coder, token: key }, login, repo.id, now).catch((e) =>
-        console.error("[workspace-open] Idle credentials cleanup failed; the next open retries it", e)
+      // The secret outlives the workspace, so a skipped write is made by a later open.
+      await cleanUp("Commit email secret write", cleanupSignal, () =>
+        writeOwnSecret(
+          { ...cleanupCoder, token: key },
+          { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
+        )
+      );
+      await cleanUp("Idle credentials cleanup", cleanupSignal, () =>
+        removeIdleCredentials(
+          { ...deps, forgejo: cutOff(forgejo, cleanupSignal) },
+          { ...cleanupCoder, token: key },
+          login,
+          repo.id,
+          now
+        )
       );
     } finally {
-      try {
-        await deleteUserKey(coder, user.id, keyId);
-      } catch (e) {
-        console.error("[workspace-open] Coder API key delete failed; it expires on its own", e);
-      }
+      await cleanUp("Coder API key delete", cleanupSignal, () => deleteUserKey(cleanupCoder, user.id, keyId));
     }
     // Only once the new token is stored: the workspace may still start with an older one until then.
     // A start from Coder's dashboard racing this open can still load the old secret just before the
     // write above; that session loses push access here until the workspace restarts. Rare, accepted.
-    await revokeReplacedTokens(forgejo, login, repo.id, minted.name, now).catch((e) =>
-      console.error("[workspace-open] Replaced token cleanup failed; the next open retries it", e)
+    await cleanUp("Replaced token cleanup", cleanupSignal, () =>
+      revokeReplacedTokens(cutOff(forgejo, cleanupSignal), login, repo.id, minted.name, now)
     );
     return null;
   } catch (e) {
@@ -964,7 +1004,7 @@ export async function openWorkspace(
     row = await settleRestart(deps, row, ws);
   }
   // Coder writes secrets into a workspace only as it starts, so they go in right before each start.
-  const beforeStart: BeforeStart = () => deliverGitCredentials(deps, caller, user.id, repo);
+  const beforeStart: BeforeStart = () => deliverGitCredentials(deps, caller, user.id, repo, deadline);
   let refused: WorkspaceOpenResponse | null | undefined;
   if (!ws) {
     refused = await beforeStart();
@@ -1047,7 +1087,7 @@ export async function workspaceStatus(
     // before the stop finished, or the call that held the claim is gone. Nothing else would start
     // it, so this is the one build a status read posts. A stale claim on a workspace that isn't
     // stopped is left to the next open.
-    const beforeStart = () => deliverGitCredentials(deps, caller, row!.coder_user_id, repo);
+    const beforeStart = () => deliverGitCredentials(deps, caller, row!.coder_user_id, repo, deadline);
     let refused: WorkspaceOpenResponse | undefined;
     ({ ws, restarting, refused } = await finishRestart(deps, row, ws, deadline, beforeStart));
     if (refused) return refused;

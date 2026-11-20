@@ -74,13 +74,29 @@ export function redactSecretsInText(text: string): string {
   return out.replace(CODER_API_KEY, REDACTED);
 }
 
-// Copies: the event shares objects with the scopes.
-function redactDeep(value: unknown, depth = 0): unknown {
+const CIRCULAR = "[Circular]";
+
+/**
+ * Copies: the event shares objects with the scopes. Processors run before the SDK's cycle-aware normalize, so
+ * this tracks identity itself: an object already on the path is a cycle, and an object reached again by another
+ * path reuses its copy. Without that, a small object referring to itself from a few keys is copied once per
+ * path, exponentially many times up to the depth limit.
+ */
+function redactDeep(value: unknown, depth = 0, copies = new Map<object, unknown>(), path = new Set<object>()): unknown {
   if (typeof value === "string") return redactSecretsInText(value);
   if (depth > 20 || value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1));
-  const out: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value)) out[key] = redactDeep(v, depth + 1);
+  if (path.has(value)) return CIRCULAR;
+  if (copies.has(value)) return copies.get(value);
+  path.add(value);
+  let out: unknown;
+  if (Array.isArray(value)) out = value.map((v) => redactDeep(v, depth + 1, copies, path));
+  else {
+    const copy: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) copy[key] = redactDeep(v, depth + 1, copies, path);
+    out = copy;
+  }
+  path.delete(value);
+  copies.set(value, out);
   return out;
 }
 

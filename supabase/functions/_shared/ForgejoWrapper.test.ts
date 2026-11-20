@@ -804,3 +804,76 @@ Deno.test("startGrading: reuses an existing tag at the commit, and replaces one 
     }
   );
 });
+
+/**
+ * A Forgejo token list paged like the real one: newest first, with X-Total-Count. `beforePage` runs before a
+ * page is answered, as a concurrent request would.
+ */
+async function withTokenList(
+  tokens: string[],
+  beforePage: (page: number, tokens: string[]) => void,
+  fn: (tokens: string[], pagesRead: number[]) => Promise<void>
+) {
+  const realFetch = globalThis.fetch;
+  const pagesRead: number[] = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const del = url.pathname.match(/\/tokens\/([^/]+)$/);
+    if (method === "DELETE" && del) {
+      const i = tokens.indexOf(decodeURIComponent(del[1]));
+      if (i >= 0) tokens.splice(i, 1);
+      return Promise.resolve(new Response(null, { status: i >= 0 ? 204 : 404 }));
+    }
+    const page = Number(url.searchParams.get("page"));
+    const limit = Number(url.searchParams.get("limit"));
+    beforePage(page, tokens);
+    pagesRead.push(page);
+    const body = tokens.slice((page - 1) * limit, page * limit).map((name) => ({ name }));
+    return Promise.resolve(new Response(JSON.stringify(body), { headers: { "X-Total-Count": String(tokens.length) } }));
+  }) as typeof fetch;
+  try {
+    await fn(tokens, pagesRead);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+Deno.test("token list: a deletion between page reads doesn't hide a token; the list is read again", async () => {
+  const now = Date.now();
+  // Newest first: 50 of repository 7's tokens, then repository 9's, the 51st.
+  const others = Array.from({ length: 50 }, (_, i) => coderTokenName(7, now - i));
+  const target = coderTokenName(9, now - 60_000);
+  let raced = false;
+  await withTokenList(
+    [...others, target],
+    (page, tokens) => {
+      // Another request revokes repository 7's tokens after page 1 was read: page 2 would be empty.
+      if (page === 2 && !raced) {
+        raced = true;
+        tokens.splice(0, 50);
+      }
+    },
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assertEquals(tokens, [], "repository 9's token is revoked");
+      assertEquals(pagesRead, [1, 2, 1]);
+    }
+  );
+});
+
+Deno.test("token list: a list that keeps changing is an error, so nothing is taken as revoked", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: 60 }, (_, i) => coderTokenName(9, now - 60_000 - i));
+  await withTokenList(
+    names,
+    (page, tokens) => {
+      if (page === 2) tokens.pop();
+    },
+    async (tokens) => {
+      await assertRejects(() => revokeRepoToken(config, "alex.kim", 9), Error, "kept changing");
+      assertEquals(tokens.length, 57, "nothing deleted from a list that wasn't read whole");
+      await assertRejects(() => revokeIdleTokens(config, "alex.kim", 1, now + IDLE_TOKEN_MS), Error, "kept changing");
+    }
+  );
+});
