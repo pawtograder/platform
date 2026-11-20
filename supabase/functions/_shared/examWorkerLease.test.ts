@@ -62,32 +62,35 @@ async function advance(time: FakeTime, periods: number) {
   for (let i = 0; i < periods; i++) await time.tickAsync(LEASE_RENEW_MS);
 }
 
-Deno.test("each renewal is set_vt_if_claimed with the claimed read_ct, every LEASE_RENEW_MS, one at a time", async () => {
-  const time = new FakeTime();
-  const fake = fakeClient();
-  let release: ((seconds?: number) => Promise<void>) | undefined;
-  try {
-    release = await holdLease(fake.client, "exam_processing", msg);
-    // The first call has returned before holdLease does.
-    assertEquals(fake.calls.length, 1);
-    await time.tickAsync(LEASE_RENEW_MS - 1);
-    assertEquals(fake.calls.length, 1, "no renewal before LEASE_RENEW_MS");
-    await time.tickAsync(1);
-    assertEquals(fake.calls.length, 2);
-    await advance(time, 2);
-    assertEquals(fake.calls.length, 4);
-    for (const call of fake.calls) {
-      assertEquals(call.schema, "pgmq_public");
-      assertEquals(call.fn, "set_vt_if_claimed");
-      assertEquals(call.args, { queue_name: "exam_processing", msg_id: 41, read_ct: 3, vt: LEASE_SECONDS });
-      assert(call.signal instanceof AbortSignal);
+Deno.test(
+  "each renewal is set_vt_if_claimed with the claimed read_ct, every LEASE_RENEW_MS, one at a time",
+  async () => {
+    const time = new FakeTime();
+    const fake = fakeClient();
+    let release: ((seconds?: number) => Promise<void>) | undefined;
+    try {
+      release = await holdLease(fake.client, "exam_processing", msg);
+      // The first call has returned before holdLease does.
+      assertEquals(fake.calls.length, 1);
+      await time.tickAsync(LEASE_RENEW_MS - 1);
+      assertEquals(fake.calls.length, 1, "no renewal before LEASE_RENEW_MS");
+      await time.tickAsync(1);
+      assertEquals(fake.calls.length, 2);
+      await advance(time, 2);
+      assertEquals(fake.calls.length, 4);
+      for (const call of fake.calls) {
+        assertEquals(call.schema, "pgmq_public");
+        assertEquals(call.fn, "set_vt_if_claimed");
+        assertEquals(call.args, { queue_name: "exam_processing", msg_id: 41, read_ct: 3, vt: LEASE_SECONDS });
+        assert(call.signal instanceof AbortSignal);
+      }
+      assertEquals(fake.maxActive(), 1);
+    } finally {
+      await release?.();
+      time.restore();
     }
-    assertEquals(fake.maxActive(), 1);
-  } finally {
-    await release?.();
-    time.restore();
   }
-});
+);
 
 Deno.test("once the message is no longer this reader's, it stops renewing", async () => {
   const time = new FakeTime();
