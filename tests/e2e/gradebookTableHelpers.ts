@@ -139,6 +139,9 @@ export async function gradebookScreenshot(page: Page, name: string, options: Gra
         const item = page.getByRole("menuitem", { name: keepMenuOpen.menuItem, exact: true });
         if (!(await item.isVisible())) {
           await keepMenuOpen.open();
+          // Argos parks the pointer before this callback; reopening moved it back onto the trigger,
+          // whose hover style would make this capture differ from one that didn't need a reopen.
+          await page.mouse.move(0, 0);
           await expect(item).toBeVisible();
         }
       }
