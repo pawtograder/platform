@@ -17,19 +17,24 @@ import type { ReactNode } from "react";
  * while the hint is open, and screen readers announce it when it changes. The region is on the page
  * before the hint opens, because screen readers announce changes to a region, not new regions.
  */
+type OnboardingPlacement = "bottom" | "bottom-start" | "bottom-end" | "right-start";
+
 export function OnboardingPopover({
   active,
   open,
   onDismiss,
   message,
   placement = "bottom",
+  fallbackPlacements,
   children
 }: {
   active: boolean;
   open: boolean;
   onDismiss: () => void;
   message: ReactNode;
-  placement?: "bottom" | "bottom-start" | "bottom-end";
+  placement?: OnboardingPlacement;
+  /** Where to put the hint instead when `placement` doesn't fit, such as on a narrow screen. */
+  fallbackPlacements?: OnboardingPlacement[];
   children: ReactNode;
 }) {
   if (!active) return <>{children}</>;
@@ -40,7 +45,7 @@ export function OnboardingPopover({
         onOpenChange={({ open: stillOpen }) => {
           if (!stillOpen) onDismiss();
         }}
-        positioning={{ placement }}
+        positioning={{ placement, flip: fallbackPlacements ?? true }}
         // Leave focus where the student is. The hint is a pointer, not a form to fill in.
         autoFocus={false}
         // Focus is never inside the hint, so by default any focus change, such as pressing Tab, would

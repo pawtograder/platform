@@ -168,24 +168,25 @@ export default function OfficeHoursPage() {
     return availableQueues.find((q) => q.id === selectedQueueId);
   }, [selectedQueueId, availableQueues]);
 
-  // Onboarding hint on the selected queue's description (see lib/officeHoursOnboarding.ts). Ask for
-  // it only while the browse view is showing that description. Otherwise the hint would wait for an
-  // anchor that isn't on the page and hold back the New Request hint behind it. The conditions match
-  // the early returns below: the loading message and the connection error replace the description.
+  // Onboarding hint on the queue list (see lib/officeHoursOnboarding.ts). It points at the list, not
+  // at the selected queue's description, because the selected queue can be an in-person or video
+  // queue while the hint is about picking between text queues.
   //
-  // The description box is on the page before the first queue is selected too, showing "Select a
-  // queue". So the hint doesn't wait for the selection, and it registers in the same render as the
-  // New Request hint in the header, which both gate on useOnboardingDataLoaded.
+  // Ask for it only while the browse view is showing the list. Otherwise the hint would wait for an
+  // anchor that isn't on the page and hold back the New Request hint behind it. The conditions match
+  // the early returns below: the loading message and the connection error replace the list. Both
+  // this hint and the New Request hint in the header gate on useOnboardingDataLoaded, so they
+  // register in the same render.
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingActive = onboardingOn && isStudent;
   const onboardingCompleted = useOnboardingCompleted(onboardingActive);
   const onboardingDataLoaded = useOnboardingDataLoaded();
   const textQueueCount = availableQueues.filter((queue) => queue.queue_type === "text").length;
-  const showsQueueDescription =
+  const showsQueueList =
     view === "browse" && onboardingDataLoaded && !connectionError && connectionStatus?.overall !== "disconnected";
   const queueDescriptionOnboarding = useOnboardingHint(
-    showsQueueDescription &&
+    showsQueueList &&
       wantsQueueDescriptionHint({
         featureEnabled: onboardingOn,
         isStudent,
@@ -299,49 +300,52 @@ export default function OfficeHoursPage() {
       <Box height={{ base: "auto", lg: "100%" }} minH={0} overflow={{ base: "visible", lg: "hidden" }}>
         <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" height="100%" minH={0}>
           <Box flex={{ lg: 4 }} minW={0} overflowY={{ base: "visible", lg: "auto" }} minH={0}>
-            <Stack spaceY={1}>
-              {availableQueues.map((queue) => {
-                const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-                const openRequestCount = activeHelpRequests.filter((r) => r.help_queue === queue.id).length;
-                return (
-                  <QueueCard
-                    key={queue.id}
-                    queue={queue}
-                    selected={queue.id === selectedQueueId}
-                    onClickAction={() => {
-                      const next = new URLSearchParams(searchParams.toString());
-                      next.set("view", "browse");
-                      next.set("queue", queue.id.toString());
-                      router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
-                    }}
-                    openRequestCount={openRequestCount}
-                    activeAssignments={queueAssignments}
-                  />
-                );
-              })}
-            </Stack>
+            <OnboardingPopover
+              active={onboardingActive}
+              open={queueDescriptionOnboarding.open}
+              onDismiss={queueDescriptionOnboarding.dismiss}
+              message="This course has more than one text queue, and the purpose of each text queue is decided by the course staff. You can click each queue to read its description. Then choose the one that matches your question."
+              // To the right of the list on wide screens. On narrow screens the list takes the full
+              // width, so the hint goes below it instead.
+              placement="right-start"
+              fallbackPlacements={["bottom-start"]}
+            >
+              <Stack spaceY={1}>
+                {availableQueues.map((queue) => {
+                  const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+                  const openRequestCount = activeHelpRequests.filter((r) => r.help_queue === queue.id).length;
+                  return (
+                    <QueueCard
+                      key={queue.id}
+                      queue={queue}
+                      selected={queue.id === selectedQueueId}
+                      onClickAction={() => {
+                        const next = new URLSearchParams(searchParams.toString());
+                        next.set("view", "browse");
+                        next.set("queue", queue.id.toString());
+                        router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
+                      }}
+                      openRequestCount={openRequestCount}
+                      activeAssignments={queueAssignments}
+                    />
+                  );
+                })}
+              </Stack>
+            </OnboardingPopover>
           </Box>
 
           <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
             <HStack justify="space-between" align="flex-start" mb="4" flexShrink={0}>
-              <OnboardingPopover
-                active={onboardingActive}
-                open={queueDescriptionOnboarding.open}
-                onDismiss={queueDescriptionOnboarding.dismiss}
-                message="This course has more than one text queue, and the purpose of each text queue is decided by the course staff. You can click each queue to read its description. Then choose the one that matches your question."
-                placement="bottom-start"
-              >
-                <Box flex="1">
-                  <Heading size="md" mb="2">
-                    {selectedQueueId
-                      ? availableQueues.find((q) => q.id === selectedQueueId)?.name || "Select a queue"
-                      : "Select a queue"}
-                  </Heading>
-                  {selectedQueueId && (
-                    <Markdown>{availableQueues.find((q) => q.id === selectedQueueId)?.description || ""}</Markdown>
-                  )}
-                </Box>
-              </OnboardingPopover>
+              <Box flex="1">
+                <Heading size="md" mb="2">
+                  {selectedQueueId
+                    ? availableQueues.find((q) => q.id === selectedQueueId)?.name || "Select a queue"
+                    : "Select a queue"}
+                </Heading>
+                {selectedQueueId && (
+                  <Markdown>{availableQueues.find((q) => q.id === selectedQueueId)?.description || ""}</Markdown>
+                )}
+              </Box>
               {selectedQueueId && selectedQueue && (
                 <>
                   <DialogRoot open={scheduleDialogOpen} onOpenChange={(e) => setScheduleDialogOpen(e.open)}>
