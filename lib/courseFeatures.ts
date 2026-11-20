@@ -17,7 +17,6 @@ export const COURSE_FEATURES = {
   GRADEBOOK_COLUMN_GROUPS: "gradebook-column-groups",
   GRADEBOOK_TOPICS: "gradebook-topics",
   EXAMS: "exams",
-  // Off unless set, like the SQL side. Not manageable here yet; the toggle comes with #1091.
   CLOUD_WORKSPACES: "cloud-workspaces",
   OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
   OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert",
@@ -190,6 +189,19 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     navAffectsStaff: true,
     switchLabel: "Enable paper exam scanning and grading",
     ariaLabel: "Enable paper exams for this course"
+  },
+  {
+    name: COURSE_FEATURES.CLOUD_WORKSPACES,
+    title: "Cloud workspaces",
+    description:
+      "When on, code assignments can use Forgejo instead of GitHub as their repository host (chosen per assignment), everyone enrolled in the course gets a Forgejo account, and students get an Open in Coder button that opens their repository in a cloud workspace. Turning it on creates the Forgejo accounts right away. When off, Forgejo can't be chosen for new assignments, Open in Coder is hidden and workspaces can't be opened, and no new Forgejo accounts or student repositories are created. Nothing is deleted: Forgejo accounts and repositories are kept, assignments already on Forgejo stay on Forgejo, and pushes to their repositories are still graded.",
+    // Off unless a course opts in, the same default as the SQL side (cloud_workspaces_enabled and
+    // assignments_validate_git_provider). Defaulting on would create a Forgejo account for everyone
+    // enrolled in every course the moment this merged.
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Enable Forgejo repositories and Coder cloud workspaces",
+    ariaLabel: "Enable cloud workspaces for this course"
   },
   {
     name: COURSE_FEATURES.OFFICE_HOURS_SHIFT_RELEASE,
