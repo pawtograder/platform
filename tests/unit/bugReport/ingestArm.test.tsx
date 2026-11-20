@@ -30,7 +30,7 @@ describe("BugReportIngestArm", () => {
   });
 
   it("does not arm on an unlisted route or another course's path", () => {
-    pathname = "/course/7/manage/course/lti";
+    pathname = "/course/7/manage/gradebook";
     render(<BugReportIngestArm courseId={7} recording />);
     expect(isIngestArmed()).toBe(false);
     pathname = "/course/8/discussion";
