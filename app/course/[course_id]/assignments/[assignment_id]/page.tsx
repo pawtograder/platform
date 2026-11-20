@@ -37,7 +37,12 @@ import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
-import { cloudWorkspacesEnabled, createWorkspaceClient } from "@/lib/workspaceStatus";
+import {
+  createWorkspaceClient,
+  isWorkspaceGitProvider,
+  shouldShowWorkspace,
+  workspaceRepoKey
+} from "@/lib/workspaceStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -173,25 +178,21 @@ export default function AssignmentPage() {
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
 
-  // Open in Coder (#1095): a student's Forgejo repository, in a course with Cloud Workspaces on.
-  // workspace-open checks enrollment and the repository on the server; this only decides whether to
-  // offer it. Not while staff view as a student: the requests would carry the staff session and act
-  // on the staff member's own repository, not the student's.
+  // Open in Coder (#1095): a student's Forgejo or GitHub repository, in a course with Cloud
+  // Workspaces on. workspace-open checks enrollment and the repository on the server; this only
+  // decides whether to offer it. Not while staff view as a student: the requests would carry the
+  // staff session and act on the staff member's own repository, not the student's.
   const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
   // useCourse(), not the controller's course: it re-renders when the flag changes.
   const liveCourse = useCourse() as CourseWithFeatures;
-  // Wait for Forgejo to finish creating the repo, or the clone step fails. The IDs key the card, so
-  // a student who joins or leaves a group gets a fresh card instead of the old repo's state.
-  const workspaceRepoKey = (repositories ?? [])
-    .filter((r) => r.git_provider === "forgejo" && r.is_github_ready)
-    .map((r) => r.id)
-    .join(",");
-  const showWorkspace =
-    !isReadOnly &&
-    enrollment?.role === "student" &&
-    assignment?.git_provider === "forgejo" &&
-    cloudWorkspacesEnabled(liveCourse.features) &&
-    workspaceRepoKey !== "";
+  const repoKey = workspaceRepoKey(repositories);
+  const showWorkspace = shouldShowWorkspace({
+    isReadOnly,
+    role: enrollment?.role,
+    assignmentGitProvider: assignment?.git_provider,
+    features: liveCourse.features,
+    repoKey
+  });
 
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
@@ -300,7 +301,12 @@ export default function AssignmentPage() {
           </Box>
           {showWorkspace && (
             <Box m={4}>
-              <WorkspaceStatus key={workspaceRepoKey} assignmentId={Number(assignment_id)} client={workspaceClient} />
+              <WorkspaceStatus
+                key={repoKey}
+                assignmentId={Number(assignment_id)}
+                client={workspaceClient}
+                gitProvider={isWorkspaceGitProvider(assignment.git_provider) ? assignment.git_provider : undefined}
+              />
             </Box>
           )}
           <SelfReviewNotice

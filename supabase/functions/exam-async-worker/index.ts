@@ -115,6 +115,21 @@ class ScanGroupChangeRejectedError extends ScanPathRejectedError {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Logging (#1157)
+// ---------------------------------------------------------------------------
+// This worker had three console statements and all three sat on error paths, so a run that went
+// wrong showed nothing at all. In the CI run for #1088 (run 40775885939) it was invoked 197 times
+// and printed not one line of its own, while discord-async-worker logged every pass beside it. The
+// cause was getExamVisionProvider() throwing because EXAM_VISION_PROVIDER was unset, which one line
+// would have said outright; instead the only symptom was a batch sitting at "ocr".
+//
+// These lines answer one question: did it run, and what did it see. The prefix follows the
+// [scope] convention discord-async-worker uses, so the two read the same way in one log artifact.
+function log(message: string): void {
+  console.log(`[exam-async-worker] ${message}`);
+}
+
 async function archive(admin: Admin, msgId: number): Promise<void> {
   // The one queue call whose error is deliberately ignored. A failed archive leaves the message
   // to be redelivered and the handler re-run, which every handler here is written to tolerate
@@ -824,7 +839,12 @@ async function finalize(
       const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
       const ocrText = wordsInRegion(words, rect);
       let structuredValue: unknown = ocrText;
-      const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
+      const question = r.exam_questions as unknown as { answer_type: string | null; label: string | null } | null;
+      const answerType = question?.answer_type ?? null;
+      // The instructor's name for the question (#1072). Carried into the artifact because the
+      // grader view has nothing else to show: it had only exam_question_id, which is a database
+      // id, so headings read "Question 38" for a question the instructor called Q1.
+      const label = question?.label?.trim() || null;
       if (answerType && answerType !== "free_text" && ocrText) {
         try {
           const bytes = await downloadImageCached(admin, pageBytes, "exam-scans", page.image_path);
@@ -847,6 +867,7 @@ async function finalize(
       }
       questions.push({
         exam_question_id: r.exam_question_id,
+        label,
         page_number: examPageNo,
         region: rect,
         ocr_text: ocrText,
@@ -994,10 +1015,15 @@ const MAX_MESSAGES_PER_INVOCATION = 250;
 async function runBatch(): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
+  const startedAt = Date.now();
+  log("run start");
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
-  const startedAt = Date.now();
   let processed = 0;
+  // Counted separately because `processed` is incremented outside the try below, so it is really
+  // an attempt count. Reporting the two as one number would have the completion line claim work
+  // that threw and was left queued for redelivery, which is the opposite of what #1157 is for.
+  let failed = 0;
   while (processed < MAX_MESSAGES_PER_INVOCATION && Date.now() - startedAt < CLAIM_WINDOW_MS) {
     const { data, error } = await admin.schema("pgmq_public").rpc("read", {
       queue_name: QUEUE,
@@ -1005,11 +1031,21 @@ async function runBatch(): Promise<number> {
       n: 1
     });
     if (error) {
+      // Logged as well as captured. A failed read leaves `processed` where it was, so without this
+      // line the run is indistinguishable from an idle one, which is the misreading that cost an
+      // evening on #814.
+      console.error(`[exam-async-worker] queue read failed after ${processed} message(s): ${error.message}`);
       Sentry.captureException(error, scope);
       break;
     }
     const msg = ((data ?? []) as QueueMessage[])[0];
-    if (!msg) break;
+    if (!msg) {
+      // What the read returned, not the queue's depth (#1157): reads are one message each (#1158),
+      // so an idle worker prints this straight after "run start", and a backed-up one prints a
+      // "handling" line per message first.
+      log("read 0 message(s)");
+      break;
+    }
     // processMessage handles its own errors, but it can throw on the way out: sendEnvelope throws
     // when a requeue cannot be queued (deliberately, so the original is not archived without a
     // replacement). Catch it so the drain carries on. Nothing is lost: an un-archived message
@@ -1026,6 +1062,15 @@ async function runBatch(): Promise<number> {
       }
       const releaseLease = await holdLease(admin, QUEUE, msg);
       try {
+        // Printed before the handler runs, so a message that kills the isolate still leaves its
+        // own name in the log. read_ct is here because a climbing one is the shape of a poison
+        // pill. It sits inside the try because a message with a null body throws on env.method;
+        // here that throw is handled like any other handler failure (#1157).
+        const env = msg.message;
+        log(
+          `handling ${env.method} msg_id=${msg.msg_id} batch=${env.batch_id} read_ct=${msg.read_ct}` +
+            (env.debug_id ? ` debug_id=${env.debug_id}` : "")
+        );
         await processMessage(admin, msg, scope.clone());
       } catch (error) {
         // A message whose handler threw comes back after the read window, as it did before the
@@ -1039,9 +1084,11 @@ async function runBatch(): Promise<number> {
     } catch (error) {
       Sentry.captureException(error, scope.clone());
       console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
+      failed++;
     }
     processed++;
   }
+  log(`run done: ${processed} message(s) attempted, ${failed} failed, in ${Date.now() - startedAt}ms`);
   return processed;
 }
 
@@ -1065,6 +1112,16 @@ Deno.serve((req) => {
       headers: { "Content-Type": "application/json" }
     });
   }
+  // Printed before the work is handed to the runtime, and deliberately paired with runBatch's own
+  // "run done" line. An invocation that prints this and never prints that one had its isolate
+  // reclaimed mid-flight, which is otherwise invisible: the 200 has already gone out.
+  //
+  // No source label. The obvious one is attractive and does not work: nothing sends
+  // x-invocation-source, and the cron job and all three triggers in exam_grading.sql send
+  // x-supabase-webhook-source: exam-async-worker, the same value for every one of them, so it
+  // cannot separate a cron tick from a trigger either. Telling the callers apart means changing
+  // what they send, which is a migration, and this change's rollback is a revert.
+  log("invocation accepted; work continues in waitUntil");
   EdgeRuntime.waitUntil(runBatch());
   return Promise.resolve(
     new Response(JSON.stringify({ message: "exam-async-worker started" }), {

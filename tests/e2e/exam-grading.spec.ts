@@ -283,14 +283,30 @@ test.describe("Exam grading OCR pipeline", () => {
       .eq("submission_id", graded.id)
       .eq("data->>format", "exam_v1")
       .single();
-    const [gradedQuestion] = (gradedArtifact!.data as { questions: { exam_question_id: number }[] }).questions;
+    const [gradedQuestion] = (
+      gradedArtifact!.data as { questions: { exam_question_id: number; label: string | null }[] }
+    ).questions;
     const [gradedSis, otherSis] =
       graded.profile_id === alice.private_profile_id ? [aliceSis, bobSis] : [bobSis, aliceSis];
-    const questionCard = page.getByRole("heading", {
-      name: `Question ${gradedQuestion.exam_question_id}`,
-      exact: true
-    });
+
+    // #1072: the heading is the instructor's name for the question, not its database id.
+    //
+    // This assertion used to read `Question ${gradedQuestion.exam_question_id}`, so it pinned the
+    // bug in place: the exam is created above with `label: "Item 1"`, and the grader was shown
+    // "Question 67". Asserting the id meant the spec went green on exactly the output #1072 is
+    // about, and would have gone red on the fix.
+    //
+    // The label has to reach here through the artifact, not just through the renderer, so check
+    // the artifact carries it before checking what the page shows. A renderer assertion alone
+    // passes just as well when `finalize` never wrote the field and the fallback is doing it.
+    expect(gradedQuestion.label).toBe("Item 1");
+    const questionCard = page.getByRole("heading", { name: "Item 1", exact: true }).first();
     await expect(questionCard).toBeVisible();
+    // The id must not survive as a heading anywhere, or the nullable-label fallback is still
+    // firing on a question that does have a label.
+    await expect(
+      page.getByRole("heading", { name: `Question ${gradedQuestion.exam_question_id}`, exact: true })
+    ).toHaveCount(0);
     await expect(page.getByText("OCR text").first()).toBeVisible();
     await expect(page.getByText(`sis-${gradedSis}`).first()).toBeVisible();
     await expect(page.getByText(`sis-${otherSis}`)).toHaveCount(0);

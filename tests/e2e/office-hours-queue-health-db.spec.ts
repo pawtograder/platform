@@ -163,4 +163,108 @@ test.describe("office hours queue health RPC", () => {
     expect(error).not.toBeNull();
     expect(error!.code).toBe("42501");
   });
+  // ---- metrics_office_hours_queue_health (20261120130100) -------------------------------------
+  // The metric drives pawtograder_office_hours_queues_red, and docs/metrics.md promises it cannot
+  // disagree with the dashboard RPC above. These pin the two places it did.
+
+  type MetricRow = {
+    class_id: number;
+    queues_active: number;
+    queues_red: number;
+    queues_unstaffed: number;
+    requests_waiting: number;
+    oldest_wait_minutes: number;
+  };
+
+  /**
+   * The RPC is not on the generated `Database` yet, the same reason the metrics edge function
+   * calls it through `rpcUntyped` (supabase/functions/metrics/index.ts:99).
+   */
+  function callMetric(client: SupabaseClient<Database>) {
+    const untyped = client as unknown as {
+      rpc: (name: string) => Promise<{ data: MetricRow[] | null; error: { code?: string } | null }>;
+    };
+    return untyped.rpc("metrics_office_hours_queue_health");
+  }
+
+  async function metricFor(cid: number): Promise<MetricRow | undefined> {
+    const { data, error } = await callMetric(supabase);
+    expect(error).toBeNull();
+    return data!.find((r) => r.class_id === cid);
+  }
+
+  async function setThresholds(value: unknown) {
+    const { error } = await supabase
+      .from("classes")
+      .update({ office_hours_health_thresholds: value as never })
+      .eq("id", classId);
+    expect(error).toBeNull();
+  }
+
+  async function ageOldestOpenRequest(seconds: number) {
+    const { data, error } = await supabase
+      .from("help_requests")
+      .select("id")
+      .eq("help_queue", activeQueueId)
+      .eq("status", "open")
+      .order("created_at", { ascending: true })
+      .limit(1);
+    expect(error).toBeNull();
+    const { error: updateError } = await supabase
+      .from("help_requests")
+      .update({ created_at: new Date(Date.now() - seconds * 1000).toISOString() })
+      .eq("id", data![0].id);
+    expect(updateError).toBeNull();
+  }
+
+  test("a wait just under the limit is not red, in the metric or the dashboard", async () => {
+    // 29m40s. Comparing rounded minutes made this 30 and counted it red, while the dashboard,
+    // which needs oldest_wait_seconds >= 1800, did not.
+    await setThresholds({ waiting_red: 5, oldest_wait_red_minutes: 30 });
+    await ageOldestOpenRequest(29 * 60 + 40);
+
+    const metric = await metricFor(classId);
+    const health = await healthFor(activeQueueId);
+    expect(health!.oldest_wait_seconds).toBeLessThan(30 * 60);
+    expect(metric!.queues_red).toBe(0);
+    expect(metric!.oldest_wait_minutes).toBe(29);
+  });
+
+  test("a wait just over the limit is red", async () => {
+    await setThresholds({ waiting_red: 5, oldest_wait_red_minutes: 30 });
+    await ageOldestOpenRequest(30 * 60 + 10);
+
+    const metric = await metricFor(classId);
+    expect(metric!.queues_red).toBe(1);
+    expect(metric!.oldest_wait_minutes).toBe(30);
+  });
+
+  test("a fractional threshold does not drop every class's row", async () => {
+    // Queue Settings posts with noValidate and no step check, and the column has no constraint,
+    // so 2.5 is reachable. Casting with ::int raised, and because the function reads every class
+    // in one statement that removed all five gauges for every class.
+    await setThresholds({ waiting_red: 2.5, oldest_wait_red_minutes: 30 });
+    const { data, error } = await callMetric(supabase);
+    expect(error).toBeNull();
+    expect(data!.length).toBeGreaterThan(0);
+    expect(data!.some((r) => r.class_id === classId)).toBe(true);
+  });
+
+  test("a non-positive or non-numeric threshold falls back to the default", async () => {
+    // parseQueueHealthThresholds takes only positive finite numbers; the function used to take 0
+    // as stored and mark every queue red.
+    await ageOldestOpenRequest(60);
+    for (const stored of [{ waiting_red: 0, oldest_wait_red_minutes: 60 }, { waiting_red: "lots" }]) {
+      await setThresholds(stored);
+      const metric = await metricFor(classId);
+      expect(metric).toBeDefined();
+      expect(metric!.queues_red).toBe(0);
+    }
+  });
+
+  test("anon and authenticated cannot execute the metric", async () => {
+    const { error } = await callMetric(studentClient);
+    expect(error).not.toBeNull();
+    expect(error!.code).toBe("42501");
+  });
 });
