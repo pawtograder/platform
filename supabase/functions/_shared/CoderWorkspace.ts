@@ -71,8 +71,8 @@ const RESTART_POLL_MS = 2_000;
  */
 const CLAIM_MIN_LEFT_MS = 5_000;
 /**
- * Optional cleanup before a start (expired keys, the commit email, idle and replaced tokens, the short-lived
- * key) is cut off this long before the deadline, so a stalled cleanup call leaves the build, the claim and the
+ * Optional cleanup before a start (expired keys, idle and replaced tokens, the short-lived key) is cut off
+ * this long before the deadline, so a stalled cleanup call leaves the build, the claim and the
  * answer their time. The next open retries what it skipped.
  */
 const CLEANUP_RESERVE_MS = 8_000;
@@ -438,12 +438,11 @@ async function deliverGitCredentials(
         }
       );
       // Forgejo refuses read:user on a repository-scoped token, so the workspace can't ask for the email.
-      // The secret outlives the workspace, so a skipped write is made by a later open.
-      await cleanUp("Commit email secret write", cleanupSignal, () =>
-        writeOwnSecret(
-          { ...cleanupCoder, token: key },
-          { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
-        )
+      // Required, like the credentials: without it the startup script falls back to the owner's placeholder
+      // email (#1222), and commits made before a later open would carry it.
+      await writeOwnSecret(
+        { ...coder, token: key },
+        { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
       );
       await cleanUp("Idle credentials cleanup", cleanupSignal, () =>
         removeIdleCredentials(

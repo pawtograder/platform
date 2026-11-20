@@ -80,6 +80,19 @@ Deno.test("a cyclic or shared object in the event is copied once, and still reda
   assert(loop.a === loop);
 });
 
+Deno.test("an object reached first past the depth limit and then shallower is redacted at the shallow one", () => {
+  redactSecret(forgejoToken);
+  const shared = { child: { token: forgejoToken } };
+  let deep: Record<string, unknown> = { shared };
+  for (let i = 0; i < 18; i++) deep = { next: deep };
+  const out = scrubEdgeEvent({ extra: { deep, shallow: shared } });
+  const json = JSON.stringify(out);
+  assert(!json.includes(forgejoToken), "the credential reached the event");
+  const extra = out.extra as Record<string, Record<string, Record<string, unknown>>>;
+  assertEquals(extra.shallow.child.token, "[redacted]");
+  assert(json.includes("[Truncated]"), "what lies past the limit is replaced, not kept");
+});
+
 Deno.test("the first credential stays redacted after hundreds more are registered", () => {
   const first = ["fedcba9876543210", "fedcba9876543210", "first000"].join("");
   redactSecret(first);

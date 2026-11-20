@@ -75,6 +75,14 @@ export function toWorkspaceState(res: WorkspaceOpenResponse): WorkspaceState {
         message: res.message || "Link your Forgejo account in Coder, then open the workspace again."
       };
     }
+    case "credentials_unavailable":
+      // Nothing was built: the workspace couldn't be given its repository token. The message says
+      // whether to wait or retry, and Retry opens again.
+      return {
+        status: "failed",
+        step: "build",
+        message: res.message || "The workspace couldn't be given access to your repository."
+      };
     case "account_conflict":
       return {
         status: "account_conflict",
