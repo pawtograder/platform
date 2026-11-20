@@ -1,5 +1,6 @@
 "use client";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import * as Sentry from "@sentry/nextjs";
 
 import { QueueCard } from "@/components/help-queue/queue-card";
 import { RequestRow } from "@/components/help-queue/request-row";
@@ -8,7 +9,8 @@ import {
   useHelpQueueAssignments,
   useHelpQueues,
   useStudentVisibleHelpRequests,
-  useHelpRequestStudents
+  useHelpRequestStudents,
+  useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, Icon, Link, Stack, Text, VStack } from "@chakra-ui/react";
@@ -29,6 +31,39 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
+
+type OfficeHoursDataState = "loading" | "ready" | "error";
+
+/**
+ * Tracks the HTTP fetch of the tables this page reads, not the realtime channels.
+ * The page has to work when the WebSocket can't connect (#1065); the layout warns
+ * that live updates are unavailable.
+ */
+function useOfficeHoursDataState(): OfficeHoursDataState {
+  const { helpQueues, helpQueueAssignments, helpRequests, helpRequestStudents } = useOfficeHoursController();
+  const [state, setState] = useState<OfficeHoursDataState>(() =>
+    [helpQueues, helpQueueAssignments, helpRequests, helpRequestStudents].every((table) => table.ready)
+      ? "ready"
+      : "loading"
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([helpQueues, helpQueueAssignments, helpRequests, helpRequestStudents].map((t) => t.readyPromise))
+      .then(() => {
+        if (!cancelled) setState("ready");
+      })
+      .catch((error) => {
+        Sentry.captureException(error);
+        if (!cancelled) setState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [helpQueues, helpQueueAssignments, helpRequests, helpRequestStudents]);
+
+  return state;
+}
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
@@ -54,7 +89,9 @@ export default function OfficeHoursPage() {
   const allHelpRequests = useStudentVisibleHelpRequests();
   const helpRequestStudents = useHelpRequestStudents();
   const officeHoursEvents = useOfficeHoursSchedule();
-  const { connectionStatus, connectionError, isLoading } = useConnectionStatus();
+  const { connectionError } = useConnectionStatus();
+  const dataState = useOfficeHoursDataState();
+  const isLoading = dataState !== "ready";
 
   // Get current user profile IDs (needed for My Requests view)
   const { private_profile_id, public_profile_id } = useClassProfiles();
@@ -230,6 +267,14 @@ export default function OfficeHoursPage() {
     }
   }, [view, selectedQueueId, helpQueues, searchParams, router, course_id, soleQueueId, isLoading, connectionError]);
 
+  if (dataState === "error") {
+    return (
+      <Box textAlign="center" py={8}>
+        <Text color="red.500">Couldn&apos;t load the help queues. Reload the page to try again.</Text>
+      </Box>
+    );
+  }
+
   if (isLoading) {
     return (
       <Box textAlign="center" py={8}>
@@ -238,10 +283,10 @@ export default function OfficeHoursPage() {
     );
   }
 
-  if (connectionError || connectionStatus?.overall === "disconnected") {
+  if (connectionError) {
     return (
       <Box textAlign="center" py={8}>
-        <Text color="red.500">{connectionError || "Connection error. Please try refreshing the page."}</Text>
+        <Text color="red.500">{connectionError}</Text>
       </Box>
     );
   }
