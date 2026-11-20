@@ -35,8 +35,21 @@ AS $$
   WITH thresholds AS (
     SELECT
       c.id AS cid,
-      COALESCE((c.office_hours_health_thresholds->>'waiting_red')::int, 5) AS waiting_red,
-      COALESCE((c.office_hours_health_thresholds->>'oldest_wait_red_minutes')::int, 30) AS oldest_red
+      -- Same rule as parseQueueHealthThresholds (lib/queueHealthThresholds.ts): a positive JSON
+      -- number, otherwise the default. Not ->>'...'::int. Queue Settings posts the value with
+      -- noValidate and no step check, and the column has no constraint, so a stored 2.5 is
+      -- reachable. ::int raises on it, and because this reads every class in one statement that
+      -- one value would drop all five gauges for every class, not just the class that set it.
+      COALESCE(
+        CASE WHEN jsonb_typeof(c.office_hours_health_thresholds->'waiting_red') = 'number'
+             THEN NULLIF(GREATEST((c.office_hours_health_thresholds->'waiting_red')::numeric, 0), 0) END,
+        5
+      ) AS waiting_red,
+      COALESCE(
+        CASE WHEN jsonb_typeof(c.office_hours_health_thresholds->'oldest_wait_red_minutes') = 'number'
+             THEN NULLIF(GREATEST((c.office_hours_health_thresholds->'oldest_wait_red_minutes')::numeric, 0), 0) END,
+        30
+      ) AS oldest_red
     FROM public.classes c
     WHERE c.archived = false
   ),
@@ -51,8 +64,10 @@ AS $$
       qu.class_id AS cid,
       qu.id AS qid,
       COALESCE(w.n, 0) AS waiting,
-      -- No open request means no wait, not a zero-minute wait; both read as "not red".
-      COALESCE(EXTRACT(EPOCH FROM (now() - w.oldest)) / 60, 0)::int AS oldest_minutes,
+      -- Seconds, cast the way office_hours_queue_health casts oldest_wait_seconds. Comparing in
+      -- minutes rounded instead: 29m40s became 30 and counted red while the dashboard, which
+      -- needs >= 1800 seconds, did not.
+      COALESCE(EXTRACT(EPOCH FROM (now() - w.oldest)), 0)::int AS oldest_seconds,
       COALESCE(s.n, 0) AS staffed
     FROM queues qu
     LEFT JOIN (
@@ -71,12 +86,14 @@ AS $$
   SELECT
     t.cid,
     COUNT(p.qid)::int,
+    -- isQueueRed (lib/queueHealthAlerts.ts): the wait only counts while something is waiting.
     COUNT(*) FILTER (
-      WHERE p.waiting >= t.waiting_red OR p.oldest_minutes >= t.oldest_red
+      WHERE p.waiting >= t.waiting_red
+         OR (p.waiting > 0 AND p.oldest_seconds >= t.oldest_red * 60)
     )::int,
     COUNT(*) FILTER (WHERE p.staffed = 0)::int,
     COALESCE(SUM(p.waiting), 0)::int,
-    COALESCE(MAX(p.oldest_minutes), 0)::int
+    COALESCE(MAX(p.oldest_seconds), 0)::int / 60
   FROM thresholds t
   LEFT JOIN per_queue p ON p.cid = t.cid
   GROUP BY t.cid
