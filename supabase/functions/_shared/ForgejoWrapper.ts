@@ -290,7 +290,8 @@ const sameNames = (a: string[], b: string[]) =>
 
 /**
  * Null when the list may not have been read whole. A list that fits on one page is one query, so it is whole.
- * A longer one is checked three ways:
+ * Whether it fits is decided by X-Total-Count, not by the page size asked for: Forgejo caps `limit` at
+ * [api].MAX_RESPONSE_ITEMS, which an operator may set below it. A longer list is checked three ways:
  * - Each later page's X-Total-Count must match page 1's. That count was read after page 1's rows, so it catches
  *   a deletion from then on.
  * - Page 1 is read again at the end and must hold the same names. A mint lands on page 1, newest first, and so
@@ -303,12 +304,17 @@ async function scanCoderTokenNames(config: ForgejoConfig, login: string, pageSiz
   const first = await readTokenPage(config, login, 1, pageSize);
   if (first === "missing") return [];
   const names = new Set<string>(first.names);
-  if (first.names.length >= pageSize) {
+  // A full page may have more after it; so may a short one when the count says so (a capped limit).
+  const longer = first.names.length >= pageSize || (first.count !== null && Number(first.count) > first.names.length);
+  if (longer) {
+    // Pages as long as Forgejo actually made page 1.
+    const served = first.names.length;
+    if (served === 0) return null;
     for (let page = 2; ; page++) {
       const next = await readTokenPage(config, login, page, pageSize);
       if (next === "missing" || next.count !== first.count) return null;
       for (const name of next.names) names.add(name);
-      if (next.names.length < pageSize) break;
+      if (next.names.length < served) break;
     }
     const again = await readTokenPage(config, login, 1, pageSize);
     if (again === "missing" || again.count !== first.count || !sameNames(again.names, first.names)) return null;

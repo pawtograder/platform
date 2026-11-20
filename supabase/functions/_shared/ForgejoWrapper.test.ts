@@ -965,6 +965,24 @@ Deno.test("token list: a tie that splits every page boundary tried is an error, 
   );
 });
 
+Deno.test("token list: a MAX_RESPONSE_ITEMS below the page size asked for still reads the whole list", async () => {
+  const now = Date.now();
+  // Forgejo caps limit at 20 here: page 1 comes back short, but X-Total-Count says 21.
+  const names = Array.from({ length: 21 }, (_, i) => coderTokenName(i === 20 ? 9 : 7, now - 60_000 - i));
+  const target = names[20];
+  await withTokenList(
+    names,
+    () => {},
+    async (tokens, pagesRead) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assert(!tokens.includes(target), "repository 9's token, the 21st, is revoked");
+      assertEquals(pagesRead, [1, 2, 1]);
+    },
+    () => {},
+    (page, _limit, tokens) => tokens.slice((page - 1) * 20, page * 20)
+  );
+});
+
 Deno.test("token list: a list that keeps changing is an error, so nothing is taken as revoked", async () => {
   const now = Date.now();
   const names = Array.from({ length: 60 }, (_, i) => coderTokenName(9, now - 60_000 - i));
