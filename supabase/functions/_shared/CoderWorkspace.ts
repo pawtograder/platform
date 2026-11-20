@@ -402,18 +402,18 @@ async function deliverGitCredentials(
   repo: RepositoryRow,
   deadline: number
 ): Promise<WorkspaceOpenResponse | null> {
+  const { db, coder } = deps;
+  const cleanupMs = deadline - CLEANUP_RESERVE_MS - clock(deps)();
+  const cleanupSignal = cleanupMs > 0 ? AbortSignal.timeout(cleanupMs) : AbortSignal.abort();
+  const cleanupCoder = cutOff(coder, cleanupSignal);
   if (repo.git_provider === "github") {
-    await deliverCommitEmail(deps, caller, coderUserId).catch((e) =>
-      console.error("[workspace-open] Commit email delivery failed", e)
+    await cleanUp("Commit email delivery", cleanupSignal, () =>
+      deliverCommitEmail({ ...deps, coder: cleanupCoder }, caller, coderUserId)
     );
     return null;
   }
   const userId = caller.userId;
-  const { db, coder } = deps;
   const forgejo = requireForgejo(deps);
-  const cleanupMs = deadline - CLEANUP_RESERVE_MS - clock(deps)();
-  const cleanupSignal = cleanupMs > 0 ? AbortSignal.timeout(cleanupMs) : AbortSignal.abort();
-  const cleanupCoder = cutOff(coder, cleanupSignal);
   const login = await db.getForgejoLogin(userId, forgejo.url);
   if (!login) {
     return credentialsUnavailable("Your Forgejo account isn't set up yet. Try again in a few minutes.");

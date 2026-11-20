@@ -2370,6 +2370,35 @@ Deno.test("github: a commit email key that couldn't be deleted doesn't block the
   );
 });
 
+Deno.test("github: a commit email write that stalls is cut off, and the workspace is still created", async () => {
+  const t = setup();
+  const { coder } = t;
+  githubProvider(coder);
+  await openWorkspace(t.deps, ALEX, { assignment_id: 42 });
+  signInAndLink(coder, ALEX);
+  let stalled = 0;
+  const stall: typeof fetch = async (input, init) => {
+    if (new URL(String(input)).pathname === "/api/v2/users/me/secrets" && init?.method === "POST") {
+      stalled++;
+      const signal = init!.signal!;
+      await new Promise((_resolve, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }
+    return await coder.fetch(input, init);
+  };
+  // A 10 s budget: its signal fires at 8 s, and cleanup is cut off at 2 s.
+  const deps = onRealTime(t, 10_000, stall);
+  const t0 = Date.now();
+  const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 42 }));
+  const elapsed = Date.now() - t0;
+  assertEquals(stalled, 1);
+  assert(elapsed >= 1_500 && elapsed < 6_000, `answered after ${elapsed} ms`);
+  assertEquals(res.status, "starting");
+  assertEquals(coder.workspaces.length, 1);
+});
+
 Deno.test("github: an unlinked optional provider stops a GitHub workspace, not a Forgejo one", async () => {
   const { coder, deps } = setup();
   githubProvider(coder);
