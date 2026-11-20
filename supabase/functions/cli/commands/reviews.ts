@@ -6,6 +6,7 @@ import { createAuthenticatedSupabaseClient, type MCPAuthContext } from "../../_s
 import type { Json } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
+import { fetchProfileNames } from "../utils/profiles.ts";
 import {
   isReviewComplete,
   selectAssignableSubmissions,
@@ -161,30 +162,6 @@ async function fetchReviewAssignments(
     if (rows.length < page) break;
   }
   return out;
-}
-
-/** Batched private-profile-id → display name lookup. */
-async function fetchProfileNames(
-  supabase: ReturnType<typeof getAdminClient>,
-  ids: Array<string | null | undefined>
-): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
-  const unique = [...new Set(ids.filter((id): id is string => !!id))];
-  if (unique.length === 0) return names;
-
-  // profiles.id is a UUID, so this is bounded by URL length, not max_rows.
-  const BATCH = UUID_IN_BATCH_SIZE;
-  for (let i = 0; i < unique.length; i += BATCH) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, name")
-      .in("id", unique.slice(i, i + BATCH));
-    if (error) throw new CLICommandError(`Failed to resolve profile names: ${error.message}`, 500);
-    for (const row of data ?? []) {
-      if (row.name) names.set(row.id, row.name);
-    }
-  }
-  return names;
 }
 
 /** `fetchReviewAssignments` yields loose rows; narrow them for the status rule. */

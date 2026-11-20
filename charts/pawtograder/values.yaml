@@ -2248,8 +2248,18 @@ backup:
   # filesystem, defeating the point, and worse than /tmp in one way: a
   # local-path PVC is not charged to the pod's ephemeral storage, so kubelet
   # will not evict the pod before the node fills.
+  # With Forgejo on, its backup (templates/backup-apps.yaml) stages Forgejo's
+  # dump, a git copy of every repository and the /data archive here together
+  # (about twice the volume's size plus the dump), so size for the larger of
+  # that and Pawtograder's dump. Coder's backup stages only its dump.
   scratchSize: 30Gi
   scratchStorageClass: ""
+  # With global.environment: production, the render fails when Forgejo keeps
+  # data outside its /data volume (forgejo.gitea.config: a STORAGE_TYPE other
+  # than local, or a storage PATH off the volume), because the Forgejo backup
+  # copies only that volume. true confirms that storage is backed up some other
+  # way, such as a versioned and replicated bucket.
+  forgejoExternalStorageBackedUp: false
   # Retained Jobs each keep their pod, and each pod keeps its scratch PVC, so
   # these are the retained-storage lever as well as the log-retention one.
   # Worst case is (successful + failed x attempts) x scratchSize of REQUESTED
@@ -2782,6 +2792,10 @@ forgejo:
     hosts: []
   # true: /user/login goes straight to the Pawtograder login source. /user/login?password_login=1 keeps the password form.
   signInRedirect: true
+  # ID of the pawtograder row in `forgejo admin auth list` (Forgejo's API can't list sources).
+  authSourceId: ""
+  # The chart appends the API host: "external" alone refuses it when it resolves to an in-cluster address.
+  webhookAllowedHosts: [external]
   # Subchart values aren't templated: the ConfigMap name is <release>-forgejo-templates.
   extraVolumes:
     - name: pawtograder-templates
@@ -2809,6 +2823,9 @@ forgejo:
       - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
+      - name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-webhook, key: ALLOWED_HOST_LIST }
     config:
       server:
         DISABLE_SSH: true
@@ -2927,13 +2944,13 @@ coder:
     signInText: Sign in with Pawtograder
     # true: anyone who can sign in to Pawtograder gets a Coder account, and with it workspace compute.
     allowSignups: false
-  # Run scripts/setup-coder-forgejo-auth.sh before enabling; coderd exits at startup without the client ID.
+  # Add Coder's callback to the Pawtograder GitHub App before enabling; coderd exits at startup without the client ID.
   externalAuth:
-    forgejo:
+    github:
       enabled: false
-      # Changing it unlinks every user and needs the OAuth app re-registered.
-      id: forgejo
-      displayName: Forgejo
+      # Changing it unlinks every user and changes the callback URL the App must list.
+      id: github
+      displayName: GitHub
   coder:
     image:
       repo: ghcr.io/pawtograder/mirror/coder/coder
@@ -3082,8 +3099,6 @@ coderBootstrap:
     image: ""
     # "" uses the image's code-server.
     codeServerVersion: 4.143.1
-    # Workspaces clone and push with this Coder external auth provider's token. Must equal coder.externalAuth.forgejo.id.
-    externalAuthId: forgejo
     arch: amd64
     priorityClassName: ""
     imagePullPolicy: IfNotPresent
