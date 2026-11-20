@@ -125,6 +125,15 @@ export function coderTokenName(repositoryId: number, mintedAt: number): string {
   return `${repoTokenPrefix(repositoryId)}${mintedAt}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
+/**
+ * Forgejo tokens don't expire. A repository whose newest token is this old hasn't been opened in that time, so its
+ * tokens are revoked: by the next open of another repository (revokeIdleTokens), or by the reconciler for a student
+ * who doesn't open one again. Must match the interval in forgejo_repo_tokens_to_revoke.
+ */
+export const IDLE_TOKEN_MS = 14 * 24 * 60 * 60_000;
+
+const CODER_TOKEN_NAME = /^pawtograder-coder-(\d+)-(\d+)-/;
+
 function tokenMintedAt(name: string, repositoryId: number): number | null {
   const prefix = repoTokenPrefix(repositoryId);
   if (!name.startsWith(prefix)) return null;
@@ -202,6 +211,37 @@ export async function revokeRepoToken(
   return names.length;
 }
 
+/**
+ * Revokes the tokens of every repository other than `keep` whose newest token was minted IDLE_TOKEN_MS or more
+ * before `now`. Returns the ids of the repositories that still have a token. A name without a readable repository
+ * and mint time is left alone.
+ */
+export async function revokeIdleTokens(
+  config: ForgejoConfig,
+  login: string,
+  keep: number,
+  now: number = Date.now()
+): Promise<Set<number>> {
+  const byRepository = new Map<number, { name: string; at: number }[]>();
+  for (const name of await listCoderTokenNames(config, login)) {
+    const m = name.match(CODER_TOKEN_NAME);
+    if (!m || !Number.isSafeInteger(Number(m[1])) || !Number.isSafeInteger(Number(m[2]))) continue;
+    const id = Number(m[1]);
+    const list = byRepository.get(id) ?? [];
+    list.push({ name, at: Number(m[2]) });
+    byRepository.set(id, list);
+  }
+  const live = new Set<number>();
+  for (const [id, tokens] of byRepository) {
+    if (id === keep || Math.max(...tokens.map((t) => t.at)) > now - IDLE_TOKEN_MS) {
+      live.add(id);
+      continue;
+    }
+    for (const t of tokens) await deleteToken(config, login, t.name);
+  }
+  return live;
+}
+
 async function deleteToken(config: ForgejoConfig, login: string, tokenName: string): Promise<void> {
   const path = `/users/${encodeURIComponent(login)}/tokens/${encodeURIComponent(tokenName)}`;
   const res = await forgejo(config, "DELETE", path);
@@ -212,23 +252,86 @@ async function deleteToken(config: ForgejoConfig, login: string, tokenName: stri
   throw await failure(res, "token revoke");
 }
 
-const TOKEN_PAGE_SIZE = 50;
+/** One page size per attempt: a retry moves the page boundaries, so a tie that split one page from the next doesn't. */
+const TOKEN_PAGE_SIZES = [50, 49, 47];
 
+/**
+ * The list is paged by offset, so a token deleted between two page reads (by another open or a reconciler pass)
+ * moves the unread ones forward and the next page can miss one. Forgejo lists tokens newest first
+ * (ListAccessTokensOptions.ToOrders), so a mint only pushes the unread ones back, and only a deletion can pull
+ * one forward. The order is by created_unix alone, in seconds, so two tokens with the same one can come back in
+ * either order, and each page query picks its own. A scan that may have missed one is read again, and a list
+ * that can't be read whole is an error: callers keep their claim or leave the work to the next open.
+ */
 async function listCoderTokenNames(config: ForgejoConfig, login: string): Promise<string[]> {
-  const names: string[] = [];
-  for (let page = 1; ; page++) {
-    const query = new URLSearchParams({ page: String(page), limit: String(TOKEN_PAGE_SIZE) });
-    const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
-    if (res.status === 404) {
-      await res.body?.cancel();
-      return [];
-    }
-    if (!res.ok) throw await failure(res, "token list");
-    const tokens = (await res.json()) as { name: string }[];
-    names.push(...tokens.map((t) => t.name).filter((n) => n.startsWith(CODER_TOKEN_PREFIX)));
-    if (tokens.length < TOKEN_PAGE_SIZE) break;
+  for (const pageSize of TOKEN_PAGE_SIZES) {
+    const names = await scanCoderTokenNames(config, login, pageSize);
+    if (names) return names;
   }
-  return names;
+  throw new Error("Forgejo token list failed: it kept changing while it was read");
+}
+
+/** `ids` are Forgejo's token ids, which only grow; NaN when a response has none. */
+type TokenPage = { count: string | null; names: string[]; ids: number[] } | "missing";
+
+async function readTokenPage(config: ForgejoConfig, login: string, page: number, limit: number): Promise<TokenPage> {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return "missing";
+  }
+  if (!res.ok) throw await failure(res, "token list");
+  const tokens = (await res.json()) as { id?: number; name: string }[];
+  return {
+    count: res.headers.get("X-Total-Count"),
+    names: tokens.map((t) => t.name),
+    ids: tokens.map((t) => (typeof t.id === "number" ? t.id : NaN))
+  };
+}
+
+const sameNames = (a: string[], b: string[]) =>
+  a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
+
+/**
+ * Null when the list may not have been read whole. A list that fits on one page is one query, so it is whole.
+ * Whether it fits is decided by X-Total-Count, not by the page size asked for: Forgejo caps `limit` at
+ * [api].MAX_RESPONSE_ITEMS, which an operator may set below it. A longer list is checked three ways:
+ * - Each later page's X-Total-Count must match page 1's. That count was read after page 1's rows, so it catches
+ *   a deletion from then on.
+ * - Page 1 is read again at the end and must hold the same names. A mint lands on page 1, newest first, and so
+ *   does any deletion before page 1's count that could move a token past the end of page 1. With no mint, the
+ *   counts see every other deletion, so the list held the same `count` tokens throughout.
+ * - So the scan must have seen `count` different names. Fewer means two pages ordered tied tokens differently,
+ *   repeating one and leaving out another.
+ * The order is by created_unix alone, so a token minted in the same second as the ones at a page boundary could
+ * land past page 1 (#1303 review). Token ids only grow, so a later page's token with an id above all of page 1's
+ * was minted during the scan, or ties more than a page of tokens to one second. Either way the scan is read
+ * again. A mint that hides a token is always on a page read after it, so this sees it.
+ */
+async function scanCoderTokenNames(config: ForgejoConfig, login: string, pageSize: number): Promise<string[] | null> {
+  const first = await readTokenPage(config, login, 1, pageSize);
+  if (first === "missing") return [];
+  const names = new Set<string>(first.names);
+  // A full page may have more after it; so may a short one when the count says so (a capped limit).
+  const longer = first.names.length >= pageSize || (first.count !== null && Number(first.count) > first.names.length);
+  if (longer) {
+    // Pages as long as Forgejo actually made page 1.
+    const served = first.names.length;
+    if (served === 0) return null;
+    const newestOnPage1 = Math.max(...first.ids);
+    for (let page = 2; ; page++) {
+      const next = await readTokenPage(config, login, page, pageSize);
+      if (next === "missing" || next.count !== first.count) return null;
+      if (next.ids.some((id) => id > newestOnPage1)) return null;
+      for (const name of next.names) names.add(name);
+      if (next.names.length < served) break;
+    }
+    const again = await readTokenPage(config, login, 1, pageSize);
+    if (again === "missing" || again.count !== first.count || !sameNames(again.names, first.names)) return null;
+    if (first.count !== null && names.size !== Number(first.count)) return null;
+  }
+  return [...names].filter((name) => name.startsWith(CODER_TOKEN_PREFIX));
 }
 
 export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
