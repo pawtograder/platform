@@ -33,10 +33,16 @@ function question(clientId: string, label: string): Question {
   };
 }
 
-/** The same rectangle on the same page every time. Only the association differs. */
+/**
+ * The same rectangle on the same page every time. Only the association differs.
+ *
+ * `client_id` is deliberately constant across calls. The editor regenerates client_ids on every
+ * load, so the snapshot ignores them by design; holding it fixed here keeps that out of the way,
+ * leaving `question_client_id` as the only thing these cases vary.
+ */
 function regionFor(questionClientId: string | null): Region {
   return {
-    id: null,
+    client_id: "region-under-test",
     question_client_id: questionClientId,
     kind: "answer",
     page_number: 1,
