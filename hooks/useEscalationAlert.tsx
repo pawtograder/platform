@@ -1,6 +1,6 @@
 "use client";
 
-import { Text } from "@chakra-ui/react";
+import { Box, Text } from "@chakra-ui/react";
 import { useEffect, useRef, useState } from "react";
 import { getNotificationManager } from "@/lib/notifications/NotificationManager";
 import { isCheckInPending } from "@/lib/helpRequestEscalation";
@@ -127,22 +127,19 @@ export function useCheckInAlert({ subject, status, checkInExpiresAt, enabled }: 
 
 /** Shows the check-in alert on the page itself, for a student who is already looking at it. */
 export function CheckInAlertBanner({ message }: { message: string | null }) {
-  if (!message) return null;
+  // role="status": with the page focused, notify() returns early and shows nothing, so this
+  // banner is the whole alert. Without a live region a screen reader never announces it.
+  //
+  // The region stays mounted while there is no message. Assistive technology announces a change
+  // to a live region, not the content a region arrives with, so inserting the element and its
+  // text together can be missed (W3C ARIA22).
   return (
-    // role="status": with the page focused, notify() returns early and shows nothing, so this
-    // banner is the whole alert. Without a live region a screen reader never announces it.
-    <Text
-      role="status"
-      fontSize="sm"
-      fontWeight="semibold"
-      color="fg"
-      bg="bg.emphasized"
-      px={3}
-      py={2}
-      borderRadius="md"
-      mb={3}
-    >
-      {message}
-    </Text>
+    <Box role="status" mb={message ? 3 : 0}>
+      {message && (
+        <Text fontSize="sm" fontWeight="semibold" color="fg" bg="bg.emphasized" px={3} py={2} borderRadius="md">
+          {message}
+        </Text>
+      )}
+    </Box>
   );
 }

@@ -211,7 +211,16 @@ describe("office hours escalation alerts", () => {
 
     it("announces the in-page banner to a screen reader", () => {
       // With the page focused, notify() returns early, so the banner is the only alert there is.
-      render(
+      // The region has to be on the page before the message, or the announcement is a new element
+      // rather than a change to a live one, which assistive technology can miss (W3C ARIA22).
+      const { rerender } = render(
+        <ChakraProvider value={defaultSystem}>
+          <CheckInAlertBanner message={null} />
+        </ChakraProvider>
+      );
+      expect(screen.getByRole("status")).toBeEmptyDOMElement();
+
+      rerender(
         <ChakraProvider value={defaultSystem}>
           <CheckInAlertBanner message="Your ticket was resolved. Did your problem get fixed?" />
         </ChakraProvider>
