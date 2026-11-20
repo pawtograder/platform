@@ -23,7 +23,7 @@ export function OnboardingPopover({
   active: boolean;
   open: boolean;
   onDismiss: () => void;
-  message: string;
+  message: ReactNode;
   placement?: "bottom" | "bottom-start" | "bottom-end";
   children: ReactNode;
 }) {

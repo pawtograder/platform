@@ -7,7 +7,7 @@ import { Box, Flex, HStack, Text, Badge } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { FaPlus } from "react-icons/fa";
 import { FiChevronRight, FiChevronDown } from "react-icons/fi";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useActiveHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
@@ -25,9 +25,41 @@ import { newRequestHint, nextOfficeHoursStart } from "@/lib/officeHoursOnboardin
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useIsTableControllerReady } from "@/lib/TableController";
 import { format } from "date-fns";
 
 export type OfficeHoursViewMode = "my-requests" | "browse" | "working" | "all-requests" | "dashboard" | "settings";
+
+/**
+ * The New Request hint's text while nobody is on duty. It names the next office hours on the
+ * calendar, or says to check back later if the calendar has none coming up.
+ *
+ * This is its own component so that the calendar is read only while the hint is open. The popover
+ * mounts its content when it opens, so pages where the hint never opens don't load the calendar.
+ */
+function NoStaffOnDutyMessage() {
+  const { calendarEvents } = useCourseController();
+  const calendarLoaded = useIsTableControllerReady(calendarEvents);
+  const officeHoursEvents = useOfficeHoursSchedule();
+  // Check the time again every minute, so office hours that have started stop being called "next".
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Until the calendar loads, "Check back later" might be wrong, so say only what is known.
+  if (!calendarLoaded) return <>No one is on duty right now.</>;
+  const next = nextOfficeHoursStart(officeHoursEvents, now);
+  return (
+    <>
+      {next
+        ? `No one is on duty right now. The next office hours start ${format(next, "EEE, MMM d 'at' h:mm a")}.`
+        : "No one is on duty right now. Check back later."}
+    </>
+  );
+}
 
 function NavLink({ href, selected, children }: { href: string; selected: boolean; children: React.ReactNode }) {
   return (
@@ -102,8 +134,7 @@ export function OfficeHoursHeader({
   }, [activeQueueAssignments, helpQueues, isManageMode]);
 
   // Onboarding hint on the New Request button (see lib/officeHoursOnboarding.ts). When nobody is on
-  // duty, the hint names the next office hours on the calendar, or says to check back later if the
-  // course doesn't put office hours on the calendar.
+  // duty, NoStaffOnDutyMessage gives the text.
   //
   // Only a student on the student pages of a course with the feature on takes part. For everyone
   // else, clicking New Request doesn't mark the onboarding complete, and nothing reads localStorage.
@@ -112,7 +143,6 @@ export function OfficeHoursHeader({
   const onboardingActive = onboardingOn && isStudent && !isManageMode;
   const onboardingCompleted = useOnboardingCompleted(onboardingActive);
   const onboardingDataLoaded = useOnboardingDataLoaded();
-  const officeHoursEvents = useOfficeHoursSchedule();
   const newRequestHintId = newRequestHint({
     featureEnabled: onboardingOn,
     isStudent: isStudent && !isManageMode,
@@ -121,15 +151,12 @@ export function OfficeHoursHeader({
   });
   const completeOnboardingOnClick = onboardingActive ? completeOnboarding : undefined;
   const newRequestOnboarding = useOnboardingHint(onboardingDataLoaded ? newRequestHintId : null);
-  const newRequestHintMessage = useMemo(() => {
-    if (newRequestHintId === "staff-on-duty") {
-      return "Staff are on duty. Click New Request to ask for help.";
-    }
-    const next = nextOfficeHoursStart(officeHoursEvents, new Date());
-    return next
-      ? `No one is on duty right now. The next office hours start ${format(next, "EEE, MMM d 'at' h:mm a")}.`
-      : "No one is on duty right now. Check back later.";
-  }, [newRequestHintId, officeHoursEvents]);
+  const newRequestHintMessage =
+    newRequestHintId === "staff-on-duty" ? (
+      "Staff are on duty. Click New Request to ask for help."
+    ) : (
+      <NoStaffOnDutyMessage />
+    );
 
   // Get queues the TA is currently working
   const workingQueues = useMemo(() => {
