@@ -1357,6 +1357,7 @@ export function RubricCriteria({
   currentRubricId?: number;
   targetStudentProfileId?: string | null;
 }) {
+  const showDescriptions = useContext(RubricDescriptionsContext);
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
   const comments = useRubricCriteriaInstances({
     criteria: criteria,
@@ -1423,9 +1424,13 @@ export function RubricCriteria({
           </HStack>
         </Heading>
 
-        <Fieldset.HelperText>
-          <RubricDescription text={criteria.description} />
-        </Fieldset.HelperText>
+        {/* An empty helper text still takes the fieldset's gap on each side, which left a blank band in
+            every exam question's card, since those have no description (#1268). */}
+        {criteria.description && showDescriptions && (
+          <Fieldset.HelperText>
+            <RubricDescription text={criteria.description} />
+          </Fieldset.HelperText>
+        )}
         {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
           <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">
             {GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE}
