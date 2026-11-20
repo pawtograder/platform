@@ -44,6 +44,10 @@ describe("toWorkspaceState", () => {
     [
       { status: "credentials_unavailable", message: "Try again in a few minutes." },
       { status: "failed", step: "build", message: "Try again in a few minutes." }
+    ],
+    [
+      { status: "needs_org_invite", message: "Accept the invitation." },
+      { status: "failed", step: "build", message: "Accept the invitation." }
     ]
   ] as [WorkspaceOpenResponse, WorkspaceState][])("maps %j", (res, expected) => {
     expect(toWorkspaceState(res)).toEqual(expected);

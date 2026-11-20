@@ -2367,33 +2367,70 @@ Deno.test("github: a commit email key that couldn't be deleted doesn't block the
   );
 });
 
-Deno.test("github: a commit email write that stalls is cut off, and the workspace is still created", async () => {
+Deno.test(
+  "github: a commit email write that stalls builds nothing, and the open answers 504 within budget",
+  async () => {
+    const t = setup();
+    const { coder } = t;
+    githubProvider(coder);
+    await openWorkspace(t.deps, ALEX, { assignment_id: 42 });
+    signInAndLink(coder, ALEX);
+    const stall = stallUntilCutOff(
+      coder.fetch,
+      (method, path) => method === "POST" && path === "/api/v2/users/me/secrets"
+    );
+    // A 10 s budget: its signal fires at 8 s.
+    const deps = onRealTime(t, 10_000, stall.fetch);
+    const t0 = Date.now();
+    const err = await assertRejects(() =>
+      withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 42 }))
+    );
+    const elapsed = Date.now() - t0;
+    assertEquals(stall.stalled(), 1);
+    assert(elapsed >= 7_500 && elapsed < 10_000, `answered after ${elapsed} ms`);
+    assertEquals((err as UserVisibleError).status, 504);
+    assertEquals(coder.workspaces.length, 0, "no workspace starts with the placeholder email");
+  }
+);
+
+Deno.test("github: an expired key list that stalls is cut off, and the email is still written", async () => {
   const t = setup();
   const { coder } = t;
   githubProvider(coder);
   await openWorkspace(t.deps, ALEX, { assignment_id: 42 });
   signInAndLink(coder, ALEX);
-  let stalled = 0;
-  const stall: typeof fetch = async (input, init) => {
-    if (new URL(String(input)).pathname === "/api/v2/users/me/secrets" && init?.method === "POST") {
-      stalled++;
-      const signal = init!.signal!;
-      await new Promise((_resolve, reject) => {
-        if (signal.aborted) reject(signal.reason);
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-      });
-    }
-    return await coder.fetch(input, init);
-  };
-  // A 10 s budget: its signal fires at 8 s, and cleanup is cut off at 2 s.
-  const deps = onRealTime(t, 10_000, stall);
+  const stall = stallUntilCutOff(coder.fetch, isKeyList);
+  const deps = onRealTime(t, STALL_BUDGET_MS, stall.fetch);
   const t0 = Date.now();
   const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 42 }));
   const elapsed = Date.now() - t0;
-  assertEquals(stalled, 1);
-  assert(elapsed >= 1_500 && elapsed < 6_000, `answered after ${elapsed} ms`);
+  assertEquals(stall.stalled(), 1);
+  assert(
+    elapsed >= STALL_CUTOFF_MS - 500 && elapsed < STALL_CUTOFF_MS + 4_000,
+    `cleanup was cut off, and the open answered after ${elapsed} ms`
+  );
   assertEquals(res.status, "starting");
   assertEquals(coder.workspaces.length, 1);
+  assertEquals(coder.secrets[res.coder_user_id!].git_email, {
+    value: `${ALEX.email}\n`,
+    file_path: "/home/coder/.git-email"
+  });
+});
+
+Deno.test("github: a commit email that can't be written is credentials_unavailable, and nothing is built", async () => {
+  const { coder, reported, deps } = setup();
+  githubProvider(coder);
+  await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  signInAndLink(coder, ALEX);
+  coder.failSecretWrite = true;
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 42 });
+  assertEquals(res.status, "credentials_unavailable");
+  assertEquals(coder.workspaces.length, 0);
+  assertEquals(reported.length, 1);
+  assert(
+    coder.keys.every((k) => k.deleted),
+    "the short-lived key is deleted"
+  );
 });
 
 Deno.test("github: an unlinked optional provider stops a GitHub workspace, not a Forgejo one", async () => {

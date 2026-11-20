@@ -83,6 +83,13 @@ export function toWorkspaceState(res: WorkspaceOpenResponse): WorkspaceState {
         step: "build",
         message: res.message || "The workspace couldn't be given access to your repository."
       };
+    case "needs_org_invite":
+      // Nothing was built. The message says to accept the invitation, and Retry opens again.
+      return {
+        status: "failed",
+        step: "build",
+        message: res.message || "Accept the course's GitHub organization invitation, then open the workspace again."
+      };
     case "account_conflict":
       return {
         status: "account_conflict",

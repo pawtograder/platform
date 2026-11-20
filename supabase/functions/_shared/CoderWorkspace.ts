@@ -407,10 +407,16 @@ async function deliverGitCredentials(
   const cleanupSignal = cleanupMs > 0 ? AbortSignal.timeout(cleanupMs) : AbortSignal.abort();
   const cleanupCoder = cutOff(coder, cleanupSignal);
   if (repo.git_provider === "github") {
-    await cleanUp("Commit email delivery", cleanupSignal, () =>
-      deliverCommitEmail({ ...deps, coder: cleanupCoder }, caller, coderUserId)
-    );
-    return null;
+    try {
+      await deliverCommitEmail(deps, cleanupSignal, caller, coderUserId);
+      return null;
+    } catch (e) {
+      if (outOfTime(deps)) throw e;
+      deps.report?.(e);
+      return credentialsUnavailable(
+        "Pawtograder couldn't give the workspace your commit email. Try again in a minute."
+      );
+    }
   }
   const userId = caller.userId;
   const forgejo = requireForgejo(deps);
@@ -472,11 +478,20 @@ async function deliverGitCredentials(
   }
 }
 
-/** GitHub's token comes from the agent's GIT_ASKPASS, so only the commit email has to be delivered. */
-async function deliverCommitEmail(deps: Deps, caller: Caller, coderUserId: string): Promise<void> {
+/**
+ * GitHub's token comes from the agent's GIT_ASKPASS, so only the commit email has to be delivered. It is
+ * required, not cleanup: without it the startup script falls back to the owner's placeholder email (#1222).
+ */
+async function deliverCommitEmail(
+  deps: Deps,
+  cleanupSignal: AbortSignal,
+  caller: Caller,
+  coderUserId: string
+): Promise<void> {
   const { coder } = deps;
-  await deleteExpiredKeys(deps, coderUserId).catch((e) =>
-    console.error("[workspace-open] Expired key cleanup failed", e)
+  const cleanupCoder = cutOff(coder, cleanupSignal);
+  await cleanUp("Expired key cleanup", cleanupSignal, () =>
+    deleteExpiredKeys({ ...deps, coder: cleanupCoder }, coderUserId)
   );
   const key = await mintUserKey(coder, coderUserId, secretKeyName("email"), SECRET_KEY_LIFETIME_MS);
   const keyId = apiKeyId(key);
@@ -486,11 +501,7 @@ async function deliverCommitEmail(deps: Deps, caller: Caller, coderUserId: strin
       { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
     );
   } finally {
-    try {
-      await deleteUserKey(coder, coderUserId, keyId);
-    } catch (e) {
-      console.error("[workspace-open] Coder API key delete failed; it expires on its own", e);
-    }
+    await cleanUp("Coder API key delete", cleanupSignal, () => deleteUserKey(cleanupCoder, coderUserId, keyId));
   }
 }
 
