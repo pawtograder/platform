@@ -259,8 +259,8 @@ const TOKEN_LIST_ATTEMPTS = 3;
  * The list is paged by offset, so a token deleted between two page reads (by another open or a reconciler pass)
  * moves the unread ones forward and the next page can miss one. Forgejo lists tokens newest first
  * (ListAccessTokensOptions.ToOrders), so a mint only pushes the unread ones back, and only a deletion can pull
- * one forward. A deletion also lowers X-Total-Count, so a scan whose count changed is read again, and a list
- * that keeps changing is an error: callers keep their claim or leave the work to the next open.
+ * one forward. A scan that may have missed one is read again, and a list that keeps changing is an error:
+ * callers keep their claim or leave the work to the next open.
  */
 async function listCoderTokenNames(config: ForgejoConfig, login: string): Promise<string[]> {
   for (let attempt = 0; attempt < TOKEN_LIST_ATTEMPTS; attempt++) {
@@ -270,30 +270,47 @@ async function listCoderTokenNames(config: ForgejoConfig, login: string): Promis
   throw new Error("Forgejo token list failed: it kept changing while it was read");
 }
 
-/** Null when the list changed between page reads. */
+type TokenPage = { count: string | null; names: string[] } | "missing";
+
+async function readTokenPage(config: ForgejoConfig, login: string, page: number): Promise<TokenPage> {
+  const query = new URLSearchParams({ page: String(page), limit: String(TOKEN_PAGE_SIZE) });
+  const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return "missing";
+  }
+  if (!res.ok) throw await failure(res, "token list");
+  const tokens = (await res.json()) as { name: string }[];
+  return { count: res.headers.get("X-Total-Count"), names: tokens.map((t) => t.name) };
+}
+
+/**
+ * Null when the list may have changed while it was read. A list that fits on one page is one query, so it is
+ * whole. A longer one is checked twice over:
+ * - Each later page's X-Total-Count must match page 1's. That count was read after page 1's rows, so it catches
+ *   a deletion from then on.
+ * - Page 1 is read again at the end and must be unchanged. A mint lands on page 1, newest first, and so does
+ *   any deletion before page 1's count that could move a token past the end of page 1. With no mint, the counts
+ *   see every other deletion.
+ */
 async function scanCoderTokenNames(config: ForgejoConfig, login: string): Promise<string[] | null> {
-  const names = new Set<string>();
-  let total: string | null = null;
-  for (let page = 1; ; page++) {
-    const query = new URLSearchParams({ page: String(page), limit: String(TOKEN_PAGE_SIZE) });
-    const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
-    if (res.status === 404) {
-      await res.body?.cancel();
-      return [];
+  const first = await readTokenPage(config, login, 1);
+  if (first === "missing") return [];
+  const names = new Set<string>(first.names);
+  if (first.names.length >= TOKEN_PAGE_SIZE) {
+    for (let page = 2; ; page++) {
+      const next = await readTokenPage(config, login, page);
+      if (next === "missing" || next.count !== first.count) return null;
+      // A name repeated from the page before means a mint, which the re-read of page 1 catches.
+      for (const name of next.names) names.add(name);
+      if (next.names.length < TOKEN_PAGE_SIZE) break;
     }
-    if (!res.ok) throw await failure(res, "token list");
-    const count = res.headers.get("X-Total-Count");
-    if (page === 1) total = count;
-    else if (count !== total) {
-      await res.body?.cancel();
+    const again = await readTokenPage(config, login, 1);
+    if (again === "missing" || again.count !== first.count || again.names.join("\n") !== first.names.join("\n")) {
       return null;
     }
-    const tokens = (await res.json()) as { name: string }[];
-    // A mint between reads repeats a name from the page before.
-    for (const t of tokens) if (t.name.startsWith(CODER_TOKEN_PREFIX)) names.add(t.name);
-    if (tokens.length < TOKEN_PAGE_SIZE) break;
   }
-  return [...names];
+  return [...names].filter((name) => name.startsWith(CODER_TOKEN_PREFIX));
 }
 
 export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
