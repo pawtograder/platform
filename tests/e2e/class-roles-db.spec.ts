@@ -41,7 +41,13 @@ import {
   type TestingUser
 } from "./TestingUtils";
 
-const SEEDED_CAPABILITIES = ["manage_assignments", "manage_review_assignments", "manage_roles", "publish_groups"];
+const SEEDED_CAPABILITIES = [
+  "manage_assignments",
+  "manage_gradebook",
+  "manage_review_assignments",
+  "manage_roles",
+  "publish_groups"
+];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
 async function defaultRoles(class_id: number) {
