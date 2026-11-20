@@ -13,7 +13,14 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
+import { completeOnboarding, useOnboardingCompleted, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
+import { newRequestHint, nextOfficeHoursStart } from "@/lib/officeHoursOnboarding";
+import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { format } from "date-fns";
 
 export type OfficeHoursViewMode = "my-requests" | "browse" | "working" | "all-requests" | "dashboard" | "settings";
 
@@ -88,6 +95,30 @@ export function OfficeHoursHeader({
       .filter((queue) => queue.available && queueIdsWithActiveStaff.has(queue.id))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [activeQueueAssignments, helpQueues, isManageMode]);
+
+  // Onboarding hint on the New Request button (see lib/officeHoursOnboarding.ts). When nobody is on
+  // duty, the hint names the next office hours on the calendar, or says to check back later if the
+  // course doesn't put office hours on the calendar.
+  const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
+  const isStudent = useIsStudent();
+  const onboardingCompleted = useOnboardingCompleted();
+  const officeHoursEvents = useOfficeHoursSchedule();
+  const newRequestHintId = newRequestHint({
+    featureEnabled: onboardingOn,
+    isStudent: isStudent && !isManageMode,
+    completed: onboardingCompleted,
+    staffOnDuty: queuesWithActiveStaff.length > 0
+  });
+  const newRequestOnboarding = useOnboardingHint(newRequestHintId);
+  const newRequestHintMessage = useMemo(() => {
+    if (newRequestHintId === "staff-on-duty") {
+      return "Staff are on duty. Click New Request to ask for help.";
+    }
+    const next = nextOfficeHoursStart(officeHoursEvents, new Date());
+    return next
+      ? `No one is on duty right now. The next office hours start ${format(next, "EEE, MMM d 'at' h:mm a")}.`
+      : "No one is on duty right now. Check back later.";
+  }, [newRequestHintId, officeHoursEvents]);
 
   // Get queues the TA is currently working
   const workingQueues = useMemo(() => {
@@ -403,42 +434,55 @@ export function OfficeHoursHeader({
 
         <HStack gap={3} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
           <HelpRequestSearch isManageMode={false} />
-          {queuesWithActiveStaff.length === 0 ? (
-            <Button colorPalette="green" size="sm" flexShrink={0} disabled>
-              <FaPlus />
-              New Request
-            </Button>
-          ) : queuesWithActiveStaff.length === 1 ? (
-            <Button asChild colorPalette="green" size="sm" flexShrink={0}>
-              <NextLink href={`${officeHoursBaseHref}/${queuesWithActiveStaff[0].id}/new`}>
-                <FaPlus />
-                New Request
-              </NextLink>
-            </Button>
-          ) : (
-            <MenuRoot>
-              <MenuTrigger asChild>
-                <Button colorPalette="green" size="sm" flexShrink={0}>
+          <OnboardingPopover
+            open={newRequestOnboarding.open}
+            onDismiss={newRequestOnboarding.dismiss}
+            message={newRequestHintMessage}
+            placement="bottom-end"
+          >
+            <Box display="inline-flex" flexShrink={0}>
+              {queuesWithActiveStaff.length === 0 ? (
+                <Button colorPalette="green" size="sm" flexShrink={0} disabled>
                   <FaPlus />
                   New Request
-                  <FiChevronDown />
                 </Button>
-              </MenuTrigger>
-              <MenuContent>
-                {queuesWithActiveStaff.map((queue) => (
-                  <MenuItem
-                    key={queue.id}
-                    value={queue.id.toString()}
-                    onClick={() => {
-                      router.push(`${officeHoursBaseHref}/${queue.id}/new`);
-                    }}
+              ) : queuesWithActiveStaff.length === 1 ? (
+                <Button asChild colorPalette="green" size="sm" flexShrink={0}>
+                  <NextLink
+                    href={`${officeHoursBaseHref}/${queuesWithActiveStaff[0].id}/new`}
+                    onClick={onboardingOn ? completeOnboarding : undefined}
                   >
-                    {queue.name}
-                  </MenuItem>
-                ))}
-              </MenuContent>
-            </MenuRoot>
-          )}
+                    <FaPlus />
+                    New Request
+                  </NextLink>
+                </Button>
+              ) : (
+                <MenuRoot>
+                  <MenuTrigger asChild>
+                    <Button colorPalette="green" size="sm" flexShrink={0}>
+                      <FaPlus />
+                      New Request
+                      <FiChevronDown />
+                    </Button>
+                  </MenuTrigger>
+                  <MenuContent>
+                    {queuesWithActiveStaff.map((queue) => (
+                      <MenuItem
+                        key={queue.id}
+                        value={queue.id.toString()}
+                        onClick={() => {
+                          if (onboardingOn) completeOnboarding();
+                          router.push(`${officeHoursBaseHref}/${queue.id}/new`);
+                        }}
+                      >
+                        {queue.name}
+                      </MenuItem>
+                    ))}
+                  </MenuContent>
+                </MenuRoot>
+              )}
+            </Box>
+          </OnboardingPopover>
         </HStack>
       </Flex>
     </Box>

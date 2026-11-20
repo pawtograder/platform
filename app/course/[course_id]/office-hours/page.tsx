@@ -10,7 +10,7 @@ import {
   useStudentVisibleHelpRequests,
   useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, Icon, Link, Stack, Text, VStack } from "@chakra-ui/react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +29,11 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
+import { useOnboardingCompleted, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
+import { wantsQueueDescriptionHint } from "@/lib/officeHoursOnboarding";
+import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
@@ -163,6 +168,26 @@ export default function OfficeHoursPage() {
     return availableQueues.find((q) => q.id === selectedQueueId);
   }, [selectedQueueId, availableQueues]);
 
+  // Onboarding hint on the selected queue's description (see lib/officeHoursOnboarding.ts). Ask for
+  // it only while the browse view is showing that description. Otherwise the hint would wait for an
+  // anchor that isn't on the page and hold back the New Request hint behind it.
+  const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
+  const isStudent = useIsStudent();
+  const onboardingCompleted = useOnboardingCompleted();
+  const textQueueCount = availableQueues.filter((queue) => queue.queue_type === "text").length;
+  const showsQueueDescription = view === "browse" && !isLoading && !connectionError && !!selectedQueue;
+  const queueDescriptionOnboarding = useOnboardingHint(
+    showsQueueDescription &&
+      wantsQueueDescriptionHint({
+        featureEnabled: onboardingOn,
+        isStudent,
+        completed: onboardingCompleted,
+        textQueueCount
+      })
+      ? "read-queue-description"
+      : null
+  );
+
   // Get upcoming schedule for selected queue
   const upcomingSchedule = useMemo(() => {
     if (!selectedQueueId || !selectedQueue) return [];
@@ -291,16 +316,23 @@ export default function OfficeHoursPage() {
 
           <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
             <HStack justify="space-between" align="flex-start" mb="4" flexShrink={0}>
-              <Box flex="1">
-                <Heading size="md" mb="2">
-                  {selectedQueueId
-                    ? availableQueues.find((q) => q.id === selectedQueueId)?.name || "Select a queue"
-                    : "Select a queue"}
-                </Heading>
-                {selectedQueueId && (
-                  <Markdown>{availableQueues.find((q) => q.id === selectedQueueId)?.description || ""}</Markdown>
-                )}
-              </Box>
+              <OnboardingPopover
+                open={queueDescriptionOnboarding.open}
+                onDismiss={queueDescriptionOnboarding.dismiss}
+                message="This course has more than one text queue, and the purpose of each text queue is decided by the course staff. You can click each queue to read its description. Then choose the one that matches your question."
+                placement="bottom-start"
+              >
+                <Box flex="1">
+                  <Heading size="md" mb="2">
+                    {selectedQueueId
+                      ? availableQueues.find((q) => q.id === selectedQueueId)?.name || "Select a queue"
+                      : "Select a queue"}
+                  </Heading>
+                  {selectedQueueId && (
+                    <Markdown>{availableQueues.find((q) => q.id === selectedQueueId)?.description || ""}</Markdown>
+                  )}
+                </Box>
+              </OnboardingPopover>
               {selectedQueueId && selectedQueue && (
                 <>
                   <DialogRoot open={scheduleDialogOpen} onOpenChange={(e) => setScheduleDialogOpen(e.open)}>
