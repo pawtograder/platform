@@ -15,7 +15,7 @@ function errorMessage(e: unknown): string {
  * Tracks one assignment's workspace. While it is starting, polls with a backoff, one request at a
  * time, and skips polls while the tab is hidden. In any other state it stops polling, and checks
  * again only when the tab becomes visible: a workspace stopped while the student was away doesn't
- * keep offering the editor, and a student back from linking Forgejo in another tab sees the result.
+ * keep offering the editor, and a student back from linking their Git host account in another tab sees the result.
  */
 export function useWorkspaceStatus(client: WorkspaceClient, assignmentId: number) {
   const [state, setState] = useState<WorkspaceState | null>(null);
