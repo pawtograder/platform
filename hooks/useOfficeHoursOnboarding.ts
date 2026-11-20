@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useConnectionStatus, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useIsTableControllerReady } from "@/lib/TableController";
 import {
   hintToShow,
   markOnboardingCompleted,
@@ -57,6 +59,22 @@ export function useOnboardingCompleted(): boolean {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   return mounted ? isCompleted() : true;
+}
+
+/**
+ * Whether the office hours data the hints depend on has loaded: the realtime connection, the queues,
+ * and the staff shifts.
+ *
+ * Until the shifts load, every queue looks unstaffed, so the New Request hint would say "No one is on
+ * duty" even when someone is. The page and the header both wait on this, so the queue description
+ * hint and the New Request hint register in the same render and open in their usual order.
+ */
+export function useOnboardingDataLoaded(): boolean {
+  const controller = useOfficeHoursController();
+  const { isLoading } = useConnectionStatus();
+  const queuesLoaded = useIsTableControllerReady(controller.helpQueues);
+  const shiftsLoaded = useIsTableControllerReady(controller.helpQueueAssignments);
+  return !isLoading && queuesLoaded && shiftsLoaded;
 }
 
 /** Saves that the student clicked an enabled New Request button, which closes every hint for good. */

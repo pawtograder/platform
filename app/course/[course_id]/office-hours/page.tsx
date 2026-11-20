@@ -29,7 +29,7 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
-import { useOnboardingCompleted, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
+import { useOnboardingCompleted, useOnboardingDataLoaded, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
 import { wantsQueueDescriptionHint } from "@/lib/officeHoursOnboarding";
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
@@ -170,12 +170,19 @@ export default function OfficeHoursPage() {
 
   // Onboarding hint on the selected queue's description (see lib/officeHoursOnboarding.ts). Ask for
   // it only while the browse view is showing that description. Otherwise the hint would wait for an
-  // anchor that isn't on the page and hold back the New Request hint behind it.
+  // anchor that isn't on the page and hold back the New Request hint behind it. The conditions match
+  // the early returns below: the loading message and the connection error replace the description.
+  //
+  // The description box is on the page before the first queue is selected too, showing "Select a
+  // queue". So the hint doesn't wait for the selection, and it registers in the same render as the
+  // New Request hint in the header, which both gate on useOnboardingDataLoaded.
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingCompleted = useOnboardingCompleted();
+  const onboardingDataLoaded = useOnboardingDataLoaded();
   const textQueueCount = availableQueues.filter((queue) => queue.queue_type === "text").length;
-  const showsQueueDescription = view === "browse" && !isLoading && !connectionError && !!selectedQueue;
+  const showsQueueDescription =
+    view === "browse" && onboardingDataLoaded && !connectionError && connectionStatus?.overall !== "disconnected";
   const queueDescriptionOnboarding = useOnboardingHint(
     showsQueueDescription &&
       wantsQueueDescriptionHint({

@@ -15,7 +15,12 @@ import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
 import { useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
-import { completeOnboarding, useOnboardingCompleted, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
+import {
+  completeOnboarding,
+  useOnboardingCompleted,
+  useOnboardingDataLoaded,
+  useOnboardingHint
+} from "@/hooks/useOfficeHoursOnboarding";
 import { newRequestHint, nextOfficeHoursStart } from "@/lib/officeHoursOnboarding";
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
@@ -102,6 +107,7 @@ export function OfficeHoursHeader({
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingCompleted = useOnboardingCompleted();
+  const onboardingDataLoaded = useOnboardingDataLoaded();
   const officeHoursEvents = useOfficeHoursSchedule();
   const newRequestHintId = newRequestHint({
     featureEnabled: onboardingOn,
@@ -109,7 +115,7 @@ export function OfficeHoursHeader({
     completed: onboardingCompleted,
     staffOnDuty: queuesWithActiveStaff.length > 0
   });
-  const newRequestOnboarding = useOnboardingHint(newRequestHintId);
+  const newRequestOnboarding = useOnboardingHint(onboardingDataLoaded ? newRequestHintId : null);
   const newRequestHintMessage = useMemo(() => {
     if (newRequestHintId === "staff-on-duty") {
       return "Staff are on duty. Click New Request to ask for help.";

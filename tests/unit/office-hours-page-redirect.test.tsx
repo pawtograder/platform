@@ -47,6 +47,9 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
   useHelpQueueAssignments: () => [],
   useStudentVisibleHelpRequests: () => [],
   useHelpRequestStudents: () => [],
+  // useOnboardingDataLoaded reads these tables' controllers. Without them it reports "not loaded",
+  // which keeps the onboarding hints closed in these navigation tests.
+  useOfficeHoursController: () => ({}),
   useConnectionStatus: () => ({
     connectionStatus: { overall: "connected" },
     connectionError: null,
