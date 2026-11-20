@@ -40,7 +40,16 @@ During a posted session, `queues_unstaffed` should fall as TAs start their shift
 falls within a few minutes is a queue absorbing a rush, which is the system working.
 
 The shape worth acting on is `queues_red > 0` **sustained**, especially with
-`queues_unstaffed > 0` next to it: students are waiting on a queue nobody is working.
+`queues_unstaffed > 0` next to it.
+
+Both numbers are per class, not per queue, so two positive gauges do not mean one queue is both
+red and unstaffed. A staffed queue that is behind, beside an empty queue with nobody on shift,
+reads exactly the same. Before acting on the pair, open the per-queue RPC for that class and see
+which queue is which:
+
+```sql
+SELECT * FROM public.office_hours_queue_health(:class_id);
+```
 
 ## Checking it by hand
 
@@ -66,8 +75,10 @@ SELECT * FROM public.office_hours_queue_health(<class_id>);
 This is a staffing-level problem, not a platform one. Tell the course; there is nothing to fix
 here.
 
-**`queues_red` high and `queues_unstaffed` high, during a posted session.** Either nobody started
-their shift, or shifts are ending without being noticed. Check
+**`queues_red` high and `queues_unstaffed` high, during a posted session.** Confirm with the
+per-queue RPC above that the red queue is the unstaffed one; the two gauges can come from
+different queues. If it is, either nobody started their shift or shifts are ending without being
+noticed. Check
 `help_queue_assignments` for the class: rows with `ended_at IS NULL` are the open shifts. If the
 course has `office-hours-shift-release` on, a TA's requests return to the queue when their last
 shift ends, so a shift that ended by accident shows up as a sudden rise in `requests_waiting`.
@@ -104,3 +115,11 @@ already encode it. If a deployment wants paging:
 
 `for: 15m` is the point: a queue that is briefly red is normal, and only a sustained one is worth
 anyone's attention. Keep it at `info`. Nobody should be woken up because a class is busy.
+
+One caveat, from the per-class series this metric deliberately publishes: `for: 15m` means the
+class had at least one red queue for fifteen minutes, not that one queue stayed red for fifteen
+minutes. A queue that is red for eight minutes and recovers as a second queue turns red holds the
+series above zero and fires the alert. For a course running several queues that is usually the
+right signal anyway — something has been wrong somewhere for a quarter of an hour — but an alert
+that must track one sustained queue needs per-queue state, which this metric does not carry and
+should not: queue names are free text and the label domain has to stay bounded.
