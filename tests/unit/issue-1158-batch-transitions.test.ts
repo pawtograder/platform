@@ -41,7 +41,13 @@ describe("issue #1158: worker batch status transitions", () => {
     ["match", ["matching", "ocr"]],
     ["finalize", ["finalizing"]],
     ["something_new", ["finalizing", "matching", "ocr"]],
-    [undefined, ["finalizing", "matching", "ocr"]]
+    [undefined, ["finalizing", "matching", "ocr"]],
+    // A malformed method that names an inherited Object property still gets the unknown-method list,
+    // not the inherited function (which made setBatchStatus throw and kept the message from the DLQ).
+    ["constructor", ["finalizing", "matching", "ocr"]],
+    ["toString", ["finalizing", "matching", "ocr"]],
+    ["__proto__", ["finalizing", "matching", "ocr"]],
+    ["hasOwnProperty", ["finalizing", "matching", "ocr"]]
   ])("a %s message that exhausted its retries errors the batch only from %j", (method, expected) => {
     expect([...errorFrom(method)].sort()).toEqual(expected);
   });
@@ -187,5 +193,14 @@ describe("issue #1158: worker batch status transitions", () => {
       expect(source).toMatch(/if \(step\.exhausted\) \{/);
       expect(source).not.toMatch(/ocrWaitExhausted/);
     });
+  });
+
+  // CodeRabbit on #1308: a late OCR result could replace OCR match had already read. The behavior is
+  // tested against the running worker in exam-worker-batch-status-db.spec.ts; this keeps the filter.
+  test("process_page writes OCR only to a page that has none", () => {
+    const source = readFileSync(WORKER, "utf8");
+    expect(source).toMatch(
+      /\.update\(\{ ocr_text: result\.text, ocr_data:[^}]*\}[^)]*\)\s*\.eq\("id", args\.scan_page_id\)\s*\.eq\("batch_id", batchId\)\s*\.is\("ocr_data", null\);/
+    );
   });
 });

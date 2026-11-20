@@ -46,7 +46,12 @@ const ERROR_FROM_BY_METHOD: Record<string, readonly BatchStatus[]> = {
 const ERROR_FROM_UNKNOWN_METHOD: readonly BatchStatus[] = ["ocr", "matching", "finalizing"];
 
 export function errorFrom(method: string | undefined): readonly BatchStatus[] {
-  return (method && ERROR_FROM_BY_METHOD[method]) || ERROR_FROM_UNKNOWN_METHOD;
+  // Own keys only: a malformed message's method could be "constructor" or "toString", which a plain
+  // lookup resolves to an inherited function, and spreading that into the status RPC throws, so the
+  // message never reaches the DLQ.
+  return method !== undefined && Object.hasOwn(ERROR_FROM_BY_METHOD, method)
+    ? ERROR_FROM_BY_METHOD[method]
+    : ERROR_FROM_UNKNOWN_METHOD;
 }
 
 /**
