@@ -1316,7 +1316,6 @@ function RubricCheck({
     <Box
       p={0}
       w="100%"
-      borderRadius="md"
       data-exam-question-id={check.exam_question_id ?? undefined}
       css={{ "&[data-focused]": { outline: "2px solid", outlineColor: "border.info", outlineOffset: "2px" } }}
     >
