@@ -3,9 +3,10 @@
  * actually runs. `finalize` calls it once per answer region to turn OCR word boxes
  * into the text a grader reads.
  *
- * There is a second copy of this logic in lib/exam/regionMath.ts, and that copy is
- * the one covered by tests/unit/exam-region-math.test.ts. Nothing imports it at
- * runtime, so until now the shipped implementation here had no test at all.
+ * The implementation lives in _shared/examRegionText.ts and examVision.ts re-exports
+ * it. lib/exam/regionMath.ts re-exports the same function for the seeder and the UI;
+ * tests/unit/exam-region-math.test.ts only checks that re-export, so this file is
+ * where wordsInRegion's behavior is tested (#1188).
  *
  * Coordinates are normalized 0..1 with the origin at the top-left of the page.
  *

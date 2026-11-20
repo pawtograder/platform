@@ -16,6 +16,7 @@ kong:
 forgejo:
   enabled: true
   database: pawtograder
+  authSourceId: 1
   ingress:
     hosts:
       - host: git.example.com
@@ -39,6 +40,9 @@ forgejo:
       - name: FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL
         valueFrom:
           configMapKeyRef: { name: pawtograder-forgejo-actions, key: DEFAULT_ACTIONS_URL }
+      - name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-webhook, key: ALLOWED_HOST_LIST }
       - name: FORGEJO__STORAGE__MINIO_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef: { name: pawtograder-s3, key: AWS_ACCESS_KEY_ID }
@@ -79,9 +83,9 @@ coder:
     enabled: true
     # Uncomment to create a Coder account, with workspace compute, on first sign-in for anyone who can sign in to Pawtograder.
     # allowSignups: true
-  # Run scripts/setup-coder-forgejo-auth.sh first; coderd exits at startup without the client ID.
+  # Add Coder's callback to the Pawtograder GitHub App first; coderd exits at startup without the client ID.
   externalAuth:
-    forgejo:
+    github:
       enabled: true
   coder:
     env:

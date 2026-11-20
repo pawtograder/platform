@@ -2854,6 +2854,9 @@ forgejo:
       - name: FORGEJO__DATABASE__PASSWD
         valueFrom:
           secretKeyRef: { name: pawtograder-forgejo-db, key: PGPASSWORD }
+      - name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST
+        valueFrom:
+          configMapKeyRef: { name: pawtograder-forgejo-webhook, key: ALLOWED_HOST_LIST }
 YAML
 apps_refused "mirrors: an overlay that drops the DEFAULT_ACTIONS_URL env entry is refused" \
   "must keep the chart's FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL entry" -f "$NO_ACTIONS_ENV"
@@ -2913,8 +2916,7 @@ BK_OWN_FORGEJO=(--set forgejo.database=own --set forgejo-db.enabled=true
 BK_OWN_CODER=(--set coder.database=own --set coder-db.enabled=true
   --set 'coder.coder.env[0].name=CODER_PG_CONNECTION_URL'
   --set 'coder.coder.env[0].value=postgres://coder@pawtograder-coder-db:5432/coder?sslmode=disable')
-BK_NO_FORGEJO=(--set forgejo.enabled=false --set forgejoRunner.enabled=false
-  --set coder.externalAuth.forgejo.enabled=false)
+BK_NO_FORGEJO=(--set forgejo.enabled=false --set forgejoRunner.enabled=false)
 BK_NO_CODER=(--set coder.enabled=false)
 BK_ONLY=(--show-only templates/backup-apps.yaml)
 
@@ -3343,13 +3345,13 @@ apps_refused "external auth: a client path that holds Coder's passwords is refus
 apps_refused "external auth: sharing Coder's OIDC client path is refused" \
   "coderOIDCPath and coderExternalAuthPath must differ" \
   "${SSO_ES[@]}" --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=/apps/t/coder-oidc/
-label="external auth: staging syncs Coder's Forgejo client from its own OpenBao path"
+label="external auth: staging syncs Coder's GitHub client from its own OpenBao path"
 if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
   >"$OUTFILE" 2>"$ERRFILE"; then
   echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
 elif ! grep -qF "key: apps/pawtograder/coder-external-auth-staging" "$OUTFILE" \
-  || ! grep -qF 'CODER_EXTERNAL_AUTH_0_AUTH_URL: "https://git.staging.pawtograder.net/login/oauth/authorize"' "$OUTFILE"; then
-  echo "FAIL [$label]: missing the ExternalSecret path or the provider's authorize URL"; FAILED=1
+  || ! grep -qF 'CODER_EXTERNAL_AUTH_0_TYPE: "github"' "$OUTFILE"; then
+  echo "FAIL [$label]: missing the ExternalSecret path or the github provider"; FAILED=1
 else echo "ok   [$label]"; fi
 label="sso: staging syncs both clients from OpenBao and turns on Coder's OIDC"
 if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
@@ -3453,11 +3455,10 @@ apps_has "coder oidc: that claim is read from the access token" yes 'CODER_OIDC_
 
 apps_has "schedule: workspaces stop after 1h by default" yes "--default-ttl '1h'" \
   --show-only templates/coder-bootstrap.yaml
-apps_has "template: external auth id defaults to forgejo" yes 'external_auth_id: "forgejo"' \
-  --show-only templates/coder-bootstrap.yaml
-apps_has "template: external auth id is configurable" yes 'external_auth_id: "git-school"' \
-  --set coderBootstrap.workspaces.externalAuthId=git-school --set coder.externalAuth.forgejo.id=git-school \
-  --show-only templates/coder-bootstrap.yaml
+apps_has "template: the GitHub provider reaches the template, and Forgejo's token still comes from a Coder secret" yes \
+  'github_external_auth_id: "github"' --show-only templates/coder-bootstrap.yaml
+apps_refused "template: the removed externalAuthId setting is refused" \
+  "coderBootstrap.workspaces.externalAuthId was removed" --set coderBootstrap.workspaces.externalAuthId=forgejo
 apps_has "template: workspaces default to the chart's coder-workspace image" yes \
   "image: \"ghcr.io/pawtograder/coder-workspace:$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART/Chart.yaml")\"" \
   --show-only templates/coder-bootstrap.yaml
@@ -3515,50 +3516,46 @@ else echo "ok   [$label]"; fi
 
 echo
 
-echo "== Coder external auth: Forgejo =="
-EA=(--set coder.externalAuth.forgejo.enabled=true)
+echo "== Coder external auth: GitHub =="
+EA=(--set coder.externalAuth.github.enabled=true)
 EA_ES=(--set forgejoCoderSecrets.externalSecret.enabled=true
   --set forgejoCoderSecrets.externalSecret.forgejoPath=apps/pawtograder/forgejo-test
   --set forgejoCoderSecrets.externalSecret.coderPath=apps/pawtograder/coder-test)
 apps_has "external auth: off renders no provider" no "CODER_EXTERNAL_AUTH_0" \
-  --set coder.externalAuth.forgejo.enabled=false --show-only templates/app-databases.yaml
+  --set coder.externalAuth.github.enabled=false --show-only templates/app-databases.yaml
 apps_has "external auth: off renders no ExternalSecret for it" no "pawtograder-coder-external-auth" \
-  --set coder.externalAuth.forgejo.enabled=false "${EA_ES[@]}" --show-only templates/forgejo-coder-externalsecrets.yaml
-apps_has "external auth: a gitea provider" yes 'CODER_EXTERNAL_AUTH_0_TYPE: "gitea"' "${EA[@]}" \
+  --set coder.externalAuth.github.enabled=false "${EA_ES[@]}" --show-only templates/forgejo-coder-externalsecrets.yaml
+apps_has "external auth: a github provider" yes 'CODER_EXTERNAL_AUTH_0_TYPE: "github"' "${EA[@]}" \
   --show-only templates/app-databases.yaml
-apps_has "external auth: the browser authorizes on Forgejo's public URL" yes \
-  'CODER_EXTERNAL_AUTH_0_AUTH_URL: "https://git.example.com/login/oauth/authorize"' "${EA[@]}" \
+apps_has "external auth: Coder's own defaults set the URLs" no "CODER_EXTERNAL_AUTH_0_AUTH_URL" "${EA[@]}" \
   --show-only templates/app-databases.yaml
-apps_has "external auth: coderd exchanges tokens over the Service" yes \
-  'CODER_EXTERNAL_AUTH_0_TOKEN_URL: "http://pawtograder-forgejo-http.pawtograder.svc:3000/login/oauth/access_token"' \
-  "${EA[@]}" --show-only templates/app-databases.yaml
-apps_has "external auth: the regex matches the bare origin" yes \
-  'CODER_EXTERNAL_AUTH_0_REGEX: "^https://git\\.example\\.com(/.*)?$"' "${EA[@]}" \
+apps_has "external auth: Coder's own defaults set the regex and scopes" no "CODER_EXTERNAL_AUTH_0_REGEX" "${EA[@]}" \
   --show-only templates/app-databases.yaml
-apps_has "external auth: scopes are spelled out, without Coder's stray space" yes \
-  'CODER_EXTERNAL_AUTH_0_SCOPES: "read:repository write:repository read:user"' "${EA[@]}" \
+apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: "gh-school"' "${EA[@]}" \
+  --set coder.externalAuth.github.id=gh-school \
   --show-only templates/app-databases.yaml
-apps_has "external auth: the id is configurable" yes 'CODER_EXTERNAL_AUTH_0_ID: "git-school"' "${EA[@]}" \
-  --set coder.externalAuth.forgejo.id=git-school --set coderBootstrap.workspaces.externalAuthId=git-school \
-  --show-only templates/app-databases.yaml
+apps_has "external auth: the template gets the provider id" yes 'github_external_auth_id: "gh-school"' "${EA[@]}" \
+  --set coder.externalAuth.github.id=gh-school --show-only templates/coder-bootstrap.yaml
+apps_has "external auth: the edge functions get the provider id" yes "value: \"gh-school\"" "${EA[@]}" \
+  --set coder.externalAuth.github.id=gh-school --show-only templates/edge-functions.yaml
+apps_has "external auth: off tells the edge functions nothing" no "CODER_GITHUB_AUTH_ID" \
+  --set coder.externalAuth.github.enabled=false --show-only templates/edge-functions.yaml
+apps_has "external auth: off declares no provider in the template" yes 'github_external_auth_id: ""' \
+  --set coder.externalAuth.github.enabled=false --show-only templates/coder-bootstrap.yaml
 apps_has "external auth: the ExternalSecret maps OpenBao's client to Coder's env" yes \
   "secretKey: CODER_EXTERNAL_AUTH_0_CLIENT_SECRET" "${EA[@]}" "${EA_ES[@]}" \
   --set forgejoCoderSecrets.externalSecret.coderExternalAuthPath=apps/pawtograder/coder-external-auth-test \
   --show-only templates/forgejo-coder-externalsecrets.yaml
 apps_refused "external auth: with the ExternalSecret, the OpenBao path is required" \
-  "coderExternalAuthPath is required with coder.externalAuth.forgejo.enabled" "${EA[@]}" "${EA_ES[@]}"
-apps_refused "external auth: without Forgejo is refused" \
-  "coder.externalAuth.forgejo.enabled needs forgejo.enabled=true" "${EA[@]}" --set forgejo.enabled=false \
-  --set forgejoRunner.enabled=false
+  "coderExternalAuthPath is required with coder.externalAuth.github.enabled" "${EA[@]}" "${EA_ES[@]}"
+apps_has "external auth: without Forgejo still renders" yes 'CODER_EXTERNAL_AUTH_0_TYPE: "github"' "${EA[@]}" \
+  --set forgejo.enabled=false --set forgejoRunner.enabled=false --show-only templates/app-databases.yaml
 apps_has "external auth: ignored with Coder off" no "CODER_EXTERNAL_AUTH_0" "${EA[@]}" --set coder.enabled=false \
   --show-only templates/app-databases.yaml
-apps_refused "external auth: with Forgejo's OAuth2 provider off is refused" \
-  "needs Forgejo's OAuth2 provider" "${EA[@]}" --set forgejo.gitea.config.oauth2.ENABLED=false
+apps_refused "external auth: the removed Forgejo provider is refused" \
+  "coder.externalAuth.forgejo was removed" --set coder.externalAuth.forgejo.enabled=true
 apps_refused "external auth: an id that isn't a path segment is refused" \
-  "coder.externalAuth.forgejo.id must be lowercase letters" "${EA[@]}" --set coder.externalAuth.forgejo.id=Forgejo/x
-apps_refused "external auth: a template asking for another provider is refused" \
-  "workspaces would ask Coder for a provider that doesn't exist" "${EA[@]}" \
-  --set coderBootstrap.workspaces.externalAuthId=gitea
+  "coder.externalAuth.github.id must be lowercase letters" "${EA[@]}" --set coder.externalAuth.github.id=GitHub/x
 apps_refused "external auth: an overlay dropping the Secret from envFrom is refused" \
   "coder.coder.envFrom is missing pawtograder-coder-external-auth" "${EA[@]}" \
   --set 'coder.coder.envFrom[0].configMapRef.name=pawtograder-coder-env' \
@@ -3566,12 +3563,112 @@ apps_refused "external auth: an overlay dropping the Secret from envFrom is refu
   --set 'coder.coder.envFrom[2].secretRef.name=pawtograder-coder-oidc'
 apps_refused "external auth: another provider 0 in coder.coder.env is refused" \
   "coder.coder.env sets CODER_EXTERNAL_AUTH_0_ID" "${EA[@]}" \
-  --set 'coder.coder.env[3].name=CODER_EXTERNAL_AUTH_0_ID' --set 'coder.coder.env[3].value=github'
+  --set 'coder.coder.env[3].name=CODER_EXTERNAL_AUTH_0_ID' --set 'coder.coder.env[3].value=gitlab'
 # first-owner runs its own coderd from pawtograder-coder-env, so it needs the provider's client id too
 # (staging crash-looped on "client_id must be provided" when only coderd's envFrom had it).
 apps_refused "external auth: a first-owner without the Secret is refused" \
   "first-owner envFrom is missing pawtograder-coder-external-auth" "${EA[@]}" \
   --set-json 'coder.coder.initContainers=[{"name":"first-owner","image":"ghcr.io/pawtograder/mirror/coder/coder:v2.37.3","command":["true"],"envFrom":[{"configMapRef":{"name":"pawtograder-coder-env"}},{"secretRef":{"name":"pawtograder-coder-db"}},{"secretRef":{"name":"pawtograder-coder-oidc","optional":true}}]}]'
+
+echo
+
+echo "== Forgejo admin API settings for the edge functions =="
+EF=(--show-only templates/edge-functions.yaml)
+for pair in FORGEJO_ADMIN_USERNAME:username FORGEJO_ADMIN_PASSWORD:password; do
+  var="${pair%%:*}" key="${pair#*:}"
+  label="forgejo env: $var comes from pawtograder-forgejo-admin key $key, optional"
+  if ! apps "${EF[@]}" >"$OUTFILE"; then
+    echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  elif ! grep -A5 -e "- name: $var\$" "$OUTFILE" | tr -d ' ' | tr '\n' '|' \
+    | grep -qF "secretKeyRef:|name:pawtograder-forgejo-admin|key:$key|optional:true"; then
+    echo "FAIL [$label]: want valueFrom.secretKeyRef {pawtograder-forgejo-admin, $key, optional: true}"; FAILED=1
+  else echo "ok   [$label]"; fi
+done
+apps_has "forgejo env: the admin Secret follows gitea.admin.existingSecret" yes "name: fj-admin" \
+  --set forgejo.gitea.admin.existingSecret=fj-admin "${EF[@]}"
+for flag in --set --set-string; do
+  label="forgejo env: FORGEJO_AUTH_SOURCE_ID comes from forgejo.authSourceId ($flag)"
+  if ! apps "$flag" forgejo.authSourceId=7 "${EF[@]}" >"$OUTFILE"; then
+    echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+  elif ! grep -A1 -e "- name: FORGEJO_AUTH_SOURCE_ID\$" "$OUTFILE" | grep -qF 'value: "7"'; then
+    echo "FAIL [$label]: want FORGEJO_AUTH_SOURCE_ID=\"7\""; FAILED=1
+  else echo "ok   [$label]"; fi
+done
+apps_has "forgejo env: FORGEJO_URL is still there" yes 'value: "https://git.example.com"' "${EF[@]}"
+assert_rendered_lacks "forgejo env: no admin credentials with Forgejo off" \
+  templates/edge-functions.yaml "FORGEJO_ADMIN_USERNAME"
+assert_rendered_lacks "forgejo env: no auth source id with Forgejo off, even when set" \
+  templates/edge-functions.yaml "FORGEJO_AUTH_SOURCE_ID" --set forgejo.authSourceId=1
+apps_refused "forgejo env: no auth source id with Coder on is refused" \
+  "forgejo.authSourceId is required with forgejo.enabled and coder.enabled" --set forgejo.authSourceId=
+apps_refused "forgejo env: auth source id 0 is refused" \
+  'forgejo.authSourceId="0" must be a positive integer' --set forgejo.authSourceId=0
+apps_refused "forgejo env: a negative auth source id is refused" \
+  'forgejo.authSourceId="-1" must be a positive integer' --set forgejo.authSourceId=-1
+apps_refused "forgejo env: a non-numeric auth source id is refused" \
+  'forgejo.authSourceId="pawtograder" must be a positive integer' --set-string forgejo.authSourceId=pawtograder
+apps_refused "forgejo env: a bad auth source id is refused with Coder off too" \
+  'forgejo.authSourceId="1.5" must be a positive integer' --set-string forgejo.authSourceId=1.5 \
+  --set coder.enabled=false
+apps_has "forgejo env: Coder off renders without an auth source id" no "FORGEJO_AUTH_SOURCE_ID" \
+  --set coder.enabled=false --set forgejo.authSourceId= "${EF[@]}"
+for var in FORGEJO_URL FORGEJO_ADMIN_USERNAME FORGEJO_ADMIN_PASSWORD FORGEJO_AUTH_SOURCE_ID; do
+  apps_refused "forgejo env: edgeFunctions.extraEnv setting $var is refused" \
+    "edgeFunctions.extraEnv sets $var, which the chart sets itself" \
+    --set "edgeFunctions.extraEnv[0].name=$var" --set 'edgeFunctions.extraEnv[0].value=x'
+done
+apps_has "forgejo env: other extraEnv names still render" yes "name: MALLOC_ARENA_MAX" \
+  --set 'edgeFunctions.extraEnv[0].name=MALLOC_ARENA_MAX' --set 'edgeFunctions.extraEnv[0].value=2' "${EF[@]}"
+assert_renders "forgejo env: extraEnv may set them with Forgejo off" \
+  --set 'edgeFunctions.extraEnv[0].name=FORGEJO_URL' --set 'edgeFunctions.extraEnv[0].value=x'
+
+echo
+
+echo "== Forgejo webhook ALLOWED_HOST_LIST =="
+WH=(--show-only templates/forgejo-webhook.yaml)
+apps_has "webhook: external plus the API host by name" yes \
+  'ALLOWED_HOST_LIST: "external,api.pawtograder.example.com"' "${WH[@]}"
+apps_has "webhook: [] allows the API host alone" yes 'ALLOWED_HOST_LIST: "api.pawtograder.example.com"' \
+  --set-json 'forgejo.webhookAllowedHosts=[]' "${WH[@]}"
+apps_has "webhook: the API host follows global.apiOnSeparateHost" yes \
+  'ALLOWED_HOST_LIST: "external,pawtograder.example.com"' --set global.apiOnSeparateHost=false \
+  --set-json 'forgejo.gitea.oauth=[{"name":"pawtograder","provider":"openidConnect","existingSecret":"pawtograder-forgejo-oauth","autoDiscoverUrl":"https://pawtograder.example.com/auth/v1/.well-known/openid-configuration"}]' \
+  "${WH[@]}"
+apps_has "webhook: an extra exact host and a CIDR are kept" yes \
+  'ALLOWED_HOST_LIST: "external,hooks.example.org,203.0.113.0/24,2001:db8::/32,api.pawtograder.example.com"' \
+  --set-json 'forgejo.webhookAllowedHosts=["external","hooks.example.org","203.0.113.0/24","2001:db8::/32"]' "${WH[@]}"
+apps_has "webhook: Forgejo reads it from the ConfigMap" yes "name: FORGEJO__WEBHOOK__ALLOWED_HOST_LIST" \
+  --show-only charts/forgejo/templates/gitea/deployment.yaml
+apps_has "webhook: a bare public address is kept" yes \
+  'ALLOWED_HOST_LIST: "external,203.0.113.5,2001:db8::1,api.pawtograder.example.com"' \
+  --set-json 'forgejo.webhookAllowedHosts=["external","203.0.113.5","2001:db8::1"]' "${WH[@]}"
+apps_has "webhook: a host name of hex letters is not read as an address" yes \
+  'ALLOWED_HOST_LIST: "external,cafe.feed,dead,api.pawtograder.example.com"' \
+  --set-json 'forgejo.webhookAllowedHosts=["external","cafe.feed","dead"]' "${WH[@]}"
+for host in '0.0.0.0/0' '11.0.0.1/7' '127.0.0.0/8' '169.254.0.0/16' '::/0' 'fc00::/7' 'fe80::/10' '::ffff:127.0.0.1/128' '10.0.0.5' '127.0.0.1' '169.254.169.254' '0.0.0.0' '::1' 'fd00::1' 'fe80::1' '::ffff:127.0.0.1' '::ffff:10.0.0.5' private Private loopback ' LOOPBACK ' '*' '*.example.com' 'hook?.example.org' 'hook[ab].example.org' 'external,private' ' private '; do
+  apps_refused "webhook: $host in webhookAllowedHosts is refused" \
+    "forgejo.webhookAllowedHosts can't contain \"$host\"" --set-json "forgejo.webhookAllowedHosts=[\"external\",\"$host\"]"
+done
+apps_refused "webhook: setting ALLOWED_HOST_LIST in the subchart config is refused" \
+  'forgejo.gitea.config.webhook.ALLOWED_HOST_LIST="*" would be overridden' \
+  --set-string 'forgejo.gitea.config.webhook.ALLOWED_HOST_LIST=*'
+apps_refused "webhook: an overlay dropping the env entry is refused" \
+  "must keep the chart's FORGEJO__WEBHOOK__ALLOWED_HOST_LIST entry" \
+  --set-json 'forgejo.gitea.additionalConfigFromEnvs=[{"name":"FORGEJO__DATABASE__PASSWD","valueFrom":{"secretKeyRef":{"name":"pawtograder-forgejo-db","key":"PGPASSWORD"}}},{"name":"FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL","valueFrom":{"configMapKeyRef":{"name":"pawtograder-forgejo-actions","key":"DEFAULT_ACTIONS_URL"}}}]'
+label="webhook: no ALLOWED_HOST_LIST with Forgejo off"
+if ! helm template t "$CHART" "${BASE[@]}" >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif grep -qF "ALLOWED_HOST_LIST" "$OUTFILE"; then
+  echo "FAIL [$label]: rendered, but contains ALLOWED_HOST_LIST"; FAILED=1
+else echo "ok   [$label]"; fi
+label="webhook: staging allows its API host and sets its auth source id"
+if ! helm template pawtograder "$CHART" -n pawtograder-staging -f "$CHART/examples/values-staging.yaml" \
+  >"$OUTFILE" 2>"$ERRFILE"; then
+  echo "FAIL [$label]: render was REFUSED: $(grep -oiE 'Error:.*' "$ERRFILE" | head -1)"; FAILED=1
+elif ! grep -qF 'ALLOWED_HOST_LIST: "external,api.staging.pawtograder.net"' "$OUTFILE" \
+  || ! grep -qF -- "- name: FORGEJO_AUTH_SOURCE_ID" "$OUTFILE"; then
+  echo "FAIL [$label]: missing the API host in ALLOWED_HOST_LIST or FORGEJO_AUTH_SOURCE_ID"; FAILED=1
+else echo "ok   [$label]"; fi
 
 echo
 

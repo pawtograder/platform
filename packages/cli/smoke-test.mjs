@@ -57,10 +57,11 @@ check(
   "the published entry should not read .env files"
 );
 
-// Every bare require in the bundle must be a node builtin or a declared dependency.
+// Every bare require or dynamic import in the bundle must be a node builtin or a declared
+// dependency. Dynamic imports count too: pdfjs-dist is ESM-only and loaded with import().
 const declared = new Set(Object.keys(pkg.dependencies ?? {}));
 const required = new Set();
-for (const match of bundle.matchAll(/require\("([^"./][^"]*)"\)/g)) {
+for (const match of bundle.matchAll(/(?:require|import)\("([^"./][^"]*)"\)/g)) {
   required.add(match[1]);
 }
 const undeclared = [...required].filter((id) => {
@@ -102,7 +103,8 @@ for (const group of [
   "discussions",
   "reviews",
   "repos",
-  "assessment"
+  "assessment",
+  "exams"
 ]) {
   check(`--help lists the ${group} group`, help.stdout.includes(group));
 }

@@ -2,7 +2,8 @@
  * @jest-environment node
  */
 
-import { boxCenterInRegion, cropAspect, wordsInRegion, type WordBox } from "@/lib/exam/regionMath";
+import { boxCenterInRegion, cropAspect, wordsInRegion } from "@/lib/exam/regionMath";
+import { wordsInRegion as sharedWordsInRegion } from "@/supabase/functions/_shared/examRegionText";
 
 describe("boxCenterInRegion", () => {
   const region = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 }; // covers 0.2..0.6
@@ -18,102 +19,11 @@ describe("boxCenterInRegion", () => {
   });
 });
 
+// wordsInRegion's behavior is tested in supabase/functions/_shared/examVision.test.ts (Deno, run by
+// CI deno-unit-tests). This file only checks that regionMath re-exports that one implementation (#1188).
 describe("wordsInRegion", () => {
-  const region = { x: 0, y: 0, width: 0.5, height: 1 }; // left half
-  const words: WordBox[] = [
-    { text: "world", x: 0.1, y: 0.5, width: 0.1, height: 0.03 },
-    { text: "hello", x: 0.1, y: 0.1, width: 0.1, height: 0.03 },
-    { text: "RIGHT", x: 0.8, y: 0.1, width: 0.1, height: 0.03 }
-  ];
-  it("keeps only words inside the region", () => {
-    const text = wordsInRegion(words, region);
-    expect(text).not.toContain("RIGHT");
-  });
-  it("returns words in top-to-bottom reading order", () => {
-    expect(wordsInRegion(words, region)).toBe("hello world");
-  });
-  // Each case is one printed line that has to come back left to right.
-  it.each<[string, WordBox[], string]>([
-    [
-      // Centers 0.311 and 0.309 straddle the old 0.31 band edge; catches rows cut at fixed positions.
-      "centers either side of a fixed band edge",
-      [
-        { text: "right", x: 0.25, y: 0.299, width: 0.05, height: 0.02 },
-        { text: "left", x: 0.05, y: 0.301, width: 0.05, height: 0.02 }
-      ],
-      "left right"
-    ],
-    [
-      // Same center line, top edges at different heights; catches rows keyed on the top edge (#1292).
-      "boxes of different heights on one center line",
-      [
-        { text: "long", x: 0.25, y: 0.281, width: 0.15, height: 0.04 },
-        { text: "short", x: 0.05, y: 0.291, width: 0.05, height: 0.02 }
-      ],
-      "short long"
-    ],
-    [
-      // Centers rise 0.004 across the line; catches a tolerance so tight that OCR jitter splits it.
-      "a line drifting slightly upward",
-      [
-        { text: "d", x: 0.4, y: 0.296, width: 0.05, height: 0.02 },
-        { text: "b", x: 0.2, y: 0.2987, width: 0.05, height: 0.02 },
-        { text: "a", x: 0.1, y: 0.3, width: 0.05, height: 0.02 },
-        { text: "c", x: 0.3, y: 0.2973, width: 0.05, height: 0.02 }
-      ],
-      "a b c d"
-    ]
-  ])("keeps one line in order: %s", (_name, line, text) => {
-    expect(wordsInRegion(line, region)).toBe(text);
-  });
-  // Short glyphs (punctuation, quote marks) sit inside a line without sharing its center line.
-  it.each<[string, WordBox[], string]>([
-    [
-      // All three boxes end at y 0.311; catches a baseline comma forced onto its own row.
-      "a comma on the baseline",
-      [
-        { text: "second", x: 0.25, y: 0.291, width: 0.05, height: 0.02 },
-        { text: ",", x: 0.18, y: 0.307, width: 0.01, height: 0.004 },
-        { text: "first", x: 0.1, y: 0.291, width: 0.05, height: 0.02 }
-      ],
-      "first , second"
-    ],
-    [
-      // Hangs from the top of line two, nearer line one's bottom; catches measuring only the edge below.
-      "a quote mark at the top of the line",
-      [
-        { text: "s", x: 0.25, y: 0.315, width: 0.05, height: 0.02 },
-        { text: "'", x: 0.18, y: 0.315, width: 0.01, height: 0.006 },
-        { text: "it", x: 0.1, y: 0.315, width: 0.05, height: 0.02 },
-        { text: "b", x: 0.3, y: 0.291, width: 0.05, height: 0.02 },
-        { text: "a", x: 0.1, y: 0.291, width: 0.05, height: 0.02 }
-      ],
-      "a b it ' s"
-    ],
-    [
-      // Nothing full-size to attach to; catches dropping marks when no row has a word.
-      "a region holding only punctuation",
-      [
-        { text: "!", x: 0.25, y: 0.3, width: 0.01, height: 0.004 },
-        { text: "?", x: 0.1, y: 0.3, width: 0.01, height: 0.004 }
-      ],
-      "? !"
-    ]
-  ])("keeps short glyphs on their line: %s", (_name, line, text) => {
-    expect(wordsInRegion(line, region)).toBe(text);
-  });
-  it("keeps lines 1.2 word heights apart separate", () => {
-    // Line two's words sit between line one's; catches a tolerance loose enough to merge lines.
-    const lines: WordBox[] = [
-      { text: "d", x: 0.35, y: 0.324, width: 0.05, height: 0.02 },
-      { text: "b", x: 0.3, y: 0.3, width: 0.05, height: 0.02 },
-      { text: "c", x: 0.15, y: 0.324, width: 0.05, height: 0.02 },
-      { text: "a", x: 0.1, y: 0.3, width: 0.05, height: 0.02 }
-    ];
-    expect(wordsInRegion(lines, region)).toBe("a b c d");
-  });
-  it("returns empty string when nothing matches", () => {
-    expect(wordsInRegion(words, { x: 0.9, y: 0.9, width: 0.05, height: 0.05 })).toBe("");
+  it("is the worker's implementation, not a copy", () => {
+    expect(wordsInRegion).toBe(sharedWordsInRegion);
   });
 });
 
