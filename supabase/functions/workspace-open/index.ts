@@ -13,7 +13,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<Workspa
   return await withinBudget(budget, async () => {
     const { deps, caller, request } = await workspaceRequestContext(req, budget);
     scope.setTag("assignment_id", String(request.assignment_id));
-    return await openWorkspace(deps, caller, request);
+    return await openWorkspace({ ...deps, report: (e) => Sentry.captureException(e, scope) }, caller, request);
   });
 }
 

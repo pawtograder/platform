@@ -51,6 +51,26 @@ graph LR
 - **Meeting usage** (sessions, participants, unique users)
 - **Meeting quality** (average duration)
 - **Recent activity** (7-day metrics)
+- **Queue health** (active, red and unstaffed queues, open requests, oldest wait)
+
+Queue health does not come from `get_all_class_metrics`. It has its own function,
+`metrics_office_hours_queue_health()`, because the red condition is defined per class by
+`classes.office_hours_health_thresholds` rather than by a constant here, and because it mirrors
+`office_hours_queue_health` (the RPC behind the staff dashboard) definition for definition so the
+metric and the dashboard cannot disagree. It publishes one series per class:
+
+| Gauge                                          | Means                                                                 |
+| ---------------------------------------------- | --------------------------------------------------------------------- |
+| `pawtograder_office_hours_queues_red`          | Active queues at or over the class's waiting or oldest-wait threshold |
+| `pawtograder_office_hours_queues_unstaffed`    | Active queues with nobody on shift                                    |
+| `pawtograder_office_hours_queues_active`       | Active queues                                                         |
+| `pawtograder_office_hours_requests_waiting`    | Open requests across those queues                                     |
+| `pawtograder_office_hours_oldest_wait_minutes` | Oldest open request, in minutes                                       |
+
+Per class, not per queue: queue names are free text an instructor can add to at will, and a
+Prometheus label domain has to stay bounded. See
+[Office Hours Queue Health](./operations/office-hours-queue-health.md) for what normal looks like
+and how to triage a queue that stays red.
 
 ### 🚨 System Health & Issues
 

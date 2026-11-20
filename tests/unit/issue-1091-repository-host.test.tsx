@@ -22,6 +22,7 @@ import {
   showRepositoryHostPicker,
   submissionModeUnavailableReason
 } from "@/lib/gitProviderOptions";
+import { COURSE_FEATURES, courseFeatureEnabled, MANAGEABLE_COURSE_FEATURES } from "@/lib/courseFeatures";
 import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 
 const FLAG_ON = [{ name: "cloud-workspaces", enabled: true }];
@@ -35,6 +36,17 @@ describe("cloud-workspaces flag", () => {
     expect(cloudWorkspacesEnabled([{ name: "cloud-workspaces", enabled: "true" as unknown as boolean }])).toBe(false);
     expect(cloudWorkspacesEnabled([...FLAG_OFF, ...FLAG_ON])).toBe(false);
     expect(cloudWorkspacesEnabled(FLAG_ON)).toBe(true);
+  });
+
+  // Turning it on creates a Forgejo account for everyone enrolled, so a course that never opted in
+  // must read as off everywhere, including through the generic courseFeatureEnabled.
+  it("is listed on the Feature flags page and is off by default", () => {
+    const entry = MANAGEABLE_COURSE_FEATURES.find((f) => f.name === COURSE_FEATURES.CLOUD_WORKSPACES);
+    expect(entry).toBeDefined();
+    expect(entry?.defaultWhenMissing).toBe(false);
+    expect(courseFeatureEnabled(null, COURSE_FEATURES.CLOUD_WORKSPACES)).toBe(false);
+    expect(courseFeatureEnabled([], COURSE_FEATURES.CLOUD_WORKSPACES)).toBe(false);
+    expect(courseFeatureEnabled(FLAG_ON, COURSE_FEATURES.CLOUD_WORKSPACES)).toBe(true);
   });
 });
 

@@ -452,6 +452,13 @@ spec:
             # workspace-open (#1222) calls Coder here and builds the student's links from it.
             - name: CODER_URL
               value: {{ include "pawtograder.coder.url" $ctx | quote }}
+            {{- with $ctx.Values.coder.externalAuth.github }}
+            {{- if .enabled }}
+            # The id workspace-open looks for when a GitHub repository needs its link.
+            - name: CODER_GITHUB_AUTH_ID
+              value: {{ .id | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- with $ctx.Values.edgeFunctions.extraEnv }}
             {{- toYaml . | nindent 12 }}

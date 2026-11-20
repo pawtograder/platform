@@ -10,6 +10,7 @@
 // - `editor`: the template's startup script (git identity and code-server) plus code-server's
 //   health check.
 
+import { COURSE_FEATURES, courseFeatureEffectiveEnabled } from "@/lib/courseFeatures";
 import { workspaceOpen, workspaceStatus } from "@/lib/edgeFunctions";
 import type { WorkspaceOpenResponse } from "@/supabase/functions/_shared/FunctionTypes.js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -75,6 +76,21 @@ export function toWorkspaceState(res: WorkspaceOpenResponse): WorkspaceState {
         message: res.message || "Link your Forgejo account in Coder, then open the workspace again."
       };
     }
+    case "credentials_unavailable":
+      // Nothing was built: the workspace couldn't be given its repository token. The message says
+      // whether to wait or retry, and Retry opens again.
+      return {
+        status: "failed",
+        step: "build",
+        message: res.message || "The workspace couldn't be given access to your repository."
+      };
+    case "needs_org_invite":
+      // Nothing was built. The message says to accept the invitation, and Retry opens again.
+      return {
+        status: "failed",
+        step: "build",
+        message: res.message || "Accept the course's GitHub organization invitation, then open the workspace again."
+      };
     case "account_conflict":
       return {
         status: "account_conflict",
@@ -97,15 +113,14 @@ export function createWorkspaceClient(supabase: SupabaseClient<Database>): Works
   };
 }
 
-// Not in COURSE_FEATURES yet: CW-10 (#1128) owns adding it. Like its SQL check and
-// `courseFeatureEffectiveEnabled`, the first matching entry decides, and only a boolean true counts
-// as on.
-export const CLOUD_WORKSPACES_FLAG = "cloud-workspaces";
-
+/**
+ * Whether the course has cloud workspaces on. Like its SQL check, the first matching entry decides,
+ * only a boolean true counts as on, and anything that isn't an array is off.
+ */
 export function cloudWorkspacesEnabled(features: unknown): boolean {
-  if (!Array.isArray(features)) return false;
-  const entry = features.find((f) => (f as { name?: unknown } | null)?.name === CLOUD_WORKSPACES_FLAG) as
-    | { enabled?: unknown }
-    | undefined;
-  return entry?.enabled === true;
+  return courseFeatureEffectiveEnabled(
+    features as { name: string; enabled: boolean }[] | null | undefined,
+    COURSE_FEATURES.CLOUD_WORKSPACES,
+    false
+  );
 }
