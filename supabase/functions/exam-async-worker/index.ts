@@ -892,11 +892,11 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   }
 }
 
-async function runBatch(source: string): Promise<number> {
+async function runBatch(): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
   const startedAt = Date.now();
-  log(`run start (source=${source})`);
+  log("run start");
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let processed = 0;
@@ -947,7 +947,7 @@ async function runBatch(source: string): Promise<number> {
       processed++;
     }
   }
-  log(`run done: processed ${processed} message(s) in ${Date.now() - startedAt}ms (source=${source})`);
+  log(`run done: processed ${processed} message(s) in ${Date.now() - startedAt}ms`);
   return processed;
 }
 
@@ -971,24 +971,17 @@ Deno.serve((req) => {
       headers: { "Content-Type": "application/json" }
     });
   }
-  // What the caller says triggered this run, so one log artifact can tell a cron tick from a
-  // manual or test invocation. Callers that send nothing read as "http".
-  const source = req.headers.get("x-invocation-source") ?? "http";
   // Printed before the work is handed to the runtime, and deliberately paired with runBatch's own
   // "run done" line. An invocation that prints this and never prints that one had its isolate
   // reclaimed mid-flight, which is otherwise invisible: the 200 has already gone out.
-  log(`invocation accepted (source=${source}); work continues in waitUntil`);
-  EdgeRuntime.waitUntil(
-    // Not _shared/SentryInit.ts's waitUntilWithSentryFlush, which is the obvious helper to reach
-    // for. Importing it runs initSentry() as an import side effect, and this function runs its own
-    // Sentry.init above with a different config (no fingerprint, no identity, no SentryScrub), so
-    // the import would quietly change which client reports. Worth doing, but not in a change whose
-    // rollback is a revert. The flush is the part this path needed: every capture in runBatch
-    // happens after the response, so under per_request they died with the isolate.
-    runBatch(source).finally(async () => {
-      await Sentry.flush(2000);
-    })
-  );
+  //
+  // No source label. The obvious one is attractive and does not work: nothing sends
+  // x-invocation-source, and the cron job and all three triggers in exam_grading.sql send
+  // x-supabase-webhook-source: exam-async-worker, the same value for every one of them, so it
+  // cannot separate a cron tick from a trigger either. Telling the callers apart means changing
+  // what they send, which is a migration, and this change's rollback is a revert.
+  log("invocation accepted; work continues in waitUntil");
+  EdgeRuntime.waitUntil(runBatch());
   return Promise.resolve(
     new Response(JSON.stringify({ message: "exam-async-worker started" }), {
       headers: { "Content-Type": "application/json" }
