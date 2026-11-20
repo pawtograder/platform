@@ -150,7 +150,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
     }
 
     // Office hours queue health, read the same way as the Discord breaker above and for the same
-    // reason: a deployment that has not applied 20261119130000 has no such function, and losing one
+    // reason: a deployment that has not applied 20261120130100 has no such function, and losing one
     // gauge must not cost the scrape every other metric in it.
     let officeHoursQueueHealth: OfficeHoursQueueHealthRow[] = [];
     try {

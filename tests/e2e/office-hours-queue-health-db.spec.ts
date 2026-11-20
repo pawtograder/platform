@@ -163,7 +163,7 @@ test.describe("office hours queue health RPC", () => {
     expect(error).not.toBeNull();
     expect(error!.code).toBe("42501");
   });
-  // ---- metrics_office_hours_queue_health (20261119130000) -------------------------------------
+  // ---- metrics_office_hours_queue_health (20261120130100) -------------------------------------
   // The metric drives pawtograder_office_hours_queues_red, and docs/metrics.md promises it cannot
   // disagree with the dashboard RPC above. These pin the two places it did.
 

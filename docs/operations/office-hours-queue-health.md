@@ -88,13 +88,13 @@ the database before office hours: if help request updates are not reaching clien
 re-ask and queues inflate. Check `pawtograder_queue_depth` and the circuit breaker gauges first.
 
 **The gauges vanish from the scrape.** `metrics_office_hours_queue_health` is read non-fatally and
-a deployment that has not applied `20261119130000` has no such function, so the scrape drops these
+a deployment that has not applied `20261120130100` has no such function, so the scrape drops these
 gauges and keeps every other metric. Confirm the migration applied before investigating further.
 
 **The gauge and the dashboard disagree.** They should not: both count only active queues, count
 waiting as `help_requests.status = 'open'`, and treat a shift as `ended_at IS NULL`. If they
 differ, one of the two definitions has drifted — compare
-`20261119130000_metrics_office_hours_queue_health.sql` against
+`20261120130100_metrics_office_hours_queue_health.sql` against
 `20261117174200_office_hours_queue_health.sql` and fix the metric to match the dashboard, not the
 other way round.
 
