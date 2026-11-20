@@ -1,0 +1,26 @@
+{{- if .Values.forgejo.enabled }}
+{{- $cmName := printf "%s-forgejo-templates" .Release.Name }}
+{{- $redirect := and .Values.forgejo.signInRedirect (include "pawtograder.forgejo.hasPawtograderSource" .) }}
+{{- /* Checked even with the redirect off: without the rm branch a header copied earlier stays on the volume. */}}
+{{- $volume := false }}
+{{- range .Values.forgejo.extraVolumes }}{{ if eq (dig "configMap" "name" "" .) $cmName }}{{ $volume = .name }}{{ end }}{{ end }}
+{{- $mount := false }}
+{{- range .Values.forgejo.extraInitVolumeMounts }}{{ if and $volume (eq .name $volume) (eq .mountPath "/pawtograder-templates") }}{{ $mount = true }}{{ end }}{{ end }}
+{{- $script := toString .Values.forgejo.initPreScript }}
+{{- $copies := and (contains "cp /pawtograder-templates/header.tmpl" $script) (contains "rm -f /data/gitea/templates/custom/header.tmpl" $script) }}
+{{- if not (and $volume $mount $copies) }}
+{{- fail (printf "forgejo needs the chart's extraVolumes entry for ConfigMap %s, its extraInitVolumeMounts entry at /pawtograder-templates and its initPreScript copy step (forgejo.signInRedirect); an overlay that sets one of these lists replaces the chart's, so keep those entries in it" $cmName) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forgejo
+{{- if $redirect }}
+data:
+  header.tmpl: |
+    {{- .Files.Get "files/forgejo/header.tmpl" | trim | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -2,6 +2,7 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { FORGEJO_DETACH_REASON } from "@/lib/gitProviderOptions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
@@ -94,6 +95,24 @@ export default function EditAssignment() {
         // between modes. The form only DISABLES the branch-protection inputs for
         // no-repo modes, it doesn't reset their stored values — so without this
         // the constraint will reject the update.
+        // Non-code assessments are pinned to individual submissions, mirroring the create page.
+        // Only the create page had this coercion, and the shared form merely DISABLES the
+        // assignment-type selector when editing -- it still renders the group-configuration
+        // controls. So an existing quiz/exam/survey could be switched to groups here, and once
+        // students joined a group every assessment submission path (quiz_submit,
+        // exam_create_submission, the survey trigger) still inserts assignment_group_id NULL,
+        // which submissions_insert_hook_optimized rejects: submission, finalization and survey
+        // credit would all fail for exactly the students in groups.
+        const editedType = (values.assignment_type ?? refineCore.queryResult?.data?.data?.assignment_type) as
+          | string
+          | undefined;
+        if ((editedType ?? "code") !== "code") {
+          values.group_config = "individual";
+          values.min_group_size = null;
+          values.max_group_size = null;
+          values.allow_student_formed_groups = false;
+          values.group_formation_deadline = null;
+        }
         const isNoRepo = values.repo_mode === "none" || values.repo_mode === "no_submission";
         if (isNoRepo) {
           values.protect_block_force_push = false;
@@ -106,6 +125,18 @@ export default function EditAssignment() {
         }
         if (values.repo_mode !== "fork_from_prior_assignment") {
           values.source_assignment_id = null;
+        }
+        // Every GitHub edge function below (handout webhook, workflow sync, grader validation)
+        // rejects Forgejo assignments, so a Forgejo save skips them (#1091).
+        const isForgejo = (values.git_provider ?? queryData?.git_provider) === "forgejo";
+        // Moving to Forgejo (#1091) writes the settings the form shows off and disabled for it. An
+        // assignment already saved on Forgejo keeps its stored values. The host can only change
+        // while no repositories exist, so no GitHub cleanup is needed here.
+        if (values.git_provider === "forgejo" && queryData?.git_provider !== "forgejo") {
+          values.protect_block_force_push = false;
+          values.protect_require_pull_request = false;
+          values.protect_required_reviewers = 0;
+          values.enable_repo_analytics = false;
         }
         // Switching an assignment that HAS a handout to a no-repo mode has to clean up the handout
         // BEFORE the pointer to it is discarded.
@@ -132,6 +163,10 @@ export default function EditAssignment() {
         // Set once the pre-detach cleanup below has actually taken effect in GitHub, so the row
         // write further down knows it has something to undo if IT fails.
         let preDetachCleanupApplied = false;
+        // The cleanup below is GitHub's. The form doesn't offer this switch for a Forgejo handout.
+        if (isForgejo && isNoRepo && queryData?.template_repo) {
+          throw new Error(FORGEJO_DETACH_REASON);
+        }
         if (isNoRepo && queryData?.template_repo) {
           const { data: sharers, error: sharersError } = await supabase
             .from("assignments")
@@ -235,7 +270,10 @@ export default function EditAssignment() {
         // value"), so an instructor who ticks the box and then switches to PR or a no-repo mode
         // still submits `true`. Running the guard first refused that whole save — dates, title,
         // the mode change and all — over a flag those very coercions were about to clear.
-        if (values.has_autograder === true && queryData?.has_autograder === false) {
+        //
+        // Skipped for Forgejo: the validation is a GitHub call, and the Autograder page this points
+        // at can't set up a grader for a Forgejo assignment yet.
+        if (values.has_autograder === true && queryData?.has_autograder === false && !isForgejo) {
           const { data: graderRow } = await supabase
             .from("autograder")
             .select("grader_repo")
@@ -330,7 +368,7 @@ export default function EditAssignment() {
         // 200 with `{ message: "Repository not found" }`, and `invokeEdgeFunction` only throws on a
         // transport error or an `error` key. So check the returned message too.
         let webhookError: string | null = null;
-        if (values.template_repo) {
+        if (values.template_repo && !isForgejo) {
           // Both GitHub-touching calls sit in ONE rollback scope. The row is already
           // saved by this point, so anything that throws here would otherwise leave
           // has_autograder at its new value with the handout untouched — and the
@@ -624,6 +662,7 @@ export default function EditAssignment() {
       update,
       updateAsync,
       queryData?.has_autograder,
+      queryData?.git_provider,
       revalidateServerCaches
     ]
   );

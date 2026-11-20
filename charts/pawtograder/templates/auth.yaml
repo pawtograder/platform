@@ -92,10 +92,31 @@ spec:
             # GOTRUE_JWT_ISSUER below, so this doesn't affect token validation.)
             - name: API_EXTERNAL_URL
               value: {{ include "pawtograder.api.url" . }}/auth/v1
+            {{- /*
+            Email links are API_EXTERNAL_URL resolved against a mailer URL path, and the default
+            path is the absolute "/verify", which replaces /auth/v1 instead of appending to it:
+            reset links pointed at https://api.<host>/verify and Kong answered "no Route matched".
+            Supabase's self-hosted config sets these to /auth/v1/verify for the same reason.
+            */}}
+            - name: GOTRUE_MAILER_URLPATHS_INVITE
+              value: /auth/v1/verify
+            - name: GOTRUE_MAILER_URLPATHS_CONFIRMATION
+              value: /auth/v1/verify
+            - name: GOTRUE_MAILER_URLPATHS_RECOVERY
+              value: /auth/v1/verify
+            - name: GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE
+              value: /auth/v1/verify
             - name: GOTRUE_SITE_URL
               value: {{ include "pawtograder.web.url" . }}
+            {{- /* GoTrue allows any path on SITE_URL's host; other hosts need `/**` since `/*` matches one segment. */}}
+            {{- $uriAllow := list (printf "%s/*" (include "pawtograder.web.url" .)) }}
+            {{- range $c := .Values.channels }}
+            {{- if $c.web }}
+            {{- $uriAllow = append $uriAllow (printf "https://%s/**" (include "pawtograder.channel.host" (dict "ctx" $ "channel" $c))) }}
+            {{- end }}
+            {{- end }}
             - name: GOTRUE_URI_ALLOW_LIST
-              value: "{{ include "pawtograder.web.url" . }}/*"
+              value: {{ join "," $uriAllow | quote }}
             - name: GOTRUE_DISABLE_SIGNUP
               value: {{ .Values.auth.disableSignup | quote }}
             - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
@@ -152,6 +173,14 @@ spec:
               value: "true"
             - name: GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI
               value: {{ .Values.auth.customAccessTokenHook.uri | quote }}
+            {{- end }}
+            {{- if .Values.auth.oauthServer.enabled }}
+            - name: GOTRUE_OAUTH_SERVER_ENABLED
+              value: "true"
+            - name: GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH
+              value: {{ .Values.auth.oauthServer.authorizationPath | quote }}
+            - name: GOTRUE_OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION
+              value: {{ .Values.auth.oauthServer.allowDynamicRegistration | quote }}
             {{- end }}
             {{- if .Values.auth.external.github.enabled }}
             - name: GOTRUE_EXTERNAL_GITHUB_ENABLED

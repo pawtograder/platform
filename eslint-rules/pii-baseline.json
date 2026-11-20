@@ -1,0 +1,6 @@
+{
+  "about": "Violation count of the pii/pii-render lint rule (eslint-rules/pii-render.js). CI fails when the count rises above `count`. Lower it with `npm run lint:pii -- --update` after fixing violations; never raise it to let a new one in.",
+  "count": 0,
+  "byMessage": {},
+  "byFile": {}
+}

@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 //
 import { useColorMode } from "@/components/ui/color-mode";
@@ -189,29 +190,33 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
     </Box>
   );
 
+  // Blocked whole: the score is in the text and in the trigger's aria-label. The tooltip is
+  // portalled, so its content (which can hold the override note) is blocked separately.
   return (
-    <Box
-      w="100%"
-      textAlign="right"
-      border="1px solid"
-      borderColor="border.muted"
-      position="relative"
-      _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
-    >
-      {hovered && canShowGradeFor && scoreAdvice ? (
-        <Tooltip
-          content={scoreAdvice}
-          positioning={{ placement: "bottom" }}
-          showArrow={true}
-          ids={{ trigger: triggerId, content: contentId }}
-          contentProps={{ style: { zIndex: 10000 } }}
-        >
-          {cellInner}
-        </Tooltip>
-      ) : (
-        cellInner
-      )}
-      {!canShowGradeFor ? <GradeCellOverlay /> : null}
-    </Box>
+    <ReportBlock>
+      <Box
+        w="100%"
+        textAlign="right"
+        border="1px solid"
+        borderColor="border.muted"
+        position="relative"
+        _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
+      >
+        {hovered && canShowGradeFor && scoreAdvice ? (
+          <Tooltip
+            content={<ReportBlock>{scoreAdvice}</ReportBlock>}
+            positioning={{ placement: "bottom" }}
+            showArrow={true}
+            ids={{ trigger: triggerId, content: contentId }}
+            contentProps={{ style: { zIndex: 10000 } }}
+          >
+            {cellInner}
+          </Tooltip>
+        ) : (
+          cellInner
+        )}
+        {!canShowGradeFor ? <GradeCellOverlay /> : null}
+      </Box>
+    </ReportBlock>
   );
 }

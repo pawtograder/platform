@@ -5,6 +5,7 @@ import { useTrackEvent } from "@/hooks/useTrackEvent";
 import { createClient } from "@/utils/supabase/client";
 import { useForm } from "@refinedev/react-hook-form";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
+import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
@@ -393,6 +394,14 @@ export default function EditSurveyPage() {
             .eq("id", rawSurveyId)
             .select("id, survey_id")
             .single();
+
+          // The database refused to publish (or keep published) a survey whose questions share
+          // a name. Saving it as a draft instead, as below, would unpublish a live survey, so
+          // report the refusal and leave the survey as it was.
+          if (reportDuplicateNamesRefusal(error)) {
+            toaster.dismiss(loadingToast);
+            return;
+          }
 
           if (error || !data) {
             // If database error, try to save as draft with error flag

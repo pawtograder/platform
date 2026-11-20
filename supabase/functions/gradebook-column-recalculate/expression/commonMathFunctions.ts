@@ -73,6 +73,82 @@ function extractScalarValues(values: unknown[]): number[] {
   return result;
 }
 
+/** The part of an evaluation context that records which dependencies were missing. */
+type MissingCarrier = { incomplete_values?: { missing?: { gradebook_columns?: string[] } } | null };
+
+type RawArgNode = { isNode: true; compile: () => { evaluate: (scope: unknown) => unknown } };
+
+function isRawArgNode(value: unknown): value is RawArgNode {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { isNode?: unknown }).isNode === true &&
+    typeof (value as { compile?: unknown }).compile === "function"
+  );
+}
+
+/** The evaluation context ("context" in the mathjs scope), when the caller provides one. */
+function contextFromScope(scope: unknown): MissingCarrier | undefined {
+  const get = (scope as { get?: (key: string) => unknown } | null)?.get;
+  if (typeof get !== "function") return undefined;
+  const context = get.call(scope, "context");
+  return typeof context === "object" && context !== null ? (context as MissingCarrier) : undefined;
+}
+
+/** Drop the missing-column entries recorded after `keep`, and the empty containers that leaves. */
+function forgetMissingSince(context: MissingCarrier | undefined, keep: number) {
+  const incomplete = context?.incomplete_values;
+  const list = incomplete?.missing?.gradebook_columns;
+  if (!incomplete || !list || list.length <= keep) return;
+  list.length = keep;
+  if (list.length === 0) {
+    delete incomplete.missing!.gradebook_columns;
+    if (Object.keys(incomplete.missing!).length === 0) delete incomplete.missing;
+  }
+}
+
+const compiledRawArgs = new WeakMap<RawArgNode, { evaluate: (scope: unknown) => unknown }>();
+
+function evaluateRawArg(node: RawArgNode, scope: unknown): unknown {
+  let compiled = compiledRawArgs.get(node);
+  if (!compiled) {
+    compiled = node.compile();
+    compiledRawArgs.set(node, compiled);
+  }
+  return compiled.evaluate(scope);
+}
+
+/**
+ * `max` / `min` are sinks for missing values: they only need one score to have a result, so as
+ * long as at least one non-missing value reaches them, the dependencies that were missing among
+ * their arguments are not reported as incomplete (a best-of standing with an unattempted try is
+ * complete). With no value at all they return undefined and the missing entries stay.
+ *
+ * Under mathjs this is a `rawArgs` function: it receives its argument nodes and the scope,
+ * evaluates them itself, and so can tell which missing entries its own arguments recorded,
+ * whether they reach it as gradebook values, as globs, or through map/filter. Called directly
+ * with values (no scope), it simply reduces them.
+ */
+function missingSinkFunction(reduce: (...values: number[]) => number) {
+  const fn = (...params: unknown[]) => {
+    const [args, , scope] = params;
+    const isRawCall = params.length === 3 && Array.isArray(args) && args.every(isRawArgNode);
+    if (!isRawCall) {
+      const validValues = extractScalarValues(params);
+      return validValues.length === 0 ? undefined : reduce(...validValues);
+    }
+    const context = contextFromScope(scope);
+    const keep = context?.incomplete_values?.missing?.gradebook_columns?.length ?? 0;
+    const values = (args as RawArgNode[]).map((node) => evaluateRawArg(node, scope));
+    const validValues = extractScalarValues(values);
+    if (validValues.length === 0) return undefined;
+    forgetMissingSince(context, keep);
+    return reduce(...validValues);
+  };
+  (fn as unknown as { rawArgs: boolean }).rawArgs = true;
+  return fn;
+}
+
 export function addCommonExpressionFunctions(
   imports: ImportMap,
   {
@@ -157,17 +233,8 @@ export function addCommonExpressionFunctions(
     return value <= threshold ? 1 : 0;
   }) as (...args: never[]) => unknown;
 
-  imports["min"] = ((...values: unknown[]) => {
-    const validValues = extractScalarValues(values);
-    if (validValues.length === 0) return undefined;
-    return Math.min(...validValues);
-  }) as (...args: never[]) => unknown;
-
-  imports["max"] = ((...values: unknown[]) => {
-    const validValues = extractScalarValues(values);
-    if (validValues.length === 0) return undefined;
-    return Math.max(...validValues);
-  }) as (...args: never[]) => unknown;
+  imports["min"] = missingSinkFunction(Math.min) as (...args: never[]) => unknown;
+  imports["max"] = missingSinkFunction(Math.max) as (...args: never[]) => unknown;
 
   imports["larger"] = ((value: number | GradebookExpressionValue, threshold: number) => {
     if (isGradebookExpressionValue(value)) {

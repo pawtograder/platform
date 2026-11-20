@@ -13,6 +13,7 @@ import {
   type DiscussionConfig,
   type SurveyConfig
 } from "./DatabaseSeedingUtils";
+import type { ExamConfig } from "./ExamSeeding";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -36,7 +37,9 @@ interface SeederConfig {
   helpRequests?: HelpRequestConfig;
   discussions?: DiscussionConfig;
   surveyConfig?: SurveyConfig;
+  examConfig?: ExamConfig;
   gradingScheme?: "current" | "specification";
+  columnGroupFixtures?: boolean;
   rateLimitOverrides?: Record<string, { maxInsertsPerSecond: number; description: string; batchSize?: number }>;
 }
 
@@ -90,7 +93,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       submissionRate: 0.85,
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
-    }
+    },
+    examConfig: { maxScannedStudents: 30 }
   },
 
   small: {
@@ -143,7 +147,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       submissionRate: 0.85,
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
-    }
+    },
+    examConfig: { maxScannedStudents: 40 }
   },
 
   large: {
@@ -201,7 +206,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       submissionRate: 0.8,
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
-    }
+    },
+    examConfig: { maxScannedStudents: 60 }
   },
 
   tcrs: {
@@ -256,7 +262,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       linkToGroupAssignments: true,
       includeTeamCollaboration: true,
       completeResponsesForFirstNAssignmentSurveys: 9 // First 9 surveys: all students respond (submitted); last 1: none
-    }
+    },
+    examConfig: { maxScannedStudents: 25 }
   },
 
   // Marketing screenshot class: a believable ~500-student CS course tuned to
@@ -327,6 +334,67 @@ const TEMPLATES: Record<string, SeederConfig> = {
         maxInsertsPerSecond: 1,
         description: "Assignment creation (500 students → many gradebook columns per assignment)"
       }
+    },
+    examConfig: { maxScannedStudents: 60 }
+  },
+
+  // CS 4535 onboarding: the "gradebook column groups" assignment. A small course whose
+  // gradebook actually exercises the render-time grouping heuristic in
+  // manage/gradebook/gradebookTable.tsx — real multi-column families to group, and the cases
+  // the heuristic gets wrong for students to find. See createColumnGroupFixtures in
+  // DatabaseSeedingUtils for what the extra columns are and why each one is there.
+  //   npm run seed -- --template cs4535
+  cs4535: {
+    className: "CS 4535: Software Design & Delivery",
+    students: 24,
+    graders: 2,
+    instructors: 1,
+    assignments: 8,
+    // Everything already due, so the whole gradebook has scores in it.
+    dateRangeStart: -60,
+    dateRangeEnd: -2,
+    manualGradedColumns: 0, // the specification scheme + the fixtures below supply the columns
+    rubricConfig: {
+      minPartsPerAssignment: 2,
+      maxPartsPerAssignment: 3,
+      minCriteriaPerPart: 1,
+      maxCriteriaPerPart: 2,
+      minChecksPerCriteria: 2,
+      maxChecksPerCriteria: 3
+    },
+    sectionsAndTags: {
+      numClassSections: 1,
+      numLabSections: 2,
+      numStudentTags: 2,
+      numGraderTags: 1
+    },
+    labAssignments: {
+      numLabAssignments: 4,
+      minutesDueAfterLab: 1440
+    },
+    groupAssignments: {
+      numGroupAssignments: 2,
+      numLabGroupAssignments: 0
+    },
+    helpRequests: {
+      numHelpRequests: 8,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 6,
+      maxMembersPerRequest: 3
+    },
+    discussions: {
+      postsPerTopic: 3,
+      maxRepliesPerPost: 4
+    },
+    gradingScheme: "specification",
+    columnGroupFixtures: true,
+    surveyConfig: {
+      numSurveys: 2,
+      numTemplates: 1,
+      responseRate: 0.75,
+      submissionRate: 0.85,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
     }
   },
 
@@ -381,7 +449,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
       linkToGroupAssignments: true,
       includeTeamCollaboration: true
     },
-    rateLimitOverrides: {}
+    rateLimitOverrides: {},
+    examConfig: { maxScannedStudents: 40 }
   }
 };
 
@@ -425,7 +494,12 @@ async function runSeeding(config: SeederConfig) {
     .withHelpRequests(config.helpRequests!)
     .withDiscussions(config.discussions!)
     .withSurveys(config.surveyConfig!)
-    .withGradingScheme(config.gradingScheme!);
+    .withGradingScheme(config.gradingScheme!)
+    .withColumnGroupFixtures(config.columnGroupFixtures === true);
+
+  if (config.examConfig) {
+    chain = chain.withExams(config.examConfig);
+  }
 
   if (fixedUsers.instructor || fixedUsers.grader || fixedUsers.student || fixedUsers.admin) {
     // Don't log the raw emails — they may be real reviewer addresses
@@ -474,6 +548,9 @@ interface CLIArgs {
   rubricMaxCriteria?: number;
   rubricMinChecks?: number;
   rubricMaxChecks?: number;
+  /** Comma-separated exam scenario keys, "all", or "none". */
+  exams?: string;
+  examScans?: number;
 }
 
 function parseArgs(): CLIArgs {
@@ -560,6 +637,21 @@ function parseArgs(): CLIArgs {
           i++;
         }
         break;
+      case "--exams":
+        if (nextArg && !nextArg.startsWith("--")) {
+          result.exams = nextArg;
+          i++;
+        }
+        break;
+      case "--exam-scans":
+        // Not `startsWith("--")`: that would take "-1" as a value, and parseInt accepts "5x".
+        if (!nextArg || !/^\d+$/.test(nextArg)) {
+          console.error(`--exam-scans needs a non-negative integer, got ${nextArg ?? "nothing"}`);
+          process.exit(1);
+        }
+        result.examScans = Number(nextArg);
+        i++;
+        break;
       case "--discussion-posts":
         if (nextArg && !nextArg.startsWith("--")) {
           result.discussionPosts = parseInt(nextArg, 10);
@@ -580,7 +672,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "tcrs", "marketing", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "tcrs", "marketing", "cs4535", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:
@@ -601,12 +693,18 @@ Help Request Options:
 Discussion Options:
       --discussion-posts <number>     Posts per discussion topic
 
+Exam Options:
+      --exams <list|all|none>         Exam and quiz scenarios to seed, comma-separated
+                                      [choices: midterm-1, midterm-3, midterm-2, final, pop-quiz, quiz-1, quiz-2, quiz-3] [default: all]
+      --exam-scans <number>           Most students with scanned papers per paper exam
+
   -h, --help                         Show this help
 
 Examples:
   npm run seed                                        Run with micro template (default)
   npm run seed -- --template large                   Run with large scale template
   npm run seed -- --template small --students 100    Use small template but override student count
+  npm run seed -- --template cs4535                  A gradebook that exercises the column-grouping heuristic
   npm run seed -- --students 50 --graders 5 --assignments 10  Full custom configuration
   npm run seed -- --help                             Show detailed help
   
@@ -667,6 +765,19 @@ async function main() {
         ...template.discussions!,
         postsPerTopic: argv.discussionPosts
       };
+    }
+
+    // Override exams if specified
+    if (argv.exams !== undefined || argv.examScans !== undefined) {
+      if (argv.exams === "none") {
+        config.examConfig = undefined;
+      } else {
+        config.examConfig = {
+          ...template.examConfig,
+          ...(argv.exams && argv.exams !== "all" && { scenarios: argv.exams.split(",").map((s) => s.trim()) }),
+          ...(argv.examScans !== undefined && { maxScannedStudents: argv.examScans })
+        };
+      }
     }
 
     // Display final configuration

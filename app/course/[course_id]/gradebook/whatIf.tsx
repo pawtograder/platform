@@ -1,10 +1,15 @@
 import Markdown from "@/components/ui/markdown";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { useCourseFeature, useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { databaseLayout, isHeaderGroup, legacySlugLayout, topicLayout } from "@/lib/gradebookColumnGroups";
 import {
   useGradebookColumn,
+  useGradebookColumnGroups,
   useGradebookColumns,
+  useGradebookTopics,
   useGradebookColumnStudent,
   useGradebookController,
   useLinkToAssignment,
@@ -58,6 +63,14 @@ import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
  *
  * @returns The JSX element representing the score cell, including optional expression rendering, max score, a What If editor, and an instructor override indicator when applicable.
  */
+
+/**
+ * Two decimal places, the same as the instructor gradebook's default render (`round(score, 2)`),
+ * so a computed average reads 85.33 rather than 85.33333333333333.
+ */
+function roundScoreForDisplay(score: number): number {
+  return Math.round(score * 100) / 100;
+}
 function WhatIfScoreCell({
   column,
   private_profile_id,
@@ -92,32 +105,34 @@ function WhatIfScoreCell({
   if (isEditing && whatIfEnabled) {
     return (
       <Box display="flex" flexDirection="column" alignItems="center">
-        <Input
-          minW="5em"
-          autoFocus
-          type="number"
-          step="any"
-          aria-label={`Hypothetical grade for ${column.name}`}
-          value={whatIfVal?.what_if === undefined ? "" : whatIfVal.what_if}
-          onChange={(e) => {
-            const v = e.target.value === "" ? undefined : Number(e.target.value.trim());
-            if (v !== undefined) {
-              whatIfController.setWhatIfGrade(column.id, v, null);
-              modifiedColumnsRef.current.add(column.id);
-            } else {
-              whatIfController.clearGrade(column.id);
-              modifiedColumnsRef.current.delete(column.id);
-            }
-          }}
-          // Blur means focus already moved elsewhere, so close without stealing it back.
-          onBlur={stopEditing}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Escape") {
-              e.preventDefault();
-              closeEditor();
-            }
-          }}
-        />
+        <ReportBlock>
+          <Input
+            minW="5em"
+            autoFocus
+            type="number"
+            step="any"
+            aria-label={`Hypothetical grade for ${column.name}`}
+            value={whatIfVal?.what_if === undefined ? "" : whatIfVal.what_if}
+            onChange={(e) => {
+              const v = e.target.value === "" ? undefined : Number(e.target.value.trim());
+              if (v !== undefined) {
+                whatIfController.setWhatIfGrade(column.id, v, null);
+                modifiedColumnsRef.current.add(column.id);
+              } else {
+                whatIfController.clearGrade(column.id);
+                modifiedColumnsRef.current.delete(column.id);
+              }
+            }}
+            // Blur means focus already moved elsewhere, so close without stealing it back.
+            onBlur={stopEditing}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") {
+                e.preventDefault();
+                closeEditor();
+              }
+            }}
+          />
+        </ReportBlock>
         <Text color="fg.muted">What If?</Text>
         <Text fontSize="sm" color="fg.muted" maxW="xs">
           Simulate your grade based on a hypothetical grade for this item.
@@ -140,7 +155,7 @@ function WhatIfScoreCell({
   let scoreToShow: string | number = "N/A";
   let hasNumericScore = false;
   if (score !== null && score !== undefined) {
-    scoreToShow = score;
+    scoreToShow = roundScoreForDisplay(score);
     hasNumericScore = true;
   } else if (submissionStatus.status === "no-submission") {
     scoreToShow = "Not Submitted";
@@ -154,7 +169,7 @@ function WhatIfScoreCell({
     scoreToShow = "In Progress";
   }
   if (isShowingWhatIf) {
-    scoreToShow = whatIfVal?.what_if ?? 0;
+    scoreToShow = roundScoreForDisplay(whatIfVal?.what_if ?? 0);
     hasNumericScore = true;
   }
   const showMaxScore = hasNumericScore && column.max_score != null;
@@ -181,23 +196,13 @@ function WhatIfScoreCell({
       )}
       {column.render_expression && (
         <Box pr={1}>
-          <Text fontSize="sm">
-            {" "}
-            {renderer(
-              isShowingWhatIf
-                ? {
-                    score: whatIfVal?.what_if ?? null,
-                    score_override: null,
-                    is_missing: false,
-                    is_excused: false,
-                    is_droppable: false,
-                    released: false,
-                    max_score: max_score
-                  }
-                : studentGrade
-                  ? { ...studentGrade, max_score }
-                  : {
-                      score: null,
+          <ReportBlock>
+            <Text fontSize="sm">
+              {" "}
+              {renderer(
+                isShowingWhatIf
+                  ? {
+                      score: whatIfVal?.what_if ?? null,
                       score_override: null,
                       is_missing: false,
                       is_excused: false,
@@ -205,20 +210,34 @@ function WhatIfScoreCell({
                       released: false,
                       max_score: max_score
                     }
-            )}
-          </Text>
+                  : studentGrade
+                    ? { ...studentGrade, max_score }
+                    : {
+                        score: null,
+                        score_override: null,
+                        is_missing: false,
+                        is_excused: false,
+                        is_droppable: false,
+                        released: false,
+                        max_score: max_score
+                      }
+              )}
+            </Text>
+          </ReportBlock>
         </Box>
       )}
       {/* Punctuation that only groups the rendered expression with the raw
           score visually — spoken it is just "left paren" noise, and the
           SpokenValue below already reads the score as a phrase. */}
       {column.render_expression && <chakra.span aria-hidden="true">(</chakra.span>}
-      <Text fontSize="sm" whiteSpace="nowrap">
-        <SpokenValue spoken={spokenScore}>
-          {scoreToShow}
-          {showMaxScore && `/${column.max_score}`}
-        </SpokenValue>
-      </Text>
+      <ReportBlock>
+        <Text fontSize="sm" whiteSpace="nowrap">
+          <SpokenValue spoken={spokenScore}>
+            {scoreToShow}
+            {showMaxScore && `/${column.max_score}`}
+          </SpokenValue>
+        </Text>
+      </ReportBlock>
       {column.render_expression && <chakra.span aria-hidden="true">)</chakra.span>}
       {whatIfEnabled && canEditColumn(column) && (
         // Keyboard path into what-if editing (WCAG 2.1.1): the card-level click
@@ -467,11 +486,14 @@ function GradebookCard({
 }
 function GroupHeader({
   groupName,
+  isStoredGroup,
   columnCount,
   isCollapsed,
   onToggle
 }: {
   groupName: string;
+  /** Stored group names render verbatim; legacy (slug-guessed) names are singular and pluralized here. */
+  isStoredGroup: boolean;
   columnCount: number;
   isCollapsed: boolean;
   onToggle: () => void;
@@ -507,7 +529,8 @@ function GroupHeader({
             <HStack as="span" gap={2}>
               <Icon as={isCollapsed ? LuChevronRight : LuChevronDown} boxSize={4} color="fg.muted" aria-hidden="true" />
               <Text as="span" fontWeight="bold" fontSize="sm" color="fg.muted">
-                {columnCount} {pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
+                {columnCount}{" "}
+                {isStoredGroup ? groupName : pluralize(groupName.charAt(0).toUpperCase() + groupName.slice(1))}...
               </Text>
             </HStack>
           </HStack>
@@ -566,108 +589,59 @@ function CollapsedGroupColumn({
 
 export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_id: string; whatIfEnabled: boolean }) {
   const columns = useGradebookColumns();
+  const columnGroupsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_COLUMN_GROUPS, true);
+  const columnGroups = useGradebookColumnGroups();
+  const topicsEnabled = useCourseFeature(COURSE_FEATURES.GRADEBOOK_TOPICS, true);
+  const topics = useGradebookTopics();
 
-  // State for collapsible groups - use base group name as key for stability
+  // Collapse state keyed by unit key, so two groups that share a name collapse independently.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Sort columns by sort order
-  const sortedColumns = useMemo(() => {
-    const cols = [...columns];
-    cols.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-    return cols;
-  }, [columns]);
-
-  // Group gradebook columns by slug prefix, with special handling for assignment sub-groups
+  // Stored groups when the course has them on; otherwise the legacy slug-prefix heuristic. With
+  // topics on, each topic is one unit that collapses to its standing.
   const groupedColumns = useMemo(() => {
-    const groups: Record<string, { groupName: string; columns: GradebookColumn[] }> = {};
-
-    let currentGroupKey = "";
-    let currentGroupIndex = 0;
-    let lastSortOrder = -1;
-
-    sortedColumns.forEach((col) => {
-      const slugParts = col.slug.split("-");
-      let baseGroupName: string;
-
-      // Special handling for assignment columns
-      if (slugParts[0] === "assignment" && slugParts.length >= 3) {
-        // For assignment-assignment-*, assignment-lab-*, etc., use "assignment-{type}" as the base group
-        baseGroupName = `${slugParts[0]}-${slugParts[1]}`;
-      } else {
-        // For all other columns, use the first part as the base group
-        baseGroupName = slugParts[0] || "other";
-      }
-
-      // Check if this column is contiguous with the previous one
-      const currentSortOrder = col.sort_order ?? 0;
-      const isContiguous = lastSortOrder === -1 || currentSortOrder === lastSortOrder + 1;
-
-      // If not contiguous or different prefix, start a new group
-      if (!isContiguous || baseGroupName !== currentGroupKey) {
-        currentGroupKey = baseGroupName;
-        currentGroupIndex++;
-      }
-
-      const groupKey = `${baseGroupName}-${currentGroupIndex}`;
-
-      if (!groups[groupKey]) {
-        // Format group name for display
-        let displayName: string;
-        if (baseGroupName === "other") {
-          displayName = "Other";
-        } else if (baseGroupName.startsWith("assignment-")) {
-          // For assignment sub-groups, capitalize and format nicely
-          const subType = baseGroupName.split("-")[1];
-          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
-        } else {
-          displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
-        }
-
-        groups[groupKey] = {
-          groupName: displayName,
-          columns: []
-        };
-      }
-
-      groups[groupKey].columns.push(col);
-      lastSortOrder = currentSortOrder;
-    });
-
-    return groups;
-  }, [sortedColumns]);
+    const base = columnGroupsEnabled ? databaseLayout(columns, columnGroups) : legacySlugLayout(columns);
+    return topicsEnabled && topics.length > 0 ? topicLayout(base, topics) : base;
+  }, [columns, columnGroups, columnGroupsEnabled, topics, topicsEnabled]);
+  const collapsibleGroupKeys = useMemo(
+    () => Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1),
+    [groupedColumns]
+  );
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
+  // Collapse every group the first time groups appear; after that, keep what the user chose, so
+  // "Expand all" followed by a group being created or renamed doesn't collapse everything again.
+  const collapseInitializedRef = useRef(false);
   useEffect(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-
+    // Decide here, not inside the updater: React may run an updater twice (Strict Mode), and a
+    // ref written there would make the second run skip the first collapse.
+    const collapseAll = !collapseInitializedRef.current && collapsibleGroupKeys.length > 0;
+    if (collapseAll) collapseInitializedRef.current = true;
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
       // Preserve existing collapsed state for groups that still exist
-      baseGroupNames.forEach((baseGroupName) => {
-        if (prev.has(baseGroupName)) {
-          newSet.add(baseGroupName);
+      collapsibleGroupKeys.forEach((key) => {
+        if (prev.has(key)) {
+          newSet.add(key);
         }
       });
 
-      // If no groups were previously collapsed, collapse all by default
-      if (newSet.size === 0 && baseGroupNames.length > 0) {
-        baseGroupNames.forEach((baseGroupName) => newSet.add(baseGroupName));
+      if (collapseAll) {
+        collapsibleGroupKeys.forEach((key) => newSet.add(key));
       }
 
       return newSet;
     });
-  }, [groupedColumns]);
+  }, [collapsibleGroupKeys]);
 
-  // Toggle group collapse/expand using base group name
-  const toggleGroup = useCallback((baseGroupName: string) => {
+  const toggleGroup = useCallback((groupKey: string) => {
     setCollapsedGroups((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(baseGroupName)) {
-        newSet.delete(baseGroupName);
+      if (newSet.has(groupKey)) {
+        newSet.delete(groupKey);
       } else {
-        newSet.add(baseGroupName);
+        newSet.add(groupKey);
       }
       return newSet;
     });
@@ -680,17 +654,15 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-    setCollapsedGroups(new Set(baseGroupNames));
-  }, [groupedColumns]);
+    setCollapsedGroups(new Set(collapsibleGroupKeys));
+  }, [collapsibleGroupKeys]);
 
   // Build the rendered items
   const renderedItems = useMemo(() => {
     const items: JSX.Element[] = [];
 
     Object.entries(groupedColumns).forEach(([groupKey, group]) => {
-      if (group.columns.length === 1) {
+      if (!isHeaderGroup(group)) {
         // Single column - no need for group header
         const column = group.columns[0];
         items.push(
@@ -702,17 +674,18 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
           />
         );
       } else {
-        // Multiple columns - handle collapsed state using base group name
-        const isCollapsed = collapsedGroups.has(group.groupName);
+        // Header group; a one-column group has nothing to collapse.
+        const isCollapsed = group.columns.length > 1 && collapsedGroups.has(groupKey);
 
         // Add group header
         items.push(
           <GroupHeader
             key={`header-${groupKey}`}
             groupName={group.groupName}
+            isStoredGroup={group.groupId != null || group.topicId != null}
             columnCount={group.columns.length}
             isCollapsed={isCollapsed}
-            onToggle={() => toggleGroup(group.groupName)}
+            onToggle={() => toggleGroup(groupKey)}
           />
         );
 
@@ -729,6 +702,19 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
               />
             );
           });
+        } else if (group.standingColumnId != null) {
+          // A collapsed topic shows its standing.
+          const standing = group.columns.find((c) => c.id === group.standingColumnId)!;
+          items.push(
+            <GradebookCard
+              key={`collapsed-${groupKey}`}
+              column={standing}
+              private_profile_id={private_profile_id}
+              isCollapsedGroupItem={true}
+              whatIfEnabled={whatIfEnabled}
+              headingLevel={3}
+            />
+          );
         } else {
           // Show the appropriate column when collapsed (first if no grades, last if grades exist)
           items.push(
@@ -754,7 +740,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
         </Text>
       )}
       {/* Expand/Collapse All Buttons */}
-      {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+      {collapsibleGroupKeys.length > 0 && (
         <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>
           <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
             <Icon as={LuChevronDown} mr={2} /> Expand All

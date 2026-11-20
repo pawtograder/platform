@@ -2719,7 +2719,10 @@ export function useSurveyResponses(surveyId: string | undefined) {
         .eq("is_submitted", true)
         .is("deleted_at", null),
       classRealTimeController: controller.classRealTimeController,
-      realtimeFilter: { survey_id: surveyId }
+      // Must select the same rows as the query above. Every survey autosaves drafts as the student
+      // types, and each write is broadcast to staff, so a survey_id-only filter listed drafts live.
+      // It also kept a response listed after it was soft-deleted, which arrives as an update.
+      realtimeFilter: (row) => row.survey_id === surveyId && row.is_submitted === true && row.deleted_at == null
     });
 
     // Get profiles for joining response data

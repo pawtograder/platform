@@ -23,6 +23,7 @@ import { PlainRubricLineMenu } from "./plain-rubric-line-menu";
 import { RubricQuickApplyPalette } from "./rubric-quick-apply-palette";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export type { CodeFileHandle, CodeFileProps };
 
@@ -424,9 +425,11 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
           alignItems="center"
           justifyContent="space-between"
         >
-          <Text fontSize="xs" color="text.subtle">
-            {currentFile.name} (plain view — Monaco disabled in your preferences)
-          </Text>
+          <ReportBlock>
+            <Text fontSize="xs" color="text.subtle">
+              {currentFile.name} (plain view — Monaco disabled in your preferences)
+            </Text>
+          </ReportBlock>
           <HStack>
             {showCommentsFeature && commentsForCurrentFile.length > 0 && (
               <>

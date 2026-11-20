@@ -65,6 +65,7 @@ import MessageInput from "./message-input";
 import { StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Tooltip } from "./tooltip";
 import { toaster } from "./toaster";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Use line 0 as convention for file-level comments on markdown files
 const MARKDOWN_FILE_COMMENT_LINE = 0;
@@ -204,12 +205,6 @@ function getMimeFromExtension(filename: string): string {
 function isImageFile(filename: string): boolean {
   const ext = filename.split(".").pop()?.toLowerCase() || "";
   return ["png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "ico", "tiff", "tif"].includes(ext);
-}
-
-// Check if a file is a markdown file
-export function isMarkdownFile(filename: string): boolean {
-  const ext = filename.split(".").pop()?.toLowerCase() || "";
-  return ["md", "markdown", "mdown", "mkdn", "mkd"].includes(ext);
 }
 
 // Resolve a relative path from the current file's directory
@@ -1185,9 +1180,11 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
           justifyContent="space-between"
         >
           <HStack>
-            <Text fontSize="xs" color="text.subtle">
-              {file.name}
-            </Text>
+            <ReportBlock>
+              <Text fontSize="xs" color="text.subtle">
+                {file.name}
+              </Text>
+            </ReportBlock>
             <HStack gap={0} role="group">
               <Button
                 variant={viewMode === "preview" ? "solid" : "outline"}
@@ -1250,25 +1247,27 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
         </Flex>
         <MarkdownLineActionPopup {...lineActionPopupProps} file={file} />
         {viewMode === "preview" ? (
-          <Box
-            p={6}
-            className="markdown-file-preview"
-            css={markdownPreviewStyles}
-            onClick={(ev) => {
-              ev.preventDefault();
-              ev.stopPropagation();
-              lineActionPopupProps.onClose?.();
-              setLineActionPopupProps((prev) => ({ ...prev, visible: false, onClose: undefined }));
-            }}
-          >
-            <ReactMarkdown
-              remarkPlugins={[remarkEscapeHtml, remarkGfm, remarkMath, remarkGemoji]}
-              rehypePlugins={[rehypeSanitize, rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
-              components={components}
+          <ReportBlock>
+            <Box
+              p={6}
+              className="markdown-file-preview"
+              css={markdownPreviewStyles}
+              onClick={(ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                lineActionPopupProps.onClose?.();
+                setLineActionPopupProps((prev) => ({ ...prev, visible: false, onClose: undefined }));
+              }}
             >
-              {content}
-            </ReactMarkdown>
-          </Box>
+              <ReactMarkdown
+                remarkPlugins={[remarkEscapeHtml, remarkGfm, remarkMath, remarkGemoji]}
+                rehypePlugins={[rehypeSanitize, rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
+                components={components}
+              >
+                {content}
+              </ReactMarkdown>
+            </Box>
+          </ReportBlock>
         ) : (
           <CodeFileStarryNight file={file} embedded language="text.md" />
         )}

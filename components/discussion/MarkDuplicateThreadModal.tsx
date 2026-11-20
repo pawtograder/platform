@@ -18,6 +18,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, HStack, Spinner, Stack, Text } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 const MAX_RESULTS = 20;
 const DEBOUNCE_MS = 150;
@@ -307,9 +308,11 @@ export function MarkDuplicateThreadModal({
               <Text fontSize="xs" color="fg.muted">
                 Selected original
               </Text>
-              <Text fontSize="sm" fontWeight="semibold" lineClamp={1}>
-                #{selectedThread.ordinal} {selectedThread.subject}
-              </Text>
+              <ReportBlock>
+                <Text fontSize="sm" fontWeight="semibold" lineClamp={1}>
+                  #{selectedThread.ordinal} {selectedThread.subject}
+                </Text>
+              </ReportBlock>
             </Box>
           )}
         </DialogBody>

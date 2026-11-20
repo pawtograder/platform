@@ -10,6 +10,7 @@ import { formatRelative } from "date-fns";
 import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Mirror of statusConfig used across the regrade request UIs (InstructorRegradeTableShared,
 // RegradeRequestsTable). Kept local so this panel renders consistent status badges.
@@ -107,15 +108,19 @@ function AnchoredRegradeRequestRow({ request }: { request: RegradeRequest }) {
           <HStack gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">
             <Text>
               Initial:{" "}
-              <Text as="span" fontWeight="semibold" color="fg.default">
-                {request.initial_points ?? "-"}
-              </Text>
+              <ReportBlock>
+                <Text as="span" fontWeight="semibold" color="fg.default">
+                  {request.initial_points ?? "-"}
+                </Text>
+              </ReportBlock>
             </Text>
             <Text>
               Final:{" "}
-              <Text as="span" fontWeight="semibold" color="fg.default">
-                {finalPoints ?? "-"}
-              </Text>
+              <ReportBlock>
+                <Text as="span" fontWeight="semibold" color="fg.default">
+                  {finalPoints ?? "-"}
+                </Text>
+              </ReportBlock>
             </Text>
           </HStack>
           <HStack gap={3} flexWrap="wrap" fontSize="xs" color="fg.muted">

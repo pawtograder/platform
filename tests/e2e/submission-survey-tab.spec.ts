@@ -11,6 +11,8 @@ import type { Locator, Page } from "@playwright/test";
 import { viewAsCookieName } from "@/lib/viewAs";
 import { loginAsUser } from "./TestingUtils";
 import {
+  SUBMISSION_SURVEY_JSON_DESCRIPTION,
+  SUBMISSION_SURVEY_JSON_TITLE,
   SURVEY_ANSWER_TEXT,
   SURVEY_TITLES,
   UNASSIGNED_SURVEY_QUESTION_TEXT,
@@ -93,6 +95,13 @@ test.describe("Submission survey tab", () => {
     await expect(panel, "the not-started member gets an explicit card, not a blank form").toContainText(
       /has not started/i
     );
+    // The panel heading names the survey, so an expanded response shows the JSON description
+    // once and never the JSON title (the builder's "Survey Name").
+    for (const member of [fx.submitter, fx.teammate]) {
+      const response = panel.getByTestId(`survey-response-${member.private_profile_id}`);
+      await expect(response.getByText(SUBMISSION_SURVEY_JSON_DESCRIPTION, { exact: true })).toHaveCount(1);
+      await expect(response.getByText(SUBMISSION_SURVEY_JSON_TITLE, { exact: true })).toHaveCount(0);
+    }
   });
 
   test("a student sees only their own response, never a teammate's", async ({ page }) => {

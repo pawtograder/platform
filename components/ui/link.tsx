@@ -40,12 +40,14 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   { href, children, variant, colorPalette, prefetch, target, w, ...rest },
   ref
 ) {
+  // Chakra's asChild hands its props and ref to NextLink, which forwards the ref to the anchor.
+  // This replaces the legacyBehavior pattern, which Next.js has deprecated.
   return (
-    <NextLink href={href} passHref legacyBehavior prefetch={prefetch === undefined ? null : prefetch}>
-      <ChakraLink ref={ref} target={target} color={colorPalette} variant={variant} style={{ width: w }} {...rest}>
+    <ChakraLink asChild ref={ref} color={colorPalette} variant={variant} style={{ width: w }} {...rest}>
+      <NextLink href={href} prefetch={prefetch === undefined ? null : prefetch} target={target}>
         {children}
-      </ChakraLink>
-    </NextLink>
+      </NextLink>
+    </ChakraLink>
   );
 });
 

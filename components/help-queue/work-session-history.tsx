@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { BsClock, BsPencil, BsPeople, BsTrash } from "react-icons/bs";
 import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 import { formatDuration, formatDateTime } from "@/utils/time-formatting";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 interface WorkSessionHistoryProps {
   help_request_id: number;
@@ -159,9 +160,11 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
 
                     {session.notes && (
                       <Box mt={2} p={2} bg="bg.emphasized" borderRadius="md">
-                        <Text fontSize="sm" fontStyle="italic">
-                          {session.notes}
-                        </Text>
+                        <ReportBlock>
+                          <Text fontSize="sm" fontStyle="italic">
+                            {session.notes}
+                          </Text>
+                        </ReportBlock>
                       </Box>
                     )}
                   </Stack>

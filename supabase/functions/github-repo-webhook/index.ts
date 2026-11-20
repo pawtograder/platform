@@ -21,12 +21,12 @@ import {
   getDefaultBranchHeadSha,
   getFileFromRepo,
   getOctoKit,
-  triggerWorkflow,
   SecondaryRateLimitError,
   PrimaryRateLimitError,
   END_TO_END_REPO_PREFIX,
   repoHasFileAtRef
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveEmptySubmissionVerdict } from "../_shared/emptySubmissionVerdict.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
@@ -55,6 +55,14 @@ import { classifyUnreadyRepoPush } from "../_shared/unreadyRepoPush.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import {
+  acceptStudentRepoPush,
+  assignmentHasRepository,
+  findStudentRepository,
+  fromGitHubPush,
+  isDefaultBranchPush,
+  recordCommitCheckRun
+} from "../_shared/RepoPush.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
@@ -1721,133 +1729,23 @@ async function cleanupPushDirectSubmission(
 
 type GitHubCommit = PushEvent["commits"][number];
 
-/**
- * Record one pushed commit in `repository_check_runs`.
- *
- * These rows are the commit history the student and staff UIs read
- * (`CommitHistoryDialog`, `staff-commit-history`), independently of whether any
- * GitHub Actions run is ever attached to them - `check_run_id` stays null until
- * one is. Shared by the Actions path and the push-direct path so a repo-only
- * assignment still has a commit history.
- *
- * Idempotent: a row already present for this repo+sha is left alone, and a
- * concurrent delivery losing the UNIQUE (repository_id, sha) race is a no-op.
- */
-async function recordCommitCheckRun(
-  adminSupabase: SupabaseClient<Database>,
-  studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
-  commit: GitHubCommit,
-  pusherName: string,
-  scope: Sentry.Scope
-): Promise<void> {
-  const { data: existing, error: existingErr } = await adminSupabase
-    .from("repository_check_runs")
-    .select("id")
-    .eq("repository_id", studentRepo.id)
-    .eq("sha", commit.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (existingErr) {
-    console.error(existingErr);
-    scope.setTag("error_source", "repository_check_run_lookup_failed");
-    scope.setTag("error_context", "Error checking existing repository_check_runs");
-    Sentry.captureException(existingErr, scope);
-    throw existingErr;
-  }
-  if (existing && existing.id) {
-    return;
-  }
-
-  const status: ExtendedCheckRunStatus = {
-    created_at: new Date().toISOString(),
-    commit_author: commit.author.name,
-    commit_date: commit.timestamp,
-    created_by: "github push by " + pusherName
-  };
-  const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
-    repository_id: studentRepo.id,
-    check_run_id: null,
-    class_id: studentRepo.class_id,
-    assignment_group_id: studentRepo.assignment_group_id,
-    commit_message: commit.message,
-    sha: commit.id,
-    profile_id: studentRepo.profile_id,
-    status: status as unknown as Json
-  });
-  if (checkRunError) {
-    // 23505 = unique_violation. With UNIQUE (repository_id, sha) the
-    // SELECT-then-INSERT pattern above has a race window: concurrent webhook
-    // deliveries for the same commit can both pass the SELECT, then one wins
-    // the INSERT and the other returns 23505. Treat that as a no-op so we
-    // don't throw and force GitHub to retry the whole delivery.
-    if (checkRunError.code === "23505") {
-      scope.setTag("repository_check_run_insert_race", "true");
-      return;
-    }
-    console.error(checkRunError);
-    scope.setTag("error_source", "repository_check_run_insert_failed");
-    scope.setTag("error_context", "Could not create repository_check_run");
-    Sentry.captureException(checkRunError, scope);
-    throw checkRunError;
-  }
-}
-
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
   payload: PushEvent,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
   scope: Sentry.Scope
 ) {
-  scope.setTag("webhook_handler", "push_to_student_repo");
-  scope.setTag("repository", payload.repository.full_name);
-  scope.setTag("assignment_id", studentRepo.assignment_id.toString());
-  scope.setTag("class_id", studentRepo.class_id.toString());
-  scope.setTag("commits_count", payload.commits.length.toString());
-
-  console.log(`Handling push to student repo ${payload.repository.full_name}, ref: ${payload.ref}`);
-
-  // pr-mode guard: when this repo's assignment takes submissions as pull requests
-  // (submission_mode='pr'), a push to the fork's main is NOT a submission and
-  // must not create a check run or dispatch grade.yml — the PR webhook handles
-  // submissions. Skip rather than spin up a grading workflow.
-  // Also load has_autograder + due-date inputs for the push-mode zero-runner
-  // path below (a push-mode assignment with no autograder creates the
-  // submission directly here instead of dispatching grade.yml).
-  // Named columns, not `*`: this query runs on EVERY push delivery for every student repo,
-  // and `assignments` carries an unbounded `description` body that nothing here reads.
-  // Naming them also keeps the column dependency visible to a rename.
-  const { data: pushAssignment, error: pushAssignmentErr } = await adminSupabase
-    .from("assignments")
-    .select(
-      "id, submission_mode, has_autograder, repo_mode, allow_not_graded_submissions, permit_empty_submissions, latest_template_sha, max_late_tokens, require_tokens_before_due_date, classes(late_tokens_per_student)"
-    )
-    .eq("id", studentRepo.assignment_id)
-    .maybeSingle();
-  if (pushAssignmentErr) {
-    Sentry.captureException(pushAssignmentErr, scope);
-    throw pushAssignmentErr;
-  }
-  if (pushAssignment?.submission_mode === "pr") {
-    scope.setTag("skipped_reason", "pr_mode_assignment");
-    console.log(`Skipping push handling for ${payload.repository.full_name}: assignment is pr-mode`);
+  // Repository lookup, the pr-mode, tag, head-commit and repo-mode guards, and commit recording are
+  // shared with forgejo-repo-webhook (_shared/RepoPush.ts). What follows them is GitHub's.
+  const push = fromGitHubPush(payload);
+  const accepted = await acceptStudentRepoPush(adminSupabase, push, studentRepo, scope);
+  if (!accepted || !payload.head_commit) {
     return;
   }
+  const pushAssignment = accepted.assignment;
 
   //Get the repo name from the payload
   const repoName = payload.repository.full_name;
-  if (payload.ref.includes("refs/tags/pawtograder-submit/")) {
-    // If we make a #submit commit or otherwise create a submission, it will trigger creating the tag, so don't do anything on the tag push.
-    return;
-  }
-  if (!payload.head_commit) {
-    console.error("No head commit found in payload");
-    scope.setTag("error_source", "no_head_commit");
-    scope.setTag("error_context", "No head commit found in payload");
-    Sentry.captureException(new Error("No head commit found in payload"), scope);
-    return;
-  }
-  console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
 
   // Push-mode zero-runner path: when an assignment is push-mode AND has no
   // autograder, a push needs no GitHub Actions run to package the code — we
@@ -1870,27 +1768,10 @@ async function handlePushToStudentRepo(
   // actions, so counting them would make the student's newest "submission" be
   // work they never did.
   //
-  // Also guarded: `repo_mode` must still be a repo mode. Switching an existing
-  // assignment to none/no_submission coerces has_autograder=false but leaves the
-  // old `repositories` rows behind, and a later push to one of those would
-  // otherwise be recorded as a git submission for an upload-only assignment.
-  const pushRepoModeHasRepo = pushAssignment?.repo_mode !== "none" && pushAssignment?.repo_mode !== "no_submission";
-  // A mode with no repository must skip the ACTIONS path below as well, not just the
-  // push-direct branch. Guarding only the branch meant a `#submit` push to one of those
-  // leftover repos fell through, dispatched its stale grade.yml and stamped
-  // workflow_triggered_at — which autograder-create-submission reads as a pre-disable
-  // in-flight dispatch and therefore admits, producing an Actions-backed submission for an
-  // assignment that has neither a repository nor an autograder. `pushAssignment` null (no
-  // matching assignment) is left alone: that is a different case with its own handling
-  // below.
-  if (pushAssignment && !pushRepoModeHasRepo) {
-    scope.setTag("skipped_reason", "assignment_repo_mode_has_no_repo");
-    console.log(
-      `Skipping push handling for ${repoName}@${payload.after}: assignment ${pushAssignment.id} is ` +
-        `repo_mode=${pushAssignment.repo_mode}, so this repository is a leftover from a previous mode`
-    );
-    return;
-  }
+  // Also guarded: `repo_mode` must still be a repo mode (assignmentHasRepository).
+  // acceptStudentRepoPush has already dropped pushes to a leftover repository, so this is
+  // false only when no assignment matched the row.
+  const pushRepoModeHasRepo = assignmentHasRepository(pushAssignment);
   if (pushAssignment?.submission_mode === "push" && pushAssignment?.has_autograder === false && pushRepoModeHasRepo) {
     // Only the default branch is a submission. Without the `#submit` marker this path
     // has no other filter, so a push to a scratch branch or a `git push --tags` would
@@ -1910,7 +1791,7 @@ async function handlePushToStudentRepo(
       // from the history that an autograded one keeps. Only the submission is restricted to the
       // default branch; the history is not.
       for (const commit of payload.commits) {
-        await recordCommitCheckRun(adminSupabase, studentRepo, commit, payload.pusher.name, scope);
+        await recordCommitCheckRun(adminSupabase, studentRepo, push, commit, scope);
       }
       return;
     }
@@ -2054,7 +1935,7 @@ async function handlePushToStudentRepo(
     // the circuit-breaker check below) and it is idempotent per (repository, sha), so a redelivery
     // re-runs it harmlessly.
     for (const commit of payload.commits) {
-      await recordCommitCheckRun(adminSupabase, studentRepo, commit, payload.pusher.name, scope);
+      await recordCommitCheckRun(adminSupabase, studentRepo, push, commit, scope);
     }
     // BEFORE the first GitHub call on this path. This branch clones the repo zipball and now
     // also resolves the repo head below, so it must respect the same circuit breaker as the
@@ -2208,7 +2089,7 @@ async function handlePushToStudentRepo(
       );
     }
 
-    await recordCommitCheckRun(adminSupabase, studentRepo, commit, payload.pusher.name, scope);
+    await recordCommitCheckRun(adminSupabase, studentRepo, push, commit, scope);
 
     // If the workflow file was deleted in this commit, skip triggering - the workflow would fail anyway
     const removedInCommit = commit.removed.includes(GRADER_WORKFLOW_PATH);
@@ -2300,7 +2181,7 @@ async function handlePushToStudentRepo(
     if (!currentStatus.workflow_triggered_at) {
       maybeCrash("push.student.before_trigger_workflow");
       try {
-        await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+        await getGitProvider().startGrading(repoName, payload.head_commit.id);
       } catch (triggerErr) {
         console.error("Error triggering workflow:", triggerErr);
         const rt = detectRateLimitType(triggerErr);
@@ -2450,6 +2331,7 @@ async function handlePushToGraderSolution(
         const { data: handoutTarget, error: handoutTargetError } = await adminSupabase
           .from("assignments")
           .select("template_repo, latest_template_sha, class_id")
+          .eq("git_provider", "github")
           .eq("id", autograder.id)
           .maybeSingle();
         if (handoutTargetError) {
@@ -2864,29 +2746,9 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       );
       console.log(`[PUSH] repo=${repoName}`);
       //Is it a student repo?
-      const { data: studentRepo, error: studentRepoError } = await adminSupabase
-        .from("repositories")
-        .select("*")
-        .eq("repository", repoName)
-        .maybeSingle();
-      if (studentRepoError) {
-        console.error(studentRepoError);
-        scope.setTag("error_source", "student_repo_lookup_failed");
-        scope.setTag("error_context", "Error getting student repo");
-        Sentry.captureException(studentRepoError, scope);
-        throw studentRepoError;
-      }
+      const studentRepo = await findStudentRepository(adminSupabase, "github", repoName, scope);
       if (studentRepo) {
-        // Compare against the repo's ACTUAL default branch, not a hardcoded "main".
-        // For no-autograder assignments this webhook is the only thing that creates
-        // submissions, so a repo whose default branch is `master` (or anything else)
-        // had every push silently ignored. Actions-backed repos survived the
-        // hardcoding because the workflow could still call autograder-create-submission.
-        // Falls back to "main" when the payload omits default_branch.
-        const defaultBranch = payload.repository?.default_branch || "main";
-        if (payload.ref !== `refs/heads/${defaultBranch}`) {
-          scope.setTag("skipped_reason", "not_default_branch");
-          scope.setTag("repo_default_branch", defaultBranch);
+        if (!isDefaultBranchPush(fromGitHubPush(payload), scope)) {
           return;
         }
         scope.setTag("student_repo", studentRepo.id.toString());
@@ -2897,7 +2759,8 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       scope.setTag("repo_type", "grader_solution");
       const { data: graderSolution, error: graderSolutionError } = await adminSupabase
         .from("autograder")
-        .select("*")
+        .select("*, assignments!inner(git_provider)")
+        .eq("assignments.git_provider", "github")
         .eq("grader_repo", repoName);
       if (graderSolutionError) {
         console.error(graderSolutionError);
@@ -2915,6 +2778,7 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       const { data: templateRepo, error: templateRepoError } = await adminSupabase
         .from("assignments")
         .select("*")
+        .eq("git_provider", "github")
         .eq("template_repo", repoName);
       if (templateRepoError) {
         console.error(templateRepoError);
@@ -2950,7 +2814,8 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
         );
         const checkRun = await adminSupabase
           .from("repository_check_runs")
-          .select("*")
+          .select("*, repositories!inner(git_provider)")
+          .eq("repositories.git_provider", "github")
           .eq("check_run_id", payload.check_run.id)
           .maybeSingle();
         if (checkRun && checkRun.data) {
@@ -2982,7 +2847,7 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
             );
             maybeCrash("check_run.before_trigger_workflow");
             try {
-              await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
+              await getGitProvider().startGrading(payload.repository.full_name, payload.check_run.head_sha);
             } catch (triggerErr) {
               // Log the error with proper fingerprinting to prevent notification storms
               const repoName = payload.repository.full_name;
@@ -3564,6 +3429,7 @@ eventHandler.on("workflow_run", async ({ payload }: { payload: WorkflowRunEvent 
     const { data: matchedRepo, error: repoError } = await adminSupabase
       .from("repositories")
       .select("id, class_id")
+      .eq("git_provider", "github")
       .eq("repository", repository.full_name)
       .maybeSingle();
 
@@ -3691,6 +3557,7 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
     const { data: matchedRepo, error: repoError } = await adminSupabase
       .from("repositories")
       .select("id, class_id")
+      .eq("git_provider", "github")
       .eq("repository", repoFullName)
       .maybeSingle();
     if (repoError) {
@@ -3710,7 +3577,8 @@ eventHandler.on("deployment_status", async ({ payload }: { payload: DeploymentSt
       // head_sha silently drops deployments for push-mode submissions.
       const { data: matchedSubmission, error: submissionError } = await adminSupabase
         .from("submissions")
-        .select("class_id")
+        .select("class_id, assignments!inner(git_provider)")
+        .eq("assignments.git_provider", "github")
         .eq("repository", repoFullName)
         .or(`head_sha.eq.${sha},sha.eq.${sha}`)
         .limit(1)
@@ -3823,6 +3691,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const { data: assignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
     .select("id, class_id, upstream_base_branch, pr_identification, pr_branch_convention")
+    .eq("git_provider", "github")
     .eq("submission_mode", "pr")
     .ilike("upstream_repo", upstreamRepoPattern);
   if (assignmentsError) {
@@ -3896,6 +3765,7 @@ async function handlePrSubmission(payload: PullRequestEvent, scope: Sentry.Scope
   const { data: repoRow, error: repoRowError } = await adminSupabase
     .from("repositories")
     .select("id, profile_id, assignment_group_id, assignment_id, class_id")
+    .eq("git_provider", "github")
     .eq("repository", headRepo)
     .maybeSingle();
   if (repoRowError) {
@@ -4125,6 +3995,7 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
       const { data: repo, error: repoError } = await adminSupabase
         .from("repositories")
         .select("id, synced_handout_sha, desired_handout_sha, sync_data, sync_blocked_at")
+        .eq("git_provider", "github")
         .eq("repository", repoFullName)
         .maybeSingle();
 

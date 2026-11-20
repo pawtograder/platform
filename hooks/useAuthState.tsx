@@ -18,6 +18,12 @@ export function AuthStateProvider({ children, user }: { children: React.ReactNod
       Sentry.setUser(null);
       posthog.reset();
     }
+    // Signing out is a soft navigation to /sign-in that unmounts this provider without a reload.
+    // Without this, the next person to use the tab is reported to Sentry as this user, bug
+    // reports included. app/global-error.tsx restores the ID for its crash event.
+    return () => {
+      Sentry.setUser(null);
+    };
   }, [uid, posthog]);
   return <AuthStateContext.Provider value={{ user }}>{children}</AuthStateContext.Provider>;
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { ReportBugMenuItem } from "@/components/bugReport/ReportBugMenuItem";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 import NotificationsBox from "@/components/notifications/notifications-box";
 import { TimeZoneSelector } from "@/components/TimeZoneSelector";
@@ -155,14 +156,7 @@ function SupportMenu() {
                 Request a feature
               </Link>
             </Menu.Item>
-            <Menu.Item value="report-bug">
-              <Link
-                href={"https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md"}
-                target="_blank"
-              >
-                Report a bug
-              </Link>
-            </Menu.Item>
+            <ReportBugMenuItem />
             <Menu.Item value="view-open-bugs">
               <Link href={"https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen"} target="_blank">
                 View open issues

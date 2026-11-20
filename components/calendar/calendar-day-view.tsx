@@ -9,6 +9,7 @@ import { BsCalendar, BsCameraVideo, BsChevronLeft, BsChevronRight } from "react-
 import { calculateEventLayouts, EventLayout, formatTime } from "./calendar-layout-utils";
 import { CalendarColorPalette, isEventCurrentlyHappening, isUrl } from "./calendar-utils";
 import { getResolvedQueueName, useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 const HOUR_HEIGHT = 60; // pixels per hour
 const START_HOUR = 8; // 8 AM
@@ -113,32 +114,36 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
 
       {isVeryShort ? (
         // Very short events: Single line with name and time
-        <Text
-          fontSize="xs"
-          fontWeight="medium"
-          overflow="hidden"
-          textOverflow="ellipsis"
-          whiteSpace="nowrap"
-          lineHeight="1.3"
-          width="100%"
-        >
-          {event.title}
-        </Text>
-      ) : isShort ? (
-        // Short events: Name and time stacked tightly
-        <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+        <ReportBlock>
           <Text
             fontSize="xs"
             fontWeight="medium"
             overflow="hidden"
             textOverflow="ellipsis"
             whiteSpace="nowrap"
-            lineHeight="1.2"
+            lineHeight="1.3"
             width="100%"
-            flexShrink={0}
           >
             {event.title}
           </Text>
+        </ReportBlock>
+      ) : isShort ? (
+        // Short events: Name and time stacked tightly
+        <VStack align="stretch" gap={0} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+          <ReportBlock>
+            <Text
+              fontSize="xs"
+              fontWeight="medium"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+              lineHeight="1.2"
+              width="100%"
+              flexShrink={0}
+            >
+              {event.title}
+            </Text>
+          </ReportBlock>
           {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="2xs"
@@ -166,9 +171,29 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
           {event.location && (
+            <ReportBlock>
+              <Text
+                fontSize="2xs"
+                color="fg.muted"
+                overflow="hidden"
+                textOverflow="ellipsis"
+                whiteSpace="nowrap"
+                lineHeight="1.2"
+                width="100%"
+                flexShrink={0}
+              >
+                📍 {event.location}
+              </Text>
+            </ReportBlock>
+          )}
+        </VStack>
+      ) : (
+        // Normal and tall events: Full layout
+        <VStack align="stretch" gap={0.5} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
+          <ReportBlock>
             <Text
-              fontSize="2xs"
-              color="fg.muted"
+              fontSize="sm"
+              fontWeight="medium"
               overflow="hidden"
               textOverflow="ellipsis"
               whiteSpace="nowrap"
@@ -176,25 +201,9 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
               width="100%"
               flexShrink={0}
             >
-              📍 {event.location}
+              {event.title}
             </Text>
-          )}
-        </VStack>
-      ) : (
-        // Normal and tall events: Full layout
-        <VStack align="stretch" gap={0.5} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
-          <Text
-            fontSize="sm"
-            fontWeight="medium"
-            overflow="hidden"
-            textOverflow="ellipsis"
-            whiteSpace="nowrap"
-            lineHeight="1.2"
-            width="100%"
-            flexShrink={0}
-          >
-            {event.title}
-          </Text>
+          </ReportBlock>
           {event.organizer_name && event.uid?.startsWith("lab-meeting-") && (
             <Text
               fontSize="xs"
@@ -246,18 +255,20 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
                 Join virtual call
               </Link>
             ) : (
-              <Text
-                fontSize="xs"
-                color="fg.muted"
-                overflow="hidden"
-                textOverflow="ellipsis"
-                whiteSpace="nowrap"
-                lineHeight="1.2"
-                width="100%"
-                flexShrink={0}
-              >
-                📍 {event.location}
-              </Text>
+              <ReportBlock>
+                <Text
+                  fontSize="xs"
+                  color="fg.muted"
+                  overflow="hidden"
+                  textOverflow="ellipsis"
+                  whiteSpace="nowrap"
+                  lineHeight="1.2"
+                  width="100%"
+                  flexShrink={0}
+                >
+                  📍 {event.location}
+                </Text>
+              </ReportBlock>
             ))}
         </VStack>
       )}

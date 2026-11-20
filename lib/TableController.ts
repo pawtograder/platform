@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ClassRealTimeController } from "./ClassRealTimeController";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
+import { bugReportIngest, registerRowSource, unregisterRowSource } from "@/lib/bugReport/ingestGate";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 export type TablesThatHaveAnIDField = {
@@ -40,6 +41,19 @@ type ChannelType =
   | "discussion_thread_root";
 
 /**
+ * Privacy-aware broadcasts send only `{ id }` as `data` (e.g. private help_requests on the class
+ * students channel). Matching that against a realtime filter fails on every missing column and
+ * drops the row, so such messages are treated as ID-only and the row is refetched under RLS.
+ */
+function idOnlyRowId(data: unknown): unknown {
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const keys = Object.keys(data);
+    if (keys.length === 1 && keys[0] === "id") return (data as { id: unknown }).id;
+  }
+  return undefined;
+}
+
+/**
  * Tables that have an updated_at column and support incremental refetching.
  * Tables in this set can use the updated_at watermark optimization for efficient reconnection refetches.
  * Tables NOT in this set will skip refetch on reconnection unless enableAutoRefetch flag is explicitly set.
@@ -57,6 +71,8 @@ const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
   "discussion_threads",
   "gradebook_column_students",
   "gradebook_columns",
+  "gradebook_column_groups",
+  "gradebook_topics",
   "help_queue_assignments",
   "help_queues",
   "help_request_feedback",
@@ -124,6 +140,8 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   discussion_threads: ["staff", "students", "discussion_thread_root"],
   discussion_topics: ["staff", "students"],
   gradebook_columns: ["staff", "students"],
+  gradebook_column_groups: ["staff", "students"], // Students get id-only messages and refetch through RLS
+  gradebook_topics: ["staff", "students"], // Same as gradebook_column_groups
   gradebook_column_students: ["staff", "user"], // Also to individual users when not private
   help_queue_assignments: ["help_queue"],
   help_queues: ["help_queue"],
@@ -844,6 +862,34 @@ export default class TableController<
   private _autoFetchMissingRows: boolean = true;
   /** Debug ID for tracking controller instances in logs */
   readonly _debugID: string = Math.random().toString(36).substring(2, 15);
+  /** This controller's entry in the bug reporter's row-source registry (see bugReportRows). */
+  private _bugReportRef = registerRowSource(this);
+  private _bugReportSelectCache: string | null | undefined;
+
+  /**
+   * For the bug reporter's taint ingest (lib/bugReport/ingestGate.ts): the rows this controller
+   * holds, so a recorder that starts after they loaded can still classify them. Null once closed.
+   */
+  bugReportRows(): { relation: string; rows: readonly unknown[]; select: string | null } | null {
+    if (this._closed) return null;
+    return { relation: this._table, rows: this._rows, select: this._bugReportSelect() };
+  }
+
+  /** The PostgREST select the rows were read with (query and single-row refetch), for the ingest. */
+  private _bugReportSelect(): string | null {
+    if (this._bugReportSelectCache !== undefined) return this._bugReportSelectCache;
+    let select: string | null = null;
+    try {
+      const fromQuery = (this._query as unknown as { url?: URL } | undefined)?.url?.searchParams.get("select");
+      // A key in both keeps the query's embed (the parser's last one wins); that's what most rows hold.
+      const parts = [this._selectForSingleRow, fromQuery].filter((s): s is string => !!s);
+      select = parts.length > 0 ? parts.join(",") : null;
+    } catch {
+      select = null;
+    }
+    this._bugReportSelectCache = select;
+    return select;
+  }
 
   get table() {
     return this._table;
@@ -1078,7 +1124,11 @@ export default class TableController<
   /**
    * Refetch multiple rows by their IDs using IN queries with batching
    */
-  private async _refetchRowsByIds(ids: IDType[]): Promise<Map<IDType, ResultOne>> {
+  /**
+   * @param queriedIds when given, receives every id whose batch query succeeded, so a caller can
+   * tell "no longer visible" (queried, absent) apart from "query failed" (not queried).
+   */
+  private async _refetchRowsByIds(ids: IDType[], queriedIds?: Set<IDType>): Promise<Map<IDType, ResultOne>> {
     const results = new Map<IDType, ResultOne>();
     const batchSize = 100;
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
@@ -1095,6 +1145,7 @@ export default class TableController<
           continue;
         }
 
+        for (const id of batch) queriedIds?.add(id);
         if (data) {
           for (const row of data) {
             const typedRow = row as unknown as ResultOne;
@@ -1824,6 +1875,9 @@ export default class TableController<
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
           dataToLoad = initialData;
+          // Server-hydrated rows never pass the fetch hook; hand them to the taint ingest.
+          const ingest = bugReportIngest.sink;
+          if (ingest) ingest.rows(table, initialData, this._bugReportSelect());
           // We did not hit the database from the browser yet, so we have no
           // guarantee that initialData contains rows inserted just before
           // page load (cache invalidation might still be in flight). Schedule
@@ -1982,6 +2036,8 @@ export default class TableController<
       return;
     }
     this._closed = true;
+    unregisterRowSource(this._bugReportRef);
+    this._bugReportRef = undefined;
 
     // Track controller closure
     const tableName = this._table as string;
@@ -2039,10 +2095,11 @@ export default class TableController<
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
+        const idOnly = idOnlyRowId(message.data);
+        if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
+        } else if (message.row_id ?? idOnly) {
+          idsToRefetch.push((message.row_id ?? idOnly) as IDType);
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
@@ -2105,10 +2162,11 @@ export default class TableController<
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
+        const idOnly = idOnlyRowId(message.data);
+        if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
+        } else if (message.row_id ?? idOnly) {
+          idsToRefetch.push((message.row_id ?? idOnly) as IDType);
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
@@ -2129,7 +2187,16 @@ export default class TableController<
     // Batch refetch for messages without data and await completion
     if (idsToRefetch.length > 0) {
       try {
-        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
+        const queriedIds = new Set<IDType>();
+        const refetchedRows = await this._refetchRowsByIds(idsToRefetch, queriedIds);
+        // A successful refetch that returns nothing means the row is no longer visible to this
+        // user (e.g. a public help request made private, which non-participants receive as an
+        // ID-only payload). Failed batches are not in queriedIds, so errors never evict.
+        for (const id of queriedIds) {
+          if (!refetchedRows.has(id) && this._rows.some((r) => (r as ResultOne & { id: IDType }).id === id)) {
+            this._removeRow(id);
+          }
+        }
         for (const [id, row] of refetchedRows) {
           const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
           const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
@@ -3176,6 +3243,10 @@ export default class TableController<
       }
     }
 
+    // Bug reporter taint ingest; null unless a recorder is running.
+    const ingest = bugReportIngest.sink;
+    if (ingest) ingest.rows(this._table, row, this._bugReportSelect());
+
     this._rows = [...this._rows, row];
     if ("id" in row) {
       this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
@@ -3205,6 +3276,9 @@ export default class TableController<
     if (index === -1) {
       throw new Error("Row not found");
     }
+    // Bug reporter taint ingest; null unless a recorder is running.
+    const ingest = bugReportIngest.sink;
+    if (ingest) ingest.rows(this._table, newRow, this._bugReportSelect());
     const merged = {
       ...this._rows[index],
       ...newRow,

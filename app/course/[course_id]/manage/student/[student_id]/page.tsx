@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import {
@@ -430,7 +431,9 @@ export default function StudentPage() {
                         <Table.Cell fontSize="xs" verticalAlign="top">
                           {group ? (
                             <VStack align="start" gap={0.5}>
-                              <Text fontWeight="medium">{group.name}</Text>
+                              <ReportBlock>
+                                <Text fontWeight="medium">{group.name}</Text>
+                              </ReportBlock>
                               {mateNames.length > 0 && <Text color="fg.muted">With: {mateNames.join(", ")}</Text>}
                               {mentorName && <Text color="fg.muted">Mentor: {mentorName}</Text>}
                             </VStack>
@@ -466,28 +469,32 @@ export default function StudentPage() {
                             "—"
                           )}
                         </Table.Cell>
-                        <Table.Cell textAlign="right">
-                          {a.submission_id ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              {a.autograder_score ?? "—"}
-                            </Link>
-                          ) : (
-                            (a.autograder_score ?? "—")
-                          )}
-                        </Table.Cell>
-                        <Table.Cell textAlign="right">
-                          {a.submission_id ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              {a.total_score ?? "—"} / {a.total_points ?? "—"}
-                            </Link>
-                          ) : (
-                            (a.total_score ?? "—")
-                          )}
-                        </Table.Cell>
+                        <ReportBlock>
+                          <Table.Cell textAlign="right">
+                            {a.submission_id ? (
+                              <Link
+                                href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                              >
+                                {a.autograder_score ?? "—"}
+                              </Link>
+                            ) : (
+                              (a.autograder_score ?? "—")
+                            )}
+                          </Table.Cell>
+                        </ReportBlock>
+                        <ReportBlock>
+                          <Table.Cell textAlign="right">
+                            {a.submission_id ? (
+                              <Link
+                                href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                              >
+                                {a.total_score ?? "—"} / {a.total_points ?? "—"}
+                              </Link>
+                            ) : (
+                              (a.total_score ?? "—")
+                            )}
+                          </Table.Cell>
+                        </ReportBlock>
                         <Table.Cell>
                           {a.effective_due_date ? (
                             a.submission_id ? (
@@ -561,7 +568,9 @@ export default function StudentPage() {
                         textOverflow="ellipsis"
                         whiteSpace="nowrap"
                       >
-                        <Link href={`/course/${course_id}/manage/office-hours/request/${req.id}`}>{req.request}</Link>
+                        <ReportBlock>
+                          <Link href={`/course/${course_id}/manage/office-hours/request/${req.id}`}>{req.request}</Link>
+                        </ReportBlock>
                       </Table.Cell>
                       <Table.Cell>{req.assignee ?? "—"}</Table.Cell>
                       <Table.Cell>
@@ -613,7 +622,7 @@ export default function StudentPage() {
                       </Table.Cell>
                       <Table.Cell>{new Date(msg.created_at).toLocaleString()}</Table.Cell>
                       <Table.Cell>{msg.author}</Table.Cell>
-                      <Table.Cell maxW={{ base: 56, md: 96 }} overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{msg.message}</Table.Cell>
+                      <ReportBlock><Table.Cell maxW={{ base: 56, md: 96 }} overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{msg.message}</Table.Cell></ReportBlock>
                       <Table.Cell>{msg.instructors_only ? "Yes" : "No"}</Table.Cell>
                       <Table.Cell>
                         <Link href={`/course/${course_id}/manage/office-hours/request/${msg.help_request_id}`}>#{msg.help_request_id}</Link>
@@ -664,7 +673,9 @@ export default function StudentPage() {
                         textOverflow="ellipsis"
                         whiteSpace="nowrap"
                       >
-                        <Link href={`/course/${course_id}/discussion/${post.id}`}>{post.subject}</Link>
+                        <ReportBlock>
+                          <Link href={`/course/${course_id}/discussion/${post.id}`}>{post.subject}</Link>
+                        </ReportBlock>
                       </Table.Cell>
                       <Table.Cell>{post.instructors_only ? "Yes" : "No"}</Table.Cell>
                       <Table.Cell>{post.topic_id}</Table.Cell>
@@ -715,7 +726,9 @@ export default function StudentPage() {
                         textOverflow="ellipsis"
                         whiteSpace="nowrap"
                       >
-                        <Link href={`/course/${course_id}/discussion/${reply.root}`}>{reply.body}</Link>
+                        <ReportBlock>
+                          <Link href={`/course/${course_id}/discussion/${reply.root}`}>{reply.body}</Link>
+                        </ReportBlock>
                       </Table.Cell>
                       <Table.Cell>{reply.instructors_only ? "Yes" : "No"}</Table.Cell>
                       <Table.Cell>{reply.root}</Table.Cell>
@@ -754,7 +767,9 @@ export default function StudentPage() {
                   {sortedPrivateGrades.map((g) => (
                     <Table.Row key={`${g.gradebook_column_id}`}>
                       <Table.Cell>{columnsById.get(g.gradebook_column_id)?.name ?? g.gradebook_column_id}</Table.Cell>
-                      <Table.Cell textAlign="right">{g.score_override ?? g.score ?? "—"}</Table.Cell>
+                      <ReportBlock>
+                        <Table.Cell textAlign="right">{g.score_override ?? g.score ?? "—"}</Table.Cell>
+                      </ReportBlock>
                       <Table.Cell textAlign="right">
                         {columnsById.get(g.gradebook_column_id)?.max_score ?? "—"}
                       </Table.Cell>

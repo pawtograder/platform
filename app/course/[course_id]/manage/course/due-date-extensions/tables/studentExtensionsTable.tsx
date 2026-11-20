@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
@@ -91,7 +92,9 @@ export default function StudentExtensionsTable() {
           {(extensions || []).map((row) => (
             <Table.Row key={row.id}>
               <Table.Cell>{studentName(row.student_id)}</Table.Cell>
-              <Table.Cell>{row.hours}</Table.Cell>
+              <ReportBlock>
+                <Table.Cell>{row.hours}</Table.Cell>
+              </ReportBlock>
               <Table.Cell>{row.includes_lab ? "Yes" : "No"}</Table.Cell>
               <Table.Cell>
                 <TimeZoneAwareDate date={row.created_at} format="compact" />

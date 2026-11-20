@@ -88,7 +88,7 @@ async function handleAssignmentGroupJoin(
         "*,classes(github_org), profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))"
       )
       .eq("assignment_group_id", assignment_group_id);
-    if (remaining_members) {
+    if (remaining_members && assignmentGroup.repositories[0]?.git_provider === "github") {
       await enqueueSyncRepoPermissions({
         class_id: assignmentGroup.class_id,
         course_slug: assignmentGroup.classes!.slug!,

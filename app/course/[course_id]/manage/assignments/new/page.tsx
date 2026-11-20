@@ -44,9 +44,23 @@ export default function NewAssignmentPage() {
   const onSubmit = useCallback(
     async (values: FieldValues) => {
       async function create() {
-        const repoMode = getValues("repo_mode") || "template_only_staff";
+        // 'code' = the GitHub/autograder flow. quiz/exam/survey have no git repository at
+        // all, so they are pinned to repo_mode 'none' rather than left at the form's
+        // default: the AFTER INSERT trigger on `assignments` enqueues student repo
+        // creation straight from repo_mode, so a quiz saved as 'template_only_staff'
+        // would get repos from the database no matter what this handler skips.
+        const assignmentType = ((getValues("assignment_type") as string) || "code") as
+          | "code"
+          | "quiz"
+          | "exam"
+          | "survey";
+        const isCode = assignmentType === "code";
+        const repoMode = isCode ? getValues("repo_mode") || "template_only_staff" : "none";
         const isNoRepo = repoMode === "none" || repoMode === "no_submission";
-        const isPr = getValues("submission_mode") === "pr";
+        const isPr = isCode && getValues("submission_mode") === "pr";
+        // The Repository host picker only sets this in a course with Cloud workspaces on. Without
+        // it the insert leaves git_provider to its database default, as before #1091.
+        const isForgejo = isCode && getValues("git_provider") === "forgejo";
         const willCreateRepos = !isNoRepo;
 
         // Validate the fork/source autograder agreement BEFORE inserting anything.
@@ -108,7 +122,9 @@ export default function NewAssignmentPage() {
         const loadingToast = toaster.create({
           title: "Creating Assignment",
           description: willCreateRepos
-            ? "Creating GitHub repositories for handout and grader... This may take a few moments."
+            ? isForgejo
+              ? "Creating the handout repository on Forgejo... This may take a few moments."
+              : "Creating GitHub repositories for handout and grader... This may take a few moments."
             : "Setting up assignment...",
           type: "loading"
         });
@@ -194,6 +210,7 @@ export default function NewAssignmentPage() {
               total_points: getValues("total_points"),
               template_repo: isNoRepo ? null : getValues("template_repo"),
               submission_files: getValues("submission_files"),
+              assignment_type: assignmentType,
               // has_autograder must reflect reality (it gates the webhook's autograder run and the
               // results-page empty state). No-repo modes ('none'/'no_submission') can never have one
               // — the autograder runs as a GitHub Actions workflow inside the student repo. PR mode
@@ -205,11 +222,19 @@ export default function NewAssignmentPage() {
               has_autograder: !isNoRepo && !isPr && getValues("has_autograder") !== false,
               has_handgrader: true,
               class_id: Number.parseInt(course_id as string),
-              group_config: getValues("group_config"),
-              min_group_size: getValues("min_group_size") || null,
-              max_group_size: getValues("max_group_size") || null,
-              allow_student_formed_groups: getValues("allow_student_formed_groups"),
-              enable_repo_analytics: getValues("enable_repo_analytics") || false,
+              // Pinned to individual for quiz/exam/survey, for the same reason repo_mode is
+              // pinned to 'none' above: every submission path for these types inserts an
+              // individual row with assignment_group_id NULL (quiz_submit,
+              // exam_create_submission, the survey completion trigger), and
+              // submissions_insert_hook_optimized REJECTS that insert for a student who belongs
+              // to an assignment group. Persisting a group config would therefore break quiz
+              // submission, scanned-exam finalization and survey credit for exactly the
+              // students in groups, with no group-aware path to fall back on.
+              group_config: isCode ? getValues("group_config") : "individual",
+              min_group_size: isCode ? getValues("min_group_size") || null : null,
+              max_group_size: isCode ? getValues("max_group_size") || null : null,
+              allow_student_formed_groups: isCode ? getValues("allow_student_formed_groups") : false,
+              enable_repo_analytics: !isForgejo && (getValues("enable_repo_analytics") || false),
               grader_pseudonymous_mode: getValues("grader_pseudonymous_mode") || false,
               show_leaderboard: getValues("show_leaderboard") || false,
               minutes_due_after_lab:
@@ -220,15 +245,18 @@ export default function NewAssignmentPage() {
                   : getValues("minutes_due_after_lab"),
               regrade_deadline: values.regrade_deadline || null,
               self_review_setting_id: selfReviewSettingId as number,
-              group_formation_deadline: values.group_formation_deadline || null,
+              group_formation_deadline: isCode ? values.group_formation_deadline || null : null,
               repo_mode: repoMode,
               source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
               // DB constraint `assignments_no_protection_when_no_repo` rejects non-default
               // protect_* when repo_mode is none/no_submission, so coerce here rather than
               // surfacing a constraint error from the disabled-but-still-set checkboxes.
-              protect_block_force_push: isNoRepo ? false : getValues("protect_block_force_push") !== false,
-              protect_require_pull_request: isNoRepo ? false : getValues("protect_require_pull_request") === true,
-              protect_required_reviewers: isNoRepo ? 0 : Number(getValues("protect_required_reviewers") || 0),
+              // Forgejo shows these off and disabled, so write what it shows.
+              protect_block_force_push: isNoRepo || isForgejo ? false : getValues("protect_block_force_push") !== false,
+              protect_require_pull_request:
+                isNoRepo || isForgejo ? false : getValues("protect_require_pull_request") === true,
+              protect_required_reviewers:
+                isNoRepo || isForgejo ? 0 : Number(getValues("protect_required_reviewers") || 0),
               // Submission-mode axis. Only persist the upstream/PR config when the
               // instructor actually selected PR mode; otherwise leave the columns at
               // their push-mode defaults.
@@ -241,7 +269,8 @@ export default function NewAssignmentPage() {
               upstream_base_branch: isPr ? getValues("upstream_base_branch") || "main" : "main",
               pr_identification: prIdentification,
               pr_branch_convention: prBranchConvention,
-              require_pr_open: isPr ? getValues("require_pr_open") === true : false
+              require_pr_open: isPr ? getValues("require_pr_open") === true : false,
+              ...(isForgejo ? { git_provider: "forgejo" } : {})
             })
             .select("id")
             .single();
@@ -257,15 +286,18 @@ export default function NewAssignmentPage() {
               description: error?.message ?? "The assignment was not created. Please try again."
             });
           } else {
-            if (!isNoRepo) {
+            if (willCreateRepos) {
               await assignmentCreateHandoutRepo(
                 { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
                 supabase
               );
-              await assignmentCreateSolutionRepo(
-                { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-                supabase
-              );
+              // Grader repositories are only created on GitHub; see FORGEJO_GRADER_SETUP_REASON.
+              if (!isForgejo) {
+                await assignmentCreateSolutionRepo(
+                  { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+                  supabase
+                );
+              }
             }
 
             // Clear the timer and dismiss the loading toast
@@ -274,18 +306,35 @@ export default function NewAssignmentPage() {
             toaster.create({
               title: "Assignment Created Successfully",
               description: willCreateRepos
-                ? "GitHub repositories have been created and the assignment is ready."
-                : "The assignment is ready.",
+                ? isForgejo
+                  ? "The handout repository has been created on Forgejo. Student repositories are created on release."
+                  : "GitHub repositories have been created and the assignment is ready."
+                : isCode
+                  ? "The assignment is ready."
+                  : "The assignment is ready to configure.",
               type: "success"
             });
 
+            // Send the instructor to the right next step for the chosen type.
+            const base = `/course/${course_id}/manage/assignments/${data.id}`;
+            const navigateTo =
+              assignmentType === "quiz"
+                ? `${base}/quiz`
+                : assignmentType === "exam"
+                  ? `${base}/exam`
+                  : assignmentType === "survey"
+                    ? // survey: create + link a survey. Pass the new assignment id so the survey
+                      // form links back to it -- its `assignment_id` defaults to null, so without
+                      // this the flow can leave a survey assignment with no survey attached.
+                      `/course/${course_id}/manage/surveys/new?assignment_id=${data.id}`
+                    : isForgejo
+                      ? // The Autograder page sets up GitHub grader repositories, which Forgejo rejects.
+                        base
+                      : `${base}/autograder`;
             // Awaited, and the navigation goes through the hook: this also drops the browser's
             // Router Cache, which still holds the pre-insert render of the assignments list the
             // user came from (#937). `revalidateTag` alone never reached that copy.
-            await revalidateServerCaches({
-              tables: ["assignments"],
-              navigateTo: `/course/${course_id}/manage/assignments/${data.id}/autograder`
-            });
+            await revalidateServerCaches({ tables: ["assignments"], navigateTo });
           }
         } catch (error) {
           // Clear the timer and dismiss the loading toast

@@ -56,10 +56,8 @@ export const updateSession = async (request: NextRequest) => {
           headers: requestHeaders
         }
       });
-      Sentry.setUser({
-        id: claims.data.claims.sub,
-        email: claims.data.claims.email
-      });
+      // ID only: Sentry events never carry a user's name or email. Staff look the user up by ID.
+      Sentry.setUser({ id: claims.data.claims.sub });
     } else {
       Sentry.setUser(null);
     }

@@ -39,6 +39,7 @@ import {
   type CodeFileHandle,
   type CodeFileProps
 } from "./code-file-shared";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
 
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -1285,9 +1286,11 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
           alignItems="center"
           justifyContent="space-between"
         >
-          <Text fontSize="xs" color="text.subtle">
-            {currentFile.name}
-          </Text>
+          <ReportBlock>
+            <Text fontSize="xs" color="text.subtle">
+              {currentFile.name}
+            </Text>
+          </ReportBlock>
           <HStack>
             {showCommentsFeature && allFileComments.length > 0 && (
               <>

@@ -34,6 +34,7 @@ import {
   FiCompass,
   FiFileText,
   FiHash,
+  FiKey,
   FiMenu,
   FiMessageSquare,
   FiSettings,
@@ -152,6 +153,13 @@ const LinkItems = (courseID: number) => [
         icon: FiSliders,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/feature-flags`
+      },
+      {
+        // Not gated on the gemini-api-key-setup flag: status and removal stay available when setup is off.
+        name: "Gemini API Key",
+        icon: FiKey,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/gemini-api-key`
       },
       {
         name: "GitHub Templates",
@@ -325,8 +333,10 @@ export default function DynamicCourseNav() {
           copy the user is actually seeing.) */}
       <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">
-          {/* Top row: Course picker, logo, course name, user menu */}
-          <HStack justifyContent="space-between" alignItems="center">
+          {/* Top row: Course picker, logo, course name, user menu. Wraps so the user menu moves
+              below the course name when both don't fit at 320px (a long title word plus the
+              time zone chip overflowed the page). */}
+          <HStack justifyContent="space-between" alignItems="center" flexWrap="wrap">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
               <NextLink href="/course" aria-label={`${branding.name} home`}>

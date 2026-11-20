@@ -1,3 +1,4 @@
+import { ReportBugButton } from "@/components/bugReport/ReportBugButton";
 import { VStack, Container, Stack, Heading, Text } from "@chakra-ui/react";
 
 export default async function ErrorPage({
@@ -15,9 +16,10 @@ export default async function ErrorPage({
             <>
               <Text color="fg.muted">{error_description}</Text>
               <Text color="fg.muted">
-                Try using your browser&apos;s back button to go back to the previous page, and **TODO** file a bug
-                report.
+                Try using your browser&apos;s back button to go back to the previous page. If this keeps happening,
+                report it so we can fix it.
               </Text>
+              <ReportBugButton variant="outline" mt="2" />
             </>
           ) : (
             <Text color="fg.muted">

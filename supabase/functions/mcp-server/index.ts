@@ -1072,7 +1072,9 @@ async function listGraderFiles(supabase: SupabaseClient<Database>, assignmentId:
   // Get the autograder info to find the grader repo
   const { data: autograder, error } = await supabase
     .from("autograder")
-    .select("grader_repo")
+    .select("grader_repo, assignments!inner(git_provider)")
+    .eq("assignments.git_provider", "github")
+    .eq("assignments.class_id", classId)
     .eq("id", assignmentId)
     .single();
 
@@ -1120,7 +1122,9 @@ async function getGraderFilesFiltered(
   // Get the autograder info to find the grader repo
   const { data: autograder, error } = await supabase
     .from("autograder")
-    .select("grader_repo")
+    .select("grader_repo, assignments!inner(git_provider)")
+    .eq("assignments.git_provider", "github")
+    .eq("assignments.class_id", classId)
     .eq("id", assignmentId)
     .single();
 
@@ -1184,6 +1188,7 @@ async function listHandoutFiles(supabase: SupabaseClient<Database>, assignmentId
   const { data: assignment, error } = await supabase
     .from("assignments")
     .select("template_repo")
+    .eq("git_provider", "github")
     .eq("id", assignmentId)
     .eq("class_id", classId)
     .single();
@@ -1248,6 +1253,7 @@ async function getHandoutFilesFiltered(
   const { data: assignment, error } = await supabase
     .from("assignments")
     .select("template_repo")
+    .eq("git_provider", "github")
     .eq("id", assignmentId)
     .eq("class_id", classId)
     .single();

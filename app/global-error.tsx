@@ -1,13 +1,139 @@
 "use client";
+import { GITHUB_BUG_REPORT_URL, useBugReportingAvailable } from "@/lib/bugReport/availability";
+import { getLastKnownReportContext } from "@/lib/bugReport/reportContext";
+import { submitReport, type SubmitReportResult } from "@/lib/bugReport/submitFeedback";
 import * as Sentry from "@sentry/nextjs";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+
+/**
+ * Plain-HTML bug report form. This page renders its own `<html>` outside the root layout,
+ * so Chakra and the report dialog are not available here.
+ */
+function CrashReportForm({ errorID }: { errorID: string }) {
+  const [state, setState] = useState<"editing" | "submitting" | SubmitReportResult>("editing");
+  const descriptionId = useId();
+  const contactId = useId();
+
+  const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    setState("submitting");
+    try {
+      setState(
+        await submitReport({
+          description: String(form.get("description") ?? ""),
+          contactOk: form.get("contact_ok") === "on",
+          eventId: errorID,
+          context: getLastKnownReportContext()
+        })
+      );
+    } catch {
+      setState({ status: "error", message: "The report did not go through. Try again." });
+    }
+  };
+
+  const sent = typeof state === "object" && state.status === "sent";
+  const problem =
+    typeof state !== "object"
+      ? undefined
+      : state.status === "rate_limited"
+        ? "Too many reports are being sent right now. Try again later."
+        : state.status === "error"
+          ? state.message
+          : undefined;
+
+  // Both live regions are in the page before their text arrives, so screen readers announce
+  // the change. Focus moves to the message: the button that had it is gone (sent) or was
+  // disabled while sending (error), which drops focus to <body>.
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const alertRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (sent) statusRef.current?.focus();
+    else if (problem) alertRef.current?.focus();
+  }, [state, sent, problem]);
+
+  return (
+    <div style={{ margin: "0 0 1.5rem 0" }}>
+      <p
+        ref={statusRef}
+        role="status"
+        tabIndex={-1}
+        data-testid="global-error-report-status"
+        style={{ fontSize: "1rem", color: "#22543d", margin: 0 }}
+      >
+        {sent ? "Thanks, your report was sent. The developers will look into it." : ""}
+      </p>
+      {!sent && (
+        <form
+          onSubmit={onSubmit}
+          aria-label="Report this error"
+          data-testid="global-error-report-form"
+          style={{ textAlign: "left" }}
+        >
+          <p style={{ fontSize: "1rem", color: "#4a5568", lineHeight: "1.6", margin: "0 0 0.75rem 0" }}>
+            Tell us what you were doing when this happened. The report is linked to error ID{" "}
+            <code data-testid="global-error-event-id">{errorID}</code> and includes your user ID and course role, not
+            your name or email.
+          </p>
+          <label htmlFor={descriptionId} style={{ display: "block", fontWeight: 600, color: "#1a202c" }}>
+            What happened?
+          </label>
+          <textarea
+            id={descriptionId}
+            name="description"
+            required
+            rows={4}
+            disabled={state === "submitting"}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              margin: "0.25rem 0 0.75rem 0",
+              padding: "0.5rem",
+              borderRadius: "6px",
+              border: "1px solid #a0aec0",
+              font: "inherit"
+            }}
+          />
+          <label htmlFor={contactId} style={{ display: "flex", gap: "0.5rem", alignItems: "center", color: "#1a202c" }}>
+            <input id={contactId} type="checkbox" name="contact_ok" disabled={state === "submitting"} />
+            You may contact me about this
+          </label>
+          <p
+            ref={alertRef}
+            role="alert"
+            tabIndex={-1}
+            style={{ color: "#9b2c2c", margin: problem ? "0.75rem 0 0 0" : 0 }}
+          >
+            {problem ?? ""}
+          </p>
+          <button
+            type="submit"
+            className="error-button-primary"
+            disabled={state === "submitting"}
+            style={{ marginTop: "0.75rem" }}
+          >
+            {state === "submitting" ? "Sending" : "Send report"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
 
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
   const [errorID, setErrorID] = useState<string | undefined>(undefined);
+  const reportingAvailable = useBugReportingAvailable();
 
-  // Call Sentry once per error
+  // Call Sentry once per error. The crash unmounted the layouts, and their cleanups cleared the
+  // scope's role and class tags and its user before this effect runs, so tag the event from the
+  // identity they published, as the report below does.
   useEffect(() => {
-    setErrorID(Sentry.captureException(error));
+    const ctx = getLastKnownReportContext();
+    const tags: Record<string, string | number> = {};
+    if (ctx.role) tags.role = ctx.role;
+    if (ctx.classId !== undefined) tags.class_id = ctx.classId;
+    const user = ctx.userId ? { id: ctx.userId } : undefined;
+    setErrorID(Sentry.captureException(error, { tags, user }));
   }, [error]);
 
   const handleGoBack = () => {
@@ -106,14 +232,11 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               It looks like a husky encountered a bug and buried it... a little too well! This error has been
               automatically reported to our pack of developers.
             </p>
-            {errorID && (
+            {errorID && reportingAvailable && <CrashReportForm errorID={errorID} />}
+            {errorID && !reportingAvailable && (
               <p style={{ fontSize: "1rem", color: "#4a5568", marginBottom: "1.5rem", lineHeight: "1.6" }}>
                 If you continue to experience this error, please{" "}
-                <a
-                  href={`https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
+                <a href={GITHUB_BUG_REPORT_URL} target="_blank" rel="noopener noreferrer">
                   report it on our issue tracker
                 </a>
                 , and include the error ID: {errorID}. Any additional information that you can provide about how you

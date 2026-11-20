@@ -1,0 +1,1059 @@
+[
+  {
+    "source": "realtime:help_request_messages",
+    "key": "help_request_messages.message",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]/manage/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › realtime: a help request message arrives while staff watch the request"
+  },
+  {
+    "source": "realtime:notifications",
+    "key": "notifications.body",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours › Student can request help"
+  },
+  {
+    "source": "rest:discussion_threads",
+    "key": "discussion_threads.body",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:discussion_threads",
+    "key": "discussion_threads.subject",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:gradebook_column_students",
+    "key": "gradebook_column_students.score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rest:help_request_messages",
+    "key": "help_request_messages.message",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:help_requests",
+    "key": "help_requests.request",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:lab_section_leaders",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/course/lab-sections",
+    "test": "tests/e2e/lab-sections.test.tsx › Lab Sections Page › Instructors can cancel a lab section meeting"
+  },
+  {
+    "source": "rest:notifications",
+    "key": "notifications.body",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:notifications",
+    "key": "notifications.body",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:profiles",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:profiles",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:profiles",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:profiles",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:repositories",
+    "key": "repositories.repository",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:submission_comments",
+    "key": "submission_comments.comment",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:submission_reviews",
+    "key": "submission_reviews.total_score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:submissions",
+    "key": "submission_reviews.total_score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rest:submissions_with_grades_for_assignment_nice",
+    "key": "submissions_with_grades_for_assignment_nice.gradername",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rest:submissions_with_grades_for_assignment_nice",
+    "key": "submissions_with_grades_for_assignment_nice.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rest:submissions_with_grades_for_assignment_nice",
+    "key": "submissions_with_grades_for_assignment_nice.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rest:submissions_with_grades_for_assignment_nice",
+    "key": "submissions_with_grades_for_assignment_nice.total_score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "profiles.avatar_url",
+    "kind": "email",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "profiles.name",
+    "kind": "email",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "users.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "users.discord_username",
+    "kind": "handle",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "users.github_username",
+    "kind": "handle",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rest:user_roles",
+    "key": "users.name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rpc:get_assignments_for_student_dashboard",
+    "key": "$[*].grading_total_score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rpc:get_assignments_for_student_dashboard",
+    "key": "$[*].repository",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rpc:get_student_summary",
+    "key": "$.assignments[*].total_score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/manage/student/[student_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rpc:get_student_summary",
+    "key": "$.grades_private[*].score",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/manage/student/[student_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rpc:get_student_summary",
+    "key": "$.help_messages[*].message",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]/manage/student/[student_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rpc:get_student_summary",
+    "key": "$.help_requests[*].request",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]/manage/student/[student_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rpc:get_survey_responses_for_submission",
+    "key": "$[*].profile_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/survey",
+    "test": "tests/e2e/submission-survey-tab.spec.ts › Submission survey tab › a group member who did not submit still sees their own response"
+  },
+  {
+    "source": "rpc:get_survey_responses_with_full_context",
+    "key": "$[*].mentor_email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey responses and analytics"
+  },
+  {
+    "source": "rpc:get_survey_responses_with_full_context",
+    "key": "$[*].mentor_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey responses and analytics"
+  },
+  {
+    "source": "rpc:get_survey_responses_with_full_context",
+    "key": "$[*].profile_email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey responses and analytics"
+  },
+  {
+    "source": "rpc:get_survey_responses_with_full_context",
+    "key": "$[*].profile_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey responses and analytics"
+  },
+  {
+    "source": "rsc:/course",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/discussion-threads.test.tsx › Discussion duplicate merge (grader) › Grader marks a thread duplicate, student sees banner and notification"
+  },
+  {
+    "source": "rsc:/course/[course_id]",
+    "key": "?rendered:children",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student sees survey status banner on submission page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student sees survey status banner on submission page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student sees survey status banner on submission page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "test": "tests/e2e/grading.test.tsx › An end-to-end grading workflow self-review to grading › Students can submit self-review early"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "test": "tests/e2e/grading.test.tsx › An end-to-end grading workflow self-review to grading › Students can submit self-review early"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "test": "tests/e2e/grading.test.tsx › An end-to-end grading workflow self-review to grading › Graders assigned to a rubric part see just that rubric part to grade"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results",
+    "test": "tests/e2e/grade-view.test.tsx › Student grade view › results page anchors land focus on the test heading (WCAG 1.3.2/2.4.3)"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results",
+    "test": "tests/e2e/grade-view.test.tsx › Student grade view › results page anchors land focus on the test heading (WCAG 1.3.2/2.4.3)"
+  },
+  {
+    "source": "rsc:/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results",
+    "test": "tests/e2e/grade-view.test.tsx › Student grade view › results page anchors land focus on the test heading (WCAG 1.3.2/2.4.3)"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/discussion",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/discussion",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/[root_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/discussion/[root_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/[root_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion/[root_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/[root_id]",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion/[root_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/[root_id]",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion/[root_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/[root_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/discussion/[root_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/new",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/discussion/new",
+    "test": "tests/e2e/view-as-student.spec.ts › Instructor view-as-student (read-only) › a non-instructor cannot activate view-as with a forged cookie"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/new",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/discussion/new",
+    "test": "tests/e2e/view-as-student.spec.ts › Instructor view-as-student (read-only) › a non-instructor cannot activate view-as with a forged cookie"
+  },
+  {
+    "source": "rsc:/course/[course_id]/discussion/new",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/discussion/new",
+    "test": "tests/e2e/view-as-student.spec.ts › Instructor view-as-student (read-only) › a non-instructor cannot activate view-as with a forged cookie"
+  },
+  {
+    "source": "rsc:/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]/files",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/gradebook",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/gradebook",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/gradebook",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/gradebook",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/gradebook",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/assignments",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/assignments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/assignments/[assignment_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions",
+    "test": "tests/e2e/due-date-exceptions-table.test.tsx › Due date exceptions table › a lab section change reaches the open page without a reload"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/assignments/[assignment_id]/groups",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/assignments/[assignment_id]/groups",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/course/class-sections",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/course/class-sections",
+    "test": "tests/e2e/class-sections.test.tsx › Class Sections Page › A name longer than the 100-character limit is rejected in the form"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/course/enrollments",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/course/enrollments",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/discussion-engagement",
+    "key": "?rendered:children",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/discussion-engagement",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/discussion-engagement",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/discussion-engagement",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/discussion-engagement",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/discussion-engagement",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/discussion-topics",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/discussion-topics",
+    "test": "tests/e2e/discussion-threads.test.tsx › Custom Discussion Topics › Custom discussion topic lifecycle: create, edit, verify visibility, and delete"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/gradebook",
+    "key": "?rendered:markup",
+    "kind": "grade",
+    "firstSeenIn": "/course/[course_id]/manage/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/gradebook",
+    "key": "gradebook_column_students.score_override_note",
+    "kind": "free_text",
+    "firstSeenIn": "/course/[course_id]/manage/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/gradebook",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/gradebook",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/office-hours",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/office-hours",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › grader pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/office-hours/request/[request_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/polls",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/polls",
+    "test": "tests/e2e/polls.test.tsx › Polls › instructor 'View Poll' opens responses page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/polls/[poll_id]/responses",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/polls/[poll_id]/responses",
+    "test": "tests/e2e/polls.test.tsx › Polls › responses page start/stop button updates poll live state"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/polls/new",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/polls/new",
+    "test": "tests/e2e/polls.test.tsx › Polls › visual builder modal updates poll question JSON"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/student/[student_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/student/[student_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › instructor pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/surveys",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/surveys",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey manage page with linked assignment column"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey responses and analytics"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/[survey_id]/responses",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › instructor views survey responses and analytics"
+  },
+  {
+    "source": "rsc:/course/[course_id]/manage/surveys/new",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/manage/surveys/new",
+    "test": "tests/e2e/surveys.test.tsx › Surveys Page › visual builder allows editing page name and choice text"
+  },
+  {
+    "source": "rsc:/course/[course_id]/notifications",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/notifications",
+    "test": "tests/e2e/discussion-threads.test.tsx › Discussion duplicate merge (grader) › Grader marks a thread duplicate, student sees banner and notification"
+  },
+  {
+    "source": "rsc:/course/[course_id]/notifications",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/notifications",
+    "test": "tests/e2e/discussion-threads.test.tsx › Discussion duplicate merge (grader) › Grader marks a thread duplicate, student sees banner and notification"
+  },
+  {
+    "source": "rsc:/course/[course_id]/notifications",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/notifications",
+    "test": "tests/e2e/discussion-threads.test.tsx › Discussion duplicate merge (grader) › Grader marks a thread duplicate, student sees banner and notification"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/office-hours",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/office-hours",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › second student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours audit regressions › Dropping the last code reference does not publish a private help request"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours audit regressions › Dropping the last code reference does not publish a private help request"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/[request_id]",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours audit regressions › Dropping the last code reference does not publish a private help request"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/[queue_id]/new",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/new",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours audit regressions › A follow-up request records the request it follows up on"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/[queue_id]/new",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/new",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours audit regressions › A follow-up request records the request it follows up on"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/[queue_id]/new",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/office-hours/[queue_id]/new",
+    "test": "tests/e2e/office-hours.test.tsx › Office Hours audit regressions › A follow-up request records the request it follows up on"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/request/[request_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/request/[request_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/request/[request_id]",
+    "key": "profiles.short_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/request/[request_id]",
+    "key": "profiles.sortable_name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/office-hours/request/[request_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/office-hours/request/[request_id]",
+    "test": "tests/e2e/bugReport/trace-tour.spec.ts › student pages"
+  },
+  {
+    "source": "rsc:/course/[course_id]/polls",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/polls",
+    "test": "tests/e2e/polls.test.tsx › Polls › student clicking Answer Poll opens poll page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/polls",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/polls",
+    "test": "tests/e2e/polls.test.tsx › Polls › student clicking Answer Poll opens poll page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/polls",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/polls",
+    "test": "tests/e2e/polls.test.tsx › Polls › student clicking Answer Poll opens poll page"
+  },
+  {
+    "source": "rsc:/course/[course_id]/surveys",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/surveys",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student views team collaboration survey and takes it"
+  },
+  {
+    "source": "rsc:/course/[course_id]/surveys",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/surveys",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student views team collaboration survey and takes it"
+  },
+  {
+    "source": "rsc:/course/[course_id]/surveys",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/surveys",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student views team collaboration survey and takes it"
+  },
+  {
+    "source": "rsc:/course/[course_id]/surveys/[survey_id]",
+    "key": "profiles.avatar_url",
+    "kind": "handle",
+    "firstSeenIn": "/course/[course_id]/surveys/[survey_id]",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student submitted survey shows read-only view"
+  },
+  {
+    "source": "rsc:/course/[course_id]/surveys/[survey_id]",
+    "key": "profiles.name",
+    "kind": "name",
+    "firstSeenIn": "/course/[course_id]/surveys/[survey_id]",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student submitted survey shows read-only view"
+  },
+  {
+    "source": "rsc:/course/[course_id]/surveys/[survey_id]",
+    "key": "users.email",
+    "kind": "email",
+    "firstSeenIn": "/course/[course_id]/surveys/[survey_id]",
+    "test": "tests/e2e/survey-assignment-grading.test.tsx › Survey Assignment Grading - E2E Screenshots › student submitted survey shows read-only view"
+  }
+]

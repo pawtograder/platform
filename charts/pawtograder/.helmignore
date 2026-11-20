@@ -3,7 +3,7 @@
 .gitignore
 .idea/
 .vscode/
-*.tgz
+/*.tgz
 *.swp
 *.tmp
 *.bak

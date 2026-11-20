@@ -273,7 +273,7 @@ spec:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "kong") | nindent 6 }}
   endpoints:
-    - port: admin-metrics
+    - port: {{ ternary "status-metrics" "admin-metrics" (eq .Values.kong.metricsListener "status") }}
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}

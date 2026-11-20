@@ -6,6 +6,7 @@ import SsoIcon from "@/components/branding/sso-icon";
 import { Box, Container, HStack, Input, Separator, Stack, Text } from "@chakra-ui/react";
 import { isSignupsEnabled } from "@/lib/features";
 import { getBranding } from "@/lib/branding";
+import { safeRedirectPath } from "@/lib/redirectPath";
 
 export async function generateMetadata() {
   return {
@@ -16,7 +17,7 @@ export async function generateMetadata() {
 type SearchParams = Message & { email?: string; code?: string; redirect?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, redirect: redirectParam, ...message } = await props.searchParams;
-  const redirectSafe = redirectParam && redirectParam.startsWith("/") ? redirectParam : undefined;
+  const redirectSafe = safeRedirectPath(redirectParam);
   const enableSignup = isSignupsEnabled();
   const ssoProviders = getBranding().ssoProviders;
 

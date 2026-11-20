@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
@@ -495,9 +496,11 @@ function ManageMeetingsModal({
                             </Text>
                           </Table.Cell>
                           <Table.Cell>
-                            <Text fontSize="sm" color="fg.muted">
-                              {meeting.notes || "No notes"}
-                            </Text>
+                            <ReportBlock>
+                              <Text fontSize="sm" color="fg.muted">
+                                {meeting.notes || "No notes"}
+                              </Text>
+                            </ReportBlock>
                           </Table.Cell>
                           <Table.Cell>
                             <Button

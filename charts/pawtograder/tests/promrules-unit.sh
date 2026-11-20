@@ -103,6 +103,7 @@ did_not_run() {
 }
 
 command -v helm >/dev/null 2>&1 || did_not_run "helm is not on PATH"
+"$CHART/scripts/build-deps.sh" --if-missing "$CHART" || did_not_run "could not fetch $CHART's subcharts"
 
 PROMTOOL_MODE=""
 RUNTIME=""

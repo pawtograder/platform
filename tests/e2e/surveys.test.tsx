@@ -1,4 +1,5 @@
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
+import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -55,6 +56,22 @@ const getAuthedClient = async (user: User) => {
   await client.auth.setSession({ access_token, refresh_token: "ignore" });
   return client;
 };
+
+// A student's stored answer to q1 and whether the row is submitted, or null when there is no row.
+const storedResponse = async (surveyId: string, student: User) => {
+  const { data, error } = await supabase
+    .from("survey_responses")
+    .select("response, is_submitted")
+    .eq("survey_id", surveyId)
+    .eq("profile_id", student.private_profile_id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? { q1: (data.response as { q1?: string }).q1, is_submitted: data.is_submitted } : null;
+};
+
+// Past the 1 s autosave debounce. Fires it on the page's clock, so the test needs page.clock.install()
+// before it opens the survey, and the edit just made has been through the debounce when this returns.
+const passAutosaveDebounce = (page: Page) => page.clock.runFor(1_100);
 
 test.describe("Surveys Page", () => {
   test.describe.configure({ mode: "serial" });
@@ -424,6 +441,17 @@ test.describe("Surveys Page", () => {
     expect(Array.isArray(parsed.pages[0].elements)).toBe(true);
   });
 
+  test("response editing checkbox is labeled and described", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+
+    const checkbox = page.getByRole("checkbox", { name: "Let students edit their responses after submitting" });
+    await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toHaveAccessibleDescription(
+      "When off, a student's first submission is final. Answers in progress auto-save either way."
+    );
+  });
+
   test("publishing a draft survey updates status", async ({ page }) => {
     const draftTitle = "Draft To Publish";
     const draftSurvey = await seedSurvey<{ id: string }>(course, instructor, {
@@ -643,6 +671,106 @@ test.describe("Surveys Page", () => {
       .toBe("First response");
   });
 
+  // Issue #977: autosave used to run only when the survey allowed response editing, which is off
+  // by default, so on most surveys a refresh before Complete lost every answer.
+  for (const allowResponseEditing of [false, true]) {
+    test(`student's in-progress answers survive a reload (editing ${allowResponseEditing ? "on" : "off"})`, async ({
+      page
+    }) => {
+      const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+        title: "Reload Survey",
+        status: "published",
+        allow_response_editing: allowResponseEditing,
+        json: {
+          pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
+        }
+      });
+
+      await loginAsUser(page, studentA, course);
+      await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+      await page.getByRole("textbox", { name: "Question 1" }).fill("Answer before reload");
+
+      // The debounced autosave must land as a draft, not as a submission.
+      await expect
+        .poll(() => storedResponse(survey.id, studentA), { timeout: 10_000 })
+        .toEqual({ q1: "Answer before reload", is_submitted: false });
+
+      await page.reload();
+      const input = page.getByRole("textbox", { name: "Question 1" });
+      await expect(input).toHaveValue("Answer before reload");
+      // A draft comes back as a draft: the student can keep answering.
+      await expect(input).toBeEditable();
+    });
+  }
+
+  test("an answered survey shows as In Progress on the list (editing off)", async ({ page }) => {
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Answered Not Completed Survey",
+      status: "published",
+      allow_response_editing: false,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Answer without completing");
+    await expect
+      .poll(() => storedResponse(survey.id, studentA), { timeout: 10_000 })
+      .toEqual({ q1: "Answer without completing", is_submitted: false });
+
+    await page.goto(`/course/${course.id}/surveys`);
+    await expect(page.getByText("Answered Not Completed Survey")).toBeVisible();
+    await expect(page.locator("span.chakra-badge", { hasText: "In Progress" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Continue Survey" })).toBeVisible();
+  });
+
+  test("a submitted response stays locked after a reload and sends no writes (editing off)", async ({ page }) => {
+    const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: "Submitted Locked Survey",
+      status: "published",
+      allow_response_editing: false,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await page.getByRole("textbox", { name: "Question 1" }).fill("Submitted answer");
+    await page.getByRole("button", { name: "Complete" }).click();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+    // Let the list finish loading first: on WebKit the redirect's navigation can still be under
+    // way after the URL changes, and it cuts off the goto below.
+    await expect(page.getByRole("link", { name: "View Submission" })).toBeVisible();
+    await expect
+      .poll(() => storedResponse(survey.id, studentA))
+      .toEqual({ q1: "Submitted answer", is_submitted: true });
+
+    const responseWrites: string[] = [];
+    page.on("request", (request) => {
+      if (
+        request.url().includes("/rest/v1/survey_responses") &&
+        ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())
+      ) {
+        responseWrites.push(request.method());
+      }
+    });
+
+    await page.clock.install();
+    await page.goto(`/course/${course.id}/surveys/${survey.id}`);
+    await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible();
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    await expect(input).toHaveValue("Submitted answer");
+    await expect(input).not.toBeEditable();
+    await expect(page.getByRole("button", { name: "Complete" })).toHaveCount(0);
+
+    // Typing at the locked field must not reach the server, even once the debounce has passed.
+    await input.click();
+    await page.keyboard.type(" and more");
+    await passAutosaveDebounce(page);
+    await expect(input).toHaveValue("Submitted answer");
+    expect(await storedResponse(survey.id, studentA)).toEqual({ q1: "Submitted answer", is_submitted: true });
+    expect(responseWrites).toEqual([]);
+  });
+
   test("survey questions read before their answer options (WCAG 1.3.2)", async ({ page }) => {
     // SurveyJS renders its own DOM (axe-excluded), so probe the emitted markup directly:
     // the question title must be a real h2 that PRECEDES the choice inputs in DOM order,
@@ -693,6 +821,87 @@ test.describe("Surveys Page", () => {
       return Boolean(el && el !== document.body && ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName));
     });
     expect(autoFocused, "no form control is auto-focused when the survey opens").toBe(false);
+  });
+
+  test("survey shows its database title, not the JSON title (#1002)", async ({ page }) => {
+    // The visual builder writes a placeholder "Survey Name" title into the JSON. The
+    // database title is the one instructors set and the survey list shows, so every
+    // rendered view of the survey must use it instead.
+    const dbTitle = "Week 3 Check-in";
+    const jsonTitle = "Survey Name";
+    const dbDescription = "Weekly reflection for the team project.";
+    const jsonDescription = "Answer for the week you just finished.";
+    const surveyJson = {
+      title: jsonTitle,
+      description: jsonDescription,
+      pages: [
+        {
+          name: "page1",
+          elements: [{ type: "text", name: "q1", title: "Question 1" }]
+        }
+      ]
+    };
+
+    const published = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title: dbTitle,
+      description: dbDescription,
+      status: "published",
+      json: surveyJson
+    });
+    const draft = await seedSurvey<{ id: string }>(course, instructor, {
+      title: dbTitle,
+      status: "draft",
+      json: surveyJson
+    });
+    const { data: response, error: respError } = await supabase
+      .from("survey_responses")
+      .insert({
+        survey_id: published.id,
+        profile_id: studentA.private_profile_id,
+        response: { q1: "Going well" },
+        is_submitted: true,
+        submitted_at: new Date().toISOString()
+      })
+      .select("id")
+      .single();
+    if (respError || !response) {
+      throw new Error(`Failed to seed survey response: ${respError?.message}`);
+    }
+
+    // Student survey page
+    await loginAsUser(page, studentA, course);
+    await page.goto(`/course/${course.id}/surveys/${published.id}`);
+    const studentSurvey = page.locator(".sd-root-modern");
+    await expect(studentSurvey.getByRole("textbox", { name: "Question 1" })).toBeVisible();
+    await expect(studentSurvey.getByRole("heading", { level: 1, name: dbTitle })).toBeVisible();
+    await expect(page.getByText(jsonTitle)).toHaveCount(0);
+
+    // Instructor's Student Preview from the survey form
+    await page.context().clearCookies();
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}/manage/surveys/${draft.id}/edit`);
+    await page.getByRole("button", { name: "Preview as Student" }).click();
+    const preview = page.getByRole("dialog");
+    await expect(preview.getByRole("textbox", { name: "Question 1" })).toBeVisible();
+    // The dialog's heading names the survey; the preview below shows the title as the
+    // student sees it, without a second (out-of-order h1) heading.
+    await expect(preview.getByRole("heading", { name: `Survey Preview: ${dbTitle}` })).toBeVisible();
+    await expect(preview.locator(".sd-root-modern").getByText(dbTitle)).toBeVisible();
+    await expect(preview.getByRole("heading", { level: 1 })).toHaveCount(0);
+    await expect(preview.getByText(jsonTitle)).toHaveCount(0);
+    await page.getByRole("button", { name: "Close Preview" }).click();
+
+    // Instructor's view of a single response: the page heading names the survey,
+    // and the rendered response does not repeat it. The database description and the
+    // JSON description differ here, so each shows once.
+    await page.goto(`/course/${course.id}/manage/surveys/${published.survey_id}/responses/${response.id}`);
+    const responseView = page.locator(".sd-root-modern");
+    await expect(responseView.getByRole("textbox", { name: "Question 1" })).toHaveValue("Going well");
+    await expect(page.getByRole("heading", { name: dbTitle })).toBeVisible();
+    await expect(responseView.getByText(dbTitle)).toHaveCount(0);
+    await expect(page.getByText(jsonTitle)).toHaveCount(0);
+    await expect(page.getByText(dbDescription, { exact: true })).toHaveCount(1);
+    await expect(page.getByText(jsonDescription, { exact: true })).toHaveCount(1);
   });
 
   test("instructor can apply filters on responses", async ({ page }) => {
@@ -972,5 +1181,125 @@ test.describe("Surveys Page", () => {
     const bool = parsed.pages[0].elements.find((el: any) => el.type === "boolean");
     expect(bool.labelTrue).toBeTruthy();
     expect(bool.labelFalse).toBeTruthy();
+  });
+});
+
+// Issue #977: autosaves go out one at a time, so an older answer can't overwrite a newer one or follow
+// Complete. Each test seeds its own survey, so they stay out of the serial describe above: one failing
+// here skips nothing else.
+test.describe("Survey autosave order", () => {
+  let course: Course;
+  let student: User;
+  let instructor: User;
+
+  test.beforeAll(async () => {
+    course = await createClass();
+    [student, instructor] = await createUsersInClass([
+      { role: "student", class_id: course.id, name: "Autosave Order Student", useMagicLink: true },
+      { role: "instructor", class_id: course.id, name: "Autosave Order Instructor", useMagicLink: true }
+    ]);
+  });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student, instructor]);
+  });
+
+  const seedOneQuestionSurvey = (title: string, allowResponseEditing: boolean) =>
+    seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
+      title,
+      status: "published",
+      allow_response_editing: allowResponseEditing,
+      json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }] }
+    });
+
+  // Each debounced autosave is its own upsert. The first one is held back until the test calls
+  // release(), so later autosaves queue behind it. With abortFirst the held request then fails as if
+  // the connection dropped. writesInServerOrder lists every request in the order it went out.
+  const holdFirstResponseWrite = async (page: Page, { abortFirst = false } = {}) => {
+    const writesInServerOrder: { is_submitted: boolean; q1?: string }[] = [];
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    let writesSeen = 0;
+    await page.route("**/rest/v1/survey_responses*", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      writesSeen += 1;
+      const isFirst = writesSeen === 1;
+      if (isFirst) await released;
+      const body = route.request().postDataJSON() as { is_submitted: boolean; response: { q1?: string } };
+      writesInServerOrder.push({ is_submitted: body.is_submitted, q1: body.response.q1 });
+      if (isFirst && abortFirst) return route.abort("failed");
+      await route.continue();
+    });
+    return { writesInServerOrder, release };
+  };
+
+  // Opens the survey and answers it three times. The first autosave goes out and is held, and each
+  // later edit passes the debounce, so it has queued behind the held one when this returns.
+  const queueAutosavesBehindHeldOne = async (page: Page, surveyId: string, lastAnswer: string) => {
+    await page.clock.install();
+    await page.goto(`/course/${course.id}/surveys/${surveyId}`);
+    const input = page.getByRole("textbox", { name: "Question 1" });
+    const firstWrite = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().includes("/rest/v1/survey_responses")
+    );
+    await input.fill("Older answer");
+    await passAutosaveDebounce(page);
+    await firstWrite;
+    await input.fill("Middle answer");
+    await passAutosaveDebounce(page);
+    await input.fill(lastAnswer);
+    await passAutosaveDebounce(page);
+  };
+
+  // Each edit made while a slow autosave is in flight queues another autosave behind it, and each
+  // one sends the whole response. Only the newest queued one needs to go out, after the slow one,
+  // and a slow one that fails must not hold it up.
+  for (const slowAutosave of ["succeeds", "fails"] as const) {
+    test(`only the newest autosave queued behind a slow one is sent (slow autosave ${slowAutosave})`, async ({
+      page
+    }) => {
+      const survey = await seedOneQuestionSurvey(`Slow Autosave Survey (${slowAutosave})`, false);
+      await loginAsUser(page, student, course);
+      const { writesInServerOrder, release } = await holdFirstResponseWrite(page, {
+        abortFirst: slowAutosave === "fails"
+      });
+
+      await queueAutosavesBehindHeldOne(page, survey.id, "Newer answer");
+      release();
+
+      await expect
+        .poll(() => storedResponse(survey.id, student), { timeout: 15_000 })
+        .toEqual({ q1: "Newer answer", is_submitted: false });
+      expect(writesInServerOrder).toEqual([
+        { is_submitted: false, q1: "Older answer" },
+        { is_submitted: false, q1: "Newer answer" }
+      ]);
+    });
+  }
+
+  test("no draft autosave reaches the server after Complete", async ({ page }) => {
+    // Editing on, so RLS lets a late draft write through to the survey_response_no_unsubmit
+    // trigger, which refuses it. The submission survives either way; the client must not send it.
+    const survey = await seedOneQuestionSurvey("Complete Behind Autosave Survey", true);
+    await loginAsUser(page, student, course);
+    const { writesInServerOrder, release } = await holdFirstResponseWrite(page);
+
+    await queueAutosavesBehindHeldOne(page, survey.id, "Final answer");
+    const completeButton = page.getByRole("button", { name: "Complete" });
+    await completeButton.click();
+    // SurveyJS removes the button once it has completed, so Complete is now waiting on the held request.
+    await expect(completeButton).toHaveCount(0);
+    release();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys$`), { timeout: 15_000 });
+
+    // A draft left in the debounce timer at Complete would go out now.
+    await passAutosaveDebounce(page);
+    expect(await storedResponse(survey.id, student)).toEqual({ q1: "Final answer", is_submitted: true });
+    // Only the held draft and the submission go out. The drafts queued behind the held one are dropped.
+    expect(writesInServerOrder).toEqual([
+      { is_submitted: false, q1: "Older answer" },
+      { is_submitted: true, q1: "Final answer" }
+    ]);
   });
 });

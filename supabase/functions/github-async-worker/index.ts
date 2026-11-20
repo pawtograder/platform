@@ -24,6 +24,7 @@ import {
   RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import {
@@ -1401,7 +1402,7 @@ export async function processEnvelope(
         // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
         const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
-          github.createRepo(
+          getGitProvider().createRepo(
             org,
             repoName,
             effectiveSource,
@@ -1414,7 +1415,7 @@ export async function processEnvelope(
           )
         );
         Sentry.addBreadcrumb({ message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}` });
-        await github.syncRepoPermissions(
+        await getGitProvider().syncRepoPermissions(
           org,
           repoName,
           courseSlug,
@@ -1456,6 +1457,7 @@ export async function processEnvelope(
               .from("repositories")
               .select("assignment_id")
               .eq("class_id", envelope.class_id)
+              .eq("git_provider", "github")
               .eq("repository", fullName)
               .maybeSingle();
             if (repoRowError) throw repoRowError;
@@ -1464,6 +1466,7 @@ export async function processEnvelope(
               .from("repositories")
               .update({ ...repoUpdate, synced_handout_sha: syncedHandoutSha })
               .eq("class_id", envelope.class_id)
+              .eq("git_provider", "github")
               .eq("repository", fullName);
             if (updateError) throw updateError;
           }
@@ -1503,6 +1506,7 @@ export async function processEnvelope(
             .from("repositories")
             .select("id, assignment_group_id")
             .eq("class_id", envelope.class_id)
+            .eq("git_provider", "github")
             .eq("repository", `${org}/${repoName}`)
             .maybeSingle();
           if (repoLookupError) throw repoLookupError;
@@ -1554,6 +1558,7 @@ export async function processEnvelope(
         const { data: repository } = await adminSupabase
           .from("repositories")
           .select("is_github_ready, creation_error")
+          .eq("git_provider", "github")
           .eq("repository", `${org}/${repoName}`)
           .maybeSingle();
         if (!repository?.is_github_ready) {
@@ -1693,7 +1698,7 @@ export async function processEnvelope(
           await retireReplacedMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
-        await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
+        await getGitProvider().syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
         recordMetric(
           adminSupabase,
           {
@@ -1781,7 +1786,7 @@ export async function processEnvelope(
         }
 
         // Trigger the workflow
-        await github.triggerWorkflow(repository, sha, "grade.yml", scope);
+        await getGitProvider().startGrading(repository, sha, scope);
 
         // Clear the rerun_queued_at flag on the repository after successful trigger
         const { error: clearError } = await adminSupabase
@@ -3449,6 +3454,7 @@ export async function processEnvelope(
               .from("repositories")
               .update(repoUpdate)
               .eq("class_id", envelope.class_id)
+              .eq("git_provider", "github")
               .eq("repository", `${eo}/${ern}`)
               .select("id");
             if (e) throw e;
@@ -3457,12 +3463,13 @@ export async function processEnvelope(
           } else if (error instanceof RepositoryMissingError) {
             // sync_repo_permissions envelopes carry no repo_id (enqueue_github_sync_repo_permissions
             // takes org + repo, not a row id), so match on the full name the error actually
-            // confirmed missing. Not scoped by class_id: `repository` carries a UNIQUE index
-            // (unique_repo_name), so this touches at most one row, and the envelope's class_id is
-            // absent on some paths.
+            // confirmed missing. Not scoped by class_id: `(git_provider, repository)` is unique
+            // and this filters on GitHub, so it touches at most one row, and the envelope's class_id
+            // is absent on some paths.
             const { data: rows, error: e } = await adminSupabase
               .from("repositories")
               .update(repoUpdate)
+              .eq("git_provider", "github")
               .eq("repository", error.fullName)
               .select("id");
             if (e) throw e;
@@ -3564,8 +3571,10 @@ export async function processEnvelope(
             if (tripCount) {
               Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
               scope.setTag("circuit_trip_count", String(tripCount));
-              if (tripCount >= 5) {
-                Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
+              // A third trip within the 24h decay window usually means a 24h window, but not always: an
+              // error_threshold trip counts too and keeps its 8h window. The RPC returns only the count.
+              if (tripCount >= 3) {
+                Sentry.captureMessage(`Repeated circuit trips for ${org} (trip count ${tripCount})`, {
                   level: "error"
                 });
               }

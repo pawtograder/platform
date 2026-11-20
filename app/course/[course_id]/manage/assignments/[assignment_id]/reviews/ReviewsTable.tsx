@@ -8,7 +8,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -73,6 +73,7 @@ export default function ReviewsTable({
   const { course_id } = useParams();
   const { mutate: deleteReviewAssignment } = useDelete();
   const { role: course } = useClassProfiles();
+  const canManageReviews = useCapability("manage_review_assignments");
   const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions, assignmentGroupsWithMembers } =
     useCourseController();
   const assignmentController = useAssignmentController();
@@ -590,8 +591,13 @@ export default function ReviewsTable({
             }, "") ?? "All";
           return filterValue.includes(text.trim() || "All");
         }
-      },
-      {
+      }
+    );
+
+    // Editing and deleting a review assignment need manage_review_assignments (#1010); without it
+    // the Actions column is left out.
+    if (canManageReviews) {
+      cols.push({
         id: "actions",
         header: "Actions",
         accessorKey: "id",
@@ -624,11 +630,20 @@ export default function ReviewsTable({
             </HStack>
           );
         }
-      }
-    );
+      });
+    }
 
     return cols;
-  }, [variant, handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, course_id, assignmentId]);
+  }, [
+    variant,
+    handleDelete,
+    openAssignModal,
+    getReviewStatus,
+    course.classes.time_zone,
+    course_id,
+    assignmentId,
+    canManageReviews
+  ]);
   const joinedSelect =
     "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
   const [tableController, setTableController] =

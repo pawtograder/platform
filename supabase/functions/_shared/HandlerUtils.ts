@@ -159,6 +159,68 @@ export async function assertUserIsInstructorOrServiceRole(courseId: number, auth
   const result = await assertUserIsInstructor(courseId, authHeader);
   return { ...result, isServiceRole: false };
 }
+
+/**
+ * Assert that the user holds `capability` in the course (#1010, docs/capabilities.md), OR the request is
+ * from the service role. It asks user_class_ids_with_capability(), the same function RLS uses, so an
+ * edge function and the policies it sits next to give the same answer. Every capability is on the
+ * default instructor role, so this replaces assertUserIsInstructorOrServiceRole for an action a
+ * capability covers. As with the instructor check, an admin of any course also passes.
+ */
+export async function assertUserHasCapabilityOrServiceRole(
+  courseId: number,
+  capability: string,
+  authHeader: string | null
+) {
+  if (!authHeader) {
+    throw new SecurityError("Authorization header required");
+  }
+  if (isServiceRoleRequest(authHeader)) {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { auth: REQUEST_SCOPED_AUTH_OPTIONS }
+    );
+    return { supabase: adminSupabase, isServiceRole: true };
+  }
+
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    auth: REQUEST_SCOPED_AUTH_OPTIONS,
+    global: {
+      headers: { Authorization: authHeader }
+    }
+  });
+  const token = authHeader.replace("Bearer ", "");
+  const {
+    data: { user },
+    error
+  } = await supabase.auth.getUser(token);
+  if (error) {
+    console.error(error);
+  }
+  assertAuthLookupSucceeded(error);
+  if (!user) {
+    throw new SecurityError("User not found");
+  }
+  const { data: classIds, error: capabilityError } = await supabase.rpc("user_class_ids_with_capability", {
+    p_capability: capability
+  });
+  assertRoleLookupSucceeded(capabilityError, "Capability lookup");
+  // Number(): a body that sends class_id as a string still matches, as the old .eq() lookup did.
+  if ((classIds ?? []).includes(Number(courseId))) {
+    return { supabase, isServiceRole: false };
+  }
+  const { data: adminEnrollment, error: adminError } = await supabase
+    .from("user_roles")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("role", "admin");
+  assertRoleLookupSucceeded(adminError, "Role lookup");
+  if (adminEnrollment && adminEnrollment.length > 0) {
+    return { supabase, isServiceRole: false };
+  }
+  throw new SecurityError(`User does not have ${capability} for this course`);
+}
 /**
  * Distinguish "the authorization question was answered no" from "the authorization question could not
  * be asked".
@@ -366,7 +428,12 @@ export async function wrapRequestHandler(
         Sentry.captureException(e, scope);
       }
     } else if (e instanceof SecurityError) {
-      if (recordSecurityErrors) {
+      // Job tokens are rejected before the repository is known, so nothing reaches workflow_run_error
+      // either. Report them even where ordinary denials are muted.
+      if (e instanceof JobTokenRejectedError) {
+        scope.setTag("job_token_rejected", e.reason);
+      }
+      if (recordSecurityErrors || e instanceof JobTokenRejectedError) {
         Sentry.captureException(e, scope);
       }
     } else if (!(e instanceof NotFoundError) && !(e instanceof IllegalArgumentError)) {
@@ -485,6 +552,15 @@ export class SecurityError extends Error {
   constructor(details: string) {
     super("Security Error");
     this.details = details;
+  }
+}
+
+/** An Actions job token rejected by `validateOIDCToken`. Responds like any SecurityError. */
+export class JobTokenRejectedError extends SecurityError {
+  reason: "issuer" | "provider" | "audience";
+  constructor(reason: "issuer" | "provider" | "audience", details: string) {
+    super(details);
+    this.reason = reason;
   }
 }
 

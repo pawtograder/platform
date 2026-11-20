@@ -2,11 +2,11 @@ import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { bottleneckRedisOptions, getBottleneckConnection } from "./Redis.ts";
 import { createAppAuth } from "npm:@octokit/auth-app";
 import { throttling } from "npm:@octokit/plugin-throttling";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "npm:octokit";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
-import { SecurityError } from "./HandlerUtils.ts";
+import { JobTokenRejectedError, SecurityError } from "./HandlerUtils.ts";
 
 // Structured error used to signal Octokit secondary rate limit back to callers
 export class SecondaryRateLimitError extends Error {
@@ -1272,17 +1272,62 @@ export async function deleteFileFromRepo(
   return { deleted: true, commit_sha: response.data.commit?.sha };
 }
 
-async function getJwks() {
-  const jwks = await fetch("https://token.actions.githubusercontent.com/.well-known/jwks");
-  const jwksData = await jwks.json();
-  return jwksData;
+export type JobTokenProvider = "github" | "forgejo";
+
+const GITHUB_ACTIONS_ISSUER = "https://token.actions.githubusercontent.com";
+
+/**
+ * Picks the provider and key set for a job token's `iss`. Keys are only ever fetched from a URL we
+ * configured, never one taken from the token. GitHub enterprises can use issuers under the GitHub
+ * host, and those share today's key set. A Forgejo instance is trusted only when FORGEJO_URL is set,
+ * and its Actions tokens use `<FORGEJO_URL>/api/actions` as the issuer. Forgejo signs with RS256
+ * unless its ID_TOKEN_SIGNING_ALGORITHM setting is changed, and any other algorithm fails here.
+ */
+function trustedJobTokenIssuer(
+  iss: string
+): { provider: JobTokenProvider; jwksUrl: string; audienceBase: string } | undefined {
+  if (iss === GITHUB_ACTIONS_ISSUER || iss.startsWith(`${GITHUB_ACTIONS_ISSUER}/`)) {
+    return {
+      provider: "github",
+      jwksUrl: `${GITHUB_ACTIONS_ISSUER}/.well-known/jwks`,
+      audienceBase: "https://github.com"
+    };
+  }
+  const forgejoUrl = Deno.env.get("FORGEJO_URL")?.replace(/\/+$/, "");
+  if (forgejoUrl && iss === `${forgejoUrl}/api/actions`) {
+    return { provider: "forgejo", jwksUrl: `${iss}/.well-known/keys`, audienceBase: forgejoUrl };
+  }
+  return undefined;
 }
 
-export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken> {
+/**
+ * Verifies an Actions job token from GitHub or the configured Forgejo instance. Repository names are
+ * only unique within one provider, so a token is rejected unless its provider is in `allowedProviders`.
+ * A caller that allows Forgejo must also check that `provider` matches the provider of the repository
+ * named by `repository`.
+ *
+ * `aud` must be the provider's default, `<host>/<repository_owner>`. assignment-action calls
+ * `core.getIDToken()` without an audience, so existing grade.yml files send exactly that. Requiring it
+ * rejects a token the same job minted for another service (for example `sts.amazonaws.com`) if that
+ * service leaks it. A custom Pawtograder audience would need a new action release and a grade.yml
+ * change in every course, so it isn't required.
+ */
+export async function validateOIDCToken(
+  token: string,
+  allowedProviders: readonly JobTokenProvider[] = ["github"]
+): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const { kid } = decoded[0] as { kid: string };
-  const jwks = await getJwks();
-  const publicKey = jwks.keys.find((key: any) => key.kid === kid);
+  const iss = (decoded[1] as { iss?: unknown } | null)?.iss;
+  const issuer = typeof iss === "string" ? trustedJobTokenIssuer(iss) : undefined;
+  if (!issuer) {
+    throw new JobTokenRejectedError("issuer", `Untrusted OIDC token issuer: ${String(iss)}`);
+  }
+  if (!allowedProviders.includes(issuer.provider)) {
+    throw new JobTokenRejectedError("provider", `OIDC token provider not accepted here: ${issuer.provider}`);
+  }
+  const jwks = await (await fetch(issuer.jwksUrl)).json();
+  const publicKey = jwks.keys.find((key: { kid?: string }) => key.kid === kid);
   if (!publicKey) {
     throw new Error("No public key found");
   }
@@ -1296,10 +1341,24 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
     true,
     ["verify"]
   );
-  const verified = await verify(token, key, {
+  const verified = (await verify(token, key, {
     expLeeway: 3600 // 1 hour
-  });
-  return verified as GitHubOIDCToken;
+  })) as GitHubOIDCToken;
+  // Owner names are case-insensitive on both hosts, and aud and repository_owner come from the same signed
+  // token, so ignoring case can't admit another owner; it only avoids rejecting a token the provider cased
+  // differently. The base, including any FORGEJO_URL path, is compared exactly.
+  const audienceBase = `${issuer.audienceBase}/`;
+  if (
+    typeof verified.aud !== "string" ||
+    !verified.aud.startsWith(audienceBase) ||
+    verified.aud.slice(audienceBase.length).toLowerCase() !== verified.repository_owner.toLowerCase()
+  ) {
+    throw new JobTokenRejectedError("audience", `Unexpected OIDC token audience: ${String(verified.aud)}`);
+  }
+  // Forgejo names are case-insensitive and Pawtograder stores Forgejo repositories lowercased (#1093), so
+  // an org created with capitals still finds its rows. GitHub names keep the case the rows were stored with.
+  const repository = issuer.provider === "forgejo" ? verified.repository.toLowerCase() : verified.repository;
+  return { ...verified, repository, provider: issuer.provider };
 }
 
 // E2E testing constants and helper
@@ -1334,7 +1393,10 @@ const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
  * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
  * are explicitly set. This prevents accidental use in production.
  */
-export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+export async function validateOIDCTokenOrAllowE2E(
+  token: string,
+  allowedProviders: readonly JobTokenProvider[] = ["github"]
+): Promise<GitHubOIDCToken & { provider: JobTokenProvider }> {
   const decoded = decode(token);
   const payload = decoded[1] as GitHubOIDCToken;
   if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
@@ -1366,9 +1428,67 @@ export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHub
     if (header.kid !== END_TO_END_SECRET) {
       throw new SecurityError("E2E repo provided, but secret is incorrect");
     }
-    return payload;
+    // E2E repos live in the GitHub playground org.
+    return { ...payload, provider: "github" };
   }
-  return await validateOIDCToken(token);
+  return await validateOIDCToken(token, allowedProviders);
+}
+
+/**
+ * Binds a verified job token to the repository it names. `repositories.repository` holds bare
+ * `owner/name`, which can exist on both hosts, so the token's provider must match the row's
+ * `git_provider`. Repositories without a row (grader, handout, E2E) are on GitHub.
+ */
+/**
+ * The Pawtograder user behind a job's `actor`: a GitHub username, or for Forgejo a login that only the
+ * accounts Pawtograder created on `forgejoUrl` map back to a user (#1110). Pawtograder's own Forgejo
+ * admin has no such account, so its dispatches match nobody, as the GitHub bot does.
+ */
+export async function findActorUserId(
+  supabase: SupabaseClient<Database>,
+  token: { actor: string; provider: JobTokenProvider },
+  forgejoUrl: string | undefined
+): Promise<string | null> {
+  if (token.provider === "forgejo") {
+    if (!forgejoUrl) return null;
+    const { data, error } = await supabase
+      .from("git_accounts")
+      .select("user_id")
+      .eq("provider", "forgejo")
+      .eq("instance_url", forgejoUrl)
+      .eq("login", token.actor)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.user_id ?? null;
+  }
+  const { data, error } = await supabase
+    .from("users")
+    .select("user_id")
+    .ilike("github_username", token.actor)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.user_id ?? null;
+}
+
+export async function assertJobTokenMatchesRepository(
+  supabase: SupabaseClient<Database>,
+  token: { repository: string; provider: JobTokenProvider },
+  scope?: Sentry.Scope
+): Promise<void> {
+  // A name is unique per provider (#1093), so it can have a row on each host.
+  const { data, error } = await supabase.from("repositories").select("git_provider").eq("repository", token.repository);
+  if (error) {
+    // Both callers mute UserVisibleError, so report the outage here.
+    Sentry.captureException(error, scope);
+    throw new UserVisibleError(`Failed to query repositories: ${error.message}`);
+  }
+  const providers = data?.length ? data.map((row) => row.git_provider) : ["github"];
+  if (!providers.includes(token.provider)) {
+    throw new JobTokenRejectedError(
+      "provider",
+      `OIDC token from ${token.provider} names a ${providers.join(" and ")} repository: ${token.repository}`
+    );
+  }
 }
 
 export async function getRepos(org: string, scope?: Sentry.Scope) {

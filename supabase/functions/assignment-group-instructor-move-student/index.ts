@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentGroupInstructorMoveStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import { assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { enqueueGithubArchiveRepo, enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
@@ -23,6 +23,17 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     { auth: REQUEST_SCOPED_AUTH_OPTIONS }
   );
+
+  const { data: forgejoGroups, error: providerError } = await adminSupabase
+    .from("assignment_groups")
+    .select("id, assignments!inner(git_provider)")
+    .in(
+      "id",
+      [old_assignment_group_id, new_assignment_group_id].filter((id): id is number => id != null)
+    )
+    .eq("assignments.git_provider", "forgejo");
+  if (providerError) throw providerError;
+  if (forgejoGroups.length) throw new IllegalArgumentError("Moving Forgejo group members is not supported yet");
 
   await moveStudentBetweenGroups(
     { new_assignment_group_id, old_assignment_group_id, profile_id, class_id },

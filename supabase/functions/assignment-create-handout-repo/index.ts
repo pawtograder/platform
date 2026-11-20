@@ -3,15 +3,17 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import {
-  createRepo,
   deleteFileFromRepo,
   getDefaultBranchHeadSha,
   GRADE_WORKFLOW_PATH,
-  syncRepoPermissions,
+  publicSupabaseUrl,
   updateAutograderWorkflowHash
 } from "../_shared/GitHubWrapper.ts";
+import { ensureHandoutRepo, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { forgejoGradeWorkflow } from "../_shared/forgejoGradeWorkflow.ts";
+import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
-import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserHasCapabilityOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
@@ -24,8 +26,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
 
-  // Allow both instructor users and service role (for admin scripts)
-  await assertUserIsInstructorOrServiceRole(class_id, req.headers.get("Authorization"));
+  // Allow holders of manage_assignments (instructors, and graders on a role that has it) and service role (for admin scripts)
+  await assertUserHasCapabilityOrServiceRole(class_id, "manage_assignments", req.headers.get("Authorization"));
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -39,7 +41,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // error. One extra row's worth of columns is a fine trade for real types.
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("*, classes(slug,github_org)")
+    .select("*, classes(slug,github_org,forgejo_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -51,7 +53,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }
   const handoutRepoOrg = assignment.classes.github_org;
-  if (!handoutRepoOrg && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission") {
+  if (
+    !handoutRepoOrg &&
+    assignment.git_provider === "github" &&
+    assignment.repo_mode !== "none" &&
+    assignment.repo_mode !== "no_submission"
+  ) {
     throw new UserVisibleError("Class does not have a GitHub organization", 400);
   }
   scope.setTag("repo_mode", assignment.repo_mode);
@@ -107,6 +114,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       skipped: true,
       repo_mode: assignment.repo_mode
     };
+  }
+
+  if (assignment.git_provider === "forgejo") {
+    // Student repos are generated from the handout. Forgejo has no fork path yet (FORGEJO_UNSUPPORTED_REPO_MODES).
+    if (assignment.repo_mode !== "template_only_staff") {
+      throw new UserVisibleError("Forgejo assignments can only use a template handout for now.", 400);
+    }
+    const config = forgejoConfig();
+    if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
+    // Lowercased like every Forgejo repository Pawtograder stores (#1093), since Forgejo names are case-insensitive.
+    const org = (assignment.classes.forgejo_org || assignment.classes.slug).toLowerCase();
+    const name = `${assignment.classes.slug}-handout-${assignment.slug}`.toLowerCase();
+    scope.setTag("handout_repo_name", name);
+    scope.setTag("handout_repo_org", org);
+    // Without an autograder, grade.yml would fail in every student repo with nothing to report to, so one
+    // already in an adopted handout is removed.
+    const content = assignment.has_autograder === false ? null : forgejoGradeWorkflow(publicSupabaseUrl());
+    const sha = await ensureHandoutRepo(config, `${org}/${name}`, [{ path: GRADE_WORKFLOW_PATH, content }]);
+    // The forgejo-reconciler sets autograder.workflow_sha from this handout's grade.yml once it's released.
+    // Matching on the provider and mode means an assignment switched to GitHub, or to a mode without a handout,
+    // while the repo was set up never points at it.
+    const { data: saved, error } = await adminSupabase
+      .from("assignments")
+      .update({ template_repo: `${org}/${name}`, latest_template_sha: sha })
+      .eq("id", assignment_id)
+      .eq("git_provider", "forgejo")
+      .eq("repo_mode", "template_only_staff")
+      .select("id");
+    if (error) throw error;
+    if (!saved.length)
+      throw new UserVisibleError("This assignment's repository host or configuration changed. Try again.", 409);
+    return { repo_name: name, org_name: org, repo_mode: assignment.repo_mode };
   }
 
   if (action.kind === "inherit_from_source") {
@@ -189,7 +228,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     requiredReviewers: 0
   };
 
-  await createRepo(
+  await getGitProvider().createRepo(
     handoutRepoOrg!,
     handoutRepoName,
     sourceTemplateRepo,
@@ -200,7 +239,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     },
     scope
   );
-  await syncRepoPermissions(
+  await getGitProvider().syncRepoPermissions(
     handoutRepoOrg!,
     handoutRepoName,
     assignment.classes.slug,
@@ -278,19 +317,24 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // autograder-create-submission then rejects as a "workflow sha mismatch" on the
   // first real student run, and which the has_autograder backfill reads as "the
   // autograder was never wired up".
-  const { error: pointerError } = await adminSupabase
-    .from("assignments")
-    .update({
-      template_repo: handoutFullName,
-      ...(strippedHandoutSha ? { latest_template_sha: strippedHandoutSha } : {}),
-      ...(assignment.submission_mode === "pr" ? { upstream_repo: handoutFullName } : {})
-    })
-    .eq("id", assignment_id);
+  //
+  // The reservation checks the assignment is still on GitHub and freezes its provider in one
+  // locked transaction, writing all three pointer fields in the same statement. If it was
+  // switched to Forgejo during creation, this fails and the new GitHub repo stays unreferenced.
+  const { error: pointerError } = await adminSupabase.rpc("reserve_github_staff_repo", {
+    p_assignment_id: assignment_id,
+    p_class_id: class_id,
+    p_repository: handoutFullName,
+    p_is_grader: false,
+    p_latest_template_sha: strippedHandoutSha || undefined,
+    p_upstream_repo: assignment.submission_mode === "pr" ? handoutFullName : undefined
+  });
   if (pointerError) {
     // Reporting success here would leave the handout repo created but unreferenced:
     // nothing points at it, and a retry cannot recover latest_template_sha because
     // grade.yml is already gone (deleteFileFromRepo then reports nothing deleted).
     Sentry.captureException(pointerError, scope);
+    if (pointerError.code === "23514") throw new UserVisibleError(pointerError.message, 400);
     throw pointerError;
   }
 

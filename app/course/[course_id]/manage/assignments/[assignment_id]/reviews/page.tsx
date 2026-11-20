@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
+import { useCapability } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import { createClient } from "@/utils/supabase/client";
 import * as Sentry from "@sentry/nextjs";
@@ -331,6 +332,9 @@ export default function ReviewAssignmentsPage() {
     closeModal: closeAssignModal
   } = useModalManager<PopulatedReviewAssignment | null>();
 
+  // Every action in Assignment Management needs manage_review_assignments (#1010).
+  const canManageReviews = useCapability("manage_review_assignments");
+
   const handleReviewAssignmentChange = () => {
     invalidate({ resource: "review_assignments", invalidates: ["list"] });
     invalidate({ resource: "submissions", invalidates: ["list"] });
@@ -341,37 +345,39 @@ export default function ReviewAssignmentsPage() {
       <Heading size="lg">Manage Review Assignments</Heading>
       <Separator mb={4} />
 
-      <VStack align="stretch" gap={4} mb={6}>
-        <Heading size="md">Assignment Management</Heading>
-        <HStack gap={4} wrap="wrap">
-          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/bulk-assign`}>
-            Bulk Assign Grading
-          </Link>
-          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
-            Reassign Grading by Grader
-          </Link>
-          <BulkEditReviewDueDatesDialog
-            courseId={Number(course_id)}
-            assignmentId={Number(assignment_id)}
-            rubrics={gradingRubricsBulk}
-            onSuccess={handleReviewAssignmentChange}
-            triggerLabel="Bulk edit grading due dates"
-            dialogTitle="Bulk edit grading review due dates"
-          />
-          <BulkEditReviewDueDatesDialog
-            courseId={Number(course_id)}
-            assignmentId={Number(assignment_id)}
-            rubrics={selfReviewRubricBulk}
-            onSuccess={handleReviewAssignmentChange}
-            triggerLabel="Bulk edit self-review due dates"
-            dialogTitle="Bulk edit self-review due dates"
-          />
-          <Button onClick={() => openAssignModal(null)} variant="ghost" size="sm">
-            Assign Single Review
-          </Button>
-          <ClearAssignmentsDialog onAssignmentCleared={handleReviewAssignmentChange} />
-        </HStack>
-      </VStack>
+      {canManageReviews && (
+        <VStack align="stretch" gap={4} mb={6}>
+          <Heading size="md">Assignment Management</Heading>
+          <HStack gap={4} wrap="wrap">
+            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/bulk-assign`}>
+              Bulk Assign Grading
+            </Link>
+            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
+              Reassign Grading by Grader
+            </Link>
+            <BulkEditReviewDueDatesDialog
+              courseId={Number(course_id)}
+              assignmentId={Number(assignment_id)}
+              rubrics={gradingRubricsBulk}
+              onSuccess={handleReviewAssignmentChange}
+              triggerLabel="Bulk edit grading due dates"
+              dialogTitle="Bulk edit grading review due dates"
+            />
+            <BulkEditReviewDueDatesDialog
+              courseId={Number(course_id)}
+              assignmentId={Number(assignment_id)}
+              rubrics={selfReviewRubricBulk}
+              onSuccess={handleReviewAssignmentChange}
+              triggerLabel="Bulk edit self-review due dates"
+              dialogTitle="Bulk edit self-review due dates"
+            />
+            <Button onClick={() => openAssignModal(null)} variant="ghost" size="sm">
+              Assign Single Review
+            </Button>
+            <ClearAssignmentsDialog onAssignmentCleared={handleReviewAssignmentChange} />
+          </HStack>
+        </VStack>
+      )}
 
       <Tabs.Root defaultValue="grading-progress" variant="enclosed" lazyMount unmountOnExit>
         <Tabs.List>

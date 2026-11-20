@@ -34,6 +34,7 @@ import { AIHelpSubmissionErrorButton } from "@/components/ai-help/AIHelpSubmissi
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { TestResultOutput, format_basic_output } from "@/components/submission-results/TestResultOutput";
 import { GenericBuildError } from "@/components/submission-results/GenericBuildError";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 /** When create-submission already recorded a user-visible message (e.g. grade.yml mismatch), hide the generic missing-grader-result row. */
 function filterWorkflowRunErrorsForDisplay<
@@ -290,13 +291,15 @@ export default function GraderResults() {
                     borderColor="border.error"
                   >
                     <Text fontWeight="bold" color="fg.error" fontSize="sm">
-                      Error: {errorMessage}
+                      Error: <ReportBlock>{errorMessage}</ReportBlock>
                     </Text>
                     {errorDetails && (
                       <Box mt={2} p={2} bg="bg.error" borderRadius="sm">
-                        <Text fontSize="xs" fontFamily="mono" color="fg.error">
-                          {typeof errorDetails === "string" ? errorDetails : JSON.stringify(errorDetails, null, 2)}
-                        </Text>
+                        <ReportBlock>
+                          <Text fontSize="xs" fontFamily="mono" color="fg.error">
+                            {typeof errorDetails === "string" ? errorDetails : JSON.stringify(errorDetails, null, 2)}
+                          </Text>
+                        </ReportBlock>
                       </Box>
                     )}
                     <Text fontSize="xs" color="fg.error" mt={2}>
@@ -366,14 +369,18 @@ export default function GraderResults() {
                   border="1px solid"
                   borderColor="blue.200"
                 >
-                  <Text fontWeight="bold" color="blue.700" fontSize="sm">
-                    {error.name}
-                  </Text>
+                  <ReportBlock>
+                    <Text fontWeight="bold" color="blue.700" fontSize="sm">
+                      {error.name}
+                    </Text>
+                  </ReportBlock>
                   {error.data && error.data !== "{}" && (
                     <Box mt={2} p={2} bg="blue.25" borderRadius="sm">
-                      <Text fontSize="xs" fontFamily="mono" color="blue.600">
-                        {typeof error.data === "string" ? error.data : JSON.stringify(error.data, null, 2)}
-                      </Text>
+                      <ReportBlock>
+                        <Text fontSize="xs" fontFamily="mono" color="blue.600">
+                          {typeof error.data === "string" ? error.data : JSON.stringify(error.data, null, 2)}
+                        </Text>
+                      </ReportBlock>
                     </Box>
                   )}
                   <Text fontSize="xs" color="blue.500" mt={2}>
@@ -452,6 +459,14 @@ export default function GraderResults() {
   );
   const hasBuildError = query.data.data.grader_results.lint_output === "Gradle build failed";
   const data = query.data.data;
+  // PostgREST returns embedded rows in no guaranteed order. Sort by id (the order the grader
+  // reported them) so parts stay grouped and the table renders the same way on every load.
+  const sortedTests = [...(data.grader_results?.grader_result_tests ?? [])].sort((a, b) => a.id - b.id);
+  // The rows the summary table shows. Part headers are computed from this list, not the raw
+  // one: a hidden first test without a part used to drop the first part header.
+  const tableTests = sortedTests.filter(
+    (r) => (r.extra_data as GraderResultTestExtraData)?.hide_score !== "true" && (showHiddenOutput || r.is_released)
+  );
   // Outputs the current viewer can see (students don't see instructor-only debug output).
   // Hoisted so the tab label's `.length === 1` check counts the *visible* tabs, not the
   // raw list — otherwise a student with one visible + one instructor-only output gets a
@@ -540,66 +555,59 @@ export default function GraderResults() {
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {data.grader_results?.grader_result_tests &&
-                  data.grader_results?.grader_result_tests.length > 0 &&
-                  data.grader_results?.grader_result_tests[0]?.part && (
-                    <Table.Row>
-                      <Table.Cell bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">
-                        {data.grader_results?.grader_result_tests[0]?.part}
-                      </Table.Cell>
-                    </Table.Row>
-                  )}
-                {data.grader_results?.grader_result_tests
-                  ?.filter(
-                    (r) =>
-                      (r.extra_data as GraderResultTestExtraData)?.hide_score !== "true" &&
-                      (showHiddenOutput || r.is_released)
-                  )
-                  .map((result, index) => {
-                    const isNewPart =
-                      index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
-                    return (
-                      <Fragment key={result.id}>
-                        {isNewPart && (
-                          <Table.Row>
-                            <Table.Cell colSpan={3} textAlign="center" bg="bg.muted" fontWeight="bold">
-                              {result.part}
-                            </Table.Cell>
-                          </Table.Row>
-                        )}
+                {tableTests[0]?.part && (
+                  <Table.Row>
+                    <Table.Cell bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">
+                      {tableTests[0].part}
+                    </Table.Cell>
+                  </Table.Row>
+                )}
+                {tableTests.map((result, index) => {
+                  const isNewPart = index > 0 && result.part !== tableTests[index - 1].part;
+                  return (
+                    <Fragment key={result.id}>
+                      {isNewPart && (
                         <Table.Row>
-                          <Table.Cell>
-                            {(() => {
-                              const extraData = result.extra_data as GraderResultTestExtraData;
-                              if (extraData?.llm?.prompt || extraData?.llm?.result) {
-                                return (
-                                  <SpokenValue spoken="AI-assisted check">
-                                    <FaRobot />
-                                  </SpokenValue>
-                                );
-                              }
-                              const passed = result.score === result.max_score;
+                          <Table.Cell colSpan={3} textAlign="center" bg="bg.muted" fontWeight="bold">
+                            {result.part}
+                          </Table.Cell>
+                        </Table.Row>
+                      )}
+                      <Table.Row>
+                        <Table.Cell>
+                          {(() => {
+                            const extraData = result.extra_data as GraderResultTestExtraData;
+                            if (extraData?.llm?.prompt || extraData?.llm?.result) {
                               return (
-                                <SpokenValue spoken={passed ? "Passed" : "Failed"}>{passed ? "✅" : "❌"}</SpokenValue>
+                                <SpokenValue spoken="AI-assisted check">
+                                  <FaRobot />
+                                </SpokenValue>
                               );
-                            })()}
-                          </Table.Cell>
-                          <Table.Cell>
-                            <Link variant="underline" href={`#test-${result.id}`}>
-                              {result.name}
-                            </Link>
-                          </Table.Cell>
+                            }
+                            const passed = result.score === result.max_score;
+                            return (
+                              <SpokenValue spoken={passed ? "Passed" : "Failed"}>{passed ? "✅" : "❌"}</SpokenValue>
+                            );
+                          })()}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <Link variant="underline" href={`#test-${result.id}`}>
+                            {result.name}
+                          </Link>
+                        </Table.Cell>
+                        <ReportBlock>
                           <Table.Cell>
                             {result.score}/{result.max_score}
                           </Table.Cell>
-                        </Table.Row>
-                      </Fragment>
-                    );
-                  })}
+                        </ReportBlock>
+                      </Table.Row>
+                    </Fragment>
+                  );
+                })}
               </Table.Body>
             </Table.Root>
-            {data.grader_results?.grader_result_tests
-              ?.filter((result) => result.is_released || showHiddenOutput)
+            {sortedTests
+              .filter((result) => result.is_released || showHiddenOutput)
               .map((result) => {
                 const hasInstructorOutput = showHiddenOutput && result.grader_result_test_output.length > 0;
                 const extraData = result.extra_data as GraderResultTestExtraData | undefined;
@@ -618,9 +626,18 @@ export default function GraderResults() {
                   }
                   return <CardBody>{content}</CardBody>;
                 };
-                const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
-                const showScore = result.max_score !== 0;
-                const isFailing = (result.max_score ?? 0) > 0 && (result.score ?? 0) < (result.max_score ?? 0);
+                // hide_score keeps a test out of the summary table; the card must not reveal it
+                // either (score, pass/fail colour, or the failing-test help button). Staff still see it.
+                const hideScore = extraData?.hide_score === "true" && !showHiddenOutput;
+                const style =
+                  hideScore || result.max_score === 0
+                    ? "info"
+                    : result.score === result.max_score
+                      ? "success"
+                      : "error";
+                const showScore = !hideScore && result.max_score !== 0;
+                const isFailing =
+                  !hideScore && (result.max_score ?? 0) > 0 && (result.score ?? 0) < (result.max_score ?? 0);
 
                 const testMatches = errorPinMatches.get(result.id) || [];
 
@@ -632,7 +649,8 @@ export default function GraderResults() {
                             (focusable via tabIndex) makes the jump land screen readers on the test
                             name instead of an unlabeled card container (WCAG 1.3.2 / 2.4.3). */}
                         <Heading as="h3" size="lg" color={`fg.${style}`} id={`test-${result.id}`} tabIndex={-1}>
-                          {result.name} {showScore ? result.score + "/" + result.max_score : ""}
+                          {result.name}{" "}
+                          {showScore ? <ReportBlock>{result.score + "/" + result.max_score}</ReportBlock> : ""}
                         </Heading>
                         {isFailing && result.output && (
                           <AIHelpSubmissionErrorButton

@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assignment_id]/commitHistory";
 import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
@@ -131,24 +132,28 @@ export default function TestAssignmentPage() {
                           <span>Upload</span>
                         )}
                       </Table.Cell>
-                      <Table.Cell>
-                        <Link href={submissionHref}>
-                          {!submission.grader_results
-                            ? "In Progress"
-                            : submission.grader_results && submission.grader_results.errors
-                              ? "Error"
-                              : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
-                        </Link>
-                      </Table.Cell>
-                      <Table.Cell>
-                        <Link href={submissionHref}>
-                          {submission.submission_reviews?.completed_at
-                            ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.data.total_points}`
-                            : submission.is_active
-                              ? "Pending"
-                              : ""}
-                        </Link>
-                      </Table.Cell>
+                      <ReportBlock>
+                        <Table.Cell>
+                          <Link href={submissionHref}>
+                            {!submission.grader_results
+                              ? "In Progress"
+                              : submission.grader_results && submission.grader_results.errors
+                                ? "Error"
+                                : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
+                          </Link>
+                        </Table.Cell>
+                      </ReportBlock>
+                      <ReportBlock>
+                        <Table.Cell>
+                          <Link href={submissionHref}>
+                            {submission.submission_reviews?.completed_at
+                              ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.data.total_points}`
+                              : submission.is_active
+                                ? "Pending"
+                                : ""}
+                          </Link>
+                        </Table.Cell>
+                      </ReportBlock>
                       <Table.Cell>
                         {/* The accessible name starts with the visible label so the two cannot
                             disagree (WCAG 2.5.3), and carries the submission id because every row

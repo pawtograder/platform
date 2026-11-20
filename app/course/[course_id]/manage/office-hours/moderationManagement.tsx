@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -219,7 +220,9 @@ export default function ModerationManagement() {
                 <Text fontSize="sm" fontWeight="medium">
                   Reason:
                 </Text>
-                <Text fontSize="sm">{action.reason}</Text>
+                <ReportBlock>
+                  <Text fontSize="sm">{action.reason}</Text>
+                </ReportBlock>
               </HStack>
             )}
           </VStack>

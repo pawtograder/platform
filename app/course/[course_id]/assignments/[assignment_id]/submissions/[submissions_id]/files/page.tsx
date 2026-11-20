@@ -14,8 +14,10 @@ import DownloadLink from "@/components/ui/download-link";
 import { GroupMemberSelectOption } from "@/components/ui/group-member-select-option";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
-import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
+import MarkdownFilePreview from "@/components/ui/markdown-file-preview";
 import BinaryFilePreview from "@/components/ui/binary-file-preview";
+import ExamSubmissionRenderer from "@/components/ui/exam-submission-renderer";
+import { isMarkdownFile, pickDefaultView } from "@/lib/submissionFiles";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -41,6 +43,7 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
+import { artifactCheckMessage } from "@/lib/artifactCheckMessage";
 import { useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
@@ -64,7 +67,11 @@ import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { getPrBaseFiles } from "@/lib/edgeFunctions";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
-import { useFindTableControllerValue } from "@/lib/TableController";
+import {
+  useFindTableControllerValue,
+  useIsTableControllerReady,
+  useTableControllerTableValues
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricCriteria,
@@ -100,6 +107,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FaCheckCircle, FaColumns, FaDownload, FaEyeSlash, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { Group, Panel, Separator as PanelSeparator } from "react-resizable-panels";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Module-stable style — `<Markdown>` is `memo`-wrapped (see
 // `components/ui/markdown.tsx`); inline literals defeat the memo.
@@ -339,7 +347,9 @@ function ArtifactAnnotation({
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
@@ -424,7 +434,9 @@ function ArtifactComment({
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
@@ -598,6 +610,17 @@ function ArtifactCheckPopover({
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
   const rubricParts = useRubricParts(reviewContext?.rubric_id ?? null);
+  const assignmentController = useAssignmentController();
+  const rubricChecksReady = useIsTableControllerReady(assignmentController.rubricChecksController);
+  // For the line shown when the popover has nothing to offer (#1269). Read straight from the loaded
+  // controller and keyed on the review's own rubric_id: useRubricWithParts and useRubricChecksByRubric
+  // update in effects, so for a render or two after the review arrives they still describe "no rubric".
+  const reviewRubricId = reviewContext?.rubric_id ?? null;
+  const allRubricChecks = useTableControllerTableValues(assignmentController.rubricChecksController);
+  const reviewChecks = useMemo(
+    () => (reviewRubricId == null ? [] : allRubricChecks.filter((c) => c.rubric_id === reviewRubricId)),
+    [allRubricChecks, reviewRubricId]
+  );
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
@@ -700,11 +723,21 @@ function ArtifactCheckPopover({
   }, [criteriaWithArtifactAnnotationChecks, rubricChecks]);
 
   if (!criteriaOptions || criteriaOptions.length === 0) {
-    return (
+    const message = artifactCheckMessage({
+      // reviewContext is undefined until the review loads, and stays undefined when the viewer can't
+      // see the review (a student before release); then nothing is shown.
+      ready: reviewContext !== undefined && rubricChecksReady,
+      isStaff: isGraderOrInstructor,
+      hasRubric: reviewRubricId != null,
+      checkCount: reviewChecks.length,
+      hasArtifactChecks: reviewChecks.some((c) => c.is_annotation && c.annotation_target === "artifact"),
+      isExamArtifact: (artifact.data as { format?: string } | null)?.format === "exam_v1"
+    });
+    return message ? (
       <Text fontSize="sm" color="fg.muted">
-        No rubric checks available for this artifact.
+        {message}
       </Text>
-    );
+    ) : null;
   }
 
   const selectComponentsConfig: SelectComponentsConfig<
@@ -1052,17 +1085,39 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
       );
     }
     return <Spinner />;
+  } else if (artifact.data.format === "exam_v1") {
+    return <ExamSubmissionRenderer artifact={artifact} />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }
 }
 
-function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
+/**
+ * Whether this artifact is backed by a file in the `submission-artifacts` bucket.
+ *
+ * `plaintext`, `markdown`, `zip` and `png` all describe a stored file, and RenderedArtifact
+ * downloads it to render. `exam_v1` does not: `finalize` in the exam worker inserts the
+ * submission_artifacts row and there is no code path anywhere that uploads a file for one.
+ * Everything a grader sees comes from `artifact.data` plus the page images, which
+ * ExamSubmissionRenderer signs itself out of the separate `submission-files` bucket.
+ *
+ * Signing a key that cannot exist is what made every finalized exam render
+ * "Error downloading artifact: Object not found" instead of the answer crops (#1076).
+ */
+function artifactHasStoredFile(artifact: SubmissionArtifact): boolean {
+  return (artifact.data as { format?: string } | null)?.format !== "exam_v1";
+}
+
+export function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   // Load the artifact data from supabase
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const hasStoredFile = artifactHasStoredFile(artifact);
   useEffect(() => {
+    // Nothing to sign for a data-backed artifact, and asking would fail. downloadLink stays
+    // null, which the render path below already handles: the Download link is conditional.
+    if (!hasStoredFile) return;
     let isMounted = true;
     async function loadArtifact() {
       const client = createClient();
@@ -1080,7 +1135,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
     return () => {
       isMounted = false;
     };
-  }, [artifactKey]);
+  }, [artifactKey, hasStoredFile]);
   if (downloadError) {
     return <Text color="fg.error">{downloadError}</Text>;
   }
@@ -1493,19 +1548,8 @@ export default function FilesView() {
       ? selectedArtifactId
       : null;
 
-  // Default to a source-code file rather than whatever happens to be first: the embedded
-  // submission_files arrive in an unspecified order, and opening a markdown file shows its rendered
-  // *preview* (no code lines) — graders want to land on code. Pick deterministically by name so the
-  // default is stable across loads, preferring code over markdown/binary, falling back to the
-  // name-first file when there is no code file.
-  const filesByName = useMemo(
-    () => [...submissionFiles].sort((a: SubmissionFile, b: SubmissionFile) => a.name.localeCompare(b.name)),
-    [submissionFiles]
-  );
-  const defaultFileId =
-    (filesByName.find((file: SubmissionFile) => !file.is_binary && !isMarkdownFile(file.name)) ?? filesByName[0])?.id ??
-    null;
-  const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
+  // With nothing in the URL: a paper exam's crops, else a code file, else the first artifact.
+  const defaultView = pickDefaultView(submissionFiles, submissionArtifacts);
   // Prefer file when both file_id and artifact_id are valid in the URL — checking
   // artifact first would null out the file and then artifact suppression would null both.
   const effectiveFileId =
@@ -1513,17 +1557,13 @@ export default function FilesView() {
       ? normalizedSelectedFileId
       : normalizedSelectedArtifactId !== null
         ? null
-        : defaultFileId !== null
-          ? defaultFileId
-          : null;
+        : defaultView.fileId;
   const effectiveArtifactId =
     normalizedSelectedFileId !== null
       ? null
       : normalizedSelectedArtifactId !== null
         ? normalizedSelectedArtifactId
-        : defaultFileId === null && defaultArtifactId !== null
-          ? defaultArtifactId
-          : null;
+        : defaultView.artifactId;
 
   const curFileIndex = submissionFiles.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1));
   const selectedFile =

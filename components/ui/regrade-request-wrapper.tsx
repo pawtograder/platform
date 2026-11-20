@@ -58,6 +58,7 @@ import {
   isBareCheckResolveLocationValid,
   type BareCheckResolveLocation
 } from "@/lib/regrade/bareCheckMaterialization";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -204,9 +205,11 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
                 }}
               />
             ) : (
-              <Box borderRadius="sm" p={1} m={-1}>
-                <Markdown>{comment.comment}</Markdown>
-              </Box>
+              <ReportBlock>
+                <Box borderRadius="sm" p={1} m={-1}>
+                  <Markdown>{comment.comment}</Markdown>
+                </Box>
+              </ReportBlock>
             )}
           </Box>
         </VStack>
@@ -1221,15 +1224,17 @@ export default function RegradeRequestWrapper({
                     data-visual-placeholder="review-status"
                   >
                     Opened {formatRelative(regradeRequest.opened_at, new Date())}, initial score:{" "}
-                    <Text as="span" fontWeight="semibold">
-                      {regradeRequest.initial_points || 0}
-                      {rubricCriteria && (
-                        <Text as="span" fontWeight="normal">
-                          {" "}
-                          {rubricCriteria.is_additive ? "pts awarded" : "pts deducted"}
-                        </Text>
-                      )}
-                    </Text>
+                    <ReportBlock>
+                      <Text as="span" fontWeight="semibold">
+                        {regradeRequest.initial_points || 0}
+                        {rubricCriteria && (
+                          <Text as="span" fontWeight="normal">
+                            {" "}
+                            {rubricCriteria.is_additive ? "pts awarded" : "pts deducted"}
+                          </Text>
+                        )}
+                      </Text>
+                    </ReportBlock>
                   </Text>
                 )}
                 {regradeRequest.status === "draft" && (
@@ -1243,39 +1248,41 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
                 {regradeRequest.resolved_at && (
-                  <Text
-                    fontSize="xs"
-                    color="fg.muted"
-                    data-visual-test="transparent"
-                    data-visual-placeholder="review-status"
-                  >
-                    Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
-                    {isInstructor ? (
-                      <EditablePoints
-                        points={regradeRequest.resolved_points}
-                        regradeRequestId={regradeRequest.id}
-                        type="resolved"
-                        privateProfileId={authorProfileId}
-                        isAdditive={rubricCriteria?.is_additive ?? true}
-                      />
-                    ) : (
-                      regradeRequest.resolved_points || 0
-                    )}
-                    {rubricCriteria?.is_additive ? " pts awarded" : " pts deducted"}
-                    {(() => {
-                      const change = (regradeRequest.resolved_points || 0) - (regradeRequest.initial_points || 0);
-                      // For additive: higher is better (green). For deductive: higher is worse (red)
-                      const isPositiveChange = (rubricCriteria?.is_additive ?? true) ? change > 0 : change < 0;
-                      if (change === 0) return " (no change)";
-                      return (
-                        <Text as="span" fontWeight="semibold" color={isPositiveChange ? "green.800" : "red.800"}>
-                          {" "}
-                          ({isPositiveChange ? "+" : "-"}
-                          {Math.abs(change)})
-                        </Text>
-                      );
-                    })()}
-                  </Text>
+                  <ReportBlock>
+                    <Text
+                      fontSize="xs"
+                      color="fg.muted"
+                      data-visual-test="transparent"
+                      data-visual-placeholder="review-status"
+                    >
+                      Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
+                      {isInstructor ? (
+                        <EditablePoints
+                          points={regradeRequest.resolved_points}
+                          regradeRequestId={regradeRequest.id}
+                          type="resolved"
+                          privateProfileId={authorProfileId}
+                          isAdditive={rubricCriteria?.is_additive ?? true}
+                        />
+                      ) : (
+                        regradeRequest.resolved_points || 0
+                      )}
+                      {rubricCriteria?.is_additive ? " pts awarded" : " pts deducted"}
+                      {(() => {
+                        const change = (regradeRequest.resolved_points || 0) - (regradeRequest.initial_points || 0);
+                        // For additive: higher is better (green). For deductive: higher is worse (red)
+                        const isPositiveChange = (rubricCriteria?.is_additive ?? true) ? change > 0 : change < 0;
+                        if (change === 0) return " (no change)";
+                        return (
+                          <Text as="span" fontWeight="semibold" color={isPositiveChange ? "green.800" : "red.800"}>
+                            {" "}
+                            ({isPositiveChange ? "+" : "-"}
+                            {Math.abs(change)})
+                          </Text>
+                        );
+                      })()}
+                    </Text>
+                  </ReportBlock>
                 )}
                 {regradeRequest.escalated_at && (
                   <Text
@@ -1288,73 +1295,77 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
                 {regradeRequest.closed_at && (
-                  <Text
-                    fontSize="xs"
-                    color="fg.muted"
-                    data-visual-test="transparent"
-                    data-visual-placeholder="review-status"
-                  >
-                    Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
-                    {/* Note: Instructors always sign final decisions with their real identity */}
-                    {isInstructor ? (
-                      <EditablePoints
-                        points={regradeRequest.closed_points}
-                        isAdditive={rubricCriteria?.is_additive ?? true}
-                        regradeRequestId={regradeRequest.id}
-                        type="closed"
-                        privateProfileId={private_profile_id}
-                      />
-                    ) : (
-                      regradeRequest.closed_points || 0
-                    )}
-                    {(() => {
-                      const changeFromResolved =
-                        (regradeRequest.closed_points || 0) - (regradeRequest.resolved_points || 0);
-                      const changeFromInitial =
-                        (regradeRequest.closed_points || 0) - (regradeRequest.initial_points || 0);
-                      const isAdditive = rubricCriteria?.is_additive ?? true;
-                      // For additive: higher is better (green). For deductive: higher is worse (red)
-                      const isPositiveChangeFromResolved = isAdditive ? changeFromResolved > 0 : changeFromResolved < 0;
-                      const isPositiveChangeFromInitial = isAdditive ? changeFromInitial > 0 : changeFromInitial < 0;
+                  <ReportBlock>
+                    <Text
+                      fontSize="xs"
+                      color="fg.muted"
+                      data-visual-test="transparent"
+                      data-visual-placeholder="review-status"
+                    >
+                      Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
+                      {/* Note: Instructors always sign final decisions with their real identity */}
+                      {isInstructor ? (
+                        <EditablePoints
+                          points={regradeRequest.closed_points}
+                          isAdditive={rubricCriteria?.is_additive ?? true}
+                          regradeRequestId={regradeRequest.id}
+                          type="closed"
+                          privateProfileId={private_profile_id}
+                        />
+                      ) : (
+                        regradeRequest.closed_points || 0
+                      )}
+                      {(() => {
+                        const changeFromResolved =
+                          (regradeRequest.closed_points || 0) - (regradeRequest.resolved_points || 0);
+                        const changeFromInitial =
+                          (regradeRequest.closed_points || 0) - (regradeRequest.initial_points || 0);
+                        const isAdditive = rubricCriteria?.is_additive ?? true;
+                        // For additive: higher is better (green). For deductive: higher is worse (red)
+                        const isPositiveChangeFromResolved = isAdditive
+                          ? changeFromResolved > 0
+                          : changeFromResolved < 0;
+                        const isPositiveChangeFromInitial = isAdditive ? changeFromInitial > 0 : changeFromInitial < 0;
 
-                      if (changeFromResolved !== 0) {
-                        return (
-                          <>
-                            <Text
-                              as="span"
-                              fontWeight="semibold"
-                              color={isPositiveChangeFromResolved ? "green.600" : "red.600"}
-                            >
-                              {" "}
-                              ({changeFromResolved > 0 ? "+" : ""}
-                              {changeFromResolved} from grader
-                            </Text>
+                        if (changeFromResolved !== 0) {
+                          return (
+                            <>
+                              <Text
+                                as="span"
+                                fontWeight="semibold"
+                                color={isPositiveChangeFromResolved ? "green.600" : "red.600"}
+                              >
+                                {" "}
+                                ({changeFromResolved > 0 ? "+" : ""}
+                                {changeFromResolved} from grader
+                              </Text>
+                              <Text
+                                as="span"
+                                fontWeight="semibold"
+                                color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
+                              >
+                                , {changeFromInitial > 0 ? "+" : ""}
+                                {changeFromInitial} overall)
+                              </Text>
+                            </>
+                          );
+                        } else if (changeFromInitial !== 0) {
+                          return (
                             <Text
                               as="span"
                               fontWeight="semibold"
                               color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
                             >
-                              , {changeFromInitial > 0 ? "+" : ""}
+                              {" "}
+                              ({changeFromInitial > 0 ? "+" : ""}
                               {changeFromInitial} overall)
                             </Text>
-                          </>
-                        );
-                      } else if (changeFromInitial !== 0) {
-                        return (
-                          <Text
-                            as="span"
-                            fontWeight="semibold"
-                            color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
-                          >
-                            {" "}
-                            ({changeFromInitial > 0 ? "+" : ""}
-                            {changeFromInitial} overall)
-                          </Text>
-                        );
-                      }
-                      return null;
-                    })()}
-                  </Text>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </Text>
+                  </ReportBlock>
                 )}
               </VStack>
               {/* Discord Link for grader/instructor */}

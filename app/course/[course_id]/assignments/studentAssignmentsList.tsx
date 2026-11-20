@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
@@ -379,13 +380,16 @@ export default function StudentAssignmentsList() {
                 <Table.Cell>
                   <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>
-                <Table.Cell>
-                  {work.submission_link ? (
-                    <Link href={work.submission_link}>{work.submission_text}</Link>
-                  ) : (
-                    <Text>{work.submission_text}</Text>
-                  )}
-                </Table.Cell>
+                {/* The submission label carries the total score. */}
+                <ReportBlock>
+                  <Table.Cell>
+                    {work.submission_link ? (
+                      <Link href={work.submission_link}>{work.submission_text}</Link>
+                    ) : (
+                      <Text>{work.submission_text}</Text>
+                    )}
+                  </Table.Cell>
+                </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
                   <Link target="_blank" href={`https://github.com/${work.repo}`}>
                     {work.repo}
@@ -448,13 +452,16 @@ export default function StudentAssignmentsList() {
                 <Table.Cell>
                   <Link href={work.name_link}>{work.name}</Link>
                 </Table.Cell>
-                <Table.Cell>
-                  {work.submission_link ? (
-                    <Link href={work.submission_link}>{work.submission_text}</Link>
-                  ) : (
-                    <Text>{work.submission_text}</Text>
-                  )}
-                </Table.Cell>
+                {/* The submission label carries the total score. */}
+                <ReportBlock>
+                  <Table.Cell>
+                    {work.submission_link ? (
+                      <Link href={work.submission_link}>{work.submission_text}</Link>
+                    ) : (
+                      <Text>{work.submission_text}</Text>
+                    )}
+                  </Table.Cell>
+                </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
                   <Link target="_blank" href={`https://github.com/${work.repo}`}>
                     {work.repo}

@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Box, HStack, VStack, Text, Icon, Badge, Separator } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
@@ -129,6 +130,8 @@ export default function StudentActivitySummary({
         return "Sent message";
       case "request_resolved":
         return "Request resolved";
+      case "request_escalated":
+        return "Request escalated";
       case "video_joined":
         return "Joined video";
       case "video_left":
@@ -172,10 +175,12 @@ export default function StudentActivitySummary({
               <Text fontSize="sm" fontWeight="medium">
                 Karma:
               </Text>
-              <HStack>
-                {renderStars(karmaEntry.karma_score, 3)}
-                <Text fontSize="sm">({karmaEntry.karma_score})</Text>
-              </HStack>
+              <ReportBlock>
+                <HStack>
+                  {renderStars(karmaEntry.karma_score, 3)}
+                  <Text fontSize="sm">({karmaEntry.karma_score})</Text>
+                </HStack>
+              </ReportBlock>
             </HStack>
           )}
 
@@ -219,16 +224,20 @@ export default function StudentActivitySummary({
             <Text fontSize="sm" fontWeight="medium">
               Student Karma
             </Text>
-            <HStack>
-              {renderStars(karmaEntry.karma_score)}
-              <Badge colorPalette={getKarmaColor(karmaEntry.karma_score)} size="sm">
-                {karmaEntry.karma_score} - {getKarmaLabel(karmaEntry.karma_score)}
-              </Badge>
-            </HStack>
+            <ReportBlock>
+              <HStack>
+                {renderStars(karmaEntry.karma_score)}
+                <Badge colorPalette={getKarmaColor(karmaEntry.karma_score)} size="sm">
+                  {karmaEntry.karma_score} - {getKarmaLabel(karmaEntry.karma_score)}
+                </Badge>
+              </HStack>
+            </ReportBlock>
             {karmaEntry.internal_notes && (
-              <Text fontSize="sm" fontStyle="italic">
-                &ldquo;{karmaEntry.internal_notes}&rdquo;
-              </Text>
+              <ReportBlock>
+                <Text fontSize="sm" fontStyle="italic">
+                  &ldquo;{karmaEntry.internal_notes}&rdquo;
+                </Text>
+              </ReportBlock>
             )}
             <Text fontSize="xs">
               Last updated {formatDistanceToNow(new Date(karmaEntry.updated_at), { addSuffix: true })}

@@ -31,6 +31,7 @@ import {
   FaStar,
   FaThumbtack
 } from "react-icons/fa";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function PostRowComponent({
   threadId,
@@ -168,18 +169,20 @@ function PostRowComponent({
                 </Stack>
                 <Stack spaceY="0.25" flex="1" minW={0} overflow="hidden">
                   <Box w="100%" overflow="hidden">
-                    <Text
-                      fontWeight="semibold"
-                      fontSize="sm"
-                      truncate
-                      display="block"
-                      w="100%"
-                      overflow="hidden"
-                      textOverflow="ellipsis"
-                      whiteSpace="nowrap"
-                    >
-                      {thread.subject}
-                    </Text>
+                    <ReportBlock>
+                      <Text
+                        fontWeight="semibold"
+                        fontSize="sm"
+                        truncate
+                        display="block"
+                        w="100%"
+                        overflow="hidden"
+                        textOverflow="ellipsis"
+                        whiteSpace="nowrap"
+                      >
+                        {thread.subject}
+                      </Text>
+                    </ReportBlock>
                   </Box>
                   {/* View-as student: hide the like/follow controls (the handlers no-op in
                       read-only, so leaving them rendered would be dead, misleading affordances —
@@ -284,9 +287,11 @@ function PostRowComponent({
           </Box>
 
           <Stack spaceY="0.25" flex="1" minW={0}>
-            <Text fontWeight="semibold" truncate>
-              {thread.subject}
-            </Text>
+            <ReportBlock>
+              <Text fontWeight="semibold" truncate>
+                {thread.subject}
+              </Text>
+            </ReportBlock>
             <HStack gap="2" minW={0} wrap="wrap">
               {thread.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="3" />}
               {showTopicBadge && topic && (

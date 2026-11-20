@@ -6,6 +6,7 @@ import { Box, Flex, HStack, Icon, Spinner, Text } from "@chakra-ui/react";
 import { useEffect, useState } from "react";
 import { FaDownload, FaFile } from "react-icons/fa";
 import DownloadLink from "./download-link";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function isImageMime(mime: string | null): boolean {
   return mime !== null && mime.startsWith("image/");
@@ -76,9 +77,11 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
       >
         <HStack>
           <Icon as={FaFile} color="fg.muted" />
-          <Text fontSize="xs" color="text.subtle">
-            {file.name}
-          </Text>
+          <ReportBlock>
+            <Text fontSize="xs" color="text.subtle">
+              {file.name}
+            </Text>
+          </ReportBlock>
           {file.file_size !== null && (
             <Text fontSize="xs" color="fg.muted">
               ({formatFileSize(file.file_size)})
@@ -115,28 +118,32 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
             <Text color="fg.error">{error}</Text>
           </Box>
         ) : isImageMime(file.mime_type) && signedUrl ? (
-          <Flex justify="center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={signedUrl}
-              alt={file.name}
-              loading="lazy"
-              style={{
-                maxWidth: "100%",
-                height: "auto",
-                display: "block",
-                borderRadius: "0.375rem"
-              }}
-            />
-          </Flex>
+          <ReportBlock>
+            <Flex justify="center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={signedUrl}
+                alt={file.name}
+                loading="lazy"
+                style={{
+                  maxWidth: "100%",
+                  height: "auto",
+                  display: "block",
+                  borderRadius: "0.375rem"
+                }}
+              />
+            </Flex>
+          </ReportBlock>
         ) : file.mime_type === "application/pdf" && signedUrl ? (
-          <Box w="100%" h="600px">
-            <iframe
-              src={signedUrl}
-              style={{ width: "100%", height: "100%", border: "none", borderRadius: "0.375rem" }}
-              title={file.name}
-            />
-          </Box>
+          <ReportBlock>
+            <Box w="100%" h="600px">
+              <iframe
+                src={signedUrl}
+                style={{ width: "100%", height: "100%", border: "none", borderRadius: "0.375rem" }}
+                title={file.name}
+              />
+            </Box>
+          </ReportBlock>
         ) : (
           <Flex direction="column" align="center" py={8} gap={3}>
             <Icon as={FaFile} boxSize={12} color="fg.muted" />
@@ -145,7 +152,9 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
               <DownloadLink href={signedUrl} filename={file.name}>
                 <HStack gap={1}>
                   <Icon as={FaDownload} />
-                  <Text>Download {file.name}</Text>
+                  <ReportBlock>
+                    <Text>Download {file.name}</Text>
+                  </ReportBlock>
                 </HStack>
               </DownloadLink>
             )}

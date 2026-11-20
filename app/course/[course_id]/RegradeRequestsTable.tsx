@@ -7,6 +7,7 @@ import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 import Link from "next/link";
 import { useMemo } from "react";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 const statusConfig = {
   draft: { label: "Draft", colorPalette: "gray", icon: Clock },
@@ -91,8 +92,12 @@ function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails;
       </Table.Cell>
       <Table.Cell>#{request.submissions?.ordinal || "?"}</Table.Cell>
       <Table.Cell>{rubricCheckName}</Table.Cell>
-      <Table.Cell>{request.initial_points ?? "-"}</Table.Cell>
-      <Table.Cell>{finalPoints ?? "-"}</Table.Cell>
+      <ReportBlock>
+        <Table.Cell>{request.initial_points ?? "-"}</Table.Cell>
+      </ReportBlock>
+      <ReportBlock>
+        <Table.Cell>{finalPoints ?? "-"}</Table.Cell>
+      </ReportBlock>
       <Table.Cell>
         <Text fontSize="sm">{formatRelative(new Date(request.created_at), new Date())}</Text>
       </Table.Cell>

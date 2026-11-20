@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
@@ -233,19 +234,21 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                 <Field.Root invalid={!!errors.help_request_id}>
                   <Field.Label>Help Request</Field.Label>
                   <NativeSelect.Root>
-                    <NativeSelect.Field
-                      {...register("help_request_id", {
-                        valueAsNumber: true,
-                        required: "Help request is required"
-                      })}
-                    >
-                      <option value="">Select a help request</option>
-                      {helpRequests.map((request) => (
-                        <option key={request.id} value={request.id}>
-                          #{request.id} - {request.request.substring(0, 50)}...
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
+                    <ReportBlock>
+                      <NativeSelect.Field
+                        {...register("help_request_id", {
+                          valueAsNumber: true,
+                          required: "Help request is required"
+                        })}
+                      >
+                        <option value="">Select a help request</option>
+                        {helpRequests.map((request) => (
+                          <option key={request.id} value={request.id}>
+                            #{request.id} - {request.request.substring(0, 50)}...
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                    </ReportBlock>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.help_request_id?.message}</Field.ErrorText>
                   <Field.HelperText>{helpRequests.length} help requests available</Field.HelperText>

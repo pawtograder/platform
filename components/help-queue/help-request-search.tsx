@@ -12,6 +12,7 @@ import { InputGroup } from "@/components/ui/input-group";
 import { getQueueTypeColor } from "@/lib/utils";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import type { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 const DEBOUNCE_MS = 200;
 const MAX_RESULTS = 6;
@@ -441,9 +442,11 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
                         )}
                         {request.students.length > 1 && ` + ${request.students.length - 1} others`}
                       </Text>
-                      <Text fontSize="xs" color="fg.muted" lineClamp={2}>
-                        {highlightMatch(request.request, 120)}
-                      </Text>
+                      <ReportBlock>
+                        <Text fontSize="xs" color="fg.muted" lineClamp={2}>
+                          {highlightMatch(request.request, 120)}
+                        </Text>
+                      </ReportBlock>
                       <Text fontSize="xs" color="fg.muted">
                         {formatRelative(new Date(request.created_at), new Date())}
                       </Text>

@@ -53,6 +53,7 @@ import { MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 function showEdgeFunctionErrorToast(e: unknown, fallbackTitle = "Something went wrong") {
   if (e instanceof EdgeFunctionError) {
@@ -391,7 +392,9 @@ function JoinGroupButton({
                         <VStack w="100%" key={g.id}>
                           <HStack>
                             <GroupMember profile_id={g.inviter} />
-                            <Heading size="sm">invites you to join {g.group.name}</Heading>
+                            <Heading size="sm">
+                              invites you to join <ReportBlock>{g.group.name}</ReportBlock>
+                            </Heading>
                           </HStack>
                           <HStack w="100%" justifyContent="start">
                             <Button
@@ -473,7 +476,9 @@ function JoinGroupButton({
                   formatOptionLabel={({ group }) => {
                     return (
                       <HStack>
-                        <Text>{group.name}</Text>
+                        <ReportBlock>
+                          <Text>{group.name}</Text>
+                        </ReportBlock>
                         <Text>{group.assignment_groups_members.length} members:</Text>
                         <GroupMemberList group={group} />
                       </HStack>
@@ -514,7 +519,9 @@ function JoinGroupButton({
                       <Card.Root key={g.id} w="100%" bg={g.status === "pending" ? "bg.muted" : "bg.subtle"}>
                         <Flex flexDirection="row" p={2}>
                           <VStack alignItems="flex-start">
-                            <Card.Title mb={0}>{g.group.name}</Card.Title>
+                            <ReportBlock>
+                              <Card.Title mb={0}>{g.group.name}</Card.Title>
+                            </ReportBlock>
                             <Text fontSize="xs" color="fg.muted">
                               ({formatRelative(g.created_at, new Date())})
                             </Text>
@@ -826,7 +833,9 @@ function GroupDetails({
   return (
     <VStack alignItems="flex-start">
       <VStack alignItems="flex-start" gap={1}>
-        <Heading size="md">You are in group &quot;{group.name}&quot;</Heading>
+        <Heading size="md">
+          You are in group &quot;<ReportBlock>{group.name}</ReportBlock>&quot;
+        </Heading>
         {group.mentor_profile_id && (
           <HStack
             gap={2}
@@ -864,8 +873,44 @@ function GroupDetails({
   );
 }
 
+// The repo's Forgejo host is the instance of the newest Forgejo account the viewer can see (#1092):
+// their own for a student, and after a FORGEJO_URL change the newest is on the current instance.
+function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
+  const { data } = useList<{ instance_url: string }>({
+    resource: "git_accounts",
+    meta: { select: "instance_url" },
+    filters: [
+      { field: "provider", operator: "eq", value: "forgejo" },
+      { field: "login", operator: "nnull", value: null }
+    ],
+    sorters: [{ field: "created_at", order: "desc" }],
+    pagination: { pageSize: 1 }
+  });
+  const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
+  const instanceUrl = data?.data?.[0]?.instance_url;
+  if (!instanceUrl) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {label}
+      </Text>
+    );
+  }
+  return (
+    <Link
+      href={`${instanceUrl}/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {label}
+    </Link>
+  );
+}
+
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
+  if (repository.git_provider === "forgejo") {
+    return <ForgejoRepositoryLabel repository={repository} />;
+  }
   if (!role.github_org_confirmed) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">

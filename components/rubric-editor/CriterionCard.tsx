@@ -49,6 +49,7 @@ function blankCheck(name = "New check"): HydratedRubricCheck {
     id: -1,
     name,
     description: null,
+    exam_question_id: null,
     ordinal: 0,
     rubric_id: 0,
     assignment_id: 0,

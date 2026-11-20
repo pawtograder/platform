@@ -1,3 +1,4 @@
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { ViewAsStudentButton } from "@/components/course/view-as-student-button";
@@ -746,7 +747,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
             {helpRequests?.map((request) => (
               <CardRoot key={request.id}>
                 <CardHeader>
-                  <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
+                  <ReportBlock>
+                    <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
+                  </ReportBlock>
                 </CardHeader>
                 <CardBody>
                   Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />

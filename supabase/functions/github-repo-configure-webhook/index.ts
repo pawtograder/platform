@@ -9,7 +9,13 @@ import {
   getDefaultBranchHeadSha,
   isValidRepoFullName
 } from "../_shared/GitHubWrapper.ts";
-import { UserVisibleError, SecurityError, wrapRequestHandler, readJsonObjectBody } from "../_shared/HandlerUtils.ts";
+import {
+  assertUserHasCapabilityOrServiceRole,
+  readJsonObjectBody,
+  SecurityError,
+  UserVisibleError,
+  wrapRequestHandler
+} from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
@@ -90,7 +96,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     );
   }
   scope?.setTag("watch_type", watch_type);
-  //Validate that the user is an instructor
+  // Read the autograder row as the caller (RLS: manage_assignments), then check the capability below.
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     auth: REQUEST_SCOPED_AUTH_OPTIONS,
     global: {
@@ -120,16 +126,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.error(autograder_error);
     throw new UserVisibleError("Autograder not found");
   }
-  //Make sure that we are an instructor in this class
-  const { data: roles } = await supabase
-    .from("user_roles")
-    .select("*")
-    .eq("role", "instructor")
-    .eq("class_id", autograder.assignments.class_id!)
-    .eq("user_id", user.id)
-    .single();
-  if (!roles) {
-    throw new SecurityError("Unauthorized");
+  // Configuring the grader or handout repository is part of saving an assignment, so it follows
+  // manage_assignments (#1010), like the rest of the Edit Assignment save.
+  await assertUserHasCapabilityOrServiceRole(
+    autograder.assignments.class_id!,
+    "manage_assignments",
+    req.headers.get("Authorization")
+  );
+  if (autograder.assignments.git_provider !== "github") {
+    throw new UserVisibleError("This assignment uses Forgejo. GitHub configuration is unavailable.", 400);
   }
   if (watch_type === "template_repo" && autograder.assignments.has_autograder === false) {
     // No autograder means the handout has no grade.yml to hash (it is stripped at

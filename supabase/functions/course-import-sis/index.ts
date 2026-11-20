@@ -1048,7 +1048,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     scope?.setTag("existingClassTitle", existingClass.course_title);
   }
 
-  scope?.setUser({ id: user.id, email: user.email });
+  // ID only: Sentry events never carry a user's name or email.
+  scope?.setUser({ id: user.id });
+  scope?.setTag("role", "admin");
 
   // Get SIS API configuration
   const SIS_API_URL = Deno.env.get("SIS_API_URL");

@@ -51,6 +51,7 @@ import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import ClearAssignmentsButton from "../ClearAssignmentsButton";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import RequireManageReviews from "../RequireManageReviews";
 import { compareAssigneeOptions, getAssigneeDisplayLabel } from "./assigneeOptions";
 
 // Main Page Component
@@ -64,33 +65,35 @@ export default function BulkAssignGradingPage() {
   };
 
   return (
-    <Container maxW="container.xl" py={2} px={2}>
-      <HStack justifyContent="space-between" mb={4}>
-        <VStack gap={1} align="flex-start">
-          <Heading size="lg">Bulk Assign Grading</Heading>
-          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews`}>
-            <FaArrowLeft /> Back to Reviews
-          </Link>
-          <Text fontSize="sm" maxW="lg">
-            Bulk assign grading, accounting for conflicts. This form will not allow you to re-assign work (see{" "}
-            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
-              Reassigning Work
+    <RequireManageReviews>
+      <Container maxW="container.xl" py={2} px={2}>
+        <HStack justifyContent="space-between" mb={4}>
+          <VStack gap={1} align="flex-start">
+            <Heading size="lg">Bulk Assign Grading</Heading>
+            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews`}>
+              <FaArrowLeft /> Back to Reviews
             </Link>
-            ), and will only process submissions/rubric parts that have not been assigned yet. By default, students and
-            groups that have not yet submitted are not assigned to a grader; enable &ldquo;Assign grading for all
-            students&rdquo; below to create empty submissions for non-submitters so they can be graded too. As students
-            update existing submissions, the grading assignments will be updated automatically.
-          </Text>
-          <Text fontSize="sm" maxW="lg">
-            The algorithm will first split submissions between graders (assigning all selected rubric parts to each
-            grader), or split the rubric parts between graders first (assigning each submission to different graders for
-            each rubric part). You will be able to preview the assignments before creating them.
-          </Text>
-        </VStack>
-      </HStack>{" "}
-      <Separator mb={4} />
-      <BulkAssignGradingForm handleReviewAssignmentChange={handleReviewAssignmentChange} />
-    </Container>
+            <Text fontSize="sm" maxW="lg">
+              Bulk assign grading, accounting for conflicts. This form will not allow you to re-assign work (see{" "}
+              <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
+                Reassigning Work
+              </Link>
+              ), and will only process submissions/rubric parts that have not been assigned yet. By default, students
+              and groups that have not yet submitted are not assigned to a grader; enable &ldquo;Assign grading for all
+              students&rdquo; below to create empty submissions for non-submitters so they can be graded too. As
+              students update existing submissions, the grading assignments will be updated automatically.
+            </Text>
+            <Text fontSize="sm" maxW="lg">
+              The algorithm will first split submissions between graders (assigning all selected rubric parts to each
+              grader), or split the rubric parts between graders first (assigning each submission to different graders
+              for each rubric part). You will be able to preview the assignments before creating them.
+            </Text>
+          </VStack>
+        </HStack>{" "}
+        <Separator mb={4} />
+        <BulkAssignGradingForm handleReviewAssignmentChange={handleReviewAssignmentChange} />
+      </Container>
+    </RequireManageReviews>
   );
 }
 

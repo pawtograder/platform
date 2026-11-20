@@ -46,7 +46,9 @@ export async function createUserInClass(
   if (!user.primary_email) {
     console.error(`No email found for user ${user.name}`);
     console.error(JSON.stringify(user, null, 2));
-    throw new Error("No email found for user " + user.name);
+    // No name in the message: a thrown error becomes the Sentry event's text, and events never
+    // carry a person's name. The log lines above keep it for the function logs.
+    throw new Error("No email found for the user being enrolled");
   }
 
   if (!userId) {

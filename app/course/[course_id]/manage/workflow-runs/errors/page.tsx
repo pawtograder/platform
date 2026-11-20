@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Box, Heading, Text, HStack, Button, Link, Spinner, Input } from "@chakra-ui/react";
 import { useMemo } from "react";
@@ -143,9 +144,11 @@ function WorkflowErrorsTable() {
           // Show group name if this is a group assignment
           if (submission.assignment_groups && submission.assignment_groups.name) {
             return (
-              <Text fontSize="sm" fontWeight="medium">
-                📁 {submission.assignment_groups.name}
-              </Text>
+              <ReportBlock>
+                <Text fontSize="sm" fontWeight="medium">
+                  📁 {submission.assignment_groups.name}
+                </Text>
+              </ReportBlock>
             );
           }
 

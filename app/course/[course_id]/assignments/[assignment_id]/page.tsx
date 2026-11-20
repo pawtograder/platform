@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -11,11 +12,12 @@ import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { isOwnRepositoryForAssignment } from "@/lib/ownRepositoryForAssignment";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
+  CourseWithFeatures,
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
@@ -34,6 +36,8 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
+import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
+import { cloudWorkspacesEnabled, createWorkspaceClient } from "@/lib/workspaceStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -169,6 +173,26 @@ export default function AssignmentPage() {
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
 
+  // Open in Coder (#1095): a student's Forgejo repository, in a course with Cloud Workspaces on.
+  // workspace-open checks enrollment and the repository on the server; this only decides whether to
+  // offer it. Not while staff view as a student: the requests would carry the staff session and act
+  // on the staff member's own repository, not the student's.
+  const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
+  // useCourse(), not the controller's course: it re-renders when the flag changes.
+  const liveCourse = useCourse() as CourseWithFeatures;
+  // Wait for Forgejo to finish creating the repo, or the clone step fails. The IDs key the card, so
+  // a student who joins or leaves a group gets a fresh card instead of the old repo's state.
+  const workspaceRepoKey = (repositories ?? [])
+    .filter((r) => r.git_provider === "forgejo" && r.is_github_ready)
+    .map((r) => r.id)
+    .join(",");
+  const showWorkspace =
+    !isReadOnly &&
+    enrollment?.role === "student" &&
+    assignment?.git_provider === "forgejo" &&
+    cloudWorkspacesEnabled(liveCourse.features) &&
+    workspaceRepoKey !== "";
+
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
@@ -188,6 +212,12 @@ export default function AssignmentPage() {
   // (#895), whose push submissions never get grader_results — without it the
   // score column would sit at "In Progress" forever.
   const isPrMode = assignment.submission_mode === "pr";
+  // Only 'code' assignments have a git repository or a file-upload submission. quiz/exam/survey
+  // are pinned to repo_mode 'none' at creation, and 'none' is exactly the value that selects the
+  // generic <UploadSubmission> branch below -- so without this gate a quiz would offer students
+  // an unrelated file upload, and an accidental upload would create an active grading submission
+  // alongside the real quiz/exam/survey flow.
+  const isCodeAssignment = (assignment.assignment_type ?? "code") === "code";
   const noAutograder =
     assignment.has_autograder === false ||
     assignment.repo_mode === "none" ||
@@ -195,8 +225,8 @@ export default function AssignmentPage() {
     isPrMode;
   return (
     <Box p={4}>
-      <LinkAccount />
-      <ResendOrgInvitation />
+      <LinkAccount assignmentGitProvider={assignment.git_provider} />
+      <ResendOrgInvitation assignmentGitProvider={assignment.git_provider} />
       <Grid
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
@@ -229,7 +259,9 @@ export default function AssignmentPage() {
             />
           )}
 
-          {isPrMode ? (
+          {!isCodeAssignment ? (
+            <></>
+          ) : isPrMode ? (
             <></>
           ) : assignment.repo_mode === "none" ? (
             <UploadSubmission assignmentId={Number(assignment_id)} onUploaded={() => refetchSubmissions()} />
@@ -259,10 +291,18 @@ export default function AssignmentPage() {
               assignment={assignment}
               repositories={repositories ?? []}
               showRepositories={
-                !isPrMode && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission"
+                isCodeAssignment &&
+                !isPrMode &&
+                assignment.repo_mode !== "none" &&
+                assignment.repo_mode !== "no_submission"
               }
             />
           </Box>
+          {showWorkspace && (
+            <Box m={4}>
+              <WorkspaceStatus key={workspaceRepoKey} assignmentId={Number(assignment_id)} client={workspaceClient} />
+            </Box>
+          )}
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}
             assignment={assignment}
@@ -273,6 +313,20 @@ export default function AssignmentPage() {
           />
           {enrollment?.role === "student" && (
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
+          )}
+          {enrollment?.role === "student" && assignment?.assignment_type === "quiz" && (
+            <Box w="100%" maxW="4xl">
+              <Alert.Root status="info" flexDirection="column">
+                <Alert.Title>This is an in-app quiz</Alert.Title>
+                <Alert.Description>
+                  Answer the questions and submit. Objective questions are graded automatically.
+                  <br />
+                  <Link href={`/course/${course_id}/assignments/${assignment_id}/quiz`} fontWeight="bold">
+                    Take the quiz →
+                  </Link>
+                </Alert.Description>
+              </Alert.Root>
+            </Box>
           )}
           {/* Submission limits throttle autograder runs, so they are meaningless
               without an autograder — and the `autograder` row is auto-created with
@@ -352,7 +406,16 @@ export default function AssignmentPage() {
                         #{submission.pr_number}
                         {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
                       </Link>
-                    ) : submission.sha && submission.repository ? (
+                    ) : submission.submitted_via !== "manual" &&
+                      submission.submitted_via !== "upload" &&
+                      submission.sha &&
+                      submission.repository ? (
+                      // Only build a commit URL for a channel that actually has one. This branch
+                      // sits BEFORE the manual branch below, so any row carrying a synthetic
+                      // sha/repository (quiz, scanned exam, survey) used to render a github.com
+                      // link that 404s. Excluding the known non-git channels rather than
+                      // requiring via === "git" keeps legacy rows -- real pushes recorded before
+                      // submitted_via existed, so NULL with a genuine sha -- still linking.
                       <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
                         {submission.sha.slice(0, 7)}
                       </Link>
@@ -362,41 +425,45 @@ export default function AssignmentPage() {
                       <span>Upload</span>
                     )}
                   </Table.Cell>
-                  <Table.Cell>
-                    <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {autograderScoreLabel(submission, noAutograder)}
-                    </Link>
-                  </Table.Cell>
-                  <Table.Cell>
-                    {(() => {
-                      // View-as-student: a real student's RLS hides unreleased reviews, so the
-                      // embedded review comes back null and the score reads "Pending"/"—". An
-                      // instructor masquerading reads the review via the staff RLS path, so mirror
-                      // RLS here and withhold the unreleased grade.
-                      const review =
-                        isReadOnly && submission.submission_reviews && !submission.submission_reviews.released
-                          ? null
-                          : submission.submission_reviews;
-                      const gradeLabel = review?.completed_at
-                        ? `${getDisplayedGradingTotalForStudent(review, private_profile_id) ?? review.total_score ?? "—"}/${assignment.total_points}`
-                        : submission.is_active
-                          ? "Pending"
-                          : submission.is_not_graded
-                            ? "Not for grading"
-                            : "—";
-                      return (
-                        <Link
-                          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
-                          // Only fall back to a synthetic accessible name when the visible
-                          // label is the dash placeholder — otherwise the visible text is
-                          // already the link's name (and tests / screen readers expect it).
-                          aria-label={gradeLabel === "—" ? `Submission #${submission.ordinal} grade` : undefined}
-                        >
-                          {gradeLabel}
-                        </Link>
-                      );
-                    })()}
-                  </Table.Cell>
+                  <ReportBlock>
+                    <Table.Cell>
+                      <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
+                        {autograderScoreLabel(submission, noAutograder)}
+                      </Link>
+                    </Table.Cell>
+                  </ReportBlock>
+                  <ReportBlock>
+                    <Table.Cell>
+                      {(() => {
+                        // View-as-student: a real student's RLS hides unreleased reviews, so the
+                        // embedded review comes back null and the score reads "Pending"/"—". An
+                        // instructor masquerading reads the review via the staff RLS path, so mirror
+                        // RLS here and withhold the unreleased grade.
+                        const review =
+                          isReadOnly && submission.submission_reviews && !submission.submission_reviews.released
+                            ? null
+                            : submission.submission_reviews;
+                        const gradeLabel = review?.completed_at
+                          ? `${getDisplayedGradingTotalForStudent(review, private_profile_id) ?? review.total_score ?? "—"}/${assignment.total_points}`
+                          : submission.is_active
+                            ? "Pending"
+                            : submission.is_not_graded
+                              ? "Not for grading"
+                              : "—";
+                        return (
+                          <Link
+                            href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
+                            // Only fall back to a synthetic accessible name when the visible
+                            // label is the dash placeholder — otherwise the visible text is
+                            // already the link's name (and tests / screen readers expect it).
+                            aria-label={gradeLabel === "—" ? `Submission #${submission.ordinal} grade` : undefined}
+                          >
+                            {gradeLabel}
+                          </Link>
+                        );
+                      })()}
+                    </Table.Cell>
+                  </ReportBlock>
                 </Table.Row>
               ))}
             </Table.Body>

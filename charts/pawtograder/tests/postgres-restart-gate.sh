@@ -49,6 +49,7 @@ set -uo pipefail
 BASE_REF="${1:?usage: $0 <base-ref>}"
 # PGATE_CHART overrides the chart path (for testing a copy of this script).
 CHART="${PGATE_CHART:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+"$CHART/scripts/build-deps.sh" --if-missing "$CHART" || { echo "FAIL could not fetch $CHART's subcharts" >&2; exit 1; }
 REPO="$(git -C "$CHART" rev-parse --show-toplevel)"
 CHART_REL="${CHART#"$REPO"/}"
 TMP="$(mktemp -d)"
@@ -64,6 +65,11 @@ if ! git -C "$REPO" archive "$BASE_REF" "$CHART_REL" | tar -x -C "$TMP/base"; th
   exit 2
 fi
 BASE_CHART="$TMP/base/$CHART_REL"
+# git archive leaves out the gitignored subcharts; fetch the base's own pins.
+if ! "$(dirname "${BASH_SOURCE[0]}")/../scripts/build-deps.sh" "$BASE_CHART"; then
+  echo "postgres-restart-gate: could not fetch the chart's dependencies at $BASE_REF" >&2
+  exit 2
+fi
 
 chart_version() { awk '/^version:/ {gsub(/["'\'']/, "", $2); print $2; exit}' "$1/Chart.yaml"; }
 BASE_VER="$(chart_version "$BASE_CHART")"
@@ -177,7 +183,8 @@ render() {
     echo "templates/$tpl does not exist in this chart (renamed or deleted? update TEMPLATES in this script)" >"$TMP/err"
     return 1
   fi
-  if helm template t "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
+  # Named pawtograder: an environment with Forgejo or Coder on refuses any other release name.
+  if helm template pawtograder "$chart" "$@" --show-only "templates/$tpl" >"$out.yaml" 2>"$TMP/err"; then
     extract template <"$out.yaml" >"$out.tpl"
     extract volumeClaimTemplates <"$out.yaml" >"$out.vct"
     extract updateStrategy <"$out.yaml" >"$out.strat"

@@ -1,0 +1,192 @@
+{{- define "pawtograder.milliQuantity" -}}
+{{- $q := toString .q -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?(m|k|M|G|T|P|Ki|Mi|Gi|Ti|Pi)?$" $q) -}}
+{{- fail (printf "%s=%q isn't a quantity the chart can read, such as 500m, 2, 512Mi or 4Gi" .key $q) -}}
+{{- end -}}
+{{- $num := regexFind "^[0-9]+(\\.[0-9]+)?" $q -}}
+{{- $unit := dict "" 1000.0 "m" 1.0 "k" 1e6 "M" 1e9 "G" 1e12 "T" 1e15 "P" 1e18 "Ki" 1024e3 "Mi" 1048576e3 "Gi" 1073741824e3 "Ti" 1099511627776e3 "Pi" 1125899906842624e3 -}}
+{{- round (mulf (float64 $num) (get $unit (trimPrefix $num $q))) 0 -}}
+{{- end -}}
+
+{{- if .Values.forgejo.enabled }}
+{{- $r := .Values.forgejoRunner }}
+{{- $a := $r.actions }}
+{{- /* Namespace-qualified: job pods run in another namespace. */}}
+{{- $serviceURL := printf "http://%s.%s.svc:%v" (include "pawtograder.forgejo.http" .) .Release.Namespace (include "pawtograder.forgejo.servicePort" .) }}
+{{- $cmName := printf "%s-forgejo-actions" .Release.Name }}
+{{- if not (has $a.source (list "mirrors" "upstream")) }}
+{{- fail (printf "forgejoRunner.actions.source must be mirrors or upstream, got %q" $a.source) }}
+{{- end }}
+{{- $mirrorsOn := and $r.enabled (eq $a.source "mirrors") }}
+{{- $upstream := $a.upstreamURL | default "" | toString | trimSuffix "/" }}
+{{- if and (not $mirrorsOn) (not (regexMatch "^https?://[^/]+" $upstream)) }}
+{{- fail (printf "forgejoRunner.actions.upstreamURL=%q must be an http(s) URL such as https://github.com: bare uses: names resolve against it" $upstream) }}
+{{- end }}
+{{- with dig "gitea" "config" "actions" "DEFAULT_ACTIONS_URL" "" .Values.forgejo }}
+{{- fail (printf "forgejo.gitea.config.actions.DEFAULT_ACTIONS_URL=%q would be overridden: the chart sets it from forgejoRunner.actions (source, upstreamURL)" .) }}
+{{- end }}
+{{- $ref := dict }}
+{{- range .Values.forgejo.gitea.additionalConfigFromEnvs }}{{ if eq .name "FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL" }}{{ $ref = dig "valueFrom" "configMapKeyRef" dict . }}{{ end }}{{ end }}
+{{- if not (and (eq (toString $ref.name) $cmName) (eq (toString $ref.key) "DEFAULT_ACTIONS_URL")) }}
+{{- fail (printf "forgejo.gitea.additionalConfigFromEnvs must keep the chart's FORGEJO__ACTIONS__DEFAULT_ACTIONS_URL entry (valueFrom.configMapKeyRef %s, key DEFAULT_ACTIONS_URL); an overlay that sets the list must include it" $cmName) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo") | nindent 4 }}
+data:
+  # Forgejo reads this at startup, so a change takes a restart of the Forgejo pod.
+  DEFAULT_ACTIONS_URL: {{ ternary $serviceURL $upstream $mirrorsOn | quote }}
+{{- if $r.enabled }}
+{{- with $r.quota }}
+{{- $keys := dict "cpu" (list "requests" "cpu") "memory" (list "requests" "memory") "requests.cpu" (list "requests" "cpu") "requests.memory" (list "requests" "memory") "requests.ephemeral-storage" (list "requests" "ephemeral-storage") "limits.cpu" (list "limits" "cpu") "limits.memory" (list "limits" "memory") "limits.ephemeral-storage" (list "limits" "ephemeral-storage") }}
+{{- $capacity := int $r.capacity }}
+{{- range $key, $hard := . }}
+{{- if eq $key "pods" }}
+{{- if gt $capacity (int $hard) }}
+{{- fail (printf "forgejoRunner.capacity=%d is more job pods than forgejoRunner.quota.pods=%v" $capacity $hard) }}
+{{- end }}
+{{- else if hasKey $keys $key }}
+{{- $kind := index (get $keys $key) 0 }}
+{{- $res := index (get $keys $key) 1 }}
+{{- $job := dig $kind $res "" ($r.resources | default dict) | toString }}
+{{- if not $job }}
+{{- fail (printf "forgejoRunner.quota.%s is set, but forgejoRunner.resources.%s.%s is empty, and a quota on %s rejects pods that don't declare it" $key $kind $res $key) }}
+{{- end }}
+{{- $hardM := include "pawtograder.milliQuantity" (dict "key" (printf "forgejoRunner.quota.%s" $key) "q" $hard) | float64 }}
+{{- $jobM := include "pawtograder.milliQuantity" (dict "key" (printf "forgejoRunner.resources.%s.%s" $kind $res) "q" $job) | float64 }}
+{{- if gt (mulf $capacity $jobM) $hardM }}
+{{- fail (printf "forgejoRunner.capacity=%d doesn't fit forgejoRunner.quota.%s=%v: %d jobs × %s. At most %d fit; lower capacity or raise the quota." $capacity $key $hard $capacity $job (floor (divf $hardM $jobM) | int)) }}
+{{- end }}
+{{- else }}
+{{- fail (printf "forgejoRunner.quota.%s isn't a key the chart checks; use pods, cpu, memory, or requests.* or limits.* for cpu, memory and ephemeral-storage" $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if $mirrorsOn }}
+{{- if not $a.tokenSecret }}
+{{- fail "forgejoRunner.actions.source=mirrors needs forgejoRunner.actions.tokenSecret, a Secret with a Forgejo `token` (write:organization, write:repository) for the mirror hook; see README \"Action mirrors\"" }}
+{{- end }}
+{{- if not $a.mirrors }}
+{{- fail "forgejoRunner.actions.source=mirrors with an empty forgejoRunner.actions.mirrors leaves every bare uses: name unresolvable; list the actions, or set source=upstream" }}
+{{- end }}
+{{- $interval := toString $a.mirrorInterval }}
+{{- if not (regexMatch "^(0|([0-9]+(h|m|s))+)$" $interval) }}
+{{- fail (printf "forgejoRunner.actions.mirrorInterval=%q must be a duration such as 8h or 30m, or 0 for no periodic sync" $interval) }}
+{{- end }}
+{{- $mirrors := list }}
+{{- $seen := dict }}
+{{- range $a.mirrors }}
+{{- $repo := toString .repo }}
+{{- if not (regexMatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" $repo) }}
+{{- fail (printf "forgejoRunner.actions.mirrors: repo %q must be owner/name, as in uses: owner/name@ref" $repo) }}
+{{- end }}
+{{- if hasKey $seen (lower $repo) }}
+{{- fail (printf "forgejoRunner.actions.mirrors lists %s twice" $repo) }}
+{{- end }}
+{{- $_ := set $seen (lower $repo) true }}
+{{- if not (regexMatch "^[A-Za-z0-9_.][A-Za-z0-9_./-]*$" (toString .ref)) }}
+{{- fail (printf "forgejoRunner.actions.mirrors: %s needs a ref, the tag or branch workflows pin (such as v4)" $repo) }}
+{{- end }}
+{{- $src := .url | default (printf "https://github.com/%s" $repo) }}
+{{- if not (regexMatch "^https?://[^/]+/" $src) }}
+{{- fail (printf "forgejoRunner.actions.mirrors: %s has url %q; give the upstream's http(s) clone URL" $repo $src) }}
+{{- end }}
+{{- $mirrors = append $mirrors (dict "repo" $repo "url" $src "ref" (toString .ref)) }}
+{{- end }}
+{{- $name := include "pawtograder.componentName" (dict "ctx" . "component" "forgejo-action-mirrors") }}
+{{- $arch := dict "kubernetes.io/arch" ($r.arch | default "amd64") }}
+{{- $placement := dict "nodeSelector" (merge (deepCopy $arch) ($r.dispatcher.nodeSelector | default dict)) "tolerations" $r.dispatcher.tolerations "affinity" $r.dispatcher.affinity }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-action-mirrors") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade,post-rollback
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  mirrors.json: {{ toJson $mirrors | quote }}
+  mirrors.sh: |
+    {{- .Files.Get "files/forgejo-action-mirrors.sh" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-action-mirrors") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade,post-rollback
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "forgejo-action-mirrors") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with $r.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.placement" (dict "ctx" . "component" $placement) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      {{- with (include "pawtograder.priorityClassName" (dict "ctx" . "component" $r.dispatcher) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mirrors
+          image: "{{ $r.image.repository }}:{{ $r.image.tag }}"
+          imagePullPolicy: {{ $r.image.pullPolicy }}
+          command: [bash, /etc/forgejo-action-mirrors/mirrors.sh]
+          env:
+            - { name: FORGEJO_URL, value: {{ $serviceURL | quote }} }
+            - { name: MIRRORS, value: /etc/forgejo-action-mirrors/mirrors.json }
+            - { name: MIRROR_INTERVAL, value: {{ $interval | quote }} }
+            - { name: HOME, value: /tmp }
+            - { name: GIT_TERMINAL_PROMPT, value: "0" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml $a.resources | nindent 12 }}
+          volumeMounts:
+            - { name: script, mountPath: /etc/forgejo-action-mirrors, readOnly: true }
+            - { name: forgejo-auth, mountPath: /run/forgejo-auth, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: script
+          configMap:
+            name: {{ $name }}
+        - name: forgejo-auth
+          secret:
+            secretName: {{ $a.tokenSecret }}
+            defaultMode: 0400
+            items: [{ key: token, path: token }]
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}
+{{- end }}

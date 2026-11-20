@@ -15,12 +15,19 @@ const FORBIDDEN_PALETTE_BG_WITH_WHITE =
 const eslintConfig = [
   // design-sync inputs are tooling artifacts (esbuild-compiled, never imported by
   // the app, regenerated each sync, intentionally full of `any`/mock shims).
-  { ignores: [".design-sync/**"] },
+  { ignores: [".design-sync/**", ".next-sso-e2e/**"] },
   ...compat.config({ extends: ["next/core-web-vitals", "next/typescript", "prettier"] }),
   {
     linterOptions: { reportUnusedDisableDirectives: "warn" },
     rules: {
       "no-console": "warn",
+      // Allow the conventional leading-underscore marker for deliberately-unused bindings
+      // (e.g. interface-required parameters a fake/stub implementation ignores). Matches
+      // `deno lint`'s default and keeps `npx eslint` clean over supabase/functions too.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }
+      ],
       "no-restricted-syntax": [
         "error",
         {

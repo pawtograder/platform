@@ -8,6 +8,7 @@ import { useTagsForProfile } from "@/hooks/useTags";
 import { Tooltip } from "@/components/ui/tooltip";
 import Markdown from "@/components/ui/markdown";
 import { ImageIcon, FileText } from "lucide-react";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 // Broadcast message type for real-time communication
 export interface BroadcastMessage {
@@ -217,7 +218,9 @@ const CollapsibleMessageContent = ({ content, isOwnMessage }: { content: string;
     // For messages without code or attachments, render normally
     return (
       <>
-        <Markdown>{content}</Markdown>
+        <ReportBlock as="div">
+          <Markdown>{content}</Markdown>
+        </ReportBlock>
         <FileAttachments attachments={attachments} />
       </>
     );
@@ -252,7 +255,9 @@ const CollapsibleMessageContent = ({ content, isOwnMessage }: { content: string;
       </Collapsible.Trigger>
       <Collapsible.Content>
         <Box mt={2} pt={2} borderTop="1px solid" borderColor={isOwnMessage ? "blue.300" : "border.muted"}>
-          <Markdown>{content}</Markdown>
+          <ReportBlock as="div">
+            <Markdown>{content}</Markdown>
+          </ReportBlock>
           <FileAttachments attachments={attachments} />
         </Box>
       </Collapsible.Content>
@@ -472,19 +477,21 @@ const ReplyContext = ({
       <Text fontWeight="medium" color="fg.muted" mb={1}>
         Replying to {getReplyDisplayName()}
       </Text>
-      <Box
-        color="fg.muted"
-        lineHeight="1.3"
-        overflow="hidden"
-        textOverflow="ellipsis"
-        style={{
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical"
-        }}
-      >
-        <Markdown>{getMessageContent(originalMessage)}</Markdown>
-      </Box>
+      <ReportBlock>
+        <Box
+          color="fg.muted"
+          lineHeight="1.3"
+          overflow="hidden"
+          textOverflow="ellipsis"
+          style={{
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical"
+          }}
+        >
+          <Markdown>{getMessageContent(originalMessage)}</Markdown>
+        </Box>
+      </ReportBlock>
     </Box>
   );
 };
@@ -549,7 +556,9 @@ export const ChatMessageItem = ({
           textAlign="center"
           maxW="90%"
         >
-          <Markdown>{getMessageContent(message)}</Markdown>
+          <ReportBlock as="div">
+            <Markdown>{getMessageContent(message)}</Markdown>
+          </ReportBlock>
           <Text
             fontSize="xs"
             color="fg.muted"

@@ -34,8 +34,12 @@ async function postHandler(request: Request) {
       if (!isCronAuthorized(request)) {
         return NextResponse.json({ error: "Not authorized" }, { status: 403 });
       }
-      const results = await drainGradeSyncQueue(db);
-      return NextResponse.json({ mode: "drain", count: results.length, results });
+      const { results, deferred } = await drainGradeSyncQueue(db);
+      const failed = results.filter((r) => !r.ok).length;
+      return NextResponse.json(
+        { mode: "drain", count: results.length, failed, deferred, results },
+        { status: failed > 0 ? 500 : 200 }
+      );
     }
 
     // --- Single-assignment mode ---

@@ -1,4 +1,5 @@
 "use client";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -693,7 +694,13 @@ function EmailsInnerPage() {
                       cursor="pointer"
                       _hover={{ bg: "gray.100" }}
                     >
-                      {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                      {data.value ? (
+                        <TagDisplay tag={data.value} />
+                      ) : (
+                        <ReportBlock>
+                          <div>{data.label}</div>
+                        </ReportBlock>
+                      )}
                     </Box>
                   )
                 }}

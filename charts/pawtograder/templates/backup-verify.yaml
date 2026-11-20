@@ -123,6 +123,61 @@ spec:
                   # keeps its claim, so free the space now rather than holding a
                   # dump-sized chunk of the scratch tier until the Job is reaped.
                   rm -f /scratch/latest.dump
+                  {{- range $app := compact (splitList " " (include "pawtograder.backupApps.enabled" $)) }}
+                  # {{ $app }} (backup-apps.yaml): the same checks on the newest
+                  # daily/{{ $app }}-<TS>.dump. No root fallback: these never
+                  # lived there, so an empty daily/ means the backup isn't landing.
+                  if ! OUT=$(mc ls "s3/${S3_BUCKET}/daily/{{ $app }}-"); then
+                    echo "[verify] FATAL: could not list s3/${S3_BUCKET}/daily/{{ $app }}-"; exit 1
+                  fi
+                  APP_TS=$(printf '%s\n' "$OUT" | awk '{print $NF}' | grep -E '^{{ $app }}-[0-9]{8}T[0-9]{6}Z\.dump$' | sort | tail -1 | sed -E 's/^{{ $app }}-(.*)\.dump$/\1/' || true)
+                  if [ -z "$APP_TS" ]; then
+                    echo "[verify] FATAL: no {{ $app }}-*.dump objects in s3/${S3_BUCKET}/daily/ — the {{ $app }} backup is not landing"
+                    exit 1
+                  fi
+                  echo "[verify] newest {{ $app }} backup: daily/{{ $app }}-${APP_TS}.dump"
+                  mc cp "s3/${S3_BUCKET}/daily/{{ $app }}-${APP_TS}.dump" /scratch/{{ $app }}.dump
+                  ENTRIES=$(pg_restore --list /scratch/{{ $app }}.dump | grep -c '^[0-9]' || true)
+                  echo "[verify] {{ $app }}: pg_restore --list OK: ${ENTRIES} TOC entries, $(stat -c%s /scratch/{{ $app }}.dump) bytes"
+                  rm -f /scratch/{{ $app }}.dump
+                  if [ "${ENTRIES}" -lt 10 ]; then
+                    echo "[verify] FATAL: {{ $app }}: suspiciously small TOC (${ENTRIES} entries) — dump is likely empty/corrupt"
+                    exit 1
+                  fi
+                  AGE_H=$(( ( $(date -u +%s) - $(date -u -d "${APP_TS:0:8} ${APP_TS:9:2}:${APP_TS:11:2}:${APP_TS:13:2}" +%s) ) / 3600 ))
+                  echo "[verify] newest {{ $app }} backup is ${AGE_H}h old"
+                  if [ "$AGE_H" -gt 48 ]; then
+                    echo "[verify] FATAL: newest {{ $app }} backup is older than 48h — its CronJob is not producing output"
+                    exit 1
+                  fi
+                  {{- if eq $app "forgejo" }}
+                  # A set whose run left unreadable repositories out carries
+                  # forgejo-<TS>.incomplete, listing them. It's kept for salvage
+                  # only, so the newest set being one fails verify by name.
+                  if printf '%s\n' "$OUT" | awk '{print $NF}' | grep -qxF "forgejo-${APP_TS}.incomplete"; then
+                    echo "[verify] FATAL: forgejo-${APP_TS} is incomplete: its backup left out these repositories:"
+                    mc cat "s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.incomplete" | sed 's/^/[verify]   /'
+                    exit 1
+                  fi
+                  # The volume archive from the same run: same <TS>, readable to
+                  # the end, and holding the repositories root and app.ini (the
+                  # SECRET_KEY the database's encrypted columns need).
+                  ARCHIVE="s3/${S3_BUCKET}/daily/forgejo-${APP_TS}.tar.gz"
+                  if ! mc stat "$ARCHIVE" >/dev/null; then
+                    echo "[verify] FATAL: forgejo-${APP_TS}.dump has no forgejo-${APP_TS}.tar.gz beside it — Forgejo's repositories were not backed up with it"
+                    exit 1
+                  fi
+                  mc cat "$ARCHIVE" | tar -tzf - > /scratch/forgejo.list
+                  for want in {{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}/ ./gitea/conf/app.ini; do
+                    if ! grep -qxF "$want" /scratch/forgejo.list; then
+                      echo "[verify] FATAL: forgejo-${APP_TS}.tar.gz has no $want"
+                      exit 1
+                    fi
+                  done
+                  echo "[verify] forgejo: volume archive OK: $(wc -l < /scratch/forgejo.list) entries, $(REPO_ROOT="{{ include "pawtograder.backupApps.forgejoRepoRoot" $ }}" {{ include "pawtograder.backupApps.listRepositories" $ }} /scratch/forgejo.list | wc -l) repositories"
+                  rm -f /scratch/forgejo.list
+                  {{- end }}
+                  {{- end }}
               volumeMounts:
                 - { name: scratch, mountPath: /scratch }
               env:

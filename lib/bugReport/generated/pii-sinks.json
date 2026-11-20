@@ -1,0 +1,241 @@
+{
+  "/course/[course_id]": {
+    "OfficeHoursStatusCard": ["handle"],
+    "ResendOrgInvitation": ["handle"],
+    "RootLayout": ["handle"],
+    "UserMenu": ["handle"],
+    "ViewAsBanner": ["name"]
+  },
+  "/course/[course_id]/assignments": {
+    "ResendOrgInvitation": ["handle"],
+    "ResponsiveTable": ["grade", "handle"],
+    "RootLayout": ["handle"],
+    "UserMenu": ["handle"],
+    "ViewAsBanner": ["name"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]": {
+    "PersonName": ["handle", "name"],
+    "RepositoriesInfo": ["handle"],
+    "ResendOrgInvitation": ["handle"],
+    "ResponsiveTable": ["grade"],
+    "RootLayout": ["handle"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]": {
+    "PersonName": ["handle", "name"],
+    "SubmissionSelector": ["name"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"],
+    "document.title": ["name"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/files": {
+    "AssignedReviewHistory": ["name"],
+    "AssignmentGradingToolbar": ["name"],
+    "CodeLineComment": ["handle", "name"],
+    "IndividualGradingStudentBlock": ["name"],
+    "LineCheckAnnotation": ["handle", "name"],
+    "NotificationTeaser": ["name"],
+    "PersonName": ["handle", "name"],
+    "RegradeRequestComment": ["handle", "name"],
+    "RegradeRequestNotificationTeaser": ["handle", "name"],
+    "ReviewAssignmentActions": ["name"],
+    "RubricCheckComment": ["name"],
+    "SubmissionReviewToolbar": ["name"],
+    "SubmissionSelector": ["name"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"],
+    "document.title": ["name"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/grade": {
+    "GradeLedgerHeader": ["grade"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results": {
+    "AssignedReviewHistory": ["name"],
+    "HelpRequestMessageNotificationTeaser": ["handle", "name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "NotificationTeaser": ["name"],
+    "PersonName": ["handle", "name"],
+    "QueueCard": ["handle"],
+    "RubricCheckComment": ["name"],
+    "SubmissionSelector": ["name"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"],
+    "ViewAsBanner": ["name"]
+  },
+  "/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/survey": {
+    "NotStartedCard": ["name"],
+    "RosterChip": ["name"],
+    "SubmissionSelector": ["name"],
+    "SubmissionSurveyPanel": ["name"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/discussion": {
+    "TopPostsSidebar": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/discussion/[root_id]": {
+    "DiscussionHeader": ["free_text"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "PostRowComponent": ["free_text", "name"],
+    "ThreadHeader": ["free_text", "handle", "name"],
+    "ThreadView": ["free_text", "handle", "name"],
+    "UserMenu": ["handle"],
+    "document.title": ["free_text"]
+  },
+  "/course/[course_id]/discussion/new": {
+    "NewDiscussionThread": ["name"],
+    "UserMenu": ["handle"],
+    "ViewAsBanner": ["name"]
+  },
+  "/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]/files": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "PersonName": ["handle", "name"],
+    "RubricView": ["grade"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"],
+    "document.title": ["name"]
+  },
+  "/course/[course_id]/grade/assignments/[assignment_id]/submissions/[submissions_id]/results": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "PersonName": ["handle", "name"],
+    "RubricView": ["grade"],
+    "SubmissionsLayout": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/gradebook": {
+    "UserMenu": ["handle"],
+    "WhatIfScoreCell": ["grade"]
+  },
+  "/course/[course_id]/manage/assignments": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/assignments/[assignment_id]": {
+    "AssignmentsTable": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "ScoreLinkWithProfile": ["grade"],
+    "StudentNameCell": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions": {
+    "DueDateExceptions": ["handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/assignments/[assignment_id]/groups": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/course/class-sections": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/course/enrollments": {
+    "EnrollmentsTable": ["email", "handle", "name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/course/lab-sections": {
+    "LabSectionsPage": ["name"],
+    "RootLayout": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/discussion-engagement": {
+    "DiscussionEngagementPage": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/discussion-topics": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/gradebook": {
+    "GradebookCell": ["grade"],
+    "GradebookTable": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "StudentNameCell": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/office-hours": {
+    "HelpQueuesDashboard": ["handle"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "RequestRow": ["free_text", "handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/office-hours/request/[request_id]": {
+    "ChatMessageItem": ["free_text", "name"],
+    "HelpRequestChat": ["name"],
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "HelpRequestSidebar": ["handle", "name"],
+    "HelpRequestStudents": ["handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/polls": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/polls/[poll_id]/responses": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/polls/new": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/student/[student_id]": {
+    "HelpRequestNotificationTeaser": ["free_text", "name"],
+    "StudentPage": ["email", "free_text", "grade", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/surveys": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/surveys/[survey_id]/edit": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/surveys/[survey_id]/responses": {
+    "GroupSummaryCards": ["name"],
+    "SurveyAnalytics": ["name"],
+    "SurveyResponsesView": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/manage/surveys/new": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/office-hours/[queue_id]": {
+    "ChatMessageItem": ["name"],
+    "HelpRequestChat": ["name"],
+    "HelpRequestHistory": ["free_text"],
+    "HelpRequestStudents": ["handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/office-hours/[queue_id]/[request_id]": {
+    "ChatMessageItem": ["name"],
+    "HelpRequestChat": ["name"],
+    "HelpRequestMessageNotificationTeaser": ["handle", "name"],
+    "HelpRequestSidebar": ["free_text", "handle", "name"],
+    "HelpRequestStudents": ["handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/office-hours/[queue_id]/new": {
+    "HelpRequestForm": ["free_text"],
+    "HelpRequestMessageNotificationTeaser": ["handle", "name"],
+    "StudentGroupPicker": ["name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/office-hours/request/[request_id]": {
+    "ChatMessageItem": ["free_text", "name"],
+    "HelpRequestChat": ["name"],
+    "HelpRequestStudents": ["handle", "name"],
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/polls": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/surveys": {
+    "UserMenu": ["handle"]
+  },
+  "/course/[course_id]/surveys/[survey_id]": {
+    "UserMenu": ["handle"]
+  }
+}

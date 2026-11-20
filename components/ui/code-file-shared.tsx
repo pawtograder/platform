@@ -45,6 +45,7 @@ import RequestRegradeDialog from "./request-regrade-dialog";
 import { CommentActions, ReviewRoundTag } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 export type RubricCheckSubOption = {
   label: string;
@@ -578,7 +579,9 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                     />
                   </VStack>
                 ) : (
-                  <Markdown>{comment.comment}</Markdown>
+                  <ReportBlock as="div">
+                    <Markdown>{comment.comment}</Markdown>
+                  </ReportBlock>
                 )}
               </Box>
               {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
@@ -669,7 +672,9 @@ export function CodeLineComment({ comment_id }: { comment_id: number }) {
                 }}
               />
             ) : (
-              <Markdown>{comment.comment}</Markdown>
+              <ReportBlock as="div">
+                <Markdown>{comment.comment}</Markdown>
+              </ReportBlock>
             )}
           </Box>
         </VStack>

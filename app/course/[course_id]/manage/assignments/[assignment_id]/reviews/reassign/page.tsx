@@ -38,6 +38,7 @@ import { FaArrowLeft } from "react-icons/fa";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import RequireManageReviews from "../RequireManageReviews";
 
 // Main Page Component
 export default function ReassignGradingPage() {
@@ -50,19 +51,21 @@ export default function ReassignGradingPage() {
   };
 
   return (
-    <Container maxW="container.xl" py={4}>
-      <HStack justifyContent="space-between" mb={4}>
-        <VStack gap={2} align="flex-start">
-          <Heading size="lg">Reassign Grading by Grader</Heading>
-          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews`}>
-            <FaArrowLeft style={{ marginRight: "8px" }} /> Back to Reviews
-          </Link>
-        </VStack>
-      </HStack>
-      <Separator mb={4} />
+    <RequireManageReviews>
+      <Container maxW="container.xl" py={4}>
+        <HStack justifyContent="space-between" mb={4}>
+          <VStack gap={2} align="flex-start">
+            <Heading size="lg">Reassign Grading by Grader</Heading>
+            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews`}>
+              <FaArrowLeft style={{ marginRight: "8px" }} /> Back to Reviews
+            </Link>
+          </VStack>
+        </HStack>
+        <Separator mb={4} />
 
-      <ReassignGradingForm handleReviewAssignmentChange={handleReviewAssignmentChange} />
-    </Container>
+        <ReassignGradingForm handleReviewAssignmentChange={handleReviewAssignmentChange} />
+      </Container>
+    </RequireManageReviews>
   );
 }
 

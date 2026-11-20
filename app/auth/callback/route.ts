@@ -3,6 +3,7 @@ import { NextResponse, after } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { syncGitHubAccount, userFetchAzureProfile } from "@/lib/edgeFunctions";
 import { findGithubIdentity } from "@/lib/githubIdentity";
+import { safeRedirectPath } from "@/lib/redirectPath";
 
 export async function GET(request: Request) {
   // The `/auth/callback` route is required for the server-side auth flow implemented
@@ -10,19 +11,7 @@ export async function GET(request: Request) {
   // https://supabase.com/docs/guides/auth/server-side/nextjs
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  // Sanitize `next` to a same-origin absolute path. `startsWith("/")` alone is not enough: a
-  // protocol-relative value like `//evil.test` (or backslash variants `/\evil.test`, `\\evil.test`
-  // that browsers/`new URL` normalize to `//`) starts with `/` yet resolves off-origin when passed
-  // to `new URL(next, redirectBase)` below, giving an open redirect. Require a leading `/` that is
-  // not followed by another `/` or a backslash, and reject any embedded backslash.
-  const nextParam = searchParams.get("next") ?? "/";
-  const next =
-    nextParam.startsWith("/") &&
-    !nextParam.startsWith("//") &&
-    !nextParam.startsWith("/\\") &&
-    !nextParam.includes("\\")
-      ? nextParam
-      : "/";
+  const next = safeRedirectPath(searchParams.get("next")) ?? "/";
   // Resolve the redirect host once: behind the load balancer, prefer X-Forwarded-Host.
   const forwardedHost = request.headers.get("x-forwarded-host"); // original origin before load balancer
   const isLocalEnv = process.env.NODE_ENV === "development";
