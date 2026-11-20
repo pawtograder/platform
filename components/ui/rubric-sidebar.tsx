@@ -80,7 +80,8 @@ import {
   useActiveReviewAssignmentId,
   useActiveRubricId,
   useActiveSubmissionReviewId,
-  useIgnoreAssignedReview
+  useIgnoreAssignedReview,
+  useScrollToExamQuestion
 } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
@@ -124,6 +125,13 @@ const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 // Whether rubric part/criteria/check descriptions are shown in the sidebar. Defaults to true so
 // any non-sidebar use is unaffected; the sidebar provides `false` (collapsed) with a toggle.
 const RubricDescriptionsContext = createContext<boolean>(true);
+
+/** Scrolls the sidebar so `target` sits `offset` px below its top edge. */
+function scrollSidebarTo(container: HTMLElement, target: HTMLElement, offset = 30) {
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  container.scrollTo({ top: container.scrollTop + (targetRect.top - containerRect.top) - offset, behavior: "smooth" });
+}
 
 /** A rubric description that the sidebar can collapse behind its "Show descriptions" toggle. */
 function RubricDescription({ text }: { text: string | null | undefined }) {
@@ -1302,8 +1310,16 @@ function RubricCheck({
   currentRubricId?: number;
   targetStudentProfileId?: string | null;
 }) {
+  // A check generated from an exam question is tagged with it, which is how an answer crop finds the
+  // check that grades it (#1268). The sidebar sets data-focused while it shows the check.
   return (
-    <Box p={0} w="100%">
+    <Box
+      p={0}
+      w="100%"
+      borderRadius="md"
+      data-exam-question-id={check.exam_question_id ?? undefined}
+      css={{ "&[data-focused]": { outline: "2px solid", outlineColor: "border.info", outlineOffset: "2px" } }}
+    >
       {check.is_annotation ? (
         <RubricCheckAnnotation
           check={check}
@@ -1563,6 +1579,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   const [descriptionsOverride, setDescriptionsOverride] = useState<boolean | null>(null);
   const showDescriptions = descriptionsOverride ?? isGraderOrInstructorForDescriptions;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
+  const { scrollToExamQuestionId, setScrollToExamQuestionId } = useScrollToExamQuestion();
   const rubrics = useMemo(() => {
     return unsortedRubrics.sort((a, b) => {
       if (a.id === activeReviewAssignment?.rubric_id) {
@@ -1658,11 +1675,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
       // Immediately set the active rubric to the selected one
       setActiveRubricId(scrollToRubricId);
 
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const offset = 30;
-      const scrollTop = container.scrollTop + (targetRect.top - containerRect.top) - offset;
-      container.scrollTo({ top: scrollTop, behavior: "smooth" });
+      scrollSidebarTo(container, target);
 
       // Clear the flag after scroll animation completes
       manualSelectTimeout = setTimeout(() => {
@@ -1679,6 +1692,39 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
       }
     };
   }, [scrollToRubricId, scrollRootRef, setScrollToRubricId, setActiveRubricId]);
+
+  // Scroll to an exam question's check when its answer crop asks for it (#1268), the same way as to a
+  // rubric above, then mark the check briefly so the grader's eye lands on it rather than near it.
+  // The mark and its timer live in a ref, not the effect's cleanup: clearing the request re-runs
+  // this effect, and a cleanup would cancel the timer before the mark could fade.
+  const focused = useRef<{ el: HTMLElement; timeout: NodeJS.Timeout } | null>(null);
+  const clearFocus = useCallback(() => {
+    if (!focused.current) return;
+    clearTimeout(focused.current.timeout);
+    delete focused.current.el.dataset.focused;
+    focused.current = null;
+  }, []);
+  useEffect(() => {
+    if (scrollToExamQuestionId === undefined) return;
+    setScrollToExamQuestionId(undefined);
+    const container = scrollRootRef.current;
+    const target = container?.querySelector<HTMLElement>(`[data-exam-question-id="${scrollToExamQuestionId}"]`);
+    if (!container || !target) return;
+
+    isManuallySelecting.current = true;
+    // Centered rather than at the top, where the sticky rubric menu would cover it.
+    scrollSidebarTo(container, target, (container.clientHeight - target.offsetHeight) / 2);
+    clearFocus();
+    target.dataset.focused = "true";
+    focused.current = {
+      el: target,
+      timeout: setTimeout(() => {
+        isManuallySelecting.current = false;
+        clearFocus();
+      }, 2000)
+    };
+  }, [scrollToExamQuestionId, scrollRootRef, setScrollToExamQuestionId, clearFocus]);
+  useEffect(() => clearFocus, [clearFocus]);
 
   // Callback to set refs
   const setRubricRef = useCallback(
