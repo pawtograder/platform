@@ -178,7 +178,8 @@ export default function OfficeHoursPage() {
   // New Request hint in the header, which both gate on useOnboardingDataLoaded.
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
-  const onboardingCompleted = useOnboardingCompleted();
+  const onboardingActive = onboardingOn && isStudent;
+  const onboardingCompleted = useOnboardingCompleted(onboardingActive);
   const onboardingDataLoaded = useOnboardingDataLoaded();
   const textQueueCount = availableQueues.filter((queue) => queue.queue_type === "text").length;
   const showsQueueDescription =
@@ -324,6 +325,7 @@ export default function OfficeHoursPage() {
           <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
             <HStack justify="space-between" align="flex-start" mb="4" flexShrink={0}>
               <OnboardingPopover
+                active={onboardingActive}
                 open={queueDescriptionOnboarding.open}
                 onDismiss={queueDescriptionOnboarding.dismiss}
                 message="This course has more than one text queue, and the purpose of each text queue is decided by the course staff. You can click each queue to read its description. Then choose the one that matches your question."

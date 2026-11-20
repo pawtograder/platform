@@ -104,9 +104,13 @@ export function OfficeHoursHeader({
   // Onboarding hint on the New Request button (see lib/officeHoursOnboarding.ts). When nobody is on
   // duty, the hint names the next office hours on the calendar, or says to check back later if the
   // course doesn't put office hours on the calendar.
+  //
+  // Only a student on the student pages of a course with the feature on takes part. For everyone
+  // else, clicking New Request doesn't mark the onboarding complete, and nothing reads localStorage.
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
-  const onboardingCompleted = useOnboardingCompleted();
+  const onboardingActive = onboardingOn && isStudent && !isManageMode;
+  const onboardingCompleted = useOnboardingCompleted(onboardingActive);
   const onboardingDataLoaded = useOnboardingDataLoaded();
   const officeHoursEvents = useOfficeHoursSchedule();
   const newRequestHintId = newRequestHint({
@@ -115,6 +119,7 @@ export function OfficeHoursHeader({
     completed: onboardingCompleted,
     staffOnDuty: queuesWithActiveStaff.length > 0
   });
+  const completeOnboardingOnClick = onboardingActive ? completeOnboarding : undefined;
   const newRequestOnboarding = useOnboardingHint(onboardingDataLoaded ? newRequestHintId : null);
   const newRequestHintMessage = useMemo(() => {
     if (newRequestHintId === "staff-on-duty") {
@@ -441,6 +446,7 @@ export function OfficeHoursHeader({
         <HStack gap={3} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
           <HelpRequestSearch isManageMode={false} />
           <OnboardingPopover
+            active={onboardingActive}
             open={newRequestOnboarding.open}
             onDismiss={newRequestOnboarding.dismiss}
             message={newRequestHintMessage}
@@ -456,7 +462,7 @@ export function OfficeHoursHeader({
                 <Button asChild colorPalette="green" size="sm" flexShrink={0}>
                   <NextLink
                     href={`${officeHoursBaseHref}/${queuesWithActiveStaff[0].id}/new`}
-                    onClick={onboardingOn ? completeOnboarding : undefined}
+                    onClick={completeOnboardingOnClick}
                   >
                     <FaPlus />
                     New Request
@@ -465,7 +471,9 @@ export function OfficeHoursHeader({
               ) : (
                 <MenuRoot>
                   <MenuTrigger asChild>
-                    <Button colorPalette="green" size="sm" flexShrink={0}>
+                    {/* Clicking the button counts, even if the student closes the menu without
+                        picking a queue. */}
+                    <Button colorPalette="green" size="sm" flexShrink={0} onClick={completeOnboardingOnClick}>
                       <FaPlus />
                       New Request
                       <FiChevronDown />
@@ -477,7 +485,6 @@ export function OfficeHoursHeader({
                         key={queue.id}
                         value={queue.id.toString()}
                         onClick={() => {
-                          if (onboardingOn) completeOnboarding();
                           router.push(`${officeHoursBaseHref}/${queue.id}/new`);
                         }}
                       >

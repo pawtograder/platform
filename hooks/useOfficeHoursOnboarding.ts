@@ -49,8 +49,11 @@ function isCompleted(): boolean {
  *
  * During the server render and the first browser render this returns true, so no hint opens before
  * the page has hydrated. After the component mounts, it returns the value saved in localStorage.
+ *
+ * `active` is false when the course hasn't turned the feature on, or the user isn't a student
+ * looking at the student pages. Then this returns true without touching localStorage.
  */
-export function useOnboardingCompleted(): boolean {
+export function useOnboardingCompleted(active: boolean): boolean {
   useSyncExternalStore(
     subscribe,
     () => version,
@@ -58,7 +61,7 @@ export function useOnboardingCompleted(): boolean {
   );
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  return mounted ? isCompleted() : true;
+  return active && mounted ? isCompleted() : true;
 }
 
 /**
