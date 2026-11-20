@@ -811,13 +811,15 @@ Deno.test("startGrading: reuses an existing tag at the commit, and replaces one 
 /**
  * A Forgejo token list paged like the real one: newest first, with X-Total-Count. `beforePage` runs before a
  * page is answered, as a concurrent request would. `beforeCount` runs between a page's rows and its count, which
- * Forgejo's FindAndCount reads in two queries.
+ * Forgejo's FindAndCount reads in two queries. `order` picks a page's rows, by default the list's own order.
  */
 async function withTokenList(
   tokens: string[],
   beforePage: (page: number, tokens: string[]) => void,
   fn: (tokens: string[], pagesRead: number[]) => Promise<void>,
-  beforeCount: (page: number, tokens: string[]) => void = () => {}
+  beforeCount: (page: number, tokens: string[]) => void = () => {},
+  order: (page: number, limit: number, tokens: string[]) => string[] = (page, limit, tokens) =>
+    tokens.slice((page - 1) * limit, page * limit)
 ) {
   const realFetch = globalThis.fetch;
   const pagesRead: number[] = [];
@@ -834,7 +836,7 @@ async function withTokenList(
     const limit = Number(url.searchParams.get("limit"));
     beforePage(page, tokens);
     pagesRead.push(page);
-    const body = tokens.slice((page - 1) * limit, page * limit).map((name) => ({ name }));
+    const body = order(page, limit, tokens).map((name) => ({ name }));
     beforeCount(page, tokens);
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "X-Total-Count": String(tokens.length) } }));
   }) as typeof fetch;
@@ -914,6 +916,51 @@ Deno.test("token list: a deletion that a mint hides from the count doesn't hide 
         raced = true;
         tokens.unshift(coderTokenName(7, now));
       }
+    }
+  );
+});
+
+Deno.test("token list: tokens tied on created_unix, ordered differently by two pages, don't hide one", async () => {
+  const now = Date.now();
+  // The 50th and 51st tokens were created in the same second. Page 1 puts the 50th last; page 2's query
+  // orders the tie the other way, so it repeats the 50th and leaves out the 51st, the one to revoke. The
+  // count and the re-read of page 1 both match.
+  const names = Array.from({ length: 51 }, (_, i) => coderTokenName(i === 50 ? 9 : 7, now - 60_000 - i));
+  const target = names[50];
+  const limits: number[] = [];
+  await withTokenList(
+    names,
+    () => {},
+    async (tokens) => {
+      assertEquals(await revokeRepoToken(config, "alex.kim", 9), 1);
+      assert(!tokens.includes(target), "repository 9's token is revoked");
+      assertEquals(limits.slice(0, 3), [50, 50, 50], "the first scan reads pages 1, 2 and 1 again");
+      assertEquals(limits[3], 49, "the scan that saw 50 names of 51 is read again with other page boundaries");
+    },
+    () => {},
+    (page, limit, tokens) => {
+      limits.push(limit);
+      const rows = tokens.slice((page - 1) * limit, page * limit);
+      return page === 2 && limit === 50 ? [tokens[49]] : rows;
+    }
+  );
+});
+
+Deno.test("token list: a tie that splits every page boundary tried is an error, and nothing is revoked", async () => {
+  const now = Date.now();
+  const names = Array.from({ length: 120 }, (_, i) => coderTokenName(9, now - 60_000 - i));
+  await withTokenList(
+    names,
+    () => {},
+    async (tokens) => {
+      await assertRejects(() => revokeRepoToken(config, "alex.kim", 9), Error, "kept changing");
+      assertEquals(tokens.length, 120, "nothing deleted from a list that wasn't read whole");
+    },
+    () => {},
+    // Every later page repeats the last row of the page before in place of its own first one.
+    (page, limit, tokens) => {
+      const rows = tokens.slice((page - 1) * limit, page * limit);
+      return page === 1 ? rows : [tokens[(page - 1) * limit - 1], ...rows.slice(1)];
     }
   );
 });
