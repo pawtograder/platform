@@ -9,6 +9,8 @@ import {
   budgetFetch,
   type Caller,
   type Deps,
+  type GithubConfig,
+  GITHUB_URL,
   type RepositoryRow,
   type WorkspaceDb,
   type WorkspaceRow
@@ -57,7 +59,7 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
       return check(
         await admin
           .from("user_roles")
-          .select("private_profile_id, disabled")
+          .select("private_profile_id, disabled, github_org_confirmed")
           .eq("user_id", userId)
           .eq("class_id", classId)
           .maybeSingle(),
@@ -251,6 +253,17 @@ export function supabaseWorkspaceDb(admin: SupabaseClient<Database>): WorkspaceD
  * The signed-in caller, the request, and everything the workspace functions need. Every Supabase
  * and Coder call made with them, the sign-in check included, is cut off by the budget.
  */
+/**
+ * GitHub needs no credentials of ours, only Coder's GitHub provider. The chart sets CODER_GITHUB_AUTH_ID only
+ * with `coder.externalAuth.github.enabled`; without it the template declares no provider and a GitHub clone
+ * has no credentials, so this is null and GitHub repositories are refused.
+ */
+export function githubConfig(): GithubConfig | null {
+  const externalAuthId = Deno.env.get("CODER_GITHUB_AUTH_ID");
+  if (!externalAuthId) return null;
+  return { url: (Deno.env.get("GITHUB_URL") || GITHUB_URL).replace(/\/+$/, ""), externalAuthId };
+}
+
 export async function workspaceRequestContext(
   req: Request,
   budget: Budget
@@ -272,10 +285,9 @@ export async function workspaceRequestContext(
   if (!data?.user?.email) throw new SecurityError("User not found");
 
   const config = coderConfig();
+  if (!config) throw new UserVisibleError("Coder workspaces are not set up on this deployment", 503);
+  // Either may be missing: a deployment with Coder and only GitHub, or only Forgejo, refuses just the other.
   const forgejo = forgejoConfig();
-  if (!config || !forgejo) {
-    throw new UserVisibleError("Coder workspaces are not set up on this deployment", 503);
-  }
   const admin = budgetClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, budget);
   const name = check(
     await admin.from("users").select("name").eq("user_id", data.user.id).maybeSingle(),
@@ -285,7 +297,8 @@ export async function workspaceRequestContext(
     deps: {
       db: supabaseWorkspaceDb(admin),
       coder: { ...config, fetch: budgetFetch(budget) },
-      forgejo: { ...forgejo, fetch: budgetFetch(budget) },
+      forgejo: forgejo ? { ...forgejo, fetch: budgetFetch(budget) } : null,
+      github: githubConfig(),
       budget
     },
     caller: { userId: data.user.id, email: data.user.email, name: name ?? null },

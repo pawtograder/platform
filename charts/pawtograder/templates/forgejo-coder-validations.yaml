@@ -46,20 +46,17 @@
 {{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
 {{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
 {{- end }}
-{{- with .Values.coder.externalAuth.forgejo }}
+{{- if hasKey .Values.coder.externalAuth "forgejo" }}
+{{- fail "coder.externalAuth.forgejo was removed: Coder's one external auth slot now serves GitHub, and Forgejo workspaces get a Coder secret instead. Use coder.externalAuth.github." }}
+{{- end }}
+{{- with .Values.coder.externalAuth.github }}
 {{- if and .enabled $.Values.coder.enabled }}
-{{- if not $.Values.forgejo.enabled }}
-{{- fail "coder.externalAuth.forgejo.enabled needs forgejo.enabled=true: the provider points at this release's Forgejo" }}
-{{- end }}
-{{- if eq (dig "gitea" "config" "oauth2" "ENABLED" true $.Values.forgejo | toString) "false" }}
-{{- fail "coder.externalAuth.forgejo.enabled needs Forgejo's OAuth2 provider; remove forgejo.gitea.config.oauth2.ENABLED=false" }}
-{{- end }}
 {{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" (toString .id)) }}
-{{- fail (printf "coder.externalAuth.forgejo.id must be lowercase letters, digits and single dashes (got %q); it's a path segment of Coder's callback URL" (toString .id)) }}
+{{- fail (printf "coder.externalAuth.github.id must be lowercase letters, digits and single dashes (got %q); it's a path segment of Coder's callback URL" (toString .id)) }}
 {{- end }}
 {{- range $.Values.coder.coder.env }}
 {{- if hasPrefix "CODER_EXTERNAL_AUTH_0_" (toString .name) }}
-{{- fail (printf "coder.coder.env sets %s, but coder.externalAuth.forgejo is provider 0; move other providers to index 1 and up" .name) }}
+{{- fail (printf "coder.coder.env sets %s, but coder.externalAuth.github is provider 0; move other providers to index 1 and up" .name) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -246,7 +243,7 @@
 {{- range $init.envFrom }}{{ $initRefs = append $initRefs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
 {{- $initWant := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
 {{- if .Values.coder.oidc.enabled }}{{ $initWant = append $initWant (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
-{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.github.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
 {{- range $w := $initWant }}
 {{- if not (has $w $initRefs) }}
 {{- fail (printf "coder.coder.initContainers first-owner envFrom is missing %s; its coderd reads the same provider settings as coder.coder.envFrom and won't start without them" $w) }}
@@ -406,7 +403,7 @@
 {{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
 {{- $wantRefs := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
 {{- if .Values.coder.oidc.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
-{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.github.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
 {{- range $want := $wantRefs }}
 {{- if not (has $want $refs) }}
 {{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}

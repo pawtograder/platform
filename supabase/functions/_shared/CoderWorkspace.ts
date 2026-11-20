@@ -110,7 +110,10 @@ export type WorkspaceRow = {
 export interface WorkspaceDb {
   getAssignment(assignmentId: number): Promise<{ id: number; class_id: number; git_provider: string } | null>;
   /** The caller's role in the class, if they have one. */
-  getEnrollment(userId: string, classId: number): Promise<{ private_profile_id: string; disabled: boolean } | null>;
+  getEnrollment(
+    userId: string,
+    classId: number
+  ): Promise<{ private_profile_id: string; disabled: boolean; github_org_confirmed: boolean | null } | null>;
   /** The class's `features` column, as stored. */
   getCourseFeatures(classId: number): Promise<unknown>;
   getGroupId(assignmentId: number, profileId: string): Promise<number | null>;
@@ -173,7 +176,9 @@ export interface WorkspaceDb {
 export type Deps = {
   db: WorkspaceDb;
   coder: CoderConfig;
-  forgejo: ForgejoConfig;
+  /** Null on a deployment without Forgejo, or without Coder's GitHub provider: those repositories are refused. */
+  forgejo: ForgejoConfig | null;
+  github: GithubConfig | null;
   report?: (error: unknown) => void;
   /** The request's budget; `db` and `coder` make their calls through budgetFetch with it. */
   budget?: Budget;
@@ -181,6 +186,16 @@ export type Deps = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
+
+/** GitHub repositories clone over Coder's external auth, so there is no token to mint. */
+export type GithubConfig = {
+  /** The host repo_url names; the template's `github_url`. */
+  url: string;
+  /** Coder's external auth provider for GitHub; the chart's `coder.externalAuth.github.id`. */
+  externalAuthId: string;
+};
+
+export const GITHUB_URL = "https://github.com";
 
 /** When the request has to have answered, and the signal that cuts its calls off before that. */
 export type Budget = { deadline: number; signal: AbortSignal };
@@ -278,28 +293,53 @@ export function linkUrl(coderUrl: string, providerId?: string): string {
   return `${coderUrl}/api/v2/users/oidc/callback?${new URLSearchParams({ redirect })}`;
 }
 
+/** Both are hosts the template's repo_url accepts. */
+export const WORKSPACE_PROVIDERS = ["forgejo", "github"];
+
 /** The owner and repository names the template's repo_url validation accepts (#1221). */
 const CLONE_PATH = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_-][A-Za-z0-9_.-]*)$/;
 
 /**
- * Forgejo refuses an owner with two `-`, `_` or `.` in a row or one at the end, so no owner contains `--` or
- * ends in `-`. gitCredentialsFile relies on that, so an owner that breaks it is refused too.
+ * Forgejo refuses an owner with two `-`, `_` or `.` in a row or one at the end, so no Forgejo owner contains
+ * `--` or ends in `-`. gitCredentialsFile relies on that, so a Forgejo owner that breaks it is refused too.
+ * GitHub repositories get no credentials file, so their owners aren't held to it.
  */
-function clonePath(repository: string): { owner: string; name: string } {
+function clonePath(repository: string, forgejoOwner: boolean): { owner: string; name: string } {
   const m = repository.match(CLONE_PATH);
-  if (!m || /[-._]{2}|[-._]$/.test(m[1])) {
+  if (!m || (forgejoOwner && /[-._]{2}|[-._]$/.test(m[1]))) {
     throw new IllegalArgumentError("This repository can't be opened in a workspace");
   }
   return { owner: m[1], name: m[2] };
 }
 
 /**
- * The template's repo_url, `<FORGEJO_URL>/<owner>/<repo>.git`. Coder refuses any other shape with a
+ * The template's repo_url, `<host>/<owner>/<repo>.git`. Coder refuses any other shape with a
  * 400, so a repository whose name doesn't fit is refused before anything is created.
  */
-export function cloneUrl(forgejoUrl: string, repository: string): string {
-  const { owner, name } = clonePath(repository);
-  return `${forgejoUrl}/${owner}/${name}.git`;
+export function cloneUrl(hostUrl: string, repository: string, provider: string = "forgejo"): string {
+  const { owner, name } = clonePath(repository, provider === "forgejo");
+  return `${hostUrl.replace(/\/+$/, "")}/${owner}/${name}.git`;
+}
+
+function requireForgejo(deps: Deps): ForgejoConfig {
+  if (!deps.forgejo) throw new UserVisibleError("Forgejo workspaces are not set up on this deployment", 503);
+  return deps.forgejo;
+}
+
+/** Without Coder's GitHub provider the template has no credentials to clone with. */
+function requireGithub(deps: Deps): GithubConfig {
+  if (!deps.github) {
+    throw new IllegalArgumentError("This deployment can't open GitHub repositories in a workspace");
+  }
+  return deps.github;
+}
+
+/**
+ * Where a repository's clone URL and credentials come from. Throws for a provider this deployment hasn't set
+ * up, so openWorkspace refuses the repository before anything is created.
+ */
+export function providerUrl(deps: Deps, provider: string): string {
+  return provider === "github" ? requireGithub(deps).url : requireForgejo(deps).url;
 }
 
 /**
@@ -307,7 +347,7 @@ export function cloneUrl(forgejoUrl: string, repository: string): string {
  * since no owner contains `--` or ends in `-` (clonePath), so two repositories never share a file.
  */
 export function gitCredentialsFile(repository: string): string {
-  const { owner, name } = clonePath(repository);
+  const { owner, name } = clonePath(repository, true);
   return `/home/coder/.git-credentials-${owner}--${name}`;
 }
 
@@ -337,8 +377,17 @@ export const SECRET_KEY_PREFIX = "pawtograder-secret-write-";
 export const SECRET_KEY_LIFETIME_MS = 60_000;
 
 /** Coder's token names are unique per user, so two opens of one repository can't share one. */
-export function secretKeyName(repositoryId: number): string {
-  return `${SECRET_KEY_PREFIX}${repositoryId}-${crypto.randomUUID().slice(0, 8)}`;
+export function secretKeyName(purpose: number | "email"): string {
+  return `${SECRET_KEY_PREFIX}${purpose}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/** GitHub refuses a student their own private repository until they are in the course's organization. */
+function needsOrgInvite(): WorkspaceOpenResponse {
+  return {
+    status: "needs_org_invite",
+    message:
+      "Accept the course's GitHub organization invitation, then open the workspace again. Until you do, GitHub won't let you read your own repository."
+  };
 }
 
 function credentialsUnavailable(message: string): WorkspaceOpenResponse {
@@ -353,11 +402,24 @@ async function deliverGitCredentials(
   repo: RepositoryRow,
   deadline: number
 ): Promise<WorkspaceOpenResponse | null> {
-  const userId = caller.userId;
-  const { db, coder, forgejo } = deps;
+  const { db, coder } = deps;
   const cleanupMs = deadline - CLEANUP_RESERVE_MS - clock(deps)();
   const cleanupSignal = cleanupMs > 0 ? AbortSignal.timeout(cleanupMs) : AbortSignal.abort();
   const cleanupCoder = cutOff(coder, cleanupSignal);
+  if (repo.git_provider === "github") {
+    try {
+      await deliverCommitEmail(deps, cleanupSignal, caller, coderUserId);
+      return null;
+    } catch (e) {
+      if (outOfTime(deps)) throw e;
+      deps.report?.(e);
+      return credentialsUnavailable(
+        "Pawtograder couldn't give the workspace your commit email. Try again in a minute."
+      );
+    }
+  }
+  const userId = caller.userId;
+  const forgejo = requireForgejo(deps);
   const login = await db.getForgejoLogin(userId, forgejo.url);
   if (!login) {
     return credentialsUnavailable("Your Forgejo account isn't set up yet. Try again in a few minutes.");
@@ -417,6 +479,33 @@ async function deliverGitCredentials(
 }
 
 /**
+ * GitHub's token comes from the agent's GIT_ASKPASS, so only the commit email has to be delivered. It is
+ * required, not cleanup: without it the startup script falls back to the owner's placeholder email (#1222).
+ */
+async function deliverCommitEmail(
+  deps: Deps,
+  cleanupSignal: AbortSignal,
+  caller: Caller,
+  coderUserId: string
+): Promise<void> {
+  const { coder } = deps;
+  const cleanupCoder = cutOff(coder, cleanupSignal);
+  await cleanUp("Expired key cleanup", cleanupSignal, () =>
+    deleteExpiredKeys({ ...deps, coder: cleanupCoder }, coderUserId)
+  );
+  const key = await mintUserKey(coder, coderUserId, secretKeyName("email"), SECRET_KEY_LIFETIME_MS);
+  const keyId = apiKeyId(key);
+  try {
+    await writeOwnSecret(
+      { ...coder, token: key },
+      { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
+    );
+  } finally {
+    await cleanUp("Coder API key delete", cleanupSignal, () => deleteUserKey(cleanupCoder, coderUserId, keyId));
+  }
+}
+
+/**
  * Forgejo tokens don't expire, and Coder writes every secret into every workspace, so without this a student
  * who opened six repositories would carry six live tokens into each later workspace (#1303 review). Revokes
  * the tokens of the student's other repositories that no open has replaced for IDLE_TOKEN_MS, then deletes
@@ -430,7 +519,7 @@ async function removeIdleCredentials(
   keep: number,
   now: number
 ): Promise<void> {
-  const live = await revokeIdleTokens(deps.forgejo, login, keep, now);
+  const live = await revokeIdleTokens(requireForgejo(deps), login, keep, now);
   for (const secret of await listOwnSecrets(studentCoder)) {
     const id = secretRepositoryId(secret.name);
     if (id === null || id === keep || live.has(id)) continue;
@@ -458,7 +547,7 @@ export async function resolveRepository(
   db: WorkspaceDb,
   caller: Caller,
   request: WorkspaceOpenRequest
-): Promise<{ repo: RepositoryRow; profileId: string; classId: number }> {
+): Promise<{ repo: RepositoryRow; profileId: string; classId: number; githubOrgConfirmed: boolean }> {
   if (!Number.isInteger(request.assignment_id) || request.assignment_id <= 0) {
     throw new IllegalArgumentError("assignment_id must be a positive integer");
   }
@@ -473,8 +562,8 @@ export async function resolveRepository(
   if (!courseFeatureEffectiveEnabled(features, CLOUD_WORKSPACES_FEATURE, false)) {
     throw new UserVisibleError("Cloud workspaces are not enabled for this course", 403);
   }
-  if (assignment.git_provider !== "forgejo") {
-    throw new IllegalArgumentError("This assignment's repositories are not on Forgejo");
+  if (!WORKSPACE_PROVIDERS.includes(assignment.git_provider)) {
+    throw new IllegalArgumentError("This assignment's repositories can't be opened in a workspace");
   }
   const profileId = enrollment.private_profile_id;
   const groupId = await db.getGroupId(assignment.id, profileId);
@@ -491,10 +580,15 @@ export async function resolveRepository(
     repo = await db.findRepository(assignment.id, profileId, groupId);
     if (!repo) throw new NotFoundError("You don't have a repository for this assignment yet");
   }
-  if (repo!.git_provider !== "forgejo") {
-    throw new IllegalArgumentError("This repository is not on Forgejo");
+  if (!WORKSPACE_PROVIDERS.includes(repo!.git_provider)) {
+    throw new IllegalArgumentError("This repository can't be opened in a workspace");
   }
-  return { repo: repo!, profileId, classId: assignment.class_id };
+  return {
+    repo: repo!,
+    profileId,
+    classId: assignment.class_id,
+    githubOrgConfirmed: enrollment.github_org_confirmed === true
+  };
 }
 
 /** A Coder user the caller can't sign in to and that isn't theirs to adopt. Staff have to remove it. */
@@ -933,8 +1027,10 @@ export async function openWorkspace(
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
   const deadline = deps.budget?.deadline ?? clock(deps)() + OPEN_BUDGET_MS;
-  const { repo, profileId, classId } = await resolveRepository(db, caller, request);
-  const repoUrl = cloneUrl(deps.forgejo.url, repo.repository);
+  const { repo, profileId, classId, githubOrgConfirmed } = await resolveRepository(db, caller, request);
+  // Before the invitation check: a deployment without the provider can't open the repository at all.
+  const repoUrl = cloneUrl(providerUrl(deps, repo.git_provider), repo.repository, repo.git_provider);
+  if (repo.git_provider === "github" && !githubOrgConfirmed) return needsOrgInvite();
   let user: CoderUser;
   try {
     user = await ensureCoderUser(deps, caller);
@@ -955,9 +1051,14 @@ export async function openWorkspace(
     // can't change a user's email (coderd/users.go:938-945 keeps it; SCIM changes only `active`).
     return accountConflict(user);
   }
-  const missing = (await getExternalAuth(coder, template.active_version_id, user.id)).find(
-    (e) => !e.optional && !e.authenticated
-  );
+  const providers = await getExternalAuth(coder, template.active_version_id, user.id);
+  // The GitHub provider is optional, so that an unlinked GitHub account never blocks a Forgejo
+  // workspace. A GitHub repository has to check it itself.
+  const missing =
+    providers.find((e) => !e.optional && !e.authenticated) ??
+    (repo.git_provider === "github"
+      ? providers.find((e) => e.id === requireGithub(deps).externalAuthId && !e.authenticated)
+      : undefined);
   if (subject === null || missing) {
     const authenticate_url = linkUrl(coder.url, missing?.id);
     return {
@@ -1017,9 +1118,7 @@ export async function openWorkspace(
     });
     if (created.error?.status === 403 && created.error.body?.validations?.some((v) => v.field === "external_auth")) {
       // The link went away between the check and the create.
-      const ext = (await getExternalAuth(coder, template.active_version_id, user.id)).find(
-        (e) => !e.optional && !e.authenticated
-      );
+      const ext = (await getExternalAuth(coder, template.active_version_id, user.id)).find((e) => !e.authenticated);
       const authenticate_url = linkUrl(coder.url, ext?.id);
       return { status: "needs_linking", authenticate_url, redirect_url: authenticate_url, coder_user_id: user.id };
     } else if (created.error) {
@@ -1074,9 +1173,12 @@ export async function workspaceStatus(
 ): Promise<WorkspaceOpenResponse> {
   const { db, coder } = deps;
   const deadline = deps.budget?.deadline ?? clock(deps)() + STATUS_BUDGET_MS;
-  const { repo } = await resolveRepository(db, caller, request);
+  const { repo, githubOrgConfirmed } = await resolveRepository(db, caller, request);
   let row = await db.getWorkspaceRow(caller.userId, repo.id, coder.url);
-  if (!row?.coder_workspace_id) return { status: "not_started" };
+  // A workspace that already exists isn't held back by this: only an open would create one.
+  if (!row?.coder_workspace_id) {
+    return repo.git_provider === "github" && !githubOrgConfirmed ? needsOrgInvite() : { status: "not_started" };
+  }
   let ws = await getWorkspace(coder, row.coder_workspace_id);
   if (!ws) return await withDeletionDate(deps, row.id, { status: "not_started" });
   row = await settleRestart(deps, row, ws);

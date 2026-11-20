@@ -5,6 +5,7 @@ URL='${url}'
 DIR='${dir}'
 LIMIT=${limit}
 CREDS='${creds}'
+AUTH_ID='${auth_id}'
 
 fail() {
   echo "Git Clone failed: $*" >&2
@@ -19,10 +20,16 @@ normalize() {
 # repo_url's validation lets "" through for template import, and Coder then accepts it at creation.
 [ -n "$URL" ] || fail "the workspace's repo_url is empty; recreate it with the repository's clone URL."
 
-[ -s "$CREDS" ] || fail "no Git credentials at $CREDS. Open the workspace from Pawtograder, which restarts it with them."
-ORIGIN="$(printf '%s\n' "$URL" | awk 'match($0, /^[^:\/]+:\/\/[^\/]*/) { print substr($0, 1, RLENGTH) }')"
-# One string: unquoted `store --file X` fails with "no action specified".
-git config --global --replace-all "credential.$ORIGIN.helper" "store --file=$CREDS" || fail "couldn't set git's credential helper"
+if [ -n "$CREDS" ]; then
+  [ -s "$CREDS" ] || fail "no Git credentials at $CREDS. Open the workspace from Pawtograder, which restarts it with them."
+  ORIGIN="$(printf '%s\n' "$URL" | awk 'match($0, /^[^:\/]+:\/\/[^\/]*/) { print substr($0, 1, RLENGTH) }')"
+  # One string: unquoted `store --file X` fails with "no action specified".
+  git config --global --replace-all "credential.$ORIGIN.helper" "store --file=$CREDS" || fail "couldn't set git's credential helper"
+elif [ -n "$AUTH_ID" ]; then
+  # The agent's GIT_ASKPASS reads the same token; this only turns an unlinked account into a clear message.
+  coder external-auth access-token "$AUTH_ID" >/dev/null 2>&1 \
+    || fail "your $AUTH_ID account isn't linked in Coder. Open the workspace page, follow the link to sign in, and restart the workspace."
+fi
 
 if [ -e "$DIR" ] || [ -L "$DIR" ]; then
   # mv would put the clone inside a linked directory, and VS Code would open the wrong folder.
