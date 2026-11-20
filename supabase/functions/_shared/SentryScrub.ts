@@ -75,16 +75,20 @@ export function redactSecretsInText(text: string): string {
 }
 
 const CIRCULAR = "[Circular]";
+const TRUNCATED = "[Truncated]";
+const MAX_DEPTH = 20;
 
 /**
  * Copies: the event shares objects with the scopes. Processors run before the SDK's cycle-aware normalize, so
  * this tracks identity itself: an object already on the path is a cycle, and an object reached again by another
  * path reuses its copy. Without that, a small object referring to itself from a few keys is copied once per
- * path, exponentially many times up to the depth limit.
+ * path, exponentially many times up to the depth limit. An object past the limit becomes a marker, never the
+ * original: its strings were not redacted, and a copy holding it could be reused where more depth was left.
  */
 function redactDeep(value: unknown, depth = 0, copies = new Map<object, unknown>(), path = new Set<object>()): unknown {
   if (typeof value === "string") return redactSecretsInText(value);
-  if (depth > 20 || value === null || typeof value !== "object") return value;
+  if (value === null || typeof value !== "object") return value;
+  if (depth > MAX_DEPTH) return TRUNCATED;
   if (path.has(value)) return CIRCULAR;
   if (copies.has(value)) return copies.get(value);
   path.add(value);

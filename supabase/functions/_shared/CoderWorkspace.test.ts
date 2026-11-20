@@ -2520,17 +2520,16 @@ Deno.test("credentials: a failed cleanup of idle credentials doesn't stop the op
   assert(coder.secrets[coderUserId].git_credentials_repo_504);
 });
 
-Deno.test(
-  "credentials: a cleanup call that stalls until it is cut off leaves the build and the answer their time",
-  async () => {
-    const t = await runningWorkspace();
-    const { coder, db, coderUserId } = t;
-    addSecondRepository(db);
-    // The student's secret list never answers: it fails only when its signal fires.
-    let stalled = 0;
-    const stall: typeof fetch = async (input, init) => {
-      const path = new URL(String(input)).pathname;
-      if (path === "/api/v2/users/me/secrets" && (init?.method ?? "GET") === "GET") {
+/** A fetch whose requests `match` picks never reach Coder: each fails only when its signal fires. */
+function stallUntilCutOff(
+  base: typeof fetch,
+  match: (method: string, path: string) => boolean
+): { fetch: typeof fetch; stalled: () => number } {
+  let stalled = 0;
+  return {
+    stalled: () => stalled,
+    fetch: async (input, init) => {
+      if (match(init?.method ?? "GET", new URL(String(input)).pathname)) {
         stalled++;
         const signal = init!.signal!;
         await new Promise((_resolve, reject) => {
@@ -2538,17 +2537,84 @@ Deno.test(
           signal.addEventListener("abort", () => reject(signal.reason), { once: true });
         });
       }
-      return await coder.fetch(input, init);
-    };
-    // A 10 s budget: its signal fires at 8 s, and cleanup is cut off at 2 s.
-    const deps = onRealTime(t, 10_000, stall);
+      return await base(input, init);
+    }
+  };
+}
+
+// A 12 s budget: its signal fires at 10 s, and cleanup is cut off at 4 s, leaving the open seconds to reach
+// the stalled call first.
+const STALL_BUDGET_MS = 12_000;
+const STALL_CUTOFF_MS = 4_000;
+const isOwnSecretList = (method: string, path: string) => method === "GET" && path === "/api/v2/users/me/secrets";
+const isKeyList = (method: string, path: string) =>
+  method === "GET" && /^\/api\/v2\/users\/[^/]+\/keys\/tokens$/.test(path);
+
+for (const [what, match] of [
+  ["secret list (after the credentials are written)", isOwnSecretList],
+  ["expired key list (before the credentials are written)", isKeyList]
+] as const) {
+  Deno.test(`credentials: a create whose ${what} stalls until cut off is still built and answered`, async () => {
+    const t = await runningWorkspace();
+    const { coder, db, coderUserId } = t;
+    addSecondRepository(db);
+    const stall = stallUntilCutOff(coder.fetch, match);
+    const deps = onRealTime(t, STALL_BUDGET_MS, stall.fetch);
     const t0 = Date.now();
     const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 43 }));
     const elapsed = Date.now() - t0;
-    assertEquals(stalled, 1);
-    assert(elapsed >= 1_500 && elapsed < 6_000, `cleanup was cut off, and the open answered after ${elapsed} ms`);
+    assertEquals(stall.stalled(), 1);
+    assert(
+      elapsed >= STALL_CUTOFF_MS - 500 && elapsed < STALL_CUTOFF_MS + 4_000,
+      `cleanup was cut off, and the open answered after ${elapsed} ms`
+    );
     assertEquals(res.status, "starting");
     assertEquals(coder.workspaces.length, 2, "hw2's workspace is created");
     assert(coder.secrets[coderUserId].git_credentials_repo_504, "the credentials are written before the build");
+  });
+}
+
+Deno.test(
+  "credentials: a stopped workspace whose cleanup stalls until cut off is started, and its claim given up",
+  async () => {
+    const t = await runningWorkspace();
+    const { coder, db } = t;
+    stop(coder.workspaces[0]);
+    const posted = buildPosts(coder).length;
+    const stall = stallUntilCutOff(coder.fetch, isOwnSecretList);
+    const deps = onRealTime(t, STALL_BUDGET_MS, stall.fetch);
+    const t0 = Date.now();
+    const res = await withinBudget(deps.budget!, () => openWorkspace(deps, ALEX, { assignment_id: 41 }));
+    const elapsed = Date.now() - t0;
+    assertEquals(stall.stalled(), 1);
+    assert(
+      elapsed >= STALL_CUTOFF_MS - 500 && elapsed < STALL_CUTOFF_MS + 4_000,
+      `cleanup was cut off, and the open answered after ${elapsed} ms`
+    );
+    assertEquals(res.status, "starting");
+    assertEquals(buildPosts(coder).slice(posted), ["start"], "the start is posted");
+    assertEquals([db.rows[0].restart_token, db.rows[0].restart_phase], [null, null], "the claim is given up");
   }
 );
+
+Deno.test("credentials: a commit email that can't be written stops the start, so no placeholder identity", async () => {
+  const { coder, reported, deps } = setup();
+  coder.noProviders = true;
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  coder.users.find((u) => u.email === coderEmail(ALEX.userId))!.subject = ALEX.userId;
+  const realFetch = coder.fetch;
+  coder.fetch = (input, init) =>
+    new URL(String(input)).pathname.endsWith("/users/me/secrets/git_email") ||
+    String(init?.body ?? "").includes('"name":"git_email"')
+      ? Promise.resolve(new Response(JSON.stringify({ message: "boom" }), { status: 500 }))
+      : realFetch(input, init);
+  deps.coder = { ...deps.coder, fetch: coder.fetch };
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assertEquals(res.status, "credentials_unavailable");
+  assertEquals(coder.workspaces.length, 0, "nothing is built");
+  assertEquals(reported.length, 1);
+  assert(
+    coder.keys.every((k) => k.deleted),
+    "the short-lived key is deleted"
+  );
+});
