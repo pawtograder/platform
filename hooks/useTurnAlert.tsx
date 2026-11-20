@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Text } from "@chakra-ui/react";
+import { Box, Button, Text } from "@chakra-ui/react";
 import { useEffect, useRef, useState } from "react";
 import { getNotificationManager } from "@/lib/notifications/NotificationManager";
 
@@ -103,11 +103,15 @@ export function useTurnAlert({ subject, status, assignee, position, enabled }: T
 
 /** Shows the turn alert on the page itself, for a student who is already looking at it. */
 export function TurnAlertBanner({ message }: { message: string | null }) {
-  if (!message) return null;
+  // Same live region as CheckInAlertBanner, mounted for the same reason.
   return (
-    <Text fontSize="sm" fontWeight="semibold" color="fg" bg="bg.emphasized" px={3} py={2} borderRadius="md" mb={3}>
-      {message}
-    </Text>
+    <Box role="status" mb={message ? 3 : 0}>
+      {message && (
+        <Text fontSize="sm" fontWeight="semibold" color="fg" bg="bg.emphasized" px={3} py={2} borderRadius="md">
+          {message}
+        </Text>
+      )}
+    </Box>
   );
 }
 
