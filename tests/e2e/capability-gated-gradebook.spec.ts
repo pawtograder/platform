@@ -1,5 +1,5 @@
 /**
- * #1010: arranging the gradebook needs manage_gradebook (20261120140100_gradebook_by_capability.sql).
+ * #1010: arranging the gradebook needs manage_gradebook (20261121160100_gradebook_by_capability.sql).
  * Without it the gradebook hides Add Column, Import Columns, Auto-layout, the group menus and the
  * column actions that change a column (Edit, Move, Release, Delete). Convert Missing to 0 writes
  * cells, so graders keep it. A Head TA on a custom role with manage_gradebook sees the controls.
