@@ -7,15 +7,65 @@ import { Box, Flex, HStack, Text, Badge } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { FaPlus } from "react-icons/fa";
 import { FiChevronRight, FiChevronDown } from "react-icons/fi";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useActiveHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
+import {
+  completeOnboarding,
+  useOnboardingCompleted,
+  useOnboardingDataLoaded,
+  useOnboardingHint,
+  useOnboardingHintDismissed
+} from "@/hooks/useOfficeHoursOnboarding";
+import {
+  countTextQueues,
+  newRequestHint,
+  nextOfficeHoursStart,
+  queueDescriptionHintPending
+} from "@/lib/officeHoursOnboarding";
+import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useIsTableControllerReady } from "@/lib/TableController";
+import { format } from "date-fns";
 
 export type OfficeHoursViewMode = "my-requests" | "browse" | "working" | "all-requests" | "dashboard" | "settings";
+
+/**
+ * The New Request hint's text while nobody is on duty. It names the next office hours on the
+ * calendar, or says to check back later if the calendar has none coming up.
+ *
+ * This is its own component so that the calendar is read only while the hint is open. The popover
+ * mounts its content when it opens, so pages where the hint never opens don't load the calendar.
+ */
+function NoStaffOnDutyMessage() {
+  const { calendarEvents } = useCourseController();
+  const calendarLoaded = useIsTableControllerReady(calendarEvents);
+  const officeHoursEvents = useOfficeHoursSchedule();
+  // Check the time again every minute, so office hours that have started stop being called "next".
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Until the calendar loads, "Check back later" might be wrong, so say only what is known.
+  if (!calendarLoaded) return <>No one is on duty right now.</>;
+  const next = nextOfficeHoursStart(officeHoursEvents, now);
+  return (
+    <>
+      {next
+        ? `No one is on duty right now. The next office hours start ${format(next, "EEE, MMM d 'at' h:mm a")}.`
+        : "No one is on duty right now. Check back later."}
+    </>
+  );
+}
 
 function NavLink({ href, selected, children }: { href: string; selected: boolean; children: React.ReactNode }) {
   return (
@@ -88,6 +138,44 @@ export function OfficeHoursHeader({
       .filter((queue) => queue.available && queueIdsWithActiveStaff.has(queue.id))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [activeQueueAssignments, helpQueues, isManageMode]);
+
+  // Onboarding hint on the New Request button (see lib/officeHoursOnboarding.ts). When nobody is on
+  // duty, NoStaffOnDutyMessage gives the text.
+  //
+  // Only a student on the student pages of a course with the feature on takes part. For everyone
+  // else, clicking New Request doesn't mark the onboarding complete, and nothing reads localStorage.
+  const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
+  const isStudent = useIsStudent();
+  const onboardingActive = onboardingOn && isStudent && !isManageMode;
+  const onboardingCompleted = useOnboardingCompleted(onboardingActive);
+  const onboardingDataLoaded = useOnboardingDataLoaded();
+  // On the queue list, the queue description hint on the page comes first. The header holds its
+  // hint back until the student closes that one, so the order doesn't depend on which code loads
+  // first (see queueDescriptionHintPending).
+  const onQueueList = mode === "browse" && (pathname === officeHoursBaseHref || pathname === `${officeHoursBaseHref}/`);
+  const queueDescriptionDismissed = useOnboardingHintDismissed("read-queue-description");
+  const newRequestHintId = newRequestHint({
+    featureEnabled: onboardingOn,
+    isStudent: isStudent && !isManageMode,
+    completed: onboardingCompleted,
+    staffOnDuty: queuesWithActiveStaff.length > 0,
+    waitForQueueDescription: queueDescriptionHintPending({
+      onQueueList,
+      featureEnabled: onboardingOn,
+      isStudent: isStudent && !isManageMode,
+      completed: onboardingCompleted,
+      textQueueCount: countTextQueues(helpQueues),
+      dismissed: queueDescriptionDismissed
+    })
+  });
+  const completeOnboardingOnClick = onboardingActive ? completeOnboarding : undefined;
+  const newRequestOnboarding = useOnboardingHint(onboardingDataLoaded ? newRequestHintId : null);
+  const newRequestHintMessage =
+    newRequestHintId === "staff-on-duty" ? (
+      "Staff are on duty. Click New Request to ask for help."
+    ) : (
+      <NoStaffOnDutyMessage />
+    );
 
   // Get queues the TA is currently working
   const workingQueues = useMemo(() => {
@@ -403,42 +491,57 @@ export function OfficeHoursHeader({
 
         <HStack gap={3} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
           <HelpRequestSearch isManageMode={false} />
-          {queuesWithActiveStaff.length === 0 ? (
-            <Button colorPalette="green" size="sm" flexShrink={0} disabled>
-              <FaPlus />
-              New Request
-            </Button>
-          ) : queuesWithActiveStaff.length === 1 ? (
-            <Button asChild colorPalette="green" size="sm" flexShrink={0}>
-              <NextLink href={`${officeHoursBaseHref}/${queuesWithActiveStaff[0].id}/new`}>
-                <FaPlus />
-                New Request
-              </NextLink>
-            </Button>
-          ) : (
-            <MenuRoot>
-              <MenuTrigger asChild>
-                <Button colorPalette="green" size="sm" flexShrink={0}>
+          <OnboardingPopover
+            active={onboardingActive}
+            open={newRequestOnboarding.open}
+            onDismiss={newRequestOnboarding.dismiss}
+            message={newRequestHintMessage}
+            placement="bottom-end"
+          >
+            <Box display="inline-flex" flexShrink={0}>
+              {queuesWithActiveStaff.length === 0 ? (
+                <Button colorPalette="green" size="sm" flexShrink={0} disabled>
                   <FaPlus />
                   New Request
-                  <FiChevronDown />
                 </Button>
-              </MenuTrigger>
-              <MenuContent>
-                {queuesWithActiveStaff.map((queue) => (
-                  <MenuItem
-                    key={queue.id}
-                    value={queue.id.toString()}
-                    onClick={() => {
-                      router.push(`${officeHoursBaseHref}/${queue.id}/new`);
-                    }}
+              ) : queuesWithActiveStaff.length === 1 ? (
+                <Button asChild colorPalette="green" size="sm" flexShrink={0}>
+                  <NextLink
+                    href={`${officeHoursBaseHref}/${queuesWithActiveStaff[0].id}/new`}
+                    onClick={completeOnboardingOnClick}
                   >
-                    {queue.name}
-                  </MenuItem>
-                ))}
-              </MenuContent>
-            </MenuRoot>
-          )}
+                    <FaPlus />
+                    New Request
+                  </NextLink>
+                </Button>
+              ) : (
+                <MenuRoot>
+                  <MenuTrigger asChild>
+                    {/* Clicking the button counts, even if the student closes the menu without
+                        picking a queue. */}
+                    <Button colorPalette="green" size="sm" flexShrink={0} onClick={completeOnboardingOnClick}>
+                      <FaPlus />
+                      New Request
+                      <FiChevronDown />
+                    </Button>
+                  </MenuTrigger>
+                  <MenuContent>
+                    {queuesWithActiveStaff.map((queue) => (
+                      <MenuItem
+                        key={queue.id}
+                        value={queue.id.toString()}
+                        onClick={() => {
+                          router.push(`${officeHoursBaseHref}/${queue.id}/new`);
+                        }}
+                      >
+                        {queue.name}
+                      </MenuItem>
+                    ))}
+                  </MenuContent>
+                </MenuRoot>
+              )}
+            </Box>
+          </OnboardingPopover>
         </HStack>
       </Flex>
     </Box>
