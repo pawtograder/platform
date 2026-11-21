@@ -17,3 +17,10 @@ export function useForgejoInstanceUrl(enabled = true): string | undefined {
   });
   return data?.data?.[0]?.instance_url;
 }
+
+// The web host repos of this provider live on, for links: GitHub, or the Forgejo instance (undefined until known).
+export function useRepoWebHost(gitProvider: string | null | undefined): string | undefined {
+  const isForgejo = gitProvider === "forgejo";
+  const forgejoHost = useForgejoInstanceUrl(isForgejo);
+  return isForgejo ? forgejoHost : "https://github.com";
+}
