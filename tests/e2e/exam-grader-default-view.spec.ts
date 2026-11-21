@@ -201,3 +201,121 @@ test.describe("The rubric line above a paper exam (#1269)", () => {
     expect(await sawStaffLine()).toBeUndefined();
   });
 });
+
+test.describe("A paper exam's checks beside its answers (#1268)", () => {
+  // The size the issue was measured at, where the rubric started below the sidebar's fold.
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  /**
+   * An exam of eight one-level questions, its rubric built the way the template editor builds it, and
+   * one student's finalized answers to all eight. Eight is enough that the last question's check
+   * starts out of view, so bringing it into view is something the button has to do.
+   */
+  async function gradedExam(page: Page) {
+    const course = await createClass({ name: "Exam rubric beside answers E2E" });
+    const grader = await createUserInClass({ role: "grader", class_id: course.id });
+    const student = await createUserInClass({ role: "student", class_id: course.id });
+    const assignment = await insertAssignment({
+      class_id: course.id,
+      name: "Midterm Exam",
+      assignment_type: "exam",
+      // Past due, as when grading starts, so the page does not open with the "student can still
+      // make a new submission" warning above the grading panel.
+      due_date: addDays(new Date(), -1).toISOString()
+    });
+    const { data: examId, error: examErr } = await supabase.rpc("exam_create", {
+      p_assignment_id: assignment.id,
+      p_source_type: "pdf",
+      p_num_pages: 1
+    });
+    expect(examErr).toBeNull();
+    const labels = Array.from({ length: 8 }, (_, i) => `Q${i + 1}`);
+    const { error: structErr } = await supabase.rpc("exam_upsert_questions_and_regions", {
+      p_exam_id: examId as number,
+      p_questions: labels.map((label, i) => ({
+        client_id: label,
+        parent_client_id: null,
+        level: 1,
+        ordinal: i,
+        label,
+        answer_type: "free_text",
+        points: 5
+      })),
+      p_regions: []
+    });
+    expect(structErr).toBeNull();
+    const { error: syncErr } = await supabase.rpc("exam_sync_rubric_from_questions", {
+      p_exam_id: examId as number,
+      p_rubric_id: assignment.grading_rubric_id as number
+    });
+    expect(syncErr).toBeNull();
+    const { data: questions, error: qErr } = await supabase
+      .from("exam_questions")
+      .select("id, label")
+      .eq("exam_id", examId as number)
+      .order("ordinal");
+    expect(qErr).toBeNull();
+
+    const submission = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id
+    });
+    const { error: artErr } = await supabase.from("submission_artifacts").insert({
+      submission_id: submission.submission_id,
+      class_id: course.id,
+      profile_id: student.private_profile_id,
+      name: "Exam",
+      data: {
+        format: "exam_v1",
+        pages: [],
+        questions: questions!.map((q) => ({
+          exam_question_id: q.id,
+          label: q.label,
+          page_number: 1,
+          region: { x: 0, y: 0, width: 1, height: 0.1 },
+          ocr_text: `Answer to ${q.label}`,
+          structured_value: null
+        }))
+      }
+    });
+    expect(artErr).toBeNull();
+
+    await loginAsUser(page, grader, course);
+    await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${submission.submission_id}/files`);
+    await expect(page.getByText("Answer to Q1")).toBeVisible();
+    const sidebar = page.getByRole("complementary", { name: "Grading summary" });
+    const checkFor = (label: string) =>
+      sidebar.locator(`[data-exam-question-id="${questions!.find((q) => q.label === label)!.id}"]`);
+    return { checkFor };
+  }
+
+  test("the rubric is in view when the submission opens", async ({ page }) => {
+    const { checkFor } = await gradedExam(page);
+    // Before the fix the rubric came after the score tweak, release and automated check blocks, so
+    // not one check was on screen until the grader scrolled the sidebar.
+    await expect(checkFor("Q1")).toBeInViewport();
+  });
+
+  test("an answer's button brings its check into view and marks it", async ({ page }) => {
+    const { checkFor } = await gradedExam(page);
+    await expect(checkFor("Q5")).toBeAttached();
+    await expect(checkFor("Q5")).not.toBeInViewport();
+
+    await page.getByRole("button", { name: "Show rubric check for Q5" }).click();
+    // Catches scrolling to the top of the rubric, or to the wrong question's check.
+    await expect(checkFor("Q5")).toBeInViewport();
+    await expect(checkFor("Q5")).toHaveAttribute("data-focused", "true");
+    await expect(checkFor("Q1")).not.toHaveAttribute("data-focused");
+    // In view is not enough: scrolled to the top, the check sat under the sticky rubric menu. Once
+    // the sidebar stops scrolling, the check has to be what is drawn at its own middle.
+    const uncovered = await checkFor("Q5").evaluate(async (el) => {
+      const sidebar = el.closest("aside")!;
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      for (let last = -1; sidebar.scrollTop !== last; await frame(), await frame()) last = sidebar.scrollTop;
+      const r = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+    });
+    expect(uncovered).toBe(true);
+  });
+});
