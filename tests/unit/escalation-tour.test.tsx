@@ -3,9 +3,11 @@
  *
  * - Staff only: students get neither the automatic prompt nor the header button.
  * - The prompt opens on its own the first time staff visit, and not again once dismissed, whether
- *   by Close (no tutorial) or by finishing the tour. The header button reopens it at the prompt.
+ *   by Close (no tutorial) or by finishing the tour. "Seen" is a per-user row in
+ *   public.user_whats_new_seen, so it holds across browsers and devices. The header button
+ *   reopens it at the prompt.
  * - Show me walks through every step in order, and Back returns to the previous one.
- * - When storage is blocked the prompt stays closed instead of reopening on every page load.
+ * - When the record can't be read the prompt stays closed instead of reopening on every page load.
  */
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -13,8 +15,20 @@ import { EscalationTour } from "@/components/help-queue/escalation-tour";
 
 let mockIsStaff = true;
 jest.mock("@/hooks/useClassProfiles", () => ({ useIsGraderOrInstructor: () => mockIsStaff }));
+jest.mock("@sentry/nextjs", () => ({ captureException: jest.fn() }));
 
-const SEEN_KEY = "pawtograder:whats-new:oh-escalation:v1";
+/**
+ * The signed-in user's rows in user_whats_new_seen. The component only reads its own row by item
+ * (RLS limits it to the caller's rows) and upserts it on Close or Done.
+ */
+const mockSeen = new Set<string>();
+let mockReadError: { message: string } | null = null;
+let mockReadGate: Promise<void> | null = null;
+const mockFrom = jest.fn();
+const mockUpsert = jest.fn();
+jest.mock("@/utils/supabase/client", () => ({ createClient: () => ({ from: mockFrom }) }));
+
+const ITEM = "oh-escalation:v1";
 const PROMPT = "New in Office Hours: ticket escalation";
 const STEP_TITLES = [
   "Escalate: hand a ticket on",
@@ -37,9 +51,33 @@ const dialogTitle = () =>
 
 beforeEach(() => {
   mockIsStaff = true;
-  window.localStorage.clear();
-  jest.restoreAllMocks();
+  mockSeen.clear();
+  mockReadError = null;
+  mockReadGate = null;
+  mockUpsert.mockReset().mockImplementation(async (row: { item: string }) => {
+    mockSeen.add(row.item);
+    return { error: null };
+  });
+  mockFrom.mockReset().mockImplementation((table: string) => {
+    expect(table).toBe("user_whats_new_seen");
+    return {
+      select: () => ({
+        eq: (column: string, item: string) => ({
+          maybeSingle: async () => {
+            expect(column).toBe("item");
+            if (mockReadGate) await mockReadGate;
+            if (mockReadError) return { data: null, error: mockReadError };
+            return { data: mockSeen.has(item) ? { item } : null, error: null };
+          }
+        })
+      }),
+      upsert: mockUpsert
+    };
+  });
 });
+
+const expectSeenWritten = () =>
+  expect(mockUpsert).toHaveBeenCalledWith({ item: ITEM }, { onConflict: "user_id,item", ignoreDuplicates: true });
 
 describe("EscalationTour", () => {
   it("renders nothing for students", () => {
@@ -47,6 +85,7 @@ describe("EscalationTour", () => {
     renderTour();
     expect(screen.queryByRole("button", { name: "What's new" })).toBeNull();
     expect(screen.queryByText(PROMPT)).toBeNull();
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   it("opens the prompt on a staff member's first visit", async () => {
@@ -60,12 +99,15 @@ describe("EscalationTour", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
     expect(screen.queryByText(STEP_TITLES[0])).toBeNull();
-    expect(window.localStorage.getItem(SEEN_KEY)).toBe("seen");
+    expectSeenWritten();
 
+    // A later visit, on this browser or any other, reads the row and stays closed.
     unmount();
+    mockFrom.mockClear();
     renderTour();
     expect(screen.getByRole("button", { name: "What's new" })).toBeInTheDocument();
-    expect(screen.queryByText(PROMPT)).toBeNull();
+    await waitFor(() => expect(mockFrom).toHaveBeenCalled());
+    await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
   });
 
   it("walks through every step in order, with Back, and Done closes it", async () => {
@@ -86,7 +128,7 @@ describe("EscalationTour", () => {
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(dialogTitle()).toBeNull());
-    expect(window.localStorage.getItem(SEEN_KEY)).toBe("seen");
+    expectSeenWritten();
   });
 
   it("the first step's Back is disabled", async () => {
@@ -96,38 +138,46 @@ describe("EscalationTour", () => {
   });
 
   it("What's new reopens the tour at the prompt after it was seen", async () => {
-    window.localStorage.setItem(SEEN_KEY, "seen");
+    mockSeen.add(ITEM);
     renderTour();
-    expect(screen.queryByText(PROMPT)).toBeNull();
+    await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
     fireEvent.click(screen.getByRole("button", { name: "What's new" }));
     expect(await screen.findByText(PROMPT)).toBeInTheDocument();
   });
 
-  it("stays closed when storage is blocked, and What's new still opens it", async () => {
-    jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("SecurityError");
-    });
-    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("SecurityError");
-    });
+  it("stays closed when the record can't be read, and What's new still opens it", async () => {
+    // A prompt we can't check would otherwise open on every page load.
+    mockReadError = { message: "network down" };
     renderTour();
-    expect(screen.queryByText(PROMPT)).toBeNull();
+    await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
     fireEvent.click(screen.getByRole("button", { name: "What's new" }));
     expect(await screen.findByText(PROMPT)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
   });
 
-  it("stays closed when storage can be read but not written", async () => {
-    // Storage full, or blocked for writes only: Close couldn't remember the dismissal, so an
-    // automatic prompt would come back on every page load.
-    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("QuotaExceededError");
+  it("still closes when saving the record fails", async () => {
+    mockUpsert.mockImplementation(async () => ({ error: { message: "network down" } }));
+    renderTour();
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
+    expectSeenWritten();
+  });
+
+  it("a slow read doesn't reopen the tour after the user has opened and closed it", async () => {
+    let release!: () => void;
+    mockReadGate = new Promise<void>((resolve) => {
+      release = resolve;
     });
     renderTour();
-    // The prompt opens after mount, so wait as long as the first-visit test would.
+    fireEvent.click(screen.getByRole("button", { name: "What's new" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
+
+    // The read was started before Close and reports nothing saved yet.
+    mockSeen.clear();
+    release();
     await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
-    expect(screen.getByRole("button", { name: "What's new" })).toBeInTheDocument();
   });
 
   it("keeps every control inside a step's preview out of the tab order", async () => {

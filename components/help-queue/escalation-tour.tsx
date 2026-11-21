@@ -3,42 +3,47 @@
 import { Button } from "@/components/ui/button";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { ESCALATION_NOTE_MAX_LENGTH } from "@/lib/helpRequestEscalation";
+import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Dialog, HStack, Icon, Stack, Table, Text } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { BsArrowUpCircle, BsCheck, BsCheckCircle, BsClock, BsStars, BsX, BsXCircle, BsXOctagon } from "react-icons/bs";
 import { EscalationBadge } from "./escalation-badge";
 
 /**
- * "What's new" walkthrough of ticket escalation for course staff. It opens once per browser on the
- * staff Office Hours pages, and the header button reopens it. Every step is a static preview of the
- * real controls (same colors, icons and labels as help-request-chat.tsx), so it works whatever state
- * the queue is in.
+ * "What's new" walkthrough of ticket escalation for course staff. It opens on its own once per
+ * person on the staff Office Hours pages, and the header button reopens it. Every step is a static
+ * preview of the real controls (same colors, icons and labels as help-request-chat.tsx), so it works
+ * whatever state the queue is in.
  */
 
-const SEEN_KEY = "pawtograder:whats-new:oh-escalation:v1";
-const PROBE_KEY = `${SEEN_KEY}:probe`;
+/** This walkthrough's row in public.user_whats_new_seen. A new version of the tour gets a new item. */
+const ESCALATION_TOUR_ITEM = "oh-escalation:v1";
 
-function hasSeenTour(): boolean {
-  try {
-    if (window.localStorage.getItem(SEEN_KEY) === "seen") return true;
-    // Only open on our own if closing can be remembered. When writes fail (storage full, or
-    // blocked for writes only), the prompt would otherwise come back on every page load.
-    window.localStorage.setItem(PROBE_KEY, "1");
-    window.localStorage.removeItem(PROBE_KEY);
-    return false;
-  } catch {
-    // Storage blocked (private window, site data disabled) or not writable: treat as seen so the
-    // popup doesn't reappear on every page load. The header button still opens it.
+/**
+ * Whether this user has already seen or dismissed the walkthrough. If the record can't be read,
+ * treat it as seen: an automatic prompt we can't check would otherwise open on every page load.
+ * The header button still opens it.
+ */
+async function hasSeenTour(): Promise<boolean> {
+  const { data, error } = await createClient()
+    .from("user_whats_new_seen")
+    .select("item")
+    .eq("item", ESCALATION_TOUR_ITEM)
+    .maybeSingle();
+  if (error) {
+    Sentry.captureException(error);
     return true;
   }
+  return data !== null;
 }
 
-function markTourSeen() {
-  try {
-    window.localStorage.setItem(SEEN_KEY, "seen");
-  } catch {
-    // Nothing to do: see hasSeenTour.
-  }
+async function markTourSeen() {
+  // user_id defaults to auth.uid(), and RLS only accepts the caller's own row.
+  const { error } = await createClient()
+    .from("user_whats_new_seen")
+    .upsert({ item: ESCALATION_TOUR_ITEM }, { onConflict: "user_id,item", ignoreDuplicates: true });
+  if (error) Sentry.captureException(error);
 }
 
 /**
@@ -313,7 +318,8 @@ function ResolveButtonInline() {
 
 /**
  * Header button plus the walkthrough dialog. Renders nothing for students. Opens on its own the
- * first time a staff member visits (per browser), starting with the "want to learn more?" prompt.
+ * first time a staff member visits (once per person, recorded in the database), starting with the
+ * "want to learn more?" prompt.
  */
 export function EscalationTour() {
   const isStaff = useIsGraderOrInstructor();
@@ -321,19 +327,30 @@ export function EscalationTour() {
   // -1 is the intro prompt; 0..STEPS.length-1 are the tutorial steps.
   const [step, setStep] = useState(-1);
 
+  // Set once the user opens or closes the dialog, so a slow read can't reopen it afterwards.
+  const handledRef = useRef(false);
+
   useEffect(() => {
-    if (isStaff && !hasSeenTour()) {
+    if (!isStaff) return;
+    let cancelled = false;
+    void hasSeenTour().then((seen) => {
+      if (cancelled || seen || handledRef.current) return;
       setStep(-1);
       setOpen(true);
-    }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [isStaff]);
 
   const close = useCallback(() => {
-    markTourSeen();
+    handledRef.current = true;
+    void markTourSeen();
     setOpen(false);
   }, []);
 
   const reopen = useCallback(() => {
+    handledRef.current = true;
     setStep(-1);
     setOpen(true);
   }, []);

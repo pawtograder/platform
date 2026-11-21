@@ -2099,6 +2099,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "user_roles.sis_sync_opt_out": "none",
   "user_roles.updated_at": "none",
   "user_roles.user_id": "none",
+  // user_whats_new_seen holds walkthrough names (e.g. "oh-escalation:v1") and a timestamp; nothing a user typed.
+  "user_whats_new_seen.item": "none",
+  "user_whats_new_seen.seen_at": "none",
+  "user_whats_new_seen.user_id": "none",
   "users.avatar_url": "handle",
   "users.created_at": "none",
   "users.discord_id": "handle",
@@ -2534,6 +2538,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].name": "free_text",
     "$[*].template_repo": "none"
   },
+  forgejo_groups_need_grants: "none",
   forgejo_repo_token_revocable: "none",
   forgejo_repo_tokens_to_revoke: {
     "$[*].id": "none",
@@ -2932,6 +2937,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   merge_class_feature: "none",
   merge_class_feature_as_service_role: "none",
   merge_duplicate_class_enrollments: "none",
+  metrics_office_hours_queue_health: "none",
   metrics_workflow_errors_by_category: { "$[*].category": "none", "$[*].class_id": "none", "$[*].count": "none" },
   // UNCERTAIN: name: workflow error names may interpolate usernames
   metrics_workflow_errors_by_name: { "$[*].class_id": "none", "$[*].count": "none", "$[*].name": "free_text" },

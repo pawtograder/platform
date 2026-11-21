@@ -661,24 +661,34 @@ export async function ensureTimeZonePreferenceInitialized(
   );
 }
 
-// Same key as SEEN_KEY in components/help-queue/escalation-tour.tsx. Not imported, because this
-// file runs in Node and the component pulls in React and Chakra.
-const ESCALATION_TOUR_SEEN_KEY = "pawtograder:whats-new:oh-escalation:v1";
+// Same item as ESCALATION_TOUR_ITEM in components/help-queue/escalation-tour.tsx. Not imported,
+// because this file runs in Node and the component pulls in React and Chakra.
+const ESCALATION_TOUR_ITEM = "oh-escalation:v1";
 
 /**
- * The escalation "What's new" walkthrough opens once per browser for course staff on the office
- * hours page, and its dialog blocks every click behind it. Each test gets a fresh browser context,
- * so mark the walkthrough as seen before the app loads. A test of the walkthrough itself should
- * log in with `showWhatsNew: true`.
+ * The escalation "What's new" walkthrough opens once per person for course staff on the office
+ * hours page, and its dialog blocks every click behind it. Record it as seen for this user in
+ * public.user_whats_new_seen before the app loads. A test of the walkthrough itself should log in
+ * with `showWhatsNew: true`, which clears the record instead.
  */
-export async function markWhatsNewSeen(page: Page) {
-  await page.addInitScript((key) => {
-    try {
-      localStorage.setItem(key, "seen");
-    } catch {
-      // Ignore localStorage failures in test setup.
-    }
-  }, ESCALATION_TOUR_SEEN_KEY);
+export async function markWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">) {
+  const { error } = await supabase
+    .from("user_whats_new_seen")
+    .upsert(
+      { user_id: testingUser.user_id, item: ESCALATION_TOUR_ITEM },
+      { onConflict: "user_id,item", ignoreDuplicates: true }
+    );
+  if (error) throw new Error(`markWhatsNewSeen: ${error.message}`);
+}
+
+/** Removes the walkthrough record so it opens on the user's next visit, as on a first visit. */
+export async function clearWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">) {
+  const { error } = await supabase
+    .from("user_whats_new_seen")
+    .delete()
+    .eq("user_id", testingUser.user_id)
+    .eq("item", ESCALATION_TOUR_ITEM);
+  if (error) throw new Error(`clearWhatsNewSeen: ${error.message}`);
 }
 
 export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 10000): Promise<boolean> {
@@ -851,8 +861,10 @@ export async function loginAsUser(
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);
   }
-  if (!showWhatsNew) {
-    await markWhatsNewSeen(page);
+  if (showWhatsNew) {
+    await clearWhatsNewSeen(testingUser);
+  } else {
+    await markWhatsNewSeen(testingUser);
   }
 
   await page.goto("/");
