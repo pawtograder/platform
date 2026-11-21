@@ -9,7 +9,10 @@ import { expect, test } from "../global-setup";
 import { createCs2100StyleGradebook, waitForGradebookRecalculation } from "./gradebookColumnGroupsFixtures";
 import {
   clickMenuItem,
+  expandAllGroups,
+  expectInstructorColumnMatchesDb,
   GRADEBOOK_VIEWPORT,
+  gradebookScreenshot,
   headerUnits,
   openColumnMenu,
   openInstructorGradebook,
@@ -42,7 +45,7 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     await openInstructorGradebook(page, fixture.course.id);
     // Quiz sessions are the groups before any topic exists.
     expect(await headerUnits(page)).toEqual(["4 Quiz 9/22...", "6 Quiz 10/15..."]);
-    await visualScreenshot(page, "gradebook-topics-sessions-before");
+    await gradebookScreenshot(page, "gradebook-topics-sessions-before");
 
     await page.getByRole("button", { name: "Suggest Topics" }).click();
     const dialog = page.getByRole("dialog", { name: "Suggest topics" });
@@ -95,7 +98,7 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
       "Coupling, Cohesion, and Encapsulation",
       "Stakeholder-value Matrices"
     ]);
-    await visualScreenshot(page, "gradebook-topics-view-collapsed");
+    await gradebookScreenshot(page, "gradebook-topics-view-collapsed");
 
     // Switch CCE to a generated best-of standing: the third attempt the glob missed now counts.
     // A second of slack for client/DB clock skew; earlier recalculations finished long before.
@@ -117,11 +120,13 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
       .toContain('gradebook_columns("3cce")');
     await waitForGradebookRecalculation(fixture.course.id, beforeStanding);
     await expect.poll(() => headerUnits(page)).toContain("Coupling, Cohesion, and Encapsulation (best attempt)");
+    // The database is done, but this page was open throughout: the new standing scores reach it by
+    // realtime, so wait until the cells show them before capturing.
+    await expectInstructorColumnMatchesDb(page, fixture.columns.get("topic_cce")!);
 
-    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
+    await expandAllGroups(page);
     await waitForToastsGone(page);
-    await waitForVirtualizerIdle(page);
-    await visualScreenshot(page, "gradebook-topics-view-expanded");
+    await gradebookScreenshot(page, "gradebook-topics-view-expanded");
 
     // The group view is one toggle away.
     await tableRegion(page).getByRole("button", { name: "Show groups" }).click();
@@ -138,13 +143,14 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     });
 
     await openInstructorGradebook(page, fixture.course.id);
-    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
-    await waitForVirtualizerIdle(page);
+    await expandAllGroups(page);
 
     // The column menu carries Topic… next to Group….
     await openColumnMenu(page, "HW1");
     await expect(page.getByRole("menuitem", { name: "Topic…" })).toBeVisible();
-    await visualScreenshot(page, "gradebook-topics-column-menu");
+    await gradebookScreenshot(page, "gradebook-topics-column-menu", {
+      keepMenuOpen: { menuItem: "Topic…", open: () => openColumnMenu(page, "HW1") }
+    });
 
     // Topic… for a column: an existing topic and an attempt number (blank = the next one).
     await clickMenuItem(page, "Topic…", () => openColumnMenu(page, "HW1"));
@@ -161,7 +167,12 @@ test.describe("Gradebook topics (CS 2100-style course)", () => {
     // The topic header menu: standing rule, rename, delete.
     await tableRegion(page).getByRole("button", { name: "Topic options for Git" }).click();
     await expect(page.getByRole("menuitem", { name: "Standing: keep the column's own expression" })).toBeDisabled();
-    await visualScreenshot(page, "gradebook-topics-topic-menu");
+    await gradebookScreenshot(page, "gradebook-topics-topic-menu", {
+      keepMenuOpen: {
+        menuItem: "Rename topic",
+        open: () => tableRegion(page).getByRole("button", { name: "Topic options for Git" }).click()
+      }
+    });
     await clickMenuItem(page, "Rename topic", () =>
       tableRegion(page).getByRole("button", { name: "Topic options for Git" }).click()
     );

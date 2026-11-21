@@ -420,12 +420,47 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "classes.late_tokens_per_student": "none",
   "classes.name": "none",
   "classes.office_hours_description": "none",
+  // Two integers the instructor sets (waiting limit and minutes); no user text is stored.
+  "classes.office_hours_health_thresholds": "none",
   "classes.office_hours_ics_url": "none",
   "classes.slug": "none",
   "classes.solution_template_repo": "none",
   "classes.start_date": "none",
   "classes.term": "none",
   "classes.time_zone": "none",
+  "coder_accounts.coder_user_id": "none",
+  // Coder username, built from the email's local part, like a Forgejo login
+  "coder_accounts.coder_username": "handle",
+  "coder_accounts.created_at": "none",
+  "coder_accounts.id": "none",
+  "coder_accounts.instance_url": "none",
+  "coder_accounts.user_id": "none",
+  "coder_workspaces.assignment_archived_seen_at": "none",
+  "coder_workspaces.assignment_deleted_seen_at": "none",
+  "coder_workspaces.assignment_id": "none",
+  "coder_workspaces.class_archived_seen_at": "none",
+  "coder_workspaces.class_id": "none",
+  "coder_workspaces.cleanup_attempts": "none",
+  // Coder API error text from the cleanup job; can echo usernames
+  "coder_workspaces.cleanup_last_error": "free_text",
+  "coder_workspaces.cleanup_status": "none",
+  "coder_workspaces.coder_user_id": "none",
+  "coder_workspaces.coder_workspace_id": "none",
+  "coder_workspaces.coder_workspace_name": "none",
+  "coder_workspaces.created_at": "none",
+  "coder_workspaces.id": "none",
+  "coder_workspaces.instance_url": "none",
+  "coder_workspaces.profile_id": "none",
+  // Forgejo clone URL; the repository name carries the student's username
+  "coder_workspaces.repo_url": "handle",
+  "coder_workspaces.repository_id": "none",
+  "coder_workspaces.restart_phase": "none",
+  "coder_workspaces.restart_started_at": "none",
+  "coder_workspaces.restart_token": "none",
+  "coder_workspaces.student_inactive_seen_at": "none",
+  "coder_workspaces.superseded_at": "none",
+  "coder_workspaces.updated_at": "none",
+  "coder_workspaces.user_id": "none",
   "discord_async_errors.created_at": "none",
   // UNCERTAIN: error or sync message; free_text assumes upstream errors can echo usernames or emails
   "discord_async_errors.error_data": "free_text",
@@ -885,6 +920,13 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_repo_tokens.id": "none",
+  "forgejo_repo_tokens.instance_url": "none",
+  "forgejo_repo_tokens.recorded_at": "none",
+  "forgejo_repo_tokens.repository_id": "none",
+  "forgejo_repo_tokens.revoke_claim_id": "none",
+  "forgejo_repo_tokens.revoke_claimed_at": "none",
+  "forgejo_repo_tokens.user_id": "none",
   "git_accounts.claimed_at": "none",
   "git_accounts.created_at": "none",
   "git_accounts.id": "none",
@@ -1108,6 +1150,14 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "help_queues.ordinal": "none",
   "help_queues.queue_type": "none",
   "help_queues.updated_at": "none",
+  "help_request_escalations.class_id": "none",
+  "help_request_escalations.created_at": "none",
+  "help_request_escalations.escalated_by": "none",
+  "help_request_escalations.help_request_id": "none",
+  "help_request_escalations.id": "none",
+  "help_request_escalations.note": "free_text",
+  "help_request_escalations.previous_assignee": "none",
+  "help_request_escalations.source": "none",
   "help_request_feedback.class_id": "none",
   "help_request_feedback.comment": "free_text",
   "help_request_feedback.created_at": "none",
@@ -1189,14 +1239,17 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "help_request_work_sessions.started_at": "none",
   "help_request_work_sessions.ta_profile_id": "none",
   "help_requests.assignee": "none",
+  "help_requests.check_in_expires_at": "none",
   "help_requests.class_id": "none",
   "help_requests.created_at": "none",
   "help_requests.created_by": "none",
+  "help_requests.escalation_count": "none",
   "help_requests.followup_to": "none",
   "help_requests.help_queue": "none",
   "help_requests.id": "none",
   "help_requests.is_private": "none",
   "help_requests.is_video_live": "none",
+  "help_requests.last_escalated_at": "none",
   "help_requests.location_type": "none",
   "help_requests.referenced_submission_id": "none",
   "help_requests.request": "free_text",
@@ -2280,6 +2333,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   admin_update_lab_section: "none",
   admin_upsert_github_org: "none",
   admin_upsert_lti_platform: { $table: "lti_platforms" },
+  answer_help_request_check_in: "none",
   apply_late_token_extension: { $: "none", "$.tokens_needed": "grade", "$.tokens_remaining": "grade" },
   assignment_due_date_exception_lock_key: "none",
   attach_no_repo_submission_files: "none",
@@ -2351,6 +2405,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
   cloud_workspaces_enabled: "none",
@@ -2370,6 +2425,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // UNCERTAIN: $.error is SQLERRM from a WHEN OTHERS handler and is marked free_text to be safe. Its raised messages contain only ids.
   clear_unfinished_review_assignments: { $: "none", "$.error": "free_text" },
   cli_import_submission_comments_batch: "none",
+  coder_workspace_deletion_date: "none",
   complete_eligible_grading_reviews: "none",
   copy_groups_from_assignment: "none",
   create_all_manual_submissions_for_assignment: "none",
@@ -2446,16 +2502,20 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   enqueue_gradebook_row_recalculation_batch: "none",
   enqueue_repo_analytics_fetch: "none",
   enqueue_sync_repo_permissions_for_repo: "none",
+  escalate_help_request: "none",
   evaluate_error_pin_rule: "none",
   // DRAFT: new entry, review and remove this comment
   exam_create: "none",
   // DRAFT: new entry, review and remove this comment
   exam_create_submission: "none",
+  // Reviewed: service-role only (the exam worker); returns [{exam_index, scanned_submission_id, match_status}].
+  exam_link_scan_groups: "none",
   // DRAFT: new entry, review and remove this comment
   exam_sync_rubric_from_questions: "none",
   // DRAFT: new entry, review and remove this comment
   exam_upsert_questions_and_regions: "none",
   finalize_submission_early: "none",
+  finish_help_request: "none",
   fix_assignment_repo_permissions: {
     $: "none",
     "$.results[*].repository": "handle",
@@ -2463,6 +2523,34 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  forgejo_group_repos_needed: {
+    "$[*].all_members_have_logins": "none",
+    "$[*].assignment_group_id": "none",
+    "$[*].assignment_id": "none",
+    "$[*].class_id": "none",
+    "$[*].logins": "handle",
+    "$[*].owner": "none",
+    // The repo name ends in the group's name, which students choose.
+    "$[*].name": "free_text",
+    "$[*].template_repo": "none"
+  },
+  forgejo_repo_token_revocable: "none",
+  forgejo_repo_tokens_to_revoke: {
+    "$[*].id": "none",
+    "$[*].login": "handle",
+    "$[*].repository_id": "none",
+    "$[*].user_id": "none"
+  },
+  forgejo_repos_needed: {
+    "$[*].assignment_id": "none",
+    "$[*].class_id": "none",
+    "$[*].profile_id": "none",
+    "$[*].login": "handle",
+    "$[*].owner": "none",
+    // The repo name ends in the student's Forgejo login.
+    "$[*].name": "handle",
+    "$[*].template_repo": "none"
+  },
   generate_anon_name: "name",
   get_all_class_metrics: "none",
   // UNCERTAIN: Returns a vault secret (hashing pepper), not personal data; no 'secret' kind exists, so marked free_text so it is always redacted
@@ -2807,6 +2895,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   gradebook_topic_standing_expression: "none",
   gradebook_topics_apply_suggestion: "none",
   gradebook_topics_suggest: "none",
+  help_request_caller_profile: "none",
   help_request_is_private: "none",
   help_request_notification: "none",
   import_gradebook_scores: "none",
@@ -2833,6 +2922,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   kick_forgejo_reconciler: "none",
   log_api_gateway_call: "none",
   log_flashcard_interaction: "none",
+  log_help_request_activity: "none",
   lti_consume_nonce: "none",
   lti_grade_drain_safety_net: "none",
   lti_kick_grade_drain: "none",
@@ -2853,6 +2943,18 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   metrics_workflow_run_percentiles: { "$[*].class_id": "none", "$[*].p50": "none", "$[*].p95": "none" },
   metrics_workflow_runs_by_conclusion: { "$[*].class_id": "none", "$[*].conclusion": "none", "$[*].count": "none" },
+  // Queue names are course content (see the decision in PRIVACY_REVIEW.md); the rest are counts and times.
+  office_hours_queue_health: {
+    "$[*].helping": "none",
+    "$[*].median_wait_seconds_today": "none",
+    "$[*].oldest_wait_seconds": "none",
+    "$[*].queue_id": "none",
+    "$[*].queue_name": "none",
+    "$[*].resolved_today": "none",
+    "$[*].staffed_tas": "none",
+    "$[*].unstaffed_seconds": "none",
+    "$[*].waiting": "none"
+  },
   only_calendar_or_discord_ids_changed: "none",
   only_discord_ids_changed: "none",
   open_discord_circuit: "none",
@@ -2886,6 +2988,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   record_bug_report_retention_purge: "none",
   record_discord_async_error: "none",
   record_discord_membership_status: "none",
+  record_forgejo_repo_token: "none",
   record_github_async_error: "none",
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",
@@ -2914,6 +3017,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // UNCERTAIN: pure helper; output is a sanitized fragment of a repo name (group name, slug, or possibly username)
   sanitize_repo_name_component: "handle",
   save_error_pin: "none",
+  save_forgejo_group_repo: "none",
   // DRAFT: new entry, review and remove this comment
   seed_default_class_roles: "none",
   send_signup_welcome_message: "none",
@@ -3133,5 +3237,27 @@ export const EDGE_FUNCTIONS: Readonly<Record<string, JsonPathMap>> = {
   },
   // calls RPCs only (attach_no_repo_submission_files, create_no_repo_submission, create_submission_for_student); RPCS classifies the results
   uploadNoRepoSubmission: { $: "none" },
-  userFetchAzureProfile: { $: "none", "$.message": "free_text", "$.sis_user_id": "handle", "$.error": "free_text" }
+  userFetchAzureProfile: { $: "none", "$.message": "free_text", "$.sis_user_id": "handle", "$.error": "free_text" },
+  // Coder URLs carry the student's Coder username; log lines are git and startup-script output,
+  // build.error is Coder's job error, and failure.script is the template's name for the script
+  workspaceOpen: {
+    $: "none",
+    "$.message": "free_text",
+    "$.redirect_url": "handle",
+    "$.authenticate_url": "handle",
+    "$.build.error": "free_text",
+    "$.failure.script": "free_text",
+    "$.failure.log_lines[*]": "free_text",
+    "$.error": "free_text"
+  },
+  workspaceStatus: {
+    $: "none",
+    "$.message": "free_text",
+    "$.redirect_url": "handle",
+    "$.authenticate_url": "handle",
+    "$.build.error": "free_text",
+    "$.failure.script": "free_text",
+    "$.failure.log_lines[*]": "free_text",
+    "$.error": "free_text"
+  }
 };

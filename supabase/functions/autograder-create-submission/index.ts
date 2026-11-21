@@ -14,6 +14,7 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   assertJobTokenMatchesRepository,
+  findActorUserId,
   getRepoTarballURL,
   getRepoToCloneConsideringE2E,
   validateOIDCTokenOrAllowE2E,
@@ -22,6 +23,7 @@ import {
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
+import { ArchiveTooLargeError, downloadArchive, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { attachWorkflowRunLink } from "../_shared/workflowRunUrl.ts";
 import {
@@ -470,8 +472,10 @@ async function handleGitHubApiCall<T>(
         if (tripCount) {
           Sentry.addBreadcrumb({ message: `Circuit trip #${tripCount} for ${org} (${type})`, level: "warning" });
           scope.setTag("circuit_trip_count", String(tripCount));
-          if (tripCount >= 5) {
-            Sentry.captureMessage(`Elevated circuit to 24h for ${org} after ${tripCount} trips`, {
+          // A third trip within the 24h decay window usually means a 24h window, but not always: an
+          // error_threshold trip counts too and keeps its 8h window. The RPC returns only the count.
+          if (tripCount >= 3) {
+            Sentry.captureMessage(`Repeated circuit trips for ${org} (trip count ${tripCount})`, {
               level: "error"
             });
           }
@@ -534,14 +538,15 @@ async function handleGitHubApiCall<T>(
   }
 }
 
-async function handleRequest(req: Request, scope: Sentry.Scope) {
+export async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "autograder-create-submission");
   const token = req.headers.get("Authorization");
   if (!token) {
     throw new UserVisibleError("No token provided", 400);
   }
   // Check if this is part of an
-  const decoded = await validateOIDCTokenOrAllowE2E(token);
+  // Either host. assertJobTokenMatchesRepository below ties the token to a repository on its own host.
+  const decoded = await validateOIDCTokenOrAllowE2E(token, ["github", "forgejo"]);
   const { repository, sha, workflow_ref, run_id, run_attempt } = decoded;
   const isE2ERun = repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
   const isPawtograderTriggered = decoded.actor === "pawtograder[bot]" || decoded.actor === "pawtograder-next[bot]";
@@ -553,7 +558,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("run_attempt", run_attempt);
   scope?.setTag("is_e2e_run", isE2ERun.toString());
   // One click from any event this request reports to the run that caused it.
-  attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
+  // The link is GitHub's Actions URL; a Forgejo run gets none rather than a link to the wrong host.
+  if (decoded.provider === "github") attachWorkflowRunLink(scope, { repository, run_id, run_attempt });
 
   // Circuit breaker: check if org-level circuit is open for GitHub API calls
   const adminSupabase = createClient<Database>(
@@ -575,6 +581,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       "*, assignments(class_id, due_date, has_autograder, submission_mode, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
+    .eq("git_provider", decoded.provider)
     .maybeSingle();
   if (repoError) {
     Sentry.captureException(repoError, scope);
@@ -593,14 +600,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (isPrModeLeftoverRun) {
     scope?.setTag("circuit_exempt", "pr_mode_leftover_workflow");
   }
+  // A Forgejo submission's only GitHub call is fetching the grader (D6), so it waits on the grader org's circuit.
+  const circuitOrg =
+    repoData?.git_provider === "forgejo" ? (repoData.assignments?.autograder?.grader_repo?.split("/")[0] ?? org) : org;
   try {
-    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: org });
+    const circ = await adminSupabase.schema("public").rpc("get_github_circuit", { p_scope: "org", p_key: circuitOrg });
     if (!circ.error && Array.isArray(circ.data) && circ.data.length > 0) {
       const row = circ.data[0] as { state?: string; open_until?: string; reason?: string };
       if (!isPrModeLeftoverRun && row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
         scope.setTag("circuit_state", "open");
         scope.setContext("circuit_breaker_active", {
-          org,
+          org: circuitOrg,
           reason: row.reason || "Circuit breaker active",
           open_until: row.open_until
         });
@@ -925,25 +935,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           );
         }
       }
-      // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
+      // Helper to fetch user roles by the actor's username and class ID (works with or without check run)
       const fetchUserRolesForActor = async (
         classId: number | null
       ): Promise<Database["public"]["Tables"]["user_roles"]["Row"] | undefined> => {
         if (classId == null || isPawtograderTriggered) return undefined;
-        const { data: user, error: userError } = await adminSupabase
-          .from("users")
-          .select("user_id")
-          .ilike("github_username", decoded.actor)
-          .maybeSingle();
-        if (userError) {
+        let userId: string | null;
+        try {
+          userId = await findActorUserId(adminSupabase, decoded, forgejoConfig()?.url);
+        } catch (userError) {
           Sentry.captureException(userError, scope);
-          throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
+          throw new UserVisibleError(`Failed to lookup user: ${(userError as { message?: string }).message}`);
         }
-        if (!user) return undefined;
+        if (!userId) return undefined;
         const { data: userRolesData, error: userRolesError } = await adminSupabase
           .from("user_roles")
           .select("*")
-          .eq("user_id", user.user_id)
+          .eq("user_id", userId)
           .eq("class_id", Number(classId))
           .maybeSingle();
         if (userRolesError) {
@@ -1256,6 +1264,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
           .select("id, created_at")
+          // The same owner/name can exist on GitHub and on Forgejo; only this provider's repository counts.
+          .eq("repository_id", repoData.id)
           .eq("repository", repository)
           .eq("sha", sha)
           .eq("run_number", Number.parseInt(decoded.run_id))
@@ -1534,15 +1544,42 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           };
         }
 
-        // Clone the repository
-        const repoToClone = getRepoToCloneConsideringE2E(repository);
-        const repo = await handleGitHubApiCall(
-          () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
-          org,
-          "cloneRepository",
-          adminSupabase,
-          scope
-        );
+        // Clone the repository. A Forgejo clone stays outside handleGitHubApiCall, so its failures never
+        // open the GitHub circuit for an org that happens to share the Forgejo org's name.
+        let repo: Buffer;
+        // Set when a Forgejo archive passed the limit: its size, for the rejection below.
+        let oversizedZipBytes: number | undefined;
+        if (repoData.git_provider === "forgejo") {
+          const forgejo = forgejoConfig();
+          if (!forgejo) {
+            throw new UserVisibleError("Forgejo grading isn't configured on this deployment.", 503);
+          }
+          try {
+            const archive = await downloadArchive(forgejo, repository, sha, MAX_SUBMISSION_ZIP_BYTES);
+            repo = Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
+          } catch (e) {
+            if (!(e instanceof ArchiveTooLargeError)) {
+              // The student only sees the message; the status and reason go to Sentry.
+              Sentry.captureException(e, scope);
+              const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+              throw new UserVisibleError(
+                `${timedOut ? "Forgejo took too long to return the submission" : "Forgejo didn't return the submission"}. Try again. If it keeps failing, tell staff.`,
+                502
+              );
+            }
+            oversizedZipBytes = e.bytesRead;
+            repo = Buffer.alloc(0);
+          }
+        } else {
+          const repoToClone = getRepoToCloneConsideringE2E(repository);
+          repo = await handleGitHubApiCall(
+            () => getGitProvider().cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha),
+            org,
+            "cloneRepository",
+            adminSupabase,
+            scope
+          );
+        }
 
         // Reject + clean up a submission that's too large to safely unzip in the
         // isolate (see MAX_SUBMISSION_* above). Mirrors the no-matching-files
@@ -1569,10 +1606,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         // First guard: reject an oversized zipball BEFORE unzipping it into the
         // heap (openZip.buffer holds the whole compressed buffer + parsed graph).
-        if (repo.length > MAX_SUBMISSION_ZIP_BYTES) {
+        const zipBytes = oversizedZipBytes ?? repo.length;
+        if (zipBytes > MAX_SUBMISSION_ZIP_BYTES) {
           await rejectOversizedSubmission(
             "zip_too_large",
-            Math.ceil(repo.length / (1024 * 1024)),
+            Math.ceil(zipBytes / (1024 * 1024)),
             MAX_SUBMISSION_ZIP_MB,
             "download"
           );
@@ -1846,7 +1884,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         const requestedGraderSha = isRegressionRerun ? (checkRun.requested_grader_sha ?? undefined) : undefined;
         const { download_link: grader_url, sha: grader_sha } = await handleGitHubApiCall(
           () => getRepoTarballURL(config.grader_repo!, requestedGraderSha),
-          org,
+          // The grader stays on GitHub for Forgejo assignments (D6), so its own org is the circuit key.
+          repoData.git_provider === "forgejo" ? config.grader_repo!.split("/")[0] : org,
           "getRepoTarballURL",
           adminSupabase,
           scope
@@ -1898,9 +1937,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw err;
   }
 }
-Deno.serve(async (req) => {
-  return await wrapRequestHandler(req, handleRequest, {
-    recordUserVisibleErrors: false,
-    recordSecurityErrors: false
+// Imported by tests, which call handleRequest directly.
+if (import.meta.main) {
+  Deno.serve(async (req) => {
+    return await wrapRequestHandler(req, handleRequest, {
+      recordUserVisibleErrors: false,
+      recordSecurityErrors: false
+    });
   });
-});
+}

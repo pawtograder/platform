@@ -23,6 +23,9 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
   and what breaks while you do.
 - [Monitoring & Alerting](./monitoring-alerting.md): the alerts the chart ships
   (backup, ESO, cert) and how they're wired into kube-prometheus-stack.
+- [Office Hours Queue Health](./office-hours-queue-health.md): the queue-health
+  gauges, what normal looks like in and out of a session, and how to triage a
+  queue that stays red.
 - [Incident Response](./incident-response.md): severity definitions, first
   response, and per-component triage.
 - [Data Retention & Storage Sizing](./data-retention.md): where data lives
