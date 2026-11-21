@@ -17,7 +17,7 @@ import { createClient } from "@/utils/supabase/client";
  * - `dismissed` holds the hints the student closed since the page loaded. It is kept in memory
  *   only, so the hints come back on the next page load until the onboarding is complete.
  * - `completed` comes from the student's row in user_onboarding_seen. It is null until that read
- *   finishes, and the read happens once, the first time an active component asks.
+ *   finishes, and the read happens once per profile, the first time an active component asks.
  * - `owner` is the class profile that `completed` and `dismissed` belong to. Signing out and in as
  *   someone else, or moving to another course, doesn't always reload the page, so when the profile
  *   changes, the store forgets both and reads the table again.

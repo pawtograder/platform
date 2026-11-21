@@ -39,10 +39,10 @@ export function countTextQueues(queues: readonly { available: boolean; queue_typ
  * returns: while the page is loading or the connection has failed, a message replaces the list,
  * and the queue description hint has nothing to point at.
  *
- * The page uses this to decide whether to ask for the queue description hint, and the header uses
- * it to decide whether to wait for that hint. Both have to agree. Otherwise the header can wait for
- * a hint the page never asks for, and neither hint opens. If the page's early returns change, for
- * example in #1341, change this to match.
+ * The page uses this to decide whether to ask for the queue description hint, so the hint never
+ * opens without the list it points at. If the page's early returns change, for example in #1341,
+ * change this to match. The header doesn't use it: it keeps waiting while the page is loading,
+ * because the list usually follows (see office-hours-header.tsx).
  */
 export function queueListShown({
   browseView,

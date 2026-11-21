@@ -8,7 +8,7 @@ import NextLink from "next/link";
 import { FaPlus } from "react-icons/fa";
 import { FiChevronRight, FiChevronDown } from "react-icons/fi";
 import { useEffect, useMemo, useState } from "react";
-import { useActiveHelpQueueAssignments, useConnectionStatus, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useActiveHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
@@ -26,8 +26,7 @@ import {
   countTextQueues,
   newRequestHint,
   nextOfficeHoursStart,
-  queueDescriptionHintPending,
-  queueListShown
+  queueDescriptionHintPending
 } from "@/lib/officeHoursOnboarding";
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
@@ -153,18 +152,16 @@ export function OfficeHoursHeader({
   const onboardingDataLoaded = useOnboardingDataLoaded();
   // On the queue list, the queue description hint on the page comes first. The header holds its
   // hint back until the student closes that one, so the order doesn't depend on which code loads
-  // first (see queueDescriptionHintPending). It holds it only while the page is showing the list,
-  // checked with the same queueListShown values the page uses. While the page shows its loading
-  // message or a connection error, the page asks for no hint, and the header doesn't wait.
-  const { isLoading: officeHoursLoading, connectionError, connectionStatus } = useConnectionStatus();
-  const onQueueList =
-    (pathname === officeHoursBaseHref || pathname === `${officeHoursBaseHref}/`) &&
-    queueListShown({
-      browseView: mode === "browse",
-      loading: officeHoursLoading,
-      connectionError: !!connectionError,
-      disconnected: connectionStatus?.overall === "disconnected"
-    });
+  // first (see queueDescriptionHintPending).
+  //
+  // It holds the hint while the page is still loading too. On a normal first visit the tables
+  // arrive before every realtime channel has joined, and the page shows its loading message until
+  // they do. If the header stopped waiting then, the New Request hint would open and then give way
+  // to the queue hint a moment later. The cost: while realtime can't connect at all, the page
+  // never gets past that message on this branch, and neither hint opens on a course with two or
+  // more text queues. Once the page shows the list without realtime (#1341), the queue hint opens
+  // and the New Request hint follows it.
+  const onQueueList = mode === "browse" && (pathname === officeHoursBaseHref || pathname === `${officeHoursBaseHref}/`);
   const queueDescriptionDismissed = useOnboardingHintDismissed("read-queue-description");
   const newRequestHintId = newRequestHint({
     featureEnabled: onboardingOn,

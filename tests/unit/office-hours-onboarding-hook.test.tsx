@@ -28,9 +28,24 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
     throw new Error("the onboarding store asked for the realtime connection status");
   }
 }));
+jest.mock("@/hooks/useConnectionStatus", () => ({
+  useConnectionStatus: () => {
+    throw new Error("the onboarding store asked for the realtime connection status");
+  }
+}));
 jest.mock("@/lib/TableController", () => ({
   useIsTableControllerReady: (table: object) => loadedTables.has(table)
 }));
+
+/** A read of user_onboarding_seen that the test finishes when it wants to. */
+function pendingRead() {
+  let finish: (seen: boolean) => void = () => undefined;
+  const promise = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  (hasSeenOnboarding as jest.Mock).mockImplementationOnce(() => promise);
+  return finish;
+}
 
 // The student's row in user_onboarding_seen. The table's RLS is tested against a real database in
 // tests/e2e/user-onboarding-seen-db.spec.ts.
@@ -86,6 +101,30 @@ describe("useOnboardingCompleted", () => {
     expect(result.current.dismissed).toBe(false);
     expect(hasSeenOnboarding).toHaveBeenCalledTimes(2);
   });
+
+  it("ignores a read that finishes after another student took over", async () => {
+    // Student C has seen the hints and D hasn't. D signs in while C's read is still in flight.
+    const finishReadForC = pendingRead();
+    renderHook(() => useOnboardingCompleted(true, "profile-c"));
+    const finishReadForD = pendingRead();
+    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-d"));
+
+    // C's answer arrives first. It belongs to C, so D must not take it.
+    await act(async () => finishReadForC(true));
+    await act(async () => finishReadForD(false));
+    expect(result.current).toBe(false);
+  });
+
+  it("keeps a New Request click made while the read is still in flight", async () => {
+    const finishRead = pendingRead();
+    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-e"));
+    act(() => completeOnboarding());
+    expect(result.current).toBe(true);
+
+    // The read started before the click, so its "not seen" is out of date.
+    await act(async () => finishRead(false));
+    expect(result.current).toBe(true);
+  });
 });
 
 describe("useOnboardingHint", () => {
@@ -134,10 +173,10 @@ describe("useOnboardingHint", () => {
     expect(opens.slice(rendersBeforeSwitch)).not.toContain(false);
   });
 
-  it("marks onboarding complete and saves the student's row when they click New Request", () => {
+  it("marks onboarding complete and saves the student's row when they click New Request", async () => {
     // The components pass a null hint id once this is complete, which is what closes the hints.
-    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-b"));
-    expect(result.current).toBe(false);
+    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-f"));
+    await waitFor(() => expect(result.current).toBe(false));
 
     act(() => completeOnboarding());
     expect(result.current).toBe(true);
