@@ -191,7 +191,7 @@ test.describe("help request escalation RPCs", () => {
 
     // The first ticket is resolved with its check-in pending, so it doesn't count against the
     // one-solo-request rule and the student can open a second one in the same queue.
-    await insertHelpRequest({
+    const second = await insertHelpRequest({
       class_id: classId,
       help_queue_id: (await row(first)).help_queue,
       student_profile_id: student.private_profile_id,
@@ -206,6 +206,8 @@ test.describe("help request escalation RPCs", () => {
     expect(error?.code).toBe("23505");
     // The client shows dedicated copy for this hint instead of the generic "refresh" text.
     expect(error?.hint).toBe("help_request_solo_reopen_conflict");
+    // DETAIL names the blocking request so the student knows which one to finish.
+    expect(error?.details).toBe(String(second.id));
     const r = await row(first);
     expect(r).toMatchObject({ status: "resolved", escalation_count: 0 });
     expect(r.check_in_expires_at).not.toBeNull();

@@ -22,7 +22,7 @@ DECLARE
   v_request public.help_requests%ROWTYPE;
   v_caller uuid;
   v_previous_assignee uuid;
-  v_other_solo_count int;
+  v_blocking_request_id bigint;
   v_note text := regexp_replace(coalesce(p_note, ''), '^\s+|\s+$', '', 'g');
 BEGIN
   IF auth.uid() IS NULL THEN
@@ -65,8 +65,8 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.help_request_students hrs
                     WHERE hrs.help_request_id = v_request.id
                       AND hrs.profile_id <> v_request.created_by) THEN
-      SELECT count(*)
-        INTO v_other_solo_count
+      SELECT hr.id
+        INTO v_blocking_request_id
         FROM public.help_requests hr
        WHERE hr.id <> v_request.id
          AND hr.help_queue = v_request.help_queue
@@ -75,14 +75,18 @@ BEGIN
          AND hr.status IN ('open', 'in_progress')
          AND NOT EXISTS (SELECT 1 FROM public.help_request_students hrs
                           WHERE hrs.help_request_id = hr.id
-                            AND hrs.profile_id <> v_request.created_by);
-      IF v_other_solo_count > 0 THEN
-        RAISE EXCEPTION 'you already have a % solo help request in this queue; finish it before reopening this one',
-          CASE WHEN v_request.is_private THEN 'private' ELSE 'public' END
+                            AND hrs.profile_id <> v_request.created_by)
+       ORDER BY hr.id
+       LIMIT 1;
+      IF v_blocking_request_id IS NOT NULL THEN
+        RAISE EXCEPTION 'you already have a % solo help request in this queue (#%); finish it before reopening this one',
+          CASE WHEN v_request.is_private THEN 'private' ELSE 'public' END, v_blocking_request_id
           USING ERRCODE = '23505',
                 -- The client keys its student-facing copy on this hint, so other 23505 errors keep
-                -- their generic message (lib/helpRequestEscalation.ts, checkInErrorMessage).
-                HINT = 'help_request_solo_reopen_conflict';
+                -- their generic message, and names the blocking request from DETAIL, which holds
+                -- only its id (lib/helpRequestEscalation.ts, checkInErrorMessage).
+                HINT = 'help_request_solo_reopen_conflict',
+                DETAIL = v_blocking_request_id::text;
       END IF;
     END IF;
 

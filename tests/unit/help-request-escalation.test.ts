@@ -154,15 +154,25 @@ describe("notes and labels", () => {
 });
 
 describe("checkInErrorMessage", () => {
-  it("explains the solo-request conflict instead of saying to refresh", () => {
-    const message = checkInErrorMessage({
-      code: "23505",
-      message: "you already have a public solo help request in this queue; finish it before reopening this one",
-      details: null,
-      hint: "help_request_solo_reopen_conflict"
-    });
-    expect(message).toBe(SOLO_REOPEN_CONFLICT_MESSAGE);
+  const conflict = {
+    code: "23505",
+    message: "you already have a public solo help request in this queue (#42); finish it before reopening this one",
+    details: "42",
+    hint: "help_request_solo_reopen_conflict"
+  };
+
+  it("names the blocking request instead of saying to refresh", () => {
+    const message = checkInErrorMessage(conflict);
+    expect(message).toBe(
+      "Your Request #42 is still open in this queue. Finish or close it first, then answer this check-in again."
+    );
     expect(message).not.toMatch(/refresh/i);
+  });
+
+  it("falls back to general conflict copy when the id is missing or malformed", () => {
+    expect(checkInErrorMessage({ ...conflict, details: null })).toBe(SOLO_REOPEN_CONFLICT_MESSAGE);
+    expect(checkInErrorMessage({ ...conflict, details: "42; drop" })).toBe(SOLO_REOPEN_CONFLICT_MESSAGE);
+    expect(SOLO_REOPEN_CONFLICT_MESSAGE).not.toMatch(/refresh/i);
   });
 
   it("keeps the generic copy for any other 23505", () => {
