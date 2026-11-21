@@ -2075,6 +2075,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "tags.profile_id": "none",
   "tags.updated_at": "none",
   "tags.visible": "none",
+  // Fixed guide names such as "office-hours-student-onboarding", not anything a user types.
+  "user_onboarding_seen.key": "none",
+  "user_onboarding_seen.seen_at": "none",
+  "user_onboarding_seen.user_id": "none",
   "user_privileges.class_id": "none",
   // DRAFT: new entry, review and remove this comment
   "user_privileges.class_role_id": "none",
