@@ -1,6 +1,6 @@
 /**
  * #1010: the Repository Status actions follow manage_student_repositories
- * (20261120140200_repository_status_by_capability.sql).
+ * (20261121160200_repository_status_by_capability.sql).
  *
  * retry_repository_creation, fix_assignment_repo_permissions and
  * cleanup_individual_repositories_for_assignment need manage_student_repositories in the class. The default

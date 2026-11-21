@@ -1,6 +1,6 @@
 /**
  * #1010: the Repository Status actions need manage_student_repositories
- * (20261120140200_repository_status_by_capability.sql). Without it the Repository Status nav item
+ * (20261121160200_repository_status_by_capability.sql). Without it the Repository Status nav item
  * is hidden, and someone who opens the page by URL sees the table but not Retry creation, Fix
  * Permissions or Cleanup individual repositories. A Head TA on a custom role with
  * manage_student_repositories sees them and can fix permissions. Instructors see no change.
