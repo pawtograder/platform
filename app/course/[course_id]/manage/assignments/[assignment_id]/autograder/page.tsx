@@ -95,8 +95,9 @@ export default function AutograderPage() {
       const supabase = createClient();
       const priorHasAutograder = savedHasAutograder.current;
       const nextHasAutograder = values.assignments.has_autograder;
-      // Both edge functions below reject Forgejo assignments (#1091).
-      if (values.assignments?.git_provider === "forgejo") {
+      // The grade.yml sync below rejects Forgejo assignments, whose handout is on Forgejo. Returning
+      // before it needs the flag unchanged, which the disabled radio keeps.
+      if (values.assignments?.git_provider === "forgejo" && priorHasAutograder !== nextHasAutograder) {
         throw new Error(FORGEJO_GRADER_SETUP_REASON);
       }
 
@@ -425,6 +426,7 @@ export default function AutograderPage() {
                 render={({ field }) => (
                   <RadioGroup.Root
                     name={field.name}
+                    disabled={currentAssignment?.git_provider === "forgejo"}
                     value={field.value ? "true" : "false"}
                     onValueChange={(details) => field.onChange(details.value === "true")}
                   >

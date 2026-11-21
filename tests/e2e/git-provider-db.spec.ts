@@ -291,7 +291,8 @@ for (const endpoint of [
         class_id: course.id,
         assignment_id: assignment.id,
         new_repo: "e2e-ignore/staff",
-        watch_type: "grader_solution"
+        // github-repo-configure-webhook refuses only the handout for Forgejo; the grader is checked below.
+        watch_type: "template_repo"
       }
     });
     expect(error?.context.status).toBe(400);
@@ -299,6 +300,23 @@ for (const endpoint of [
     expect(await ok(reposFor(assignment.id))).toHaveLength(0);
   });
 }
+test("github-repo-configure-webhook reads a Forgejo assignment's grader repo, which stays on GitHub", async () => {
+  const { course, assignment } = await fixture("forgejo");
+  const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
+  // A repository that doesn't exist: getting past the Forgejo refusal means failing to read it, with nothing written.
+  const { error } = await supabase.functions.invoke("github-repo-configure-webhook", {
+    headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
+    body: {
+      assignment_id: assignment.id,
+      new_repo: "pawtograder-e2e-missing/does-not-exist",
+      watch_type: "grader_solution"
+    }
+  });
+  expect(error, "reading a missing grader repo fails").toBeTruthy();
+  expect(await error.context.text()).not.toContain("This assignment uses Forgejo");
+  const saved = await ok(supabase.from("autograder").select("config").eq("id", assignment.id).single());
+  expect(saved.config).toBeNull();
+});
 // assignment-create-handout-repo creates Forgejo handouts (#1253). This lane runs no Forgejo, so only its
 // refusals are checked here. The Forgejo calls are unit-tested in ForgejoWrapper.test.ts.
 for (const [repoMode, status, message] of [
