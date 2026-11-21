@@ -17,6 +17,7 @@ import {
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 import { visualScreenshot } from "./VisualTestUtils";
+import { waitForGradebookCellsIdle } from "./gradebookTableHelpers";
 // removed unused import
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -116,31 +117,6 @@ async function waitForVirtualizerIdle(page: Page) {
     },
     { polling: "raf", timeout: 2000 }
   );
-}
-
-// `gradebook-cell-pulse` is the className applied to the calculator icon a
-// gradebookCell.tsx renders while `studentGradebookColumn.is_recalculating`
-// is true (see app/course/[course_id]/manage/gradebook/gradebookCell.tsx).
-// Each is_recalculating flip toggles the cell's children, which combined with
-// realtime row updates causes the virtualizer to remount the cell — and
-// remounts in the middle of waitForStableLocator's two boundingBox samples
-// produce its "Timed out waiting for stable locator box" flake. Block until
-// no cell is currently recalculating before sampling cell geometry.
-async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000) {
-  // Three states are possible: (a) no pulse elements at all — nothing
-  // was recalculating; (b) some existed and all transitioned to hidden;
-  // (c) at least one stayed visible past timeoutMs — recalculation is
-  // genuinely stuck and we want that to surface as a real failure, not
-  // a silent pass. Earlier we wrapped the whole waitFor in `.catch(() =>
-  // {})`, which folded (c) into "success" and masked the diagnostic.
-  // Then we narrowed to `.first()` only, which folds "first row idle but
-  // others still pulsing" into success. Now we wait until the *full
-  // set* drains, so partial-idle never reports as fully idle.
-  const pulses = page.locator(".gradebook-cell-pulse");
-  if ((await pulses.count()) === 0) return;
-  await page.waitForFunction(() => document.querySelectorAll(".gradebook-cell-pulse").length === 0, {
-    timeout: timeoutMs
-  });
 }
 
 // The recalculation pipeline is async (DB trigger → pg_net → edge function). On slow
@@ -814,7 +790,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Wait for the initial recalculation burst to drain. Each is_recalculating
     // flip remounts the cell's children, defeating waitForStableLocator's
     // two-boundingBox stability check.
-    await waitForGradebookRecalculationsIdle(page);
+    await waitForGradebookCellsIdle(page);
     const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
     // Even with recalculations idle, the virtualizer can briefly remount cells
     // on realtime row updates — keep the wide stability window.
@@ -919,6 +895,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass({ timeout: 60_000 });
 
     await expectCalculatedCell(page, students[0].private_profile_name, "Final Grade", 51.95, { classId: course.id });
+
+    // The kicks in expectCalculatedCell re-enqueue rows, and the recalculating icons they bring up
+    // clear by realtime broadcast after the values land. Capture once they have drained.
+    await waitForGradebookCellsIdle(page);
+    await waitForVirtualizerIdle(page);
 
     // Take screenshot for visual regression testing
     // Keep the scroll-right above: the point is to capture the virtualized columns.

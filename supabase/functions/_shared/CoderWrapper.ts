@@ -3,6 +3,8 @@
 // CODER_API_TOKEN belongs to a Coder owner. workspace-open creates users and workspaces on students'
 // behalf and reads their OIDC link, and only owners may read a link (GET /debug/{user}/debug-link).
 
+import { redactSecret } from "./SentryScrub.ts";
+
 export type CoderConfig = { url: string; token: string; fetch?: typeof fetch };
 
 /** Null until the deployment sets both. */
@@ -287,4 +289,83 @@ export async function getAgentLogs(config: CoderConfig, agentId: string): Promis
 /** The wildcard host for subdomain apps, such as `*.coder.example.com`, or "" when none is set. */
 export async function getAppHost(config: CoderConfig): Promise<string> {
   return (await get<{ host: string }>(config, "app host lookup", "/applications/host")).host;
+}
+
+export type CoderApiKey = { id: string; token_name: string; expires_at: string };
+
+/** Scope "all": v2.37.3 accepts narrower scopes, then 404s the secret write. */
+export async function mintUserKey(
+  config: CoderConfig,
+  userId: string,
+  tokenName: string,
+  lifetimeMs: number
+): Promise<string> {
+  const { data, error } = await coder<{ key?: unknown }>(
+    config,
+    "API key create",
+    "POST",
+    `/users/${encodeURIComponent(userId)}/keys/tokens`,
+    { token_name: tokenName, lifetime: lifetimeMs * 1_000_000, scope: "all" }
+  );
+  if (error) throw error;
+  const key = data?.key;
+  if (typeof key !== "string" || key.length <= 10)
+    throw new Error("Coder API key create failed: no key in the response");
+  redactSecret(key);
+  return key;
+}
+
+/** The create response has no id: it is the key's first 10 characters. */
+export function apiKeyId(key: string): string {
+  return key.slice(0, 10);
+}
+
+/** Expired keys too: v2.37.3 leaves them out unless asked, and they still hold their names. */
+export async function listUserKeys(config: CoderConfig, userId: string): Promise<CoderApiKey[]> {
+  return await get<CoderApiKey[]>(
+    config,
+    "API key list",
+    `/users/${encodeURIComponent(userId)}/keys/tokens?include_expired=true`
+  );
+}
+
+export async function deleteUserKey(config: CoderConfig, userId: string, keyId: string): Promise<void> {
+  const { status, error } = await coder(
+    config,
+    "API key delete",
+    "DELETE",
+    `/users/${encodeURIComponent(userId)}/keys/${encodeURIComponent(keyId)}`
+  );
+  if (error && status !== 404) throw error;
+}
+
+export type CoderSecret = { name: string; updated_at: string };
+
+export async function listOwnSecrets(config: CoderConfig): Promise<CoderSecret[]> {
+  return await get<CoderSecret[]>(config, "secret list", "/users/me/secrets");
+}
+
+export async function deleteOwnSecret(config: CoderConfig, name: string): Promise<void> {
+  const { status, error } = await coder(
+    config,
+    "secret delete",
+    "DELETE",
+    `/users/me/secrets/${encodeURIComponent(name)}`
+  );
+  if (error && status !== 404) throw error;
+}
+
+export async function writeOwnSecret(
+  config: CoderConfig,
+  secret: { name: string; value: string; file_path: string }
+): Promise<void> {
+  const path = `/users/me/secrets/${encodeURIComponent(secret.name)}`;
+  const patch = () =>
+    coder(config, "secret update", "PATCH", path, { value: secret.value, file_path: secret.file_path });
+  let res = await patch();
+  if (res.status === 404) {
+    res = await coder(config, "secret create", "POST", "/users/me/secrets", secret);
+    if (res.status === 409) res = await patch();
+  }
+  if (res.error) throw res.error;
 }

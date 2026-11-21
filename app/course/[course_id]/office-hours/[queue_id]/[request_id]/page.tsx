@@ -13,6 +13,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
+import { CheckInAlertBanner, useCheckInAlert } from "@/hooks/useEscalationAlert";
 
 type LoadState = "pending" | "loaded" | "not_found" | "error";
 
@@ -169,6 +170,15 @@ export default function RequestDetailPage() {
     enabled: turnAlertsOn && isRequestMember
   });
 
+  // Same membership gate as the turn alert: only a student on the request hears about its check-in.
+  const escalationAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_ESCALATION_ALERT, false);
+  const checkInMessage = useCheckInAlert({
+    subject: `${private_profile_id ?? "unknown"}:${requestIdNum}`,
+    status: request?.status,
+    checkInExpiresAt: request?.check_in_expires_at,
+    enabled: escalationAlertsOn && isRequestMember
+  });
+
   if (!request) {
     if (hiddenFromMasquerade) {
       return (
@@ -213,6 +223,7 @@ export default function RequestDetailPage() {
       <Box flex={{ lg: 8 }} minW={0}>
         <TurnAlertPrompt enabled={turnAlertsOn} />
         <TurnAlertBanner message={turnMessage} />
+        <CheckInAlertBanner message={checkInMessage} />
         <CurrentRequest request={request} position={position} />
       </Box>
     </Flex>
