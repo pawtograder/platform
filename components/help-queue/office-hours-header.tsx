@@ -8,7 +8,7 @@ import NextLink from "next/link";
 import { FaPlus } from "react-icons/fa";
 import { FiChevronRight, FiChevronDown } from "react-icons/fi";
 import { useEffect, useMemo, useState } from "react";
-import { useActiveHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useActiveHelpQueueAssignments, useConnectionStatus, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
@@ -26,7 +26,8 @@ import {
   countTextQueues,
   newRequestHint,
   nextOfficeHoursStart,
-  queueDescriptionHintPending
+  queueDescriptionHintPending,
+  queueListShown
 } from "@/lib/officeHoursOnboarding";
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
@@ -143,16 +144,27 @@ export function OfficeHoursHeader({
   // duty, NoStaffOnDutyMessage gives the text.
   //
   // Only a student on the student pages of a course with the feature on takes part. For everyone
-  // else, clicking New Request doesn't mark the onboarding complete, and nothing reads localStorage.
+  // else, clicking New Request doesn't mark the onboarding complete, and nothing reads or writes
+  // user_onboarding_seen.
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingActive = onboardingOn && isStudent && !isManageMode;
-  const onboardingCompleted = useOnboardingCompleted(onboardingActive);
+  const onboardingCompleted = useOnboardingCompleted(onboardingActive, private_profile_id);
   const onboardingDataLoaded = useOnboardingDataLoaded();
   // On the queue list, the queue description hint on the page comes first. The header holds its
   // hint back until the student closes that one, so the order doesn't depend on which code loads
-  // first (see queueDescriptionHintPending).
-  const onQueueList = mode === "browse" && (pathname === officeHoursBaseHref || pathname === `${officeHoursBaseHref}/`);
+  // first (see queueDescriptionHintPending). It holds it only while the page is showing the list,
+  // checked with the same queueListShown values the page uses. While the page shows its loading
+  // message or a connection error, the page asks for no hint, and the header doesn't wait.
+  const { isLoading: officeHoursLoading, connectionError, connectionStatus } = useConnectionStatus();
+  const onQueueList =
+    (pathname === officeHoursBaseHref || pathname === `${officeHoursBaseHref}/`) &&
+    queueListShown({
+      browseView: mode === "browse",
+      loading: officeHoursLoading,
+      connectionError: !!connectionError,
+      disconnected: connectionStatus?.overall === "disconnected"
+    });
   const queueDescriptionDismissed = useOnboardingHintDismissed("read-queue-description");
   const newRequestHintId = newRequestHint({
     featureEnabled: onboardingOn,

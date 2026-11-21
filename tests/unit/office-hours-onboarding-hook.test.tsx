@@ -2,24 +2,35 @@
  * The store behind the onboarding hints (hooks/useOfficeHoursOnboarding.ts).
  *
  * The store is module state that lasts for the page load, the same as in the browser. So the tests
- * in this file share it and run in order: what one test dismisses or saves, the next one sees.
+ * in this file share it and run in order: what one test reads or saves, the next one sees. Each
+ * test sets up the dismissals it checks.
  */
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   completeOnboarding,
   useOnboardingCompleted,
+  useOnboardingDataLoaded,
   useOnboardingHint,
   useOnboardingHintDismissed
 } from "@/hooks/useOfficeHoursOnboarding";
 import type { OnboardingHintId } from "@/lib/officeHoursOnboarding";
 import { hasSeenOnboarding, markOnboardingSeen } from "@/lib/onboardingSeen";
 
-// The hook module also exports useOnboardingDataLoaded, which these tests don't use.
+// The office hours tables, and which of them have finished loading.
+const queuesTable = { name: "help_queues" };
+const shiftsTable = { name: "help_queue_assignments" };
+const loadedTables = new Set<object>();
 jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
-  useOfficeHoursController: () => ({})
+  useOfficeHoursController: () => ({ helpQueues: queuesTable, helpQueueAssignments: shiftsTable }),
+  // The hints must not wait for the realtime connection (#1341), so nothing here may ask for it.
+  useConnectionStatus: () => {
+    throw new Error("the onboarding store asked for the realtime connection status");
+  }
 }));
-jest.mock("@/lib/TableController", () => ({ useIsTableControllerReady: () => true }));
+jest.mock("@/lib/TableController", () => ({
+  useIsTableControllerReady: (table: object) => loadedTables.has(table)
+}));
 
 // The student's row in user_onboarding_seen. The table's RLS is tested against a real database in
 // tests/e2e/user-onboarding-seen-db.spec.ts.
@@ -31,22 +42,49 @@ jest.mock("@/lib/onboardingSeen", () => ({
   markOnboardingSeen: jest.fn(async () => undefined)
 }));
 
+describe("useOnboardingDataLoaded", () => {
+  it("waits for both the queues and the staff shifts, and not for realtime", () => {
+    loadedTables.clear();
+    loadedTables.add(queuesTable);
+    expect(renderHook(() => useOnboardingDataLoaded()).result.current).toBe(false);
+
+    loadedTables.add(shiftsTable);
+    expect(renderHook(() => useOnboardingDataLoaded()).result.current).toBe(true);
+  });
+});
+
 describe("useOnboardingCompleted", () => {
   it("doesn't read the table when the feature is off or the user isn't a student", () => {
-    const { result } = renderHook(() => useOnboardingCompleted(false));
+    const { result } = renderHook(() => useOnboardingCompleted(false, "profile-a"));
     expect(result.current).toBe(true);
     expect(hasSeenOnboarding).not.toHaveBeenCalled();
   });
 
   it("reads the student's row once, and reports complete until the answer arrives", async () => {
-    const { result } = renderHook(() => useOnboardingCompleted(true));
+    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-a"));
     // No hint may open before the database has answered.
     expect(result.current).toBe(true);
     await waitFor(() => expect(result.current).toBe(false));
 
-    renderHook(() => useOnboardingCompleted(true));
+    renderHook(() => useOnboardingCompleted(true, "profile-a"));
     expect(hasSeenOnboarding).toHaveBeenCalledTimes(1);
     expect(hasSeenOnboarding).toHaveBeenCalledWith(fakeClient, "office-hours-student-onboarding");
+  });
+
+  it("starts over for another student signed in on the same page, without a reload", async () => {
+    // Student A finished onboarding and closed a hint.
+    act(() => completeOnboarding());
+    const hint = renderHook(() => useOnboardingHint("read-queue-description"));
+    act(() => hint.result.current.dismiss());
+
+    // Student B signs in on the same tab. A's answer and dismissals must not carry over.
+    const { result } = renderHook(() => ({
+      completed: useOnboardingCompleted(true, "profile-b"),
+      dismissed: useOnboardingHintDismissed("read-queue-description")
+    }));
+    await waitFor(() => expect(result.current.completed).toBe(false));
+    expect(result.current.dismissed).toBe(false);
+    expect(hasSeenOnboarding).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -64,11 +102,16 @@ describe("useOnboardingHint", () => {
     expect(result.current.newRequest.open).toBe(true);
   });
 
-  it("tells the header that the student closed the queue description hint", () => {
+  it("tells the header when the student closes the queue description hint", () => {
     // The header holds the New Request hint back on the queue list until this is true.
-    // The test above closed the queue description hint, and the store keeps that for the page load.
-    expect(renderHook(() => useOnboardingHintDismissed("read-queue-description")).result.current).toBe(true);
-    expect(renderHook(() => useOnboardingHintDismissed("staff-on-duty")).result.current).toBe(false);
+    const { result } = renderHook(() => ({
+      hint: useOnboardingHint("read-queue-description"),
+      dismissed: useOnboardingHintDismissed("read-queue-description"),
+      otherDismissed: useOnboardingHintDismissed("staff-on-duty")
+    }));
+    act(() => result.current.hint.dismiss());
+    expect(result.current.dismissed).toBe(true);
+    expect(result.current.otherDismissed).toBe(false);
   });
 
   it("keeps the New Request hint open on every render when staff come on duty while the page is open", () => {
@@ -91,16 +134,13 @@ describe("useOnboardingHint", () => {
     expect(opens.slice(rendersBeforeSwitch)).not.toContain(false);
   });
 
-  it("closes every hint once the student clicks New Request, and saves that in the database", () => {
-    const { result } = renderHook(() => ({
-      completed: useOnboardingCompleted(true),
-      hint: useOnboardingHint("staff-on-duty")
-    }));
-    expect(result.current.completed).toBe(false);
-    expect(result.current.hint.open).toBe(true);
+  it("marks onboarding complete and saves the student's row when they click New Request", () => {
+    // The components pass a null hint id once this is complete, which is what closes the hints.
+    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-b"));
+    expect(result.current).toBe(false);
 
     act(() => completeOnboarding());
-    expect(result.current.completed).toBe(true);
-    expect(markOnboardingSeen).toHaveBeenCalledWith(fakeClient, "office-hours-student-onboarding");
+    expect(result.current).toBe(true);
+    expect(markOnboardingSeen).toHaveBeenLastCalledWith(fakeClient, "office-hours-student-onboarding");
   });
 });

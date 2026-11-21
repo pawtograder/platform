@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
 import { useOnboardingCompleted, useOnboardingDataLoaded, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
-import { countTextQueues, wantsQueueDescriptionHint } from "@/lib/officeHoursOnboarding";
+import { countTextQueues, queueListShown, wantsQueueDescriptionHint } from "@/lib/officeHoursOnboarding";
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -172,23 +172,25 @@ export default function OfficeHoursPage() {
   // at the selected queue's description, because the selected queue can be an in-person or video
   // queue while the hint is about picking between text queues.
   //
-  // Ask for it only while the browse view is showing the list. The conditions match the early
-  // returns below, where the loading message and the connection error replace the list. If the
-  // page changes when those early returns show, change these to match. The header holds the New
-  // Request hint back on the queue list until the student closes this one, using the same
-  // wantsQueueDescriptionHint rule (see queueDescriptionHintPending).
+  // Ask for it only while the browse view is showing the list. queueListShown mirrors the early
+  // returns below, where the loading message and the connection error replace the list. The
+  // header holds the New Request hint back on the queue list until the student closes this one,
+  // and it checks queueListShown with the same values, so it never waits for a hint this page
+  // isn't asking for (see queueDescriptionHintPending).
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingActive = onboardingOn && isStudent;
-  const onboardingCompleted = useOnboardingCompleted(onboardingActive);
+  const onboardingCompleted = useOnboardingCompleted(onboardingActive, private_profile_id);
   const onboardingDataLoaded = useOnboardingDataLoaded();
   const textQueueCount = countTextQueues(availableQueues);
   const showsQueueList =
-    view === "browse" &&
     onboardingDataLoaded &&
-    !isLoading &&
-    !connectionError &&
-    connectionStatus?.overall !== "disconnected";
+    queueListShown({
+      browseView: view === "browse",
+      loading: isLoading,
+      connectionError: !!connectionError,
+      disconnected: connectionStatus?.overall === "disconnected"
+    });
   const queueDescriptionOnboarding = useOnboardingHint(
     showsQueueList &&
       wantsQueueDescriptionHint({

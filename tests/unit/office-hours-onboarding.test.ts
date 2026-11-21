@@ -11,6 +11,7 @@ import {
   nextOfficeHoursStart,
   onboardingCompletedFrom,
   queueDescriptionHintPending,
+  queueListShown,
   wantsQueueDescriptionHint,
   type OnboardingHintId
 } from "../../lib/officeHoursOnboarding";
@@ -68,6 +69,23 @@ describe("countTextQueues", () => {
       { available: true, queue_type: "in_person" }
     ];
     expect(countTextQueues(queues)).toBe(2);
+  });
+});
+
+describe("queueListShown", () => {
+  const shown = { browseView: true, loading: false, connectionError: false, disconnected: false };
+
+  it("is true in the browse view once the page is past its loading and error messages", () => {
+    expect(queueListShown(shown)).toBe(true);
+  });
+
+  it("is false while a loading or connection message replaces the list", () => {
+    // The header uses the same answer, so it doesn't hold the New Request hint for a queue hint
+    // the page can't show, for example while realtime can't connect.
+    expect(queueListShown({ ...shown, loading: true })).toBe(false);
+    expect(queueListShown({ ...shown, connectionError: true })).toBe(false);
+    expect(queueListShown({ ...shown, disconnected: true })).toBe(false);
+    expect(queueListShown({ ...shown, browseView: false })).toBe(false);
   });
 });
 

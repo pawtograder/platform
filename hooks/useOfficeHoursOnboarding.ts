@@ -17,11 +17,15 @@ import { createClient } from "@/utils/supabase/client";
  * - `dismissed` holds the hints the student closed since the page loaded. It is kept in memory
  *   only, so the hints come back on the next page load until the onboarding is complete.
  * - `completed` comes from the student's row in user_onboarding_seen. It is null until that read
- *   finishes, and the read happens once per page load, the first time an active component asks.
+ *   finishes, and the read happens once, the first time an active component asks.
+ * - `owner` is the class profile that `completed` and `dismissed` belong to. Signing out and in as
+ *   someone else, or moving to another course, doesn't always reload the page, so when the profile
+ *   changes, the store forgets both and reads the table again.
  */
 const ONBOARDING_KEY = ONBOARDING_KEYS.OFFICE_HOURS_STUDENT_ONBOARDING;
 const wanted = new Map<OnboardingHintId, number>();
 const dismissed = new Set<OnboardingHintId>();
+let owner: string | null = null;
 let completed: boolean | null = null;
 let completedRead: Promise<void> | null = null;
 let version = 0;
@@ -39,9 +43,21 @@ function subscribe(listener: () => void) {
   };
 }
 
+function startOverFor(profileId: string) {
+  if (owner === profileId) return;
+  owner = profileId;
+  completed = null;
+  completedRead = null;
+  dismissed.clear();
+  notify();
+}
+
 function readCompletedOnce() {
   if (completedRead) return;
+  const readFor = owner;
   completedRead = onboardingCompletedFrom(() => hasSeenOnboarding(createClient(), ONBOARDING_KEY)).then((value) => {
+    // Another profile took over while the read was in flight, and it has its own read.
+    if (owner !== readFor) return;
     // completeOnboarding may have run while the read was in flight. Keep its answer.
     if (completed === null) completed = value;
     notify();
@@ -55,18 +71,22 @@ function readCompletedOnce() {
  * during the server render or before the answer arrives. If the read fails, it stays true.
  *
  * `active` is false when the course hasn't turned the feature on, or the user isn't a student
- * looking at the student pages. Then this returns true without reading the table.
+ * looking at the student pages. Then this returns true without reading the table. `profileId` is
+ * the student's private profile in this class, which says whose answer the store holds.
  */
-export function useOnboardingCompleted(active: boolean): boolean {
+export function useOnboardingCompleted(active: boolean, profileId: string | null | undefined): boolean {
   useSyncExternalStore(
     subscribe,
     () => version,
     () => 0
   );
   useEffect(() => {
-    if (active) readCompletedOnce();
-  }, [active]);
-  return active ? completed !== false : true;
+    if (!active || !profileId) return;
+    startOverFor(profileId);
+    readCompletedOnce();
+  }, [active, profileId]);
+  if (!active || !profileId || owner !== profileId) return true;
+  return completed !== false;
 }
 
 /**

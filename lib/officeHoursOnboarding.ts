@@ -34,6 +34,30 @@ export function countTextQueues(queues: readonly { available: boolean; queue_typ
   return queues.filter((queue) => queue.available && queue.queue_type === "text").length;
 }
 
+/**
+ * Whether the office hours page is showing its queue list, by the same checks as the page's early
+ * returns: while the page is loading or the connection has failed, a message replaces the list,
+ * and the queue description hint has nothing to point at.
+ *
+ * The page uses this to decide whether to ask for the queue description hint, and the header uses
+ * it to decide whether to wait for that hint. Both have to agree. Otherwise the header can wait for
+ * a hint the page never asks for, and neither hint opens. If the page's early returns change, for
+ * example in #1341, change this to match.
+ */
+export function queueListShown({
+  browseView,
+  loading,
+  connectionError,
+  disconnected
+}: {
+  browseView: boolean;
+  loading: boolean;
+  connectionError: boolean;
+  disconnected: boolean;
+}): boolean {
+  return browseView && !loading && !connectionError && !disconnected;
+}
+
 /** Whether the queue description hint should show. */
 export function wantsQueueDescriptionHint({
   featureEnabled,

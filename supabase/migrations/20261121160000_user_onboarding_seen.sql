@@ -1,6 +1,6 @@
 -- Which onboarding guides each user has seen, so a guide that is meant to show once shows once per
--- user, not once per browser. The office hours hints for students (#1347) and the escalation
--- walkthrough for staff (#1261) both use it, each with its own key.
+-- user, not once per browser. The office hours hints for students (#1347) use it with the key
+-- 'office-hours-student-onboarding'. Another guide can use it with a key of its own.
 --
 -- One row per user per key. A row means the user has seen that guide. Rows are never updated or
 -- deleted by users: once seen, always seen. A second insert for the same key does nothing, because
