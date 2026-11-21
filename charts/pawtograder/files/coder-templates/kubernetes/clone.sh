@@ -20,11 +20,16 @@ normalize() {
 # repo_url's validation lets "" through for template import, and Coder then accepts it at creation.
 [ -n "$URL" ] || fail "the workspace's repo_url is empty; recreate it with the repository's clone URL."
 
+# Arguments for `git clone`: the credential helper, when there is one.
+set --
 if [ -n "$CREDS" ]; then
   [ -s "$CREDS" ] || fail "no Git credentials at $CREDS. Open the workspace from Pawtograder, which restarts it with them."
   ORIGIN="$(printf '%s\n' "$URL" | awk 'match($0, /^[^:\/]+:\/\/[^\/]*/) { print substr($0, 1, RLENGTH) }')"
-  # One string: unquoted `store --file X` fails with "no action specified".
-  git config --global --replace-all "credential.$ORIGIN.helper" "store --file=$CREDS" || fail "couldn't set git's credential helper"
+  # One string: unquoted `store --file X` fails with "no action specified". Set for the clone and then in the
+  # clone's own config, never in ~/.gitconfig: the startup script runs `git config --global` at the same time, and
+  # git refuses a second writer while the first holds ~/.gitconfig.lock ("could not lock config file").
+  HELPER="store --file=$CREDS"
+  set -- -c "credential.$ORIGIN.helper=$HELPER"
 elif [ -n "$AUTH_ID" ]; then
   # The agent's GIT_ASKPASS reads the same token; this only turns an unlinked account into a clear message.
   coder external-auth access-token "$AUTH_ID" >/dev/null 2>&1 \
@@ -54,12 +59,15 @@ fi
 TMP="$(mktemp -d "$(dirname "$DIR")/.$(basename "$DIR").cloning.XXXXXX")" || fail "couldn't create a staging directory beside $DIR"
 trap 'rm -rf "$TMP"' EXIT
 echo "Cloning $URL into $DIR..."
-GIT_TERMINAL_PROMPT=0 timeout -k 10 "$LIMIT" git clone -- "$URL" "$TMP/clone"
+GIT_TERMINAL_PROMPT=0 timeout -k 10 "$LIMIT" git "$@" clone -- "$URL" "$TMP/clone"
 code=$?
 case "$code" in
   0) ;;
   124 | 137) fail "git clone didn't finish within $LIMIT seconds (is the server reachable?)" ;;
   *) fail "git clone exited with $code. If git said authentication failed, open the workspace from Pawtograder to restart it with a new token." ;;
 esac
+if [ -n "$CREDS" ]; then
+  git -C "$TMP/clone" config --replace-all "credential.$ORIGIN.helper" "$HELPER" || fail "couldn't set git's credential helper"
+fi
 mv "$TMP/clone" "$DIR" || fail "couldn't move the clone into $DIR"
 echo "Cloned $URL into $DIR."

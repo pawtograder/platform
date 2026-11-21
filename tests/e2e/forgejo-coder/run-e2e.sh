@@ -105,12 +105,14 @@ else
   unset OAUTH_FIRST_PARTY_REDIRECT_URIS
 fi
 
-# Coder starts once Forgejo has the OAuth app that plays GitHub's (below).
+# Coder starts once Forgejo has the OAuth app that plays GitHub's (below). The workspace container always
+# starts fresh: its agents share one home, which must not carry a previous run's git config.
 if [ "${SKIP_APPS:-}" != "1" ]; then
   log "Starting Forgejo"
   $COMPOSE up -d --force-recreate loopback forgejo coder-db agents-init workspace
 else
-  $COMPOSE up -d loopback forgejo coder-db agents-init workspace
+  $COMPOSE up -d loopback forgejo coder-db
+  $COMPOSE up -d --force-recreate agents-init workspace
 fi
 wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
 
@@ -165,7 +167,7 @@ CODER_SESSION="$(curl -fsS -X POST "$CODER_BASE_URL/api/v2/users/login" -H 'Cont
 $COMPOSE exec -T -e CODER_URL="$CODER_BASE_URL" -e CODER_SESSION_TOKEN="$CODER_SESSION" coder \
   /opt/coder templates push kubernetes --directory /pawtograder-template --yes \
   --variable "forgejo_url=$FORGEJO_BASE_URL" --variable "github_url=$GITHUB_STANDIN_URL" \
-  --variable github_external_auth_id=github
+  --variable github_external_auth_id=github --variable "arch=${WORKSPACE_ARCH:-amd64}"
 # 24h; CODER_API_TOKEN belongs to an owner, as in the chart.
 export CODER_API_TOKEN="$(curl -fsS -X POST "$CODER_BASE_URL/api/v2/users/me/keys/tokens" \
   -H "Coder-Session-Token: $CODER_SESSION" -H 'Content-Type: application/json' \

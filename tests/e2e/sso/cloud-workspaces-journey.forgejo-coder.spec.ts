@@ -257,7 +257,8 @@ for (const provider of ["forgejo", "github"] as const) {
     let pushedSha: string;
 
     test.beforeAll(async () => {
-      klass = await createClass({ name: `Cloud workspaces journey ${provider}` });
+      // Short: the slug names the class's Forgejo org, and Forgejo caps names at 40 characters.
+      klass = await createClass({ name: `CW ${provider}` });
       instructor = await createUserInClass({
         role: "instructor",
         class_id: klass.id,
@@ -360,6 +361,13 @@ for (const provider of ["forgejo", "github"] as const) {
           .single();
         if (error) throw error;
         repository = repo;
+        // The student's linked GitHub account, then the accepted org invitation; confirming the invitation
+        // starts GitHub repo creation, which needs the username.
+        const { error: userError } = await supabase
+          .from("users")
+          .update({ github_username: login })
+          .eq("user_id", student.user_id);
+        if (userError) throw userError;
         const { error: roleError } = await supabase
           .from("user_roles")
           .update({ github_org_confirmed: true })

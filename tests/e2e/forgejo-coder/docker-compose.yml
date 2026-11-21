@@ -99,21 +99,22 @@ services:
       CODER_EXTERNAL_AUTH_0_AUTH_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/login/oauth/authorize"
       CODER_EXTERNAL_AUTH_0_TOKEN_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/login/oauth/access_token"
       CODER_EXTERNAL_AUTH_0_VALIDATE_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/api/v1/user"
-      CODER_EXTERNAL_AUTH_0_REGEX: "^http://localhost:${FORGEJO_PORT:-3100}/.*$$"
+      CODER_EXTERNAL_AUTH_0_REGEX: "^http://localhost:${FORGEJO_PORT:-3100}(/.*)?$$"
 
-  # Makes the shared /agents volume writable by the coder user (uid 1000) of both images.
+  # Empties the shared /agents volume and makes it writable by the coder user (uid 1000) of both images.
   agents-init:
-    image: ghcr.io/pawtograder/coder-workspace:staging-latest
+    image: ${WORKSPACE_IMAGE:-ghcr.io/pawtograder/coder-workspace:staging-latest}
     user: "0:0"
     volumes:
       - agents:/agents
-    command: ["chown", "1000:1000", "/agents"]
+    entrypoint: ["sh", "-c", "rm -rf /agents/* && chown 1000:1000 /agents"]
 
   # Where the lane's workspaces run: the chart's workspace image, running each agent the template hands over
   # (workspace-agents.sh). Its network namespace is the loopback container's, so the agent reaches Coder and
-  # Forgejo at the URLs the template and workspace-open use.
+  # Forgejo at the URLs the template and workspace-open use. The image is amd64-only; on an arm64 host,
+  # WORKSPACE_IMAGE=codercom/code-server:4.143.1 (same user, home and code-server) and WORKSPACE_ARCH=arm64.
   workspace:
-    image: ghcr.io/pawtograder/coder-workspace:staging-latest
+    image: ${WORKSPACE_IMAGE:-ghcr.io/pawtograder/coder-workspace:staging-latest}
     network_mode: service:loopback
     depends_on:
       loopback:
@@ -123,7 +124,7 @@ services:
     volumes:
       - agents:/agents
       - ./workspace-agents.sh:/e2e/workspace-agents.sh:ro
-    command: ["sh", "/e2e/workspace-agents.sh"]
+    entrypoint: ["sh", "/e2e/workspace-agents.sh"]
 
   # The edge functions the cloud workspaces journey reaches, run unmodified under Deno (functions-router.ts).
   functions:
