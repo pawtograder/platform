@@ -168,24 +168,31 @@ describe("options Forgejo can't use yet", () => {
 });
 
 describe("GitHub prompts", () => {
+  const org = "neu-cs4535";
   const github = { git_provider: "github", repo_mode: "template_only_staff", archived_at: null };
   const forgejo = { git_provider: "forgejo", repo_mode: "template_only_staff", archived_at: null };
 
   it("hide on a Forgejo assignment page and stay on a GitHub one", () => {
-    expect(needsGitHubPrompts([github], "forgejo")).toBe(false);
-    expect(needsGitHubPrompts([forgejo], "github")).toBe(true);
+    expect(needsGitHubPrompts(org, [github], "forgejo")).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo], "github")).toBe(true);
   });
 
   it("hide on course pages only when every live repository-backed assignment is on Forgejo", () => {
-    expect(needsGitHubPrompts([])).toBe(true);
-    expect(needsGitHubPrompts([forgejo])).toBe(false);
-    expect(needsGitHubPrompts([forgejo, github])).toBe(true);
+    expect(needsGitHubPrompts(org, [])).toBe(true);
+    expect(needsGitHubPrompts(org, [forgejo])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, github])).toBe(true);
     // No-repository and archived GitHub assignments don't need a GitHub account.
-    expect(needsGitHubPrompts([forgejo, { ...github, repo_mode: "none" }])).toBe(false);
-    expect(needsGitHubPrompts([forgejo, { ...github, repo_mode: "no_submission" }])).toBe(false);
-    expect(needsGitHubPrompts([forgejo, { ...github, archived_at: "2026-10-01T00:00:00Z" }])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, { ...github, repo_mode: "none" }])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, { ...github, repo_mode: "no_submission" }])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, { ...github, archived_at: "2026-10-01T00:00:00Z" }])).toBe(false);
     // A course with only no-repository assignments keeps them, as on staging.
-    expect(needsGitHubPrompts([{ ...github, repo_mode: "none" }])).toBe(true);
+    expect(needsGitHubPrompts(org, [{ ...github, repo_mode: "none" }])).toBe(true);
+  });
+
+  it("never show in a course with no GitHub organization, which they would ask students to join", () => {
+    expect(needsGitHubPrompts(null, [])).toBe(false);
+    expect(needsGitHubPrompts(null, [github])).toBe(false);
+    expect(needsGitHubPrompts(null, [github], "github")).toBe(false);
   });
 });
 

@@ -24,7 +24,7 @@ import {
   RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
-import { getGitProvider } from "../_shared/GitProvider.ts";
+import { getGitProvider, startGradingOn } from "../_shared/GitProvider.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import {
@@ -1785,8 +1785,16 @@ export async function processEnvelope(
           throw new Error(`Failed to update repository check run: ${updateError.message}`);
         }
 
-        // Trigger the workflow
-        await getGitProvider().startGrading(repository, sha, scope);
+        // Trigger the workflow, on Forgejo for a Forgejo repository: the bulk rerun page enqueues both.
+        const { data: repoRow, error: repoError } = await adminSupabase
+          .from("repositories")
+          .select("git_provider")
+          .eq("id", repository_id)
+          .single();
+        if (repoError) {
+          throw new Error(`Failed to load repository ${repository_id}: ${repoError.message}`);
+        }
+        await startGradingOn(repoRow.git_provider, repository, sha, scope);
 
         // Clear the rerun_queued_at flag on the repository after successful trigger
         const { error: clearError } = await adminSupabase

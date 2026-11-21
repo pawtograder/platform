@@ -84,7 +84,17 @@ function RegionCrop({
   );
 }
 
-export default function ExamSubmissionRenderer({ artifact }: { artifact: SubmissionArtifact }) {
+export default function ExamSubmissionRenderer({
+  artifact,
+  checkedQuestionIds,
+  onShowRubricCheck
+}: {
+  artifact: SubmissionArtifact;
+  /** Questions that have a rubric check to grade them by. An auto-scored question has none. */
+  checkedQuestionIds?: ReadonlySet<number>;
+  /** Brings a question's rubric check into view in the grading sidebar (#1268). */
+  onShowRubricCheck?: (examQuestionId: number) => void;
+}) {
   const data = artifact.data as unknown as ExamArtifactData;
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
@@ -155,9 +165,21 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
           >
             <HStack justify="space-between" mb={2}>
               <Heading size="sm">{questionHeading(q)}</Heading>
-              <Button size="xs" variant="outline" onClick={() => setShowOriginal((s) => ({ ...s, [idx]: !s[idx] }))}>
-                {showOriginal[idx] ? "Hide original page" : "View original page"}
-              </Button>
+              <HStack gap={2}>
+                {onShowRubricCheck && checkedQuestionIds?.has(q.exam_question_id) && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    aria-label={`Show rubric check for ${questionHeading(q)}`}
+                    onClick={() => onShowRubricCheck(q.exam_question_id)}
+                  >
+                    Show rubric check
+                  </Button>
+                )}
+                <Button size="xs" variant="outline" onClick={() => setShowOriginal((s) => ({ ...s, [idx]: !s[idx] }))}>
+                  {showOriginal[idx] ? "Hide original page" : "View original page"}
+                </Button>
+              </HStack>
             </HStack>
             <Flex gap={4} wrap="wrap" align="flex-start">
               {url ? (
