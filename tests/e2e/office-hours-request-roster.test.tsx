@@ -151,6 +151,19 @@ test.describe("Office hours request roster", () => {
         })
         .toBe("resolved");
 
+      // Since #1169, when the TA who is helping presses Resolve, the student gets a "Did your problem
+      // get fixed?" dialog. It has no close button and covers the page, so answer it the way a
+      // student whose problem is fixed would. Answering opens the feedback dialog, and skipping that
+      // closes it.
+      const checkIn = page.getByRole("dialog", { name: "Did your problem get fixed?" });
+      await expect(checkIn).toBeVisible();
+      await checkIn.getByRole("button", { name: /Yes, I'm done/ }).click();
+      await checkIn.getByRole("button", { name: "Close my request" }).click();
+      await expect(checkIn).toBeHidden();
+      const feedback = page.getByRole("dialog", { name: "Rate Your Help Experience" });
+      await feedback.getByRole("button", { name: "Skip Feedback" }).click();
+      await expect(feedback).toBeHidden();
+
       // #1080: the student's page shows the resolved request instead of a spinner.
       await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toBeVisible();
       await expect(page.getByRole("button", { name: "Feedback" })).toBeVisible();
