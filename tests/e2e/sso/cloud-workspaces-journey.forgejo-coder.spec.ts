@@ -143,6 +143,7 @@ function runReconcilerPass(): { failures: string[] } {
     [
       "run",
       "--no-check",
+      "--no-lock",
       "--allow-env",
       "--allow-net",
       "--allow-read",

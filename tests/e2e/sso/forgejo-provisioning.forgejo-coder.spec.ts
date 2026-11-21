@@ -13,6 +13,7 @@ type SsoConfig = {
   forgejoBaseUrl: string;
   forgejo: { authSourceName: string; authSourceId: number; admin: { username: string; password: string } };
   autoApproveForgejo?: boolean;
+  forgejoLoginRedirect?: boolean;
 };
 const cfg: SsoConfig = JSON.parse(fs.readFileSync(path.join(__dirname, ".forgejo-coder-e2e.json"), "utf8"));
 const forgejoAuth =
@@ -47,6 +48,7 @@ function runPass(): {
     [
       "run",
       "--no-check",
+      "--no-lock",
       "--allow-env",
       "--allow-net",
       "--allow-read",
@@ -164,7 +166,10 @@ test("the student's first sign-in lands on that account, which can see the repo"
   const page = await (await browser.newContext({ baseURL: cfg.pawtograderBaseUrl })).newPage();
   await loginAsUser(page, student);
   await page.goto(`${cfg.forgejoBaseUrl}/user/login`);
-  await page.locator(`a[href$="/user/oauth2/${cfg.forgejo.authSourceName}"]`).click();
+  // With the chart's sign-in redirect, /user/login goes straight to Pawtograder and there is no button.
+  if (!cfg.forgejoLoginRedirect) {
+    await page.locator(`a[href$="/user/oauth2/${cfg.forgejo.authSourceName}"]`).click();
+  }
   // With auto-approval the consent page approves on the server and never shows the button.
   if (!cfg.autoApproveForgejo) await page.getByRole("button", { name: "Authorize" }).click();
   await page.waitForURL(`${cfg.forgejoBaseUrl}/**`);
