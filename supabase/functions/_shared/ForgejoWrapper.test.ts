@@ -520,16 +520,27 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
       });
     }
   );
-  // Already there: nothing is created.
+  // Already there, maybe with an old secret or turned off: it's rewritten in place, not duplicated.
   await withForgejo(
     [
       ok({ username: "cs4535" }),
       ...ownedBy("pawtograder-admin"),
-      ok([{ id: 9, config: { url: hooked.pushHook!.url } }])
+      ok([{ id: 9, active: false, config: { url: hooked.pushHook!.url } }]),
+      ok({})
     ],
     async (calls) => {
       await ensureOrg(hooked, "cs4535");
-      assertEquals(calls.at(-1)?.method, "GET");
+      assertEquals(
+        `${calls.at(-1)?.method} ${calls.at(-1)?.url}`,
+        "PATCH https://git.example.edu/api/v1/orgs/cs4535/hooks/9"
+      );
+      assertEquals(calls.at(-1)?.body, {
+        active: true,
+        events: ["push"],
+        branch_filter: "*",
+        config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
+      });
+      assertEquals(calls.filter((c) => c.method === "POST").length, 0);
     }
   );
 });

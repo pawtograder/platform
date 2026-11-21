@@ -423,21 +423,27 @@ export async function ensureOrg(config: ForgejoConfig, org: string): Promise<voi
 
 /**
  * An org hook, not a system one: classes can share an instance, and an org's hook covers every repo in it,
- * including ones created later. It's matched by URL, so a pass that runs again adds nothing.
+ * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
+ * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
+ * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
   const hooks = await forgejo(config, "GET", `${path}?limit=50`);
   if (!hooks.ok) throw await failure(hooks, "org hooks read");
-  if (((await hooks.json()) as { config?: { url?: string } }[]).some((h) => h.config?.url === hook.url)) return;
-  const res = await forgejo(config, "POST", path, {
-    type: "forgejo",
+  const existing = ((await hooks.json()) as { id: number; config?: { url?: string } }[]).find(
+    (h) => h.config?.url === hook.url
+  );
+  const settings = {
     active: true,
     events: ["push"],
     branch_filter: "*",
     config: { url: hook.url, content_type: "json", secret: hook.secret }
-  });
-  if (!res.ok) throw await failure(res, "org hook create");
+  };
+  const res = existing
+    ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
+    : await forgejo(config, "POST", path, { type: "forgejo", ...settings });
+  if (!res.ok) throw await failure(res, existing ? "org hook update" : "org hook create");
   await res.body?.cancel();
 }
 
