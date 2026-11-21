@@ -123,7 +123,18 @@ test.describe("Office hours request roster", () => {
       const taPage = await taContext.newPage();
       await loginAsUser(taPage, ta!, course);
       await taPage.goto(`/course/${course.id}/manage/office-hours/request/${requestId}`);
+      // Start Helping updates the row in the page's cache first, so "Stop Helping" shows before
+      // the PATCH that saves it has returned. Resolve calls finish_help_request, which only opens
+      // the student's check-in when the saved status is in_progress. If Resolve is clicked while
+      // the PATCH is still in flight, finish_help_request can run first, and the PATCH then sets
+      // the status back to in_progress. So wait for the PATCH response before going on.
+      const startHelpingSaved = taPage.waitForResponse(
+        (response) =>
+          response.request().method() === "PATCH" &&
+          response.url().includes(`/rest/v1/help_requests?id=eq.${requestId}&`)
+      );
       await taPage.getByRole("button", { name: "Start Helping" }).click();
+      expect((await startHelpingSaved).ok()).toBe(true);
       await expect(taPage.getByRole("button", { name: "Stop Helping" })).toBeVisible();
 
       // #1003: the student is on the roster and can resolve. Soft, so a failure here still lets
