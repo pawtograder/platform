@@ -6,12 +6,11 @@ import { COURSE_FEATURES, courseFeatureEnabled, MANAGEABLE_COURSE_FEATURES } fro
 import {
   countTextQueues,
   hintToShow,
-  markOnboardingCompleted,
   newRequestFormHelperText,
   newRequestHint,
   nextOfficeHoursStart,
+  onboardingCompletedFrom,
   queueDescriptionHintPending,
-  readOnboardingCompleted,
   wantsQueueDescriptionHint,
   type OnboardingHintId
 } from "../../lib/officeHoursOnboarding";
@@ -185,22 +184,17 @@ describe("nextOfficeHoursStart", () => {
   });
 });
 
-describe("onboarding completion in localStorage", () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-    jest.restoreAllMocks();
+describe("onboardingCompletedFrom", () => {
+  it("is complete only when the student has a row in user_onboarding_seen", async () => {
+    await expect(onboardingCompletedFrom(async () => false)).resolves.toBe(false);
+    await expect(onboardingCompletedFrom(async () => true)).resolves.toBe(true);
   });
 
-  it("is not complete until the student clicks an enabled New Request button", () => {
-    expect(readOnboardingCompleted()).toBe(false);
-    markOnboardingCompleted();
-    expect(readOnboardingCompleted()).toBe(true);
-  });
-
-  it("counts as complete when the browser won't save it, so the hints don't open on every page load", () => {
-    jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("QuotaExceededError");
-    });
-    expect(readOnboardingCompleted()).toBe(true);
+  it("counts as complete when the read fails, so the hints don't open on every page load", async () => {
+    await expect(
+      onboardingCompletedFrom(async () => {
+        throw new Error("network down");
+      })
+    ).resolves.toBe(true);
   });
 });

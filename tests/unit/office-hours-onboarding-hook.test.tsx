@@ -5,7 +5,7 @@
  * in this file share it and run in order: what one test dismisses or saves, the next one sees.
  */
 
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   completeOnboarding,
   useOnboardingCompleted,
@@ -13,6 +13,7 @@ import {
   useOnboardingHintDismissed
 } from "@/hooks/useOfficeHoursOnboarding";
 import type { OnboardingHintId } from "@/lib/officeHoursOnboarding";
+import { hasSeenOnboarding, markOnboardingSeen } from "@/lib/onboardingSeen";
 
 // The hook module also exports useOnboardingDataLoaded, which these tests don't use.
 jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
@@ -20,26 +21,32 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
 }));
 jest.mock("@/lib/TableController", () => ({ useIsTableControllerReady: () => true }));
 
-const COMPLETED_KEY = "pawtograder:onboarding:oh-student:v1";
+// The student's row in user_onboarding_seen. The table's RLS is tested against a real database in
+// tests/e2e/user-onboarding-seen-db.spec.ts.
+const fakeClient = {};
+jest.mock("@/utils/supabase/client", () => ({ createClient: () => fakeClient }));
+jest.mock("@/lib/onboardingSeen", () => ({
+  ONBOARDING_KEYS: { OFFICE_HOURS_STUDENT_ONBOARDING: "office-hours-student-onboarding" },
+  hasSeenOnboarding: jest.fn(async () => false),
+  markOnboardingSeen: jest.fn(async () => undefined)
+}));
 
 describe("useOnboardingCompleted", () => {
-  beforeAll(() => window.localStorage.clear());
-  afterEach(() => jest.restoreAllMocks());
-
-  it("doesn't touch localStorage when the feature is off or the user isn't a student", () => {
-    const getItem = jest.spyOn(Storage.prototype, "getItem");
-    const setItem = jest.spyOn(Storage.prototype, "setItem");
+  it("doesn't read the table when the feature is off or the user isn't a student", () => {
     const { result } = renderHook(() => useOnboardingCompleted(false));
     expect(result.current).toBe(true);
-    expect(getItem).not.toHaveBeenCalled();
-    expect(setItem).not.toHaveBeenCalled();
+    expect(hasSeenOnboarding).not.toHaveBeenCalled();
   });
 
-  it("reads localStorage for a student in a course with the feature on", () => {
-    const getItem = jest.spyOn(Storage.prototype, "getItem");
+  it("reads the student's row once, and reports complete until the answer arrives", async () => {
     const { result } = renderHook(() => useOnboardingCompleted(true));
-    expect(result.current).toBe(false);
-    expect(getItem).toHaveBeenCalledWith(COMPLETED_KEY);
+    // No hint may open before the database has answered.
+    expect(result.current).toBe(true);
+    await waitFor(() => expect(result.current).toBe(false));
+
+    renderHook(() => useOnboardingCompleted(true));
+    expect(hasSeenOnboarding).toHaveBeenCalledTimes(1);
+    expect(hasSeenOnboarding).toHaveBeenCalledWith(fakeClient, "office-hours-student-onboarding");
   });
 });
 
@@ -84,7 +91,7 @@ describe("useOnboardingHint", () => {
     expect(opens.slice(rendersBeforeSwitch)).not.toContain(false);
   });
 
-  it("closes every hint once the student clicks New Request, and saves that", () => {
+  it("closes every hint once the student clicks New Request, and saves that in the database", () => {
     const { result } = renderHook(() => ({
       completed: useOnboardingCompleted(true),
       hint: useOnboardingHint("staff-on-duty")
@@ -94,6 +101,6 @@ describe("useOnboardingHint", () => {
 
     act(() => completeOnboarding());
     expect(result.current.completed).toBe(true);
-    expect(window.localStorage.getItem(COMPLETED_KEY)).toBe("completed");
+    expect(markOnboardingSeen).toHaveBeenCalledWith(fakeClient, "office-hours-student-onboarding");
   });
 });

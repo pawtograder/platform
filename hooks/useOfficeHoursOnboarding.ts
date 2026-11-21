@@ -1,14 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useIsTableControllerReady } from "@/lib/TableController";
-import {
-  hintToShow,
-  markOnboardingCompleted,
-  readOnboardingCompleted,
-  type OnboardingHintId
-} from "@/lib/officeHoursOnboarding";
+import { hintToShow, onboardingCompletedFrom, type OnboardingHintId } from "@/lib/officeHoursOnboarding";
+import { hasSeenOnboarding, markOnboardingSeen, ONBOARDING_KEYS } from "@/lib/onboardingSeen";
+import { createClient } from "@/utils/supabase/client";
 
 /*
  * The onboarding hints live in two components: the queue description hint is on the office hours
@@ -19,11 +16,14 @@ import {
  *   when it mounts and removes it when it unmounts.
  * - `dismissed` holds the hints the student closed since the page loaded. It is kept in memory
  *   only, so the hints come back on the next page load until the onboarding is complete.
- * - `completed` is read from localStorage the first time a component asks for it in the browser.
+ * - `completed` comes from the student's row in user_onboarding_seen. It is null until that read
+ *   finishes, and the read happens once per page load, the first time an active component asks.
  */
+const ONBOARDING_KEY = ONBOARDING_KEYS.OFFICE_HOURS_STUDENT_ONBOARDING;
 const wanted = new Map<OnboardingHintId, number>();
 const dismissed = new Set<OnboardingHintId>();
 let completed: boolean | null = null;
+let completedRead: Promise<void> | null = null;
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -39,19 +39,23 @@ function subscribe(listener: () => void) {
   };
 }
 
-function isCompleted(): boolean {
-  if (completed === null) completed = readOnboardingCompleted();
-  return completed;
+function readCompletedOnce() {
+  if (completedRead) return;
+  completedRead = onboardingCompletedFrom(() => hasSeenOnboarding(createClient(), ONBOARDING_KEY)).then((value) => {
+    // completeOnboarding may have run while the read was in flight. Keep its answer.
+    if (completed === null) completed = value;
+    notify();
+  });
 }
 
 /**
  * Whether this student has completed the onboarding.
  *
- * During the server render and the first browser render this returns true, so no hint opens before
- * the page has hydrated. After the component mounts, it returns the value saved in localStorage.
+ * This returns true until the student's row in user_onboarding_seen has been read, so no hint opens
+ * during the server render or before the answer arrives. If the read fails, it stays true.
  *
  * `active` is false when the course hasn't turned the feature on, or the user isn't a student
- * looking at the student pages. Then this returns true without touching localStorage.
+ * looking at the student pages. Then this returns true without reading the table.
  */
 export function useOnboardingCompleted(active: boolean): boolean {
   useSyncExternalStore(
@@ -59,9 +63,10 @@ export function useOnboardingCompleted(active: boolean): boolean {
     () => version,
     () => 0
   );
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  return active && mounted ? isCompleted() : true;
+  useEffect(() => {
+    if (active) readCompletedOnce();
+  }, [active]);
+  return active ? completed !== false : true;
 }
 
 /**
@@ -89,11 +94,17 @@ export function useOnboardingHintDismissed(id: OnboardingHintId): boolean {
   return dismissed.has(id);
 }
 
-/** Saves that the student clicked an enabled New Request button, which closes every hint for good. */
+/**
+ * Saves that the student clicked an enabled New Request button, which closes every hint for good.
+ * The hints close on this page load right away. If saving the row fails, they can open again on a
+ * later visit.
+ */
 export function completeOnboarding() {
-  markOnboardingCompleted();
   completed = true;
   notify();
+  markOnboardingSeen(createClient(), ONBOARDING_KEY).catch(() => {
+    // Nothing to show the student: the hints are already closed for this visit.
+  });
 }
 
 /**

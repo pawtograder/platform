@@ -2,21 +2,22 @@
  * Rules for the onboarding hints a student sees on the office hours pages.
  *
  * When a student opens office hours, the page shows up to two hints, one at a time:
- *   1. "read-queue-description": points at the selected queue's description. It shows only when the
- *      course has two or more text queues, because then the student has to pick between them, and
- *      each course splits its text queues its own way.
+ *   1. "read-queue-description": points at the queue list. It shows only when the course has two or
+ *      more text queues, because then the student has to pick between them, and each course splits
+ *      its text queues its own way.
  *   2. A hint on the New Request button. "no-staff-on-duty" when the button is disabled because
  *      nobody is working any queue, and "staff-on-duty" when the student can click it.
  *
  * The student sees these hints on every visit until they click New Request while it is enabled.
- * After that, the onboarding is complete and no hint opens on its own again.
+ * After that, the onboarding is complete and no hint opens on its own again. Completion is stored
+ * per user in user_onboarding_seen (lib/onboardingSeen.ts), so it holds on every browser and device.
  *
  * All of it is behind the course feature "office-hours-student-onboarding", which is off by default.
- * With the feature off, no hint opens, clicking New Request saves nothing, and the new request form
- * keeps the helper text it had before.
+ * With the feature off, no hint opens, nothing reads or writes user_onboarding_seen, and the new
+ * request form keeps the helper text it had before.
  *
- * Everything in this file is a pure function or a localStorage helper, so the rules can be tested
- * without rendering the pages.
+ * Everything in this file is a pure function, so the rules can be tested without rendering the
+ * pages or reaching the database.
  */
 
 export type OnboardingHintId = "read-queue-description" | "no-staff-on-duty" | "staff-on-duty";
@@ -27,9 +28,6 @@ export const ONBOARDING_HINT_ORDER: readonly OnboardingHintId[] = [
   "no-staff-on-duty",
   "staff-on-duty"
 ];
-
-const COMPLETED_KEY = "pawtograder:onboarding:oh-student:v1";
-const PROBE_KEY = `${COMPLETED_KEY}:probe`;
 
 /** The text queues a student can pick between on the office hours page: available ones only. */
 export function countTextQueues(queues: readonly { available: boolean; queue_type: string }[]): number {
@@ -152,28 +150,16 @@ export function nextOfficeHoursStart(events: readonly { start_time: string }[], 
 }
 
 /**
- * Whether this student has completed the onboarding in this browser.
+ * Whether this student has completed the onboarding, given a call that reads their row in
+ * user_onboarding_seen.
  *
- * If the browser blocks localStorage, or allows reads but not writes, this returns true. Otherwise
- * the hints would open on every page load forever, because the click that completes the
- * onboarding could never be saved.
+ * If the read fails, this says completed. Otherwise the hints would open on every page load while
+ * the database can't be reached, and the click that completes the onboarding couldn't be saved.
  */
-export function readOnboardingCompleted(): boolean {
+export async function onboardingCompletedFrom(readSeen: () => Promise<boolean>): Promise<boolean> {
   try {
-    if (window.localStorage.getItem(COMPLETED_KEY) === "completed") return true;
-    window.localStorage.setItem(PROBE_KEY, "1");
-    window.localStorage.removeItem(PROBE_KEY);
-    return false;
+    return await readSeen();
   } catch {
     return true;
-  }
-}
-
-/** Saves that this student clicked an enabled New Request button. */
-export function markOnboardingCompleted(): void {
-  try {
-    window.localStorage.setItem(COMPLETED_KEY, "completed");
-  } catch {
-    // readOnboardingCompleted already treats a browser that can't save this as completed.
   }
 }
