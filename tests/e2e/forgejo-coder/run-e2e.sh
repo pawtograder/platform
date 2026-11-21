@@ -89,6 +89,11 @@ if [ "$HAVE_MIGRATIONS" != "$WANT_MIGRATIONS" ]; then
   echo "ERROR: the retained Supabase's migrations differ from the checkout's. Re-run without SKIP_SUPABASE/ONLY."; exit 1
 fi
 # TestingUtils falls back to .env.local, which would seed the developer's own database.
+if [ "${ONLY:-}" = "1" ]; then
+  # ONLY doesn't recreate the functions container, so the job token must carry the secret that container started with.
+  KEPT_SECRET="$($COMPOSE exec -T functions printenv END_TO_END_SECRET 2>/dev/null || true)"
+  [ -z "$KEPT_SECRET" ] || export END_TO_END_SECRET="$KEPT_SECRET"
+fi
 [ "${ONLY:-}" = "1" ] && exec npx playwright test --config playwright.forgejo-coder.config.ts "$@"
 
 log "Registering Forgejo and Coder as OAuth clients"
