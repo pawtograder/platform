@@ -22,6 +22,7 @@ import {
   IDLE_TOKEN_MS,
   mintRepoToken,
   readFile,
+  removeCollaborator,
   REPLACED_TOKEN_GRACE_MS,
   repoPath,
   revokeAllCoderTokens,
@@ -619,6 +620,36 @@ Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo
   });
   await withForgejo([status(404)], async () => {
     await assertRejects(() => grantWrite(config, "cs4535/hw1-alex.kim", "alex.kim"), Error, "404");
+  });
+});
+
+Deno.test("removeCollaborator: removes the student, and a student already gone is success", async () => {
+  await withForgejo([new Response(null, { status: 204 })], async (calls) => {
+    await removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim");
+    assertEquals(calls[0].method, "DELETE");
+    assertEquals(
+      calls[0].url,
+      "https://git.example.edu/api/v1/repos/cs4535/cs4535-hw1-group-blue/collaborators/alex.kim"
+    );
+  });
+  // The repo is gone, or the account is.
+  await withForgejo([status(404)], async () => {
+    await removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim");
+  });
+  await withForgejo([unprocessable("user does not exist [uid: 0, name: alex.kim]")], async () => {
+    await removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim");
+  });
+  // Anything else keeps the row for the next pass, and the message never quotes Forgejo's text.
+  await withForgejo([unprocessable("something about alex.kim@northeastern.edu")], async () => {
+    const error = await assertRejects(() => removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim"));
+    assertEquals((error as Error).message, "Forgejo collaborator remove failed: 422 unrecognized response");
+  });
+  await withForgejo([status(500)], async () => {
+    await assertRejects(() => removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim"), Error, "500");
+  });
+  await withForgejo([], async (calls) => {
+    await assertRejects(() => removeCollaborator(config, "../admin", "alex.kim"), Error, "Not a Forgejo owner/name");
+    assertEquals(calls, []);
   });
 });
 

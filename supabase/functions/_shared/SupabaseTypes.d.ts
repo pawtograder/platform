@@ -4369,6 +4369,45 @@ export type Database = {
           }
         ];
       };
+      forgejo_group_repo_revocations: {
+        Row: {
+          assignment_group_id: number;
+          claim_id: number | null;
+          claimed_at: string | null;
+          created_at: string;
+          first_revoked_at: string | null;
+          id: number;
+          instance_url: string;
+          login: Pii<"handle", string>;
+          profile_id: string;
+          repository: Pii<"handle", string>;
+        };
+        Insert: {
+          assignment_group_id: number;
+          claim_id?: number | null;
+          claimed_at?: string | null;
+          created_at?: string;
+          first_revoked_at?: string | null;
+          id?: never;
+          instance_url: string;
+          login: string;
+          profile_id: string;
+          repository: string;
+        };
+        Update: {
+          assignment_group_id?: number;
+          claim_id?: number | null;
+          claimed_at?: string | null;
+          created_at?: string;
+          first_revoked_at?: string | null;
+          id?: never;
+          instance_url?: string;
+          login?: string;
+          profile_id?: string;
+          repository?: string;
+        };
+        Relationships: [];
+      };
       forgejo_repo_tokens: {
         Row: {
           id: number;
@@ -13765,6 +13804,10 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      claim_forgejo_group_repo_revocation: {
+        Args: { p_id: number; p_stale_minutes: number };
+        Returns: number;
+      };
       claim_forgejo_repo_token_revocation: {
         Args: { p_id: number; p_stale_minutes: number };
         Returns: number;
@@ -14329,6 +14372,15 @@ export type Database = {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
       };
+      finish_forgejo_group_repo_revocation: {
+        Args: {
+          p_assignment_group_id: number;
+          p_claim_id: number;
+          p_id: number;
+          p_profile_id: string;
+        };
+        Returns: undefined;
+      };
       finish_help_request: {
         Args: { p_end_ticket?: boolean; p_help_request_id: number };
         Returns: undefined;
@@ -14347,6 +14399,28 @@ export type Database = {
           email: string;
           name: string;
           user_id: string;
+        }[];
+      };
+      forgejo_group_members_left: {
+        Args: { p_group_ids: number[]; p_profile_ids: string[] };
+        Returns: undefined;
+      };
+      forgejo_group_members_rejoined: {
+        Args: { p_group_ids: number[]; p_profile_ids: string[] };
+        Returns: undefined;
+      };
+      forgejo_group_repo_revocations_needed: {
+        Args: {
+          p_instance_url: string;
+          p_limit: number;
+          p_stale_minutes: number;
+        };
+        Returns: {
+          assignment_group_id: number;
+          id: number;
+          login: string;
+          profile_id: string;
+          repository: string;
         }[];
       };
       forgejo_group_repos_needed: {

@@ -72,7 +72,9 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
     throw new Error("Failed to get remaining members");
   }
   const repository = membership.assignment_groups!.repositories[0];
-  if (repository) {
+  // A Forgejo repo's access is the database's: deleting the membership queued the student's removal for
+  // forgejo-reconciler. Its owner/name could also name a GitHub repo, which these jobs would change.
+  if (repository?.git_provider === "github") {
     if (remaining_members.length === 0) {
       //Archive
       await enqueueGithubArchiveRepo(membership.class_id, membership.classes!.github_org!, repository.repository);
