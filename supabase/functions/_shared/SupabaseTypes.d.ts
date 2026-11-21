@@ -4371,13 +4371,13 @@ export type Database = {
       };
       forgejo_repo_archives: {
         Row: {
-          archived_as: string | null;
+          archived_as: Pii<"free_text", string> | null;
           archived_at: string | null;
           claimed_at: string | null;
           class_id: number;
           id: number;
           queued_at: string;
-          repository: string;
+          repository: Pii<"free_text", string>;
         };
         Insert: {
           archived_as?: string | null;

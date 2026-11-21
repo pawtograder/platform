@@ -2999,7 +2999,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.errors[*].group_name": "free_text"
   },
   queue_forgejo_repo_archives: "none",
-  queue_repository_syncs:  queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
+  queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
   // DRAFT: new entry, review and remove this comment
   quiz_autograde: "none",
   // UNCERTAIN: returns Json; shape not reviewed, free_text taints every string in it
