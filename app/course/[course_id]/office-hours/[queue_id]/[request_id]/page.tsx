@@ -92,16 +92,22 @@ export default function RequestDetailPage() {
   );
   const hiddenFromMasquerade = isMasking && rawRequest != null && !filterHelpRequest(rawRequest, memberProfileIds);
 
-  // useHelpRequest fetches the request by id only and does not check the course. A user who is
-  // enrolled in two courses can put a request id from the other course into this course's URL.
-  // Treat that request as not found.
-  const inOtherCourse = rawRequest != null && rawRequest.class_id !== Number(course_id);
+  // A user who is enrolled in two courses can put a request id from the other course into this
+  // course's URL. useHelpRequest fetches the request by id only, and the invalidate() call above
+  // puts that row into this course's cache. If the URL also has the other course's queue id,
+  // queueRequests includes the row too, because useQueueData filters on help_queue only. So check
+  // the course on whichever row the page found, and treat a request from another course as not
+  // found.
+  const foundRequest = request ?? rawRequest;
+  const inOtherCourse = foundRequest != null && foundRequest.class_id !== Number(course_id);
 
   // queueRequests leaves out resolved and closed requests, and userRequests only has requests
   // this user is on. So a resolved or closed request can be in neither list, and the page used
-  // to spin forever (#1080). In that case, show the cached row instead. Don't show it if it
-  // belongs to another course, or if view-as hides it from this student.
-  const shownRequest = request ?? (hiddenFromMasquerade || inOtherCourse ? undefined : (rawRequest ?? undefined));
+  // to spin forever (#1080). In that case, show the cached row instead. Don't show it if view-as
+  // hides it from this student.
+  const shownRequest = inOtherCourse
+    ? undefined
+    : (request ?? (hiddenFromMasquerade ? undefined : (rawRequest ?? undefined)));
 
   // If the URL has the wrong queue id, for example from an old or hand-edited link, go to the
   // same request under its own queue. Otherwise the sidebar and the queue position would use
@@ -123,7 +129,7 @@ export default function RequestDetailPage() {
   }, [shownRequest, queueRequests]);
 
   if (!shownRequest || correctQueueId != null) {
-    if (inOtherCourse && !request) {
+    if (inOtherCourse) {
       return <div>Request not found.</div>;
     }
     if (hiddenFromMasquerade) {

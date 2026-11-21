@@ -316,6 +316,18 @@ test.describe("Office hours request roster", () => {
     await page.goto(`/course/${course.id}/office-hours/${queueId}/${requestId}`);
     await expect(page.getByText("Request not found.")).toBeVisible();
     await expect(page.getByText(HISTORICAL_CHAT_TEXT)).toHaveCount(0);
+
+    // An open request, with the other course's queue id in the URL too. Its row then also shows up
+    // in this page's queue list, which filters on the queue id alone.
+    const { id: openRequestId, help_queue_id: otherQueueId } = await insertHelpRequest({
+      class_id: otherCourse.id,
+      student_profile_id: studentInOtherCourse.private_profile_id,
+      request: "Roster check: other course, still open",
+      status: "open"
+    });
+    await page.goto(`/course/${course.id}/office-hours/${otherQueueId}/${openRequestId}`);
+    await expect(page.getByText("Request not found.")).toBeVisible();
+    await expect(page.getByText("Roster check: other course, still open")).toHaveCount(0);
   });
 
   test("A request opened under another queue of its course moves to its own queue", async ({ page }) => {
