@@ -6,6 +6,7 @@
  */
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
+  archiveRepo,
   coderTokenName,
   ArchiveTooLargeError,
   downloadArchive,
@@ -1140,4 +1141,74 @@ Deno.test("token list: a list that keeps changing is an error, so nothing is tak
       await assertRejects(() => revokeIdleTokens(config, "alex.kim", 1, now + IDLE_TOKEN_MS), Error, "kept changing");
     }
   );
+});
+
+const page = (body: unknown[], total = body.length) =>
+  new Response(JSON.stringify(body), { status: 200, headers: { "X-Total-Count": String(total) } });
+const archivedAt = new Date("2026-11-21T20:00:00.123Z");
+
+Deno.test("archiveRepo: removes every collaborator, then renames and archives the repo", async () => {
+  await withForgejo([page([{ login: "Alex" }, { login: "sam" }]), noContent(), noContent(), ok({})], async (calls) => {
+    assertEquals(
+      await archiveRepo(config, "cs4535/hw1-group-a", archivedAt),
+      "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-group-a"
+    );
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      [
+        "GET https://git.example.edu/api/v1/repos/cs4535/hw1-group-a/collaborators?page=1&limit=50",
+        "DELETE https://git.example.edu/api/v1/repos/cs4535/hw1-group-a/collaborators/Alex",
+        "DELETE https://git.example.edu/api/v1/repos/cs4535/hw1-group-a/collaborators/sam",
+        "PATCH https://git.example.edu/api/v1/repos/cs4535/hw1-group-a"
+      ]
+    );
+    assertEquals(calls[3].body, { name: "archived-2026-11-21T20-00-00-123Z-hw1-group-a", archived: true });
+  });
+});
+
+Deno.test("archiveRepo: reads past a page Forgejo cut short", async () => {
+  // MAX_RESPONSE_ITEMS set to 1: two collaborators arrive one at a time.
+  await withForgejo(
+    [page([{ login: "a" }], 2), page([{ login: "b" }], 2), noContent(), noContent(), ok({})],
+    async (calls) => {
+      await archiveRepo(config, "cs4535/hw1-a", archivedAt);
+      assertEquals(calls.filter((c) => c.method === "DELETE").length, 2);
+    }
+  );
+});
+
+Deno.test("archiveRepo: a repo that's already gone is done, with no new name", async () => {
+  await withForgejo(
+    [new Response(JSON.stringify({ message: "repository does not exist" }), { status: 404 })],
+    async (calls) => {
+      assertEquals(await archiveRepo(config, "cs4535/hw1-a", archivedAt), null);
+      assertEquals(calls.length, 1);
+    }
+  );
+});
+
+Deno.test("archiveRepo: a collaborator Forgejo won't remove stops before the rename", async () => {
+  await withForgejo([page([{ login: "a" }]), new Response("boom", { status: 500 })], async (calls) => {
+    await assertRejects(
+      () => archiveRepo(config, "cs4535/hw1-a", archivedAt),
+      Error,
+      "collaborator remove failed: 500"
+    );
+    assertEquals(calls.length, 2);
+  });
+});
+
+Deno.test("archiveRepo: the new name stays within Forgejo's 100 characters", async () => {
+  const name = "x".repeat(90);
+  await withForgejo([page([]), ok({})], async (calls) => {
+    const archived = await archiveRepo(config, `cs4535/${name}`, archivedAt);
+    assertEquals((calls[1].body!.name as string).length, 100);
+    assertEquals(archived, `cs4535/${calls[1].body!.name}`);
+  });
+});
+
+Deno.test("archiveRepo: a name that isn't owner/name never reaches Forgejo", async () => {
+  await withForgejo([], async () => {
+    await assertRejects(() => archiveRepo(config, "cs4535/../admin", archivedAt), Error, "Not a Forgejo owner/name");
+  });
 });

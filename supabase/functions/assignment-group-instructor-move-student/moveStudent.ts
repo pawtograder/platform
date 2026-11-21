@@ -139,7 +139,9 @@ export async function moveStudentBetweenGroups(
             const slash = oldGroupRepo.repository.indexOf("/");
             const owner = slash >= 0 ? oldGroupRepo.repository.slice(0, slash) : currentGroup.classes!.github_org!;
             const repoName = slash >= 0 ? oldGroupRepo.repository.slice(slash + 1) : oldGroupRepo.repository;
-            if (repoName) {
+            // A Forgejo repo was queued for archiving by the repositories delete trigger (#1378); a GitHub job
+            // for its name would fail, since the owner is a Forgejo org.
+            if (repoName && oldGroupRepo.git_provider !== "forgejo") {
               // The repo row is gone, so a failed enqueue only leaves the GitHub repo unarchived.
               try {
                 await deps.enqueueGithubArchiveRepo(class_id, owner, repoName);

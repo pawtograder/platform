@@ -920,6 +920,14 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_repo_archives.archived_as": "free_text",
+  "forgejo_repo_archives.archived_at": "none",
+  "forgejo_repo_archives.claimed_at": "none",
+  "forgejo_repo_archives.class_id": "none",
+  "forgejo_repo_archives.id": "none",
+  "forgejo_repo_archives.queued_at": "none",
+  // Student repo names end in a Forgejo login, and group repo names in a name students choose.
+  "forgejo_repo_archives.repository": "free_text",
   "forgejo_repo_tokens.id": "none",
   "forgejo_repo_tokens.instance_url": "none",
   "forgejo_repo_tokens.recorded_at": "none",
@@ -2405,6 +2413,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_repo_archive: "none",
   claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
@@ -2536,6 +2545,12 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   // void: clears is_github_ready on the groups' Forgejo repos so the reconciler re-grants them.
   forgejo_groups_need_grants: "none",
+  forgejo_repo_archives_due: {
+    "$[*].id": "none",
+    "$[*].class_id": "none",
+    // A student repo name ends in a Forgejo login; a group repo name in a name students choose.
+    "$[*].repository": "free_text"
+  },
   forgejo_repo_token_revocable: "none",
   forgejo_repo_tokens_to_revoke: {
     "$[*].id": "none",
@@ -2983,7 +2998,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.errors[*].error": "free_text",
     "$.errors[*].group_name": "free_text"
   },
-  queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
+  queue_forgejo_repo_archives: "none",
+  queue_repository_syncs:  queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
   // DRAFT: new entry, review and remove this comment
   quiz_autograde: "none",
   // UNCERTAIN: returns Json; shape not reviewed, free_text taints every string in it
