@@ -10,12 +10,15 @@ import {
   MAX_ACCOUNTS_PER_PASS,
   MAX_REPOS_PER_PASS,
   MAX_REVOCATIONS_PER_PASS,
+  MAX_STAFF_TEAMS_PER_PASS,
   reconcileForgejoAccounts,
   reconcileForgejoGroupRepos,
   reconcileForgejoRepos,
+  reconcileForgejoStaffTeams,
   reconcileForgejoWorkflowHashes,
   type RepoOps,
   revokeDroppedTokens,
+  type StaffTeamOps,
   STALE_CLAIM_MINUTES
 } from "./reconcile.ts";
 
@@ -832,3 +835,92 @@ for (const first of ["student", "group"] as const) {
     }
   );
 }
+
+type StaffClass = { class_id: number; org: string; team: string; logins: string[]; repositories: string[] };
+
+function fakeStaffSupabase(classes: StaffClass[], error: unknown = null) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      return Promise.resolve(error ? { data: null, error } : { data: classes, error: null });
+    }
+  } as unknown as Parameters<typeof reconcileForgejoStaffTeams>[0];
+  return { client, rpcCalls };
+}
+
+function stubStaffOps(overrides: Partial<StaffTeamOps> = {}) {
+  const calls: string[] = [];
+  const ops: StaffTeamOps = {
+    ensureStaffTeam: (_cfg, org, name) => {
+      calls.push(`team ${org}/${name}`);
+      return Promise.resolve(org === "cs4535" ? 7 : 8);
+    },
+    syncTeamMembers: (_cfg, teamId, logins) => {
+      calls.push(`members ${teamId} ${logins.join(",")}`);
+      return Promise.resolve({ added: logins.length, removed: 0 });
+    },
+    grantTeamRepos: (_cfg, teamId, org, repositories) => {
+      calls.push(`repos ${teamId} ${org} ${repositories.join(",")}`);
+      return Promise.resolve(repositories.length);
+    },
+    ...overrides
+  };
+  return { ops, calls };
+}
+
+const staffClass = (classId: number, org: string): StaffClass => ({
+  class_id: classId,
+  org,
+  team: `${org}-staff`,
+  logins: ["prof", "ta"],
+  repositories: [`${org}/${org}-hw1-handout`, `${org}/${org}-hw1-alex`]
+});
+
+Deno.test("staff teams: each class's team gets its staff, then its repos", async () => {
+  const { client, rpcCalls } = fakeStaffSupabase([staffClass(1, "cs4535"), staffClass(2, "cs3500")]);
+  const { ops, calls } = stubStaffOps();
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result, { synced: 2, failures: [] });
+  assertEquals(rpcCalls, [
+    { name: "forgejo_staff_teams", args: { p_instance_url: config.url, p_limit: MAX_STAFF_TEAMS_PER_PASS } }
+  ]);
+  assertEquals(calls, [
+    "team cs4535/cs4535-staff",
+    "members 7 prof,ta",
+    "repos 7 cs4535 cs4535/cs4535-hw1-handout,cs4535/cs4535-hw1-alex",
+    "team cs3500/cs3500-staff",
+    "members 8 prof,ta",
+    "repos 8 cs3500 cs3500/cs3500-hw1-handout,cs3500/cs3500-hw1-alex"
+  ]);
+});
+
+Deno.test("staff teams: a class with no staff left empties its team", async () => {
+  const { client } = fakeStaffSupabase([{ ...staffClass(1, "cs4535"), logins: [] }]);
+  const { ops, calls } = stubStaffOps();
+  await reconcileForgejoStaffTeams(client, config, ops);
+  assert(calls.includes("members 7 "));
+});
+
+Deno.test("staff teams: a class that fails doesn't stop the others, and its repos wait for its members", async () => {
+  const { client } = fakeStaffSupabase([staffClass(1, "cs4535"), staffClass(2, "cs3500")]);
+  const { ops, calls } = stubStaffOps({
+    syncTeamMembers: (_cfg, teamId) =>
+      teamId === 7
+        ? Promise.reject(new Error("Forgejo team members read failed: 500"))
+        : Promise.resolve({ added: 0, removed: 0 })
+  });
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result.synced, 1);
+  assertEquals(
+    result.failures.map((f) => [f.classId, (f.error as Error).message]),
+    [[1, "Forgejo team members read failed: 500"]]
+  );
+  assert(!calls.some((c) => c.startsWith("repos 7")));
+  assert(calls.some((c) => c.startsWith("repos 8")));
+});
+
+Deno.test("staff teams: a failed backlog query is an error", async () => {
+  const { client } = fakeStaffSupabase([], new Error("permission denied"));
+  await assertRejects(() => reconcileForgejoStaffTeams(client, config, stubStaffOps().ops), Error, "permission denied");
+});

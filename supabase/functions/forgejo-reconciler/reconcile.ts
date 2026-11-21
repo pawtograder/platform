@@ -4,10 +4,13 @@ import {
   ensureAccountForUser,
   ensureOrg,
   ensureRepoFromTemplate,
+  ensureStaffTeam,
   type ForgejoConfig,
+  grantTeamRepos,
   grantWrite,
   readFile,
-  revokeRepoToken
+  revokeRepoToken,
+  syncTeamMembers
 } from "../_shared/ForgejoWrapper.ts";
 
 /** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
@@ -322,6 +325,52 @@ export async function reconcileForgejoWorkflowHashes(
   return result;
 }
 
+export const MAX_STAFF_TEAMS_PER_PASS = 50;
+
+export type StaffTeamOps = {
+  ensureStaffTeam: typeof ensureStaffTeam;
+  syncTeamMembers: typeof syncTeamMembers;
+  grantTeamRepos: typeof grantTeamRepos;
+};
+
+export type StaffTeamResult = {
+  synced: number;
+  failures: { classId: number; error: unknown }[];
+};
+
+/**
+ * Each class's staff team in its Forgejo org, like the `{slug}-staff` team on GitHub: its members are the
+ * class's instructors, graders and admins with a Forgejo account, and it can write to every ready student
+ * and group repo and to the handouts. A class is listed every pass, since a role change or a new repo
+ * leaves no mark for a backlog query; when nothing changed that costs three reads.
+ */
+export async function reconcileForgejoStaffTeams(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  ops: StaffTeamOps = { ensureStaffTeam, syncTeamMembers, grantTeamRepos }
+): Promise<StaffTeamResult> {
+  // function-grants: service-role
+  const { data: classes, error } = await supabase.rpc("forgejo_staff_teams", {
+    p_instance_url: config.url,
+    p_limit: MAX_STAFF_TEAMS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: StaffTeamResult = { synced: 0, failures: [] };
+  for (const cls of classes ?? []) {
+    try {
+      const teamId = await ops.ensureStaffTeam(config, cls.org, cls.team);
+      // Members first: a staff member removed from the class loses every repo at once.
+      await ops.syncTeamMembers(config, teamId, cls.logins);
+      await ops.grantTeamRepos(config, teamId, cls.org, cls.repositories);
+      result.synced++;
+    } catch (failure) {
+      result.failures.push({ classId: cls.class_id, error: failure });
+    }
+  }
+  return result;
+}
+
 export const MAX_REVOCATIONS_PER_PASS = 100;
 
 export type RevokeResult = { revoked: number; failures: { userId: string; error: unknown }[] };
@@ -372,7 +421,7 @@ export async function revokeDroppedTokens(
 
 /**
  * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos and workflow hashes; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke).
+ * repos, workflow hashes and staff teams; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke).
  */
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
   // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
@@ -381,15 +430,24 @@ export async function reconcileForgejo(supabase: SupabaseClient<Database>, confi
   let repos: RepoReconcileResult | undefined;
   let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
+  let staffTeams: StaffTeamResult | undefined;
   try {
     accounts = await reconcileForgejoAccounts(supabase, config);
     repos = await reconcileForgejoRepos(supabase, config);
     groupRepos = await reconcileForgejoGroupRepos(supabase, config);
     hashes = await reconcileForgejoWorkflowHashes(supabase, config);
+    staffTeams = await reconcileForgejoStaffTeams(supabase, config);
   } catch (e) {
     stepError = e;
   }
   const revocation = await revokeDroppedTokens(supabase, config);
   if (stepError !== undefined) throw stepError;
-  return { accounts: accounts!, repos: repos!, groupRepos: groupRepos!, hashes: hashes!, revocation };
+  return {
+    accounts: accounts!,
+    repos: repos!,
+    groupRepos: groupRepos!,
+    hashes: hashes!,
+    staffTeams: staffTeams!,
+    revocation
+  };
 }
