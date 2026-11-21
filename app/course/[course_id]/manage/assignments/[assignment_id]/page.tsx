@@ -3,6 +3,8 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
+import { useOne } from "@refinedev/core";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import TableController from "@/lib/TableController";
@@ -68,10 +70,21 @@ export default function AssignmentHome() {
   const assignment = controller.assignment;
   const myReviewAssignments = useMyReviewAssignments();
   const hasReviewAssignments = myReviewAssignments.length > 0;
-  const { course, classRealTimeController } = useCourseController();
+  const { classRealTimeController } = useCourseController();
   const { assignment_id } = useParams();
   const isInstructor = useIsInstructor();
   const supabase = useMemo(() => createClient(), []);
+  const isForgejo = assignment?.git_provider === "forgejo";
+  const forgejoHost = useForgejoInstanceUrl(isForgejo);
+  const handoutHost = isForgejo ? forgejoHost : "https://github.com";
+  // RLS lets only instructors read autograder.
+  const { data: autograder } = useOne<{ grader_repo: string | null }>({
+    resource: "autograder",
+    id: Number(assignment_id),
+    meta: { select: "grader_repo" },
+    queryOptions: { enabled: isInstructor }
+  });
+  const graderRepo = autograder?.data?.grader_repo;
 
   const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
 
@@ -147,9 +160,13 @@ export default function AssignmentHome() {
                       Copied from a prior assignment
                     </Text>
                   ) : assignment.template_repo ? (
-                    <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
-                      {assignment.template_repo}
-                    </Link>
+                    handoutHost ? (
+                      <Link href={`${handoutHost}/${assignment.template_repo}`} target="_blank">
+                        {assignment.template_repo}
+                      </Link>
+                    ) : (
+                      <Text>{assignment.template_repo}</Text>
+                    )
                   ) : (
                     <Text fontStyle="italic" color="fg.muted">
                       No handout repository
@@ -160,12 +177,20 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Grader repo</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  <Link
-                    href={`https://github.com/${course.github_org}/${course.slug}-solution-${assignment.slug}`}
-                    target="_blank"
-                  >
-                    {course.github_org}/{course.slug}-solution-{assignment.slug}
-                  </Link>
+                  {!isInstructor ? (
+                    <Text fontStyle="italic" color="fg.muted">
+                      Visible to instructors
+                    </Text>
+                  ) : graderRepo ? (
+                    // The grader stays on GitHub, for Forgejo assignments too (D6).
+                    <Link href={`https://github.com/${graderRepo}`} target="_blank">
+                      {graderRepo}
+                    </Link>
+                  ) : (
+                    <Text fontStyle="italic" color="fg.muted">
+                      No grader repository
+                    </Text>
+                  )}
                 </DataList.ItemValue>
               </DataList.Item>
             </DataList.Root>
