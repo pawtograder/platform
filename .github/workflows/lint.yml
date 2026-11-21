@@ -389,6 +389,8 @@ jobs:
       # deploy.yml matches `tests/unit/issue` only. useTurnAlert and queue-health-alerts shipped
       # in #1287 and ran nowhere until this line — the same green-by-omission the bug-reporter
       # prefix above was added to end.
+      # The office hours onboarding suites (#1347) test pure rules and a hook with mocked data, so
+      # they go here by name for the same reason.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
@@ -408,6 +410,8 @@ jobs:
             tests/unit/useTurnAlert.test.tsx \
             tests/unit/queue-health-alerts.test.ts \
             tests/unit/escalation-alerts.test.tsx \
+            tests/unit/office-hours-onboarding.test.ts \
+            tests/unit/office-hours-onboarding-hook.test.tsx \
             tests/unit/bugReport
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a
