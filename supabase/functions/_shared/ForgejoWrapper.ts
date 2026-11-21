@@ -659,3 +659,22 @@ export async function grantWrite(config: ForgejoConfig, repository: string, logi
   const { permission } = (await res.json()) as { permission: string };
   return permission === "write" || permission === "admin";
 }
+
+/**
+ * Takes login off the repo's collaborators. Already gone is success: Forgejo answers 204 when they weren't one,
+ * 404 when the repo is gone and 422 "user does not exist" when the account is.
+ */
+export async function removeCollaborator(config: ForgejoConfig, repository: string, login: string): Promise<void> {
+  const res = await forgejo(
+    config,
+    "DELETE",
+    `/repos/${repoPath(repository)}/collaborators/${encodeURIComponent(login)}`
+  );
+  if (res.ok || res.status === 404) {
+    await res.body?.cancel();
+    return;
+  }
+  const text = await res.text();
+  if (res.status === 422 && reason(text) === "user does not exist") return;
+  throw new Error(`Forgejo collaborator remove failed: ${res.status} ${reason(text)}`);
+}

@@ -7,6 +7,7 @@ import {
   type ForgejoConfig,
   grantWrite,
   readFile,
+  removeCollaborator,
   revokeRepoToken
 } from "../_shared/ForgejoWrapper.ts";
 
@@ -370,9 +371,63 @@ export async function revokeDroppedTokens(
   return result;
 }
 
+export type GroupLeaveResult = {
+  removed: number;
+  failures: { assignmentGroupId: number; profileId: string; error: unknown }[];
+};
+
+/**
+ * Takes students who left a group off its Forgejo repo (#1374). The database queues one row per student and repo
+ * when a membership leaves a group (20261121200000_forgejo_group_repo_revocations.sql), and cancels it if they
+ * rejoin first. Each row is removed once now and once more after a 10-minute grace, in case a group pass that
+ * read the roster before they left granted them afterwards.
+ */
+export async function revokeGroupLeavers(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  remove: typeof removeCollaborator = removeCollaborator
+): Promise<GroupLeaveResult> {
+  // function-grants: service-role
+  const { data: due, error } = await supabase.rpc("forgejo_group_repo_revocations_needed", {
+    p_instance_url: config.url,
+    p_stale_minutes: STALE_CLAIM_MINUTES,
+    p_limit: MAX_REVOCATIONS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: GroupLeaveResult = { removed: 0, failures: [] };
+  for (const row of due ?? []) {
+    try {
+      // function-grants: service-role
+      const { data: claimId, error: claimError } = await supabase.rpc("claim_forgejo_group_repo_revocation", {
+        p_id: row.id,
+        p_stale_minutes: STALE_CLAIM_MINUTES
+      });
+      if (claimError) throw claimError;
+      if (claimId == null) continue;
+      // On failure the claim stays, and the row is retried once it is stale.
+      await remove(config, row.repository, row.login);
+      // Re-grants instead when the student is back in the group.
+      // function-grants: service-role
+      const { error: finishError } = await supabase.rpc("finish_forgejo_group_repo_revocation", {
+        p_id: row.id,
+        p_claim_id: claimId,
+        p_assignment_group_id: row.assignment_group_id,
+        p_profile_id: row.profile_id
+      });
+      if (finishError) throw finishError;
+      result.removed++;
+    } catch (failure) {
+      result.failures.push({ assignmentGroupId: row.assignment_group_id, profileId: row.profile_id, error: failure });
+    }
+  }
+  return result;
+}
+
 /**
  * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos and workflow hashes; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke).
+ * repos and workflow hashes; then the revocations: students who left a group lose its repo, and dropped
+ * students' and idle workspace tokens are revoked (forgejo_repo_tokens_to_revoke).
  */
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
   // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
@@ -389,7 +444,21 @@ export async function reconcileForgejo(supabase: SupabaseClient<Database>, confi
   } catch (e) {
     stepError = e;
   }
+  // The revocations run whatever failed above, and one failing doesn't skip the other.
+  let groupLeavers: GroupLeaveResult | undefined;
+  try {
+    groupLeavers = await revokeGroupLeavers(supabase, config);
+  } catch (e) {
+    stepError ??= e;
+  }
   const revocation = await revokeDroppedTokens(supabase, config);
   if (stepError !== undefined) throw stepError;
-  return { accounts: accounts!, repos: repos!, groupRepos: groupRepos!, hashes: hashes!, revocation };
+  return {
+    accounts: accounts!,
+    repos: repos!,
+    groupRepos: groupRepos!,
+    hashes: hashes!,
+    groupLeavers: groupLeavers!,
+    revocation
+  };
 }

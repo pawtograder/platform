@@ -1,6 +1,6 @@
 /**
- * The reconcile passes for accounts (#1092) and repos (#1093), against a fake Supabase client and
- * stubbed Forgejo steps.
+ * The reconcile passes for accounts (#1092), repos (#1093) and group leavers (#1374), against a fake
+ * Supabase client and stubbed Forgejo steps.
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net forgejo-reconciler/
  */
@@ -16,6 +16,7 @@ import {
   reconcileForgejoWorkflowHashes,
   type RepoOps,
   revokeDroppedTokens,
+  revokeGroupLeavers,
   STALE_CLAIM_MINUTES
 } from "./reconcile.ts";
 
@@ -300,6 +301,115 @@ Deno.test("revoke: a failed revoke keeps the row and the pass carries on", async
 Deno.test("revoke: a failed list fails the pass", async () => {
   const { client } = fakeTokenSupabase([], { dueError: new Error("PostgREST 502") });
   await assertRejects(() => revokeDroppedTokens(client, config), Error, "PostgREST 502");
+});
+
+type Leaver = { id: number; assignment_group_id: number; profile_id: string; repository: string; login: string };
+
+const leaver = (id: number, login: string): Leaver => ({
+  id,
+  assignment_group_id: 70 + id,
+  profile_id: `p${id}`,
+  repository: `cs4535/cs4535-hw1-group-${id}`,
+  login
+});
+
+function fakeLeaverSupabase(
+  due: Leaver[],
+  opts: { claimable?: Set<number>; dueError?: unknown; claimErrorFor?: number; finishErrorFor?: number } = {}
+) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      if (name === "forgejo_group_repo_revocations_needed") {
+        return Promise.resolve(opts.dueError ? { data: null, error: opts.dueError } : { data: due, error: null });
+      }
+      const id = args.p_id as number;
+      if (name === "claim_forgejo_group_repo_revocation") {
+        if (id === opts.claimErrorFor) return Promise.resolve({ data: null, error: new Error("PostgREST 503") });
+        const claimable = opts.claimable ?? new Set(due.map((d) => d.id));
+        return Promise.resolve({ data: claimable.has(id) ? claimGeneration(id) : null, error: null });
+      }
+      assertEquals(name, "finish_forgejo_group_repo_revocation");
+      if (id === opts.finishErrorFor) return Promise.resolve({ data: null, error: new Error("PostgREST 504") });
+      return Promise.resolve({ data: null, error: null });
+    }
+  };
+  const finishes = () => rpcCalls.filter((c) => c.name === "finish_forgejo_group_repo_revocation").map((c) => c.args);
+  return { client: client as unknown as Parameters<typeof revokeGroupLeavers>[0], rpcCalls, finishes };
+}
+
+Deno.test("group leavers: asks for this instance's backlog with the stale window and pass size", async () => {
+  const { client, rpcCalls } = fakeLeaverSupabase([]);
+  assertEquals(await revokeGroupLeavers(client, config, () => Promise.resolve()), { removed: 0, failures: [] });
+  assertEquals(rpcCalls[0], {
+    name: "forgejo_group_repo_revocations_needed",
+    args: { p_instance_url: config.url, p_stale_minutes: STALE_CLAIM_MINUTES, p_limit: MAX_REVOCATIONS_PER_PASS }
+  });
+});
+
+Deno.test("group leavers: claims each row, removes the collaborator, then finishes with its own claim", async () => {
+  const { client, rpcCalls, finishes } = fakeLeaverSupabase([leaver(1, "alex.kim"), leaver(2, "sam.lee")]);
+  const removed: [string, string][] = [];
+  const result = await revokeGroupLeavers(client, config, (_cfg, repository, login) => {
+    removed.push([repository, login]);
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 2, failures: [] });
+  assertEquals(removed, [
+    ["cs4535/cs4535-hw1-group-1", "alex.kim"],
+    ["cs4535/cs4535-hw1-group-2", "sam.lee"]
+  ]);
+  assertEquals(rpcCalls[1], {
+    name: "claim_forgejo_group_repo_revocation",
+    args: { p_id: 1, p_stale_minutes: STALE_CLAIM_MINUTES }
+  });
+  // The group and profile go along, so the database can re-grant a student who rejoined meanwhile.
+  assertEquals(finishes(), [
+    { p_id: 1, p_claim_id: claimGeneration(1), p_assignment_group_id: 71, p_profile_id: "p1" },
+    { p_id: 2, p_claim_id: claimGeneration(2), p_assignment_group_id: 72, p_profile_id: "p2" }
+  ]);
+});
+
+Deno.test("group leavers: a row another pass claimed gets no Forgejo call", async () => {
+  const { client, finishes } = fakeLeaverSupabase([leaver(1, "a")], { claimable: new Set() });
+  let calls = 0;
+  const result = await revokeGroupLeavers(client, config, () => {
+    calls++;
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 0, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(finishes(), []);
+});
+
+Deno.test("group leavers: a failed claim, removal or finish is recorded and the pass carries on", async () => {
+  const { client, finishes } = fakeLeaverSupabase([leaver(1, "a"), leaver(2, "b"), leaver(3, "c"), leaver(4, "d")], {
+    claimErrorFor: 3,
+    finishErrorFor: 4
+  });
+  const result = await revokeGroupLeavers(client, config, (_cfg, _repository, login) =>
+    login === "a" ? Promise.reject(new Error("Forgejo collaborator remove failed: 502")) : Promise.resolve()
+  );
+  assertEquals(result.removed, 1);
+  assertEquals(
+    result.failures.map((f) => [f.assignmentGroupId, f.profileId]),
+    [
+      [71, "p1"],
+      [73, "p3"],
+      [74, "p4"]
+    ]
+  );
+  // A failed removal keeps its claim, so the row is retried once the claim is stale.
+  assertEquals(
+    finishes().map((f) => f.p_id),
+    [2, 4]
+  );
+});
+
+Deno.test("group leavers: a failed backlog query fails the step", async () => {
+  const { client } = fakeLeaverSupabase([], { dueError: new Error("PostgREST 502") });
+  await assertRejects(() => revokeGroupLeavers(client, config), Error, "PostgREST 502");
 });
 
 type NeededRepo = {

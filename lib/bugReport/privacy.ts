@@ -920,6 +920,17 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_group_repo_revocations.assignment_group_id": "none",
+  "forgejo_group_repo_revocations.claim_id": "none",
+  "forgejo_group_repo_revocations.claimed_at": "none",
+  "forgejo_group_repo_revocations.created_at": "none",
+  "forgejo_group_repo_revocations.first_revoked_at": "none",
+  "forgejo_group_repo_revocations.id": "none",
+  "forgejo_group_repo_revocations.instance_url": "none",
+  "forgejo_group_repo_revocations.login": "handle",
+  "forgejo_group_repo_revocations.profile_id": "none",
+  // A group repo's owner/name, as repositories.repository.
+  "forgejo_group_repo_revocations.repository": "handle",
   "forgejo_repo_tokens.id": "none",
   "forgejo_repo_tokens.instance_url": "none",
   "forgejo_repo_tokens.recorded_at": "none",
@@ -2405,6 +2416,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_group_repo_revocation: "none",
   claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
@@ -2515,6 +2527,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // DRAFT: new entry, review and remove this comment
   exam_upsert_questions_and_regions: "none",
   finalize_submission_early: "none",
+  // void: removes the queued row, or marks the repo for re-granting when the student rejoined.
+  finish_forgejo_group_repo_revocation: "none",
   finish_help_request: "none",
   fix_assignment_repo_permissions: {
     $: "none",
@@ -2523,6 +2537,16 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  // void: queue and cancel collaborator removals for students who left or rejoined a group.
+  forgejo_group_members_left: "none",
+  forgejo_group_members_rejoined: "none",
+  forgejo_group_repo_revocations_needed: {
+    "$[*].assignment_group_id": "none",
+    "$[*].id": "none",
+    "$[*].login": "handle",
+    "$[*].profile_id": "none",
+    "$[*].repository": "handle"
+  },
   forgejo_group_repos_needed: {
     "$[*].all_members_have_logins": "none",
     "$[*].assignment_group_id": "none",
