@@ -354,7 +354,7 @@ test.describe("Repository host picker and GitHub prompts", () => {
   test("Repository Status describes a Forgejo assignment's repos, not GitHub's", async ({ page }) => {
     await loginAsUser(page, instructorOn, flagOn);
     await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/repositories`);
-    await expect(page.getByText(/Student repositories are created on Forgejo from the handout/)).toBeVisible({
+    await expect(page.getByText(/Student repositories are created on Forgejo from the handout/).first()).toBeVisible({
       timeout: 60_000
     });
     await expect(page.getByText(/rate-limited by GitHub/)).toHaveCount(0);
