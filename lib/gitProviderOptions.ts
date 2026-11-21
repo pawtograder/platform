@@ -204,12 +204,15 @@ type AssignmentForPrompts = {
  * Whether to show the GitHub link and invitation prompts. On an assignment page, only a Forgejo
  * assignment hides them. On course pages they hide only when every live repository-backed
  * assignment is on Forgejo, the same rule the invitation queries in #1128 use. A course with no
- * such assignments keeps them, as on staging.
+ * such assignments keeps them, as on staging. A course with no GitHub organization never shows them:
+ * they invite students to join that organization, and GitHub repositories can't be created without it.
  */
 export function needsGitHubPrompts(
+  courseGitHubOrg: string | null,
   assignments: readonly AssignmentForPrompts[],
   assignmentGitProvider?: string | null
 ): boolean {
+  if (!courseGitHubOrg) return false;
   if (assignmentGitProvider) return assignmentGitProvider !== "forgejo";
   const repoBacked = assignments.filter(
     (a) => !a.archived_at && a.repo_mode !== "none" && a.repo_mode !== "no_submission"
