@@ -97,16 +97,20 @@ export default function AutograderPage() {
       const nextHasAutograder = values.assignments.has_autograder;
       // The grade.yml sync below rejects Forgejo assignments, whose handout is on Forgejo. Returning
       // before it needs the flag unchanged, which the disabled radio keeps.
-      if (values.assignments?.git_provider === "forgejo" && priorHasAutograder !== nextHasAutograder) {
+      const isForgejo = values.assignments?.git_provider === "forgejo";
+      if (isForgejo && priorHasAutograder !== nextHasAutograder) {
         throw new Error(FORGEJO_GRADER_SETUP_REASON);
       }
+      // A Forgejo grader repo is chosen here even while the autograder is off, since Edit Assignment turns
+      // it on without reading the grader. So its config is read whenever one is given.
+      const readGraderConfig = nextHasAutograder || (isForgejo && !!values.grader_repo);
 
       // Only validate the grader repo when the autograder will REMAIN enabled.
       // This reads pawtograder.yml from that repo, so doing it unconditionally
       // meant a broken or missing grader repo blocked the save — making it
       // impossible to turn the autograder OFF precisely when an instructor most
       // needs to, while student pushes keep hitting the broken workflow.
-      if (nextHasAutograder) {
+      if (readGraderConfig) {
         await githubRepoConfigureWebhook(
           {
             assignment_id: Number.parseInt(assignment_id as string),
@@ -140,7 +144,8 @@ export default function AutograderPage() {
         max_submissions_period_secs: query?.data?.data?.max_submissions_period_secs ?? null
       };
       const nextAutograderRow = {
-        grader_repo: values.grader_repo,
+        // An emptied Forgejo grader field clears the repo rather than storing "".
+        grader_repo: values.grader_repo || null,
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null
       };
@@ -153,7 +158,7 @@ export default function AutograderPage() {
       // whenever it runs, and `query` still holds the page-load value — so a change
       // cannot be detected by comparing the two. Treat "we ran the validation" as
       // "config may have been replaced" and roll it back on that basis.
-      const graderConfigMayHaveChanged = nextHasAutograder === true;
+      const graderConfigMayHaveChanged = readGraderConfig;
       const autograderRowChanged =
         graderConfigMayHaveChanged ||
         priorAutograderRow.grader_repo !== nextAutograderRow.grader_repo ||
@@ -462,9 +467,19 @@ export default function AutograderPage() {
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field label="Solution Repository">
-              <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
-            </Field>
+            {currentAssignment?.git_provider === "forgejo" ? (
+              // Nothing creates a Forgejo assignment's grader repo, so the instructor names an existing one.
+              <Field
+                label="Grader repository"
+                helperText="The GitHub repository (owner/name) with the grader and its pawtograder.yml. A Forgejo assignment's grader stays on GitHub."
+              >
+                <Input placeholder="owner/name" {...register("grader_repo")} />
+              </Field>
+            ) : (
+              <Field label="Solution Repository">
+                <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
+              </Field>
+            )}
           </Fieldset.Content>
         </Fieldset.Root>
         <Button type="submit" loading={loading} colorPalette="green" variant="solid">

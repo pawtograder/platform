@@ -324,6 +324,7 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/autograder`);
     const reason = /The grader repository for a Forgejo assignment stays on GitHub/;
     await expect(page.getByText(reason).filter({ visible: true })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByLabel("Grader repository").filter({ visible: true })).toBeEditable();
     // With no grader repo yet, the save reaches github-repo-configure-webhook, which asks for one, rather than
     // being refused on the page.
     await page.getByRole("button", { name: "Save" }).filter({ visible: true }).click();
