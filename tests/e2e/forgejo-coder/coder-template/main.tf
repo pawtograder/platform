@@ -93,6 +93,11 @@ locals {
   git_credentials  = local.on_forgejo ? "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}" : ""
   clone_auth_id    = local.on_forgejo ? "" : var.github_external_auth_id
   clone_timeout    = 300
+
+  # The chart's pod runs one agent, so its editor always takes 13337. The lane's agents all share the
+  # `workspace` container's loopback, so each provider's workspace (the lane opens at most one per provider)
+  # gets its own port, and an editor check can't reach another workspace's code-server.
+  editor_port = local.on_forgejo ? 13337 : 13338
 }
 
 resource "coder_agent" "main" {
@@ -124,7 +129,7 @@ resource "coder_agent" "main" {
     [ -n "$CS" ] || { echo "the workspace image has no code-server and code_server_version is empty" >&2; exit 1; }
     S="$HOME/.local/share/code-server/Machine/settings.json"
     [ -f "$S" ] || { mkdir -p "$(dirname "$S")" && echo '{"git.useIntegratedAskPass": false}' >"$S"; }
-    "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
+    "$CS" --auth none --port ${local.editor_port} >/tmp/code-server.log 2>&1 &
   EOT
 }
 
@@ -132,13 +137,13 @@ resource "coder_app" "code_server" {
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "VS Code"
-  url          = "http://localhost:13337/?folder=${local.repo_dir}"
+  url          = "http://localhost:${local.editor_port}/?folder=${local.repo_dir}"
   icon         = "/icon/code.svg"
   subdomain    = true
   share        = "owner"
 
   healthcheck {
-    url       = "http://localhost:13337/healthz"
+    url       = "http://localhost:${local.editor_port}/healthz"
     interval  = 5
     threshold = 6
   }
