@@ -157,7 +157,7 @@ services:
       # App at import, so it gets a throwaway key.
       E2E_ENABLE: "true"
       E2E_MOCK_GITHUB: "true"
-      END_TO_END_SECRET: not-a-secret
+      END_TO_END_SECRET: "${END_TO_END_SECRET:-not-a-secret}"
       GITHUB_APP_ID: "1"
       GITHUB_PRIVATE_KEY_STRING: "${E2E_GITHUB_PRIVATE_KEY_STRING:-}"
       GITHUB_OAUTH_CLIENT_ID: not-a-real-oauth-client-id

@@ -19,6 +19,10 @@ FUNCTIONS_BASE_URL="http://127.0.0.1:${FUNCTIONS_PORT}"
 # The lane's GitHub: the same Forgejo under another origin (docker-compose.yml, CODER_EXTERNAL_AUTH_0_*).
 GITHUB_STANDIN_URL="http://localhost:${FORGEJO_PORT}"
 export FORGEJO_AUTH_SOURCE_NAME=pawtograder
+# The suite's fake job token carries this as its kid (TestingUtils, the journey spec), and the functions container
+# accepts only a token whose kid matches it (docker-compose.yml). Exported before Playwright runs, so a different
+# value in .env.local can't split the two: dotenv doesn't override a set variable.
+export END_TO_END_SECRET="${END_TO_END_SECRET:-not-a-secret}"
 [ "${ONLY:-}" = "1" ] && { KEEP_UP=1; SKIP_SUPABASE=1; }
 
 # Outside the repo, or test runners pick up the copied supabase/functions *.test.ts.
