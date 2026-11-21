@@ -446,6 +446,13 @@ export type CheckRunStatus = {
   workflow_triggered_at?: string;
   check_run_marked_in_progress_at?: string;
   /**
+   * The Actions run that graded this commit, recorded by forgejo-repo-webhook when a Forgejo run
+   * finishes. Forgejo's run URL uses the run's number in its repository, which the run id a job's
+   * token carries can't be turned into, so the URL is kept as sent.
+   */
+  workflow_run_id?: number;
+  workflow_run_url?: string;
+  /**
    * Records which workflow run was allowed through the "dispatched before the autograder
    * was disabled" exception in autograder-create-submission. The exception is a property of
    * one in-flight run, not of the commit, so it is claimed once and then only honored for

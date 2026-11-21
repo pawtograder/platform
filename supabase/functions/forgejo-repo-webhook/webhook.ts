@@ -9,6 +9,12 @@ import {
   type RepoPushCommit
 } from "../_shared/RepoPush.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import {
+  FORGEJO_ACTION_RUN_EVENTS,
+  FORGEJO_IGNORED_ACTION_RUN_EVENTS,
+  type ForgejoActionRun,
+  isForgejoActionRunPayload
+} from "./actionRun.ts";
 
 /**
  * Forgejo signs the raw body with HMAC-SHA256 and the hook's secret, and sends the hex digest in
@@ -120,9 +126,16 @@ function isForgejoPushPayload(payload: unknown): payload is ForgejoPushPayload {
  * also how job tokens are bound to it (`jobTokenIssuer` in GitHubWrapper.ts), and Forgejo builds
  * `html_url` from ROOT_URL.
  */
-export function isOnForgejoInstance(payload: ForgejoPushPayload, forgejoUrl: string): boolean {
+export function isOnForgejoInstance(
+  payload: { repository: { html_url?: string | null } },
+  forgejoUrl: string
+): boolean {
+  return isUrlOnForgejoInstance(payload.repository.html_url, forgejoUrl);
+}
+
+function isUrlOnForgejoInstance(url: string | null | undefined, forgejoUrl: string): boolean {
   const base = forgejoUrl.replace(/\/+$/, "");
-  return !!payload.repository.html_url?.startsWith(`${base}/`);
+  return !!url?.startsWith(`${base}/`);
 }
 
 /**
@@ -167,7 +180,13 @@ export type ForgejoWebhookConfig = {
   secret: string | undefined;
   forgejoUrl: string | undefined;
   handlePush: (push: RepoPush, scope: Sentry.Scope) => Promise<void>;
+  /** A finished Actions run (`action_run_success` / `action_run_failure`). */
+  handleActionRun: (run: ForgejoActionRun, scope: Sentry.Scope) => Promise<void>;
 };
+
+function isHandledActionRunEvent(event: string | null): boolean {
+  return (FORGEJO_ACTION_RUN_EVENTS as readonly string[]).includes(event ?? "");
+}
 
 export async function handleForgejoWebhook(req: Request, config: ForgejoWebhookConfig): Promise<Response> {
   if (req.method !== "POST") {
@@ -185,8 +204,12 @@ export async function handleForgejoWebhook(req: Request, config: ForgejoWebhookC
   const event = firstHeader(req.headers, EVENT_HEADERS);
   const deliveryId = firstHeader(req.headers, DELIVERY_HEADERS) ?? "";
   console.log(`[forgejo-repo-webhook] delivery=${deliveryId} event=${event}`);
-  if (event !== "push") {
-    return Response.json({ message: `Ignored ${event ?? "unknown"} event` });
+  const isActionRun = isHandledActionRunEvent(event);
+  if (event !== "push" && !isActionRun) {
+    const reason = (FORGEJO_IGNORED_ACTION_RUN_EVENTS as readonly string[]).includes(event ?? "")
+      ? " (the action_run_success delivery for the same run is handled)"
+      : "";
+    return Response.json({ message: `Ignored ${event ?? "unknown"} event${reason}` });
   }
 
   let payload: unknown;
@@ -194,6 +217,9 @@ export async function handleForgejoWebhook(req: Request, config: ForgejoWebhookC
     payload = JSON.parse(new TextDecoder().decode(body));
   } catch {
     return Response.json({ message: "Body is not JSON" }, { status: 400 });
+  }
+  if (isActionRun) {
+    return await deliverActionRun(payload, event!, deliveryId, config);
   }
   if (!isForgejoPushPayload(payload)) {
     return Response.json({ message: "Not a push payload" }, { status: 400 });
@@ -216,4 +242,38 @@ export async function handleForgejoWebhook(req: Request, config: ForgejoWebhookC
     return Response.json({ message: "Error processing webhook" }, { status: 500 });
   }
   return Response.json({ message: "Processed push" });
+}
+
+async function deliverActionRun(
+  payload: unknown,
+  event: string,
+  deliveryId: string,
+  config: ForgejoWebhookConfig
+): Promise<Response> {
+  if (!isForgejoActionRunPayload(payload)) {
+    return Response.json({ message: "Not an action run payload" }, { status: 400 });
+  }
+  const { run } = payload;
+  // The run's URL is shown to students and staff as a link, so it must be on the instance too.
+  if (
+    !isUrlOnForgejoInstance(run.repository.html_url, config.forgejoUrl!) ||
+    !isUrlOnForgejoInstance(run.html_url, config.forgejoUrl!)
+  ) {
+    console.error(`[forgejo-repo-webhook] ${run.html_url} is not on ${config.forgejoUrl}`);
+    return Response.json({ message: "Repository is not on the configured Forgejo instance" }, { status: 403 });
+  }
+
+  const scope = new Sentry.Scope();
+  scope.setTag("webhook_source", "forgejo");
+  scope.setTag("webhook_id", deliveryId);
+  scope.setTag("webhook_name", event);
+  scope.setTag("repository", run.repository.full_name);
+  try {
+    await config.handleActionRun(run, scope);
+  } catch (err) {
+    console.error(`[forgejo-repo-webhook] Error processing delivery ${deliveryId}`, err);
+    Sentry.captureException(err, scope);
+    return Response.json({ message: "Error processing webhook" }, { status: 500 });
+  }
+  return Response.json({ message: `Processed ${event}` });
 }
