@@ -1,10 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
-import { assertUserIsInstructorOrGrader, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { assertUserIsInstructorOrGrader, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import type { ExamExtractTemplateRequest } from "../_shared/FunctionTypes.d.ts";
-import { getExamVisionProvider, type PageImage } from "../_shared/examVision.ts";
+import { getExamVisionProvider, type PageImage, TemplateExtractError } from "../_shared/examVision.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { exam_id } = (await req.json()) as ExamExtractTemplateRequest;
@@ -44,7 +44,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
 
   const provider = getExamVisionProvider();
-  return await provider.extractTemplate(images);
+  try {
+    return await provider.extractTemplate(images);
+  } catch (err) {
+    // Its message says which pages failed and what to do. Any other error stays a plain 500.
+    if (err instanceof TemplateExtractError) throw new UserVisibleError(err.message, 502);
+    throw err;
+  }
 }
 
 Deno.serve((req) => wrapRequestHandler(req, handleRequest));

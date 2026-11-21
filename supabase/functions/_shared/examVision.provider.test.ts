@@ -441,3 +441,196 @@ Deno.test("EXAM_GEMINI_BASE_URL can only name a local test server", async (t) =>
     }
   }
 });
+
+Deno.test("Auto-extract sends a long template in groups of pages and merges the answers (#1369)", async (t) => {
+  const names = ["EXAM_VISION_PROVIDER", "GOOGLE_API_KEY", "EXAM_GEMINI_BASE_URL", "EXAM_GEMINI_RPM"] as const;
+  const saved = names.map((name) => [name, Deno.env.get(name)] as const);
+  const realFetch = globalThis.fetch;
+  Deno.env.set("EXAM_VISION_PROVIDER", "gemini");
+  Deno.env.set("GOOGLE_API_KEY", DUMMY_KEY);
+  Deno.env.set("EXAM_GEMINI_RPM", "0");
+  Deno.env.delete("EXAM_GEMINI_BASE_URL");
+
+  type Tree = { questions: Record<string, unknown>[]; regions: Record<string, unknown>[] };
+  const q = (client_id: string, label: string, ordinal: number, parent_client_id: string | null = null) => ({
+    client_id,
+    parent_client_id,
+    level: parent_client_id === null ? 1 : 2,
+    ordinal,
+    label
+  });
+  const region = (question_client_id: string | null, page_number: number, kind = "answer") => ({
+    question_client_id,
+    kind,
+    page_number,
+    x: 0.1,
+    y: 0.1,
+    width: 0.5,
+    height: 0.1
+  });
+
+  // Page n's image is the single byte n, so the stand-in can tell which pages a request carries.
+  // answer() gets those page numbers and returns Gemini's proposal for them, or an error to throw
+  // from fetch. getExamVisionProvider caches its provider, so each case loads a fresh module.
+  let instance = 0;
+  const extract = async (pageCount: number, answer: (pages: number[]) => Tree | Error) => {
+    const requests: number[][] = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = await (input instanceof Request ? input : new Request(input, init)).json();
+      const pages = (body.contents[0].parts as { inline_data?: { data: string } }[])
+        .filter((p) => p.inline_data)
+        .map((p) => atob(p.inline_data!.data).charCodeAt(0));
+      requests.push(pages);
+      const reply = answer(pages);
+      if (reply instanceof Error) throw reply;
+      return new Response(geminiBody(JSON.stringify(reply)), { status: 200 });
+    };
+    const mod: typeof import("./examVision.ts") = await import(`./examVision.ts?extract-case=${++instance}`);
+    const images = Array.from({ length: pageCount }, (_, i) => ({
+      name: `page-${i + 1}.png`,
+      bytes: new Uint8Array([i + 1]),
+      width: 10,
+      height: 10
+    }));
+    return { run: () => mod.getExamVisionProvider().extractTemplate(images), requests, mod };
+  };
+
+  try {
+    await t.step("a 5-page template is sent as requests of 2, 2 and 1 pages", async () => {
+      const { run, requests } = await extract(5, () => ({ questions: [], regions: [] }));
+      await run();
+      assertEquals(
+        requests.sort((a, b) => a[0] - b[0]),
+        [[1, 2], [3, 4], [5]]
+      );
+    });
+
+    await t.step("a region on a later group's page lands on that page of the whole template", async () => {
+      // Each group answers with page numbers counted from 1 within the request. Page 3 of a
+      // 2-page request doesn't exist, so it is dropped rather than shifted onto someone else's page.
+      const { run } = await extract(4, (pages) => ({
+        questions: [q("q1", `Problem ${pages[0]}`, 1)],
+        regions: [region("q1", 1), region("q1", 2), region("q1", 3)]
+      }));
+      const tree = await run();
+      assertEquals(
+        tree.regions.map((r) => r.page_number),
+        [1, 2, 3, 4]
+      );
+    });
+
+    await t.step("two groups that both say q1 stay two questions, each with its own parts", async () => {
+      const { run } = await extract(4, (pages) => ({
+        questions: [q("q1", `Problem ${pages[0]}`, 1), q("q1a", "(a)", 1, "q1")],
+        regions: [region("q1a", 1)]
+      }));
+      const tree = await run();
+      const byId = new Map(tree.questions.map((x) => [x.client_id, x]));
+      assertEquals(byId.size, 4, "client_ids collided");
+      const tops = tree.questions.filter((x) => !x.parent_client_id);
+      assertEquals(
+        tops.map((x) => [x.label, x.ordinal]),
+        [
+          ["Problem 1", 1],
+          ["Problem 3", 2]
+        ]
+      );
+      // Each group's region is on that group's first page and must point at that group's (a).
+      for (const r of tree.regions) {
+        const part = byId.get(r.question_client_id!)!;
+        assertEquals(part.label, "(a)");
+        assertEquals(byId.get(part.parent_client_id!)!.label, `Problem ${r.page_number}`);
+      }
+    });
+
+    await t.step("a problem that continues onto the next group's pages becomes one problem", async () => {
+      const { run } = await extract(4, (pages) =>
+        pages[0] === 1
+          ? {
+              questions: [
+                q("p1", "Problem 1", 1),
+                q("p1a", "(a)", 1, "p1"),
+                q("p2", "Problem 2", 2),
+                q("p2a", "(a)", 1, "p2"),
+                q("p2b", "(b)", 2, "p2"),
+                { ...q("p2b1", "call 1", 1, "p2b"), level: 3 }
+              ],
+              regions: [region("p2b1", 2)]
+            }
+          : {
+              questions: [
+                q("p2", "Problem 2 (continued)", 1),
+                q("p2b", "(b)", 1, "p2"),
+                { ...q("p2b2", "call 2", 1, "p2b"), level: 3 },
+                q("p2c", "(c)", 2, "p2"),
+                q("p3", "Problem 3", 2),
+                q("p3a", "(a)", 1, "p3")
+              ],
+              regions: [region("p2b2", 1), region("p2c", 2)]
+            }
+      );
+      const tree = await run();
+      const byId = new Map(tree.questions.map((x) => [x.client_id, x]));
+      const kids = (id: unknown) =>
+        tree.questions
+          .filter((x) => x.parent_client_id === id)
+          .sort((a, b) => a.ordinal - b.ordinal)
+          .map((x) => [x.label, x.ordinal]);
+      const tops = tree.questions.filter((x) => !x.parent_client_id).sort((a, b) => a.ordinal - b.ordinal);
+      assertEquals(
+        tops.map((x) => [x.label, x.ordinal]),
+        [
+          ["Problem 1", 1],
+          ["Problem 2", 2],
+          ["Problem 3", 3]
+        ]
+      );
+      assertEquals(kids(tops[1].client_id), [
+        ["(a)", 1],
+        ["(b)", 2],
+        ["(c)", 3]
+      ]);
+      const partB = tree.questions.find((x) => x.parent_client_id === tops[1].client_id && x.label === "(b)")!;
+      assertEquals(kids(partB.client_id), [
+        ["call 1", 1],
+        ["call 2", 2]
+      ]);
+      // Every region still points at a question that exists.
+      for (const r of tree.regions) assert(byId.has(r.question_client_id!), "region points at a dropped question");
+    });
+
+    await t.step("a timeout on pages 3-4 names those pages and says to draw the regions by hand", async () => {
+      const { run, mod } = await extract(6, (pages) =>
+        pages.includes(3) ? new DOMException("Signal timed out.", "TimeoutError") : { questions: [], regions: [] }
+      );
+      const err = await assertRejects(run, mod.TemplateExtractError);
+      assert(err.message.includes("pages 3–4"), "message doesn't name the failed pages");
+      assert(!err.message.includes("1–2") && !err.message.includes("5–6"), "message names pages that worked");
+      assert(/by hand/.test(err.message), "message doesn't say to draw the regions by hand");
+      assert(!err.message.includes(DUMMY_KEY), "message contains the credential");
+    });
+
+    await t.step("only the first name and student ID regions are kept", async () => {
+      // A name line in every page footer would otherwise give one name region per group, and the
+      // worker reads whichever the database returns first.
+      const { run } = await extract(4, () => ({
+        questions: [],
+        regions: [region(null, 1, "name"), region(null, 1, "student_id")]
+      }));
+      const tree = await run();
+      assertEquals(
+        tree.regions.map((r) => [r.kind, r.page_number]),
+        [
+          ["name", 1],
+          ["student_id", 1]
+        ]
+      );
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [name, value] of saved) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  }
+});
