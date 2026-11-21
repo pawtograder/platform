@@ -97,20 +97,16 @@ export default function AutograderPage() {
       const nextHasAutograder = values.assignments.has_autograder;
       // The grade.yml sync below rejects Forgejo assignments, whose handout is on Forgejo. Returning
       // before it needs the flag unchanged, which the disabled radio keeps.
-      const isForgejo = values.assignments?.git_provider === "forgejo";
-      if (isForgejo && priorHasAutograder !== nextHasAutograder) {
+      if (values.assignments?.git_provider === "forgejo" && priorHasAutograder !== nextHasAutograder) {
         throw new Error(FORGEJO_GRADER_SETUP_REASON);
       }
-      // A Forgejo grader repo is chosen here even while the autograder is off, since Edit Assignment turns
-      // it on without reading the grader. So its config is read whenever one is given.
-      const readGraderConfig = nextHasAutograder || (isForgejo && !!values.grader_repo);
 
       // Only validate the grader repo when the autograder will REMAIN enabled.
       // This reads pawtograder.yml from that repo, so doing it unconditionally
       // meant a broken or missing grader repo blocked the save — making it
       // impossible to turn the autograder OFF precisely when an instructor most
       // needs to, while student pushes keep hitting the broken workflow.
-      if (readGraderConfig) {
+      if (nextHasAutograder) {
         await githubRepoConfigureWebhook(
           {
             assignment_id: Number.parseInt(assignment_id as string),
@@ -158,7 +154,7 @@ export default function AutograderPage() {
       // whenever it runs, and `query` still holds the page-load value — so a change
       // cannot be detected by comparing the two. Treat "we ran the validation" as
       // "config may have been replaced" and roll it back on that basis.
-      const graderConfigMayHaveChanged = readGraderConfig;
+      const graderConfigMayHaveChanged = nextHasAutograder === true;
       const autograderRowChanged =
         graderConfigMayHaveChanged ||
         priorAutograderRow.grader_repo !== nextAutograderRow.grader_repo ||
