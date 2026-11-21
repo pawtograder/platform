@@ -14,6 +14,8 @@ import {
   reconcileForgejoGroupRepos,
   reconcileForgejoRepos,
   reconcileForgejoWorkflowHashes,
+  archiveUnlinkedRepos,
+  MAX_ARCHIVES_PER_PASS,
   type RepoOps,
   revokeDroppedTokens,
   STALE_CLAIM_MINUTES
@@ -322,13 +324,26 @@ const neededRepo = (login: string, owner = "cs4535"): NeededRepo => ({
   template_repo: `${owner}/hw1-handout`
 });
 
+/** The pending-archive lookup existingRepositoryRow makes first; names in `pending` are waiting. */
+function archiveLookup(pending: string[] = []) {
+  let name: unknown;
+  const query = {
+    select: () => query,
+    eq: (_column: string, value: unknown) => ((name = value), query),
+    is: () => query,
+    limit: () => Promise.resolve({ data: pending.includes(name as string) ? [{ id: 1 }] : [], error: null })
+  };
+  return query;
+}
+
 function fakeRepoSupabase(
   needed: NeededRepo[],
   existing: Record<
     string,
     { id: number; assignment_id: number; profile_id: string | null; assignment_group_id: null }
   > = {},
-  taken: string[] = []
+  taken: string[] = [],
+  pendingArchives: string[] = []
 ) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const writes: { kind: "insert" | "update"; row: Record<string, unknown>; id?: unknown }[] = [];
@@ -339,6 +354,7 @@ function fakeRepoSupabase(
       return Promise.resolve({ data: needed, error: null });
     },
     from(table: string) {
+      if (table === "forgejo_repo_archives") return archiveLookup(pendingArchives);
       assertEquals(table, "repositories");
       const filters: Record<string, unknown> = {};
       const lookup = {
@@ -669,6 +685,7 @@ function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = [], taken
       return Promise.resolve({ data: needed, error: null });
     },
     from(table: string) {
+      if (table === "forgejo_repo_archives") return archiveLookup();
       assertEquals(table, "repositories");
       const lookup = {
         select: () => lookup,
@@ -781,7 +798,8 @@ function overlappingPasses(first: "student" | "group") {
         }
         return { data: true, error: null };
       },
-      from() {
+      from(table: string) {
+        if (table === "forgejo_repo_archives") return archiveLookup();
         const filters: Record<string, unknown> = {};
         const lookup = {
           select: () => lookup,
@@ -832,3 +850,111 @@ for (const first of ["student", "group"] as const) {
     }
   );
 }
+
+Deno.test("repos: a name still waiting for its old repo to be archived gets no Forgejo calls", async () => {
+  const { client, writes } = fakeRepoSupabase([neededRepo("a")], {}, [], ["cs4535/hw1-a"]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(calls, []);
+  assertEquals(writes, []);
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The Forgejo repo name is waiting for its previous repo to be archived"]
+  );
+});
+
+type DueArchive = { id: number; class_id: number; repository: string };
+
+function fakeArchiveSupabase(due: DueArchive[], opts: { unclaimable?: number[]; dueError?: unknown } = {}) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const saved: { values: Record<string, unknown>; id: unknown }[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      if (name === "forgejo_repo_archives_due") {
+        return Promise.resolve(opts.dueError ? { data: null, error: opts.dueError } : { data: due, error: null });
+      }
+      assertEquals(name, "claim_forgejo_repo_archive");
+      return Promise.resolve({ data: !(opts.unclaimable ?? []).includes(args.p_id as number), error: null });
+    },
+    from(table: string) {
+      assertEquals(table, "forgejo_repo_archives");
+      return {
+        update: (values: Record<string, unknown>) => ({
+          eq: (_column: string, id: unknown) => {
+            saved.push({ values, id });
+            return Promise.resolve({ error: null });
+          }
+        })
+      };
+    }
+  } as unknown as Parameters<typeof archiveUnlinkedRepos>[0];
+  return { client, rpcCalls, saved };
+}
+
+Deno.test("archives: each claimed repo is archived and recorded with its new name", async () => {
+  const { client, rpcCalls, saved } = fakeArchiveSupabase([
+    { id: 1, class_id: 3, repository: "cs4535/hw1-group-a" },
+    { id: 2, class_id: 3, repository: "cs4535/hw1-gone" }
+  ]);
+  const archived: string[] = [];
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository) => {
+    archived.push(repository);
+    return Promise.resolve(repository.endsWith("gone") ? null : "cs4535/archived-x-hw1-group-a");
+  });
+  assertEquals(result, { archived: 2, failures: [] });
+  assertEquals(archived, ["cs4535/hw1-group-a", "cs4535/hw1-gone"]);
+  assertEquals(rpcCalls[0], {
+    name: "forgejo_repo_archives_due",
+    args: { p_stale_minutes: STALE_CLAIM_MINUTES, p_limit: MAX_ARCHIVES_PER_PASS }
+  });
+  assertEquals(
+    saved.map((s) => [s.id, s.values.archived_as]),
+    [
+      [1, "cs4535/archived-x-hw1-group-a"],
+      [2, null]
+    ]
+  );
+  assert(saved.every((s) => typeof s.values.archived_at === "string"));
+});
+
+Deno.test("archives: one another pass has claimed is left alone", async () => {
+  const { client, saved } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-a" }], {
+    unclaimable: [1]
+  });
+  let calls = 0;
+  const result = await archiveUnlinkedRepos(client, config, () => (calls++, Promise.resolve(null)));
+  assertEquals(result, { archived: 0, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(saved, []);
+});
+
+Deno.test("archives: a failure stays pending for the next pass, and the others carry on", async () => {
+  const { client, saved } = fakeArchiveSupabase([
+    { id: 1, class_id: 3, repository: "cs4535/hw1-a" },
+    { id: 2, class_id: 4, repository: "cs3500/hw1-b" }
+  ]);
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository) =>
+    repository === "cs4535/hw1-a"
+      ? Promise.reject(new Error("Forgejo collaborator remove failed: 500"))
+      : Promise.resolve("cs3500/archived-x-hw1-b")
+  );
+  assertEquals(result.archived, 1);
+  assertEquals(
+    result.failures.map((f) => [f.classId, (f.error as Error).message]),
+    [[3, "Forgejo collaborator remove failed: 500"]]
+  );
+  assertEquals(
+    saved.map((s) => s.id),
+    [2]
+  );
+});
+
+Deno.test("archives: a failed backlog query is an error", async () => {
+  const { client } = fakeArchiveSupabase([], { dueError: new Error("permission denied") });
+  await assertRejects(
+    () => archiveUnlinkedRepos(client, config, () => Promise.resolve(null)),
+    Error,
+    "permission denied"
+  );
+});

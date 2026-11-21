@@ -659,3 +659,46 @@ export async function grantWrite(config: ForgejoConfig, repository: string, logi
   const { permission } = (await res.json()) as { permission: string };
   return permission === "write" || permission === "admin";
 }
+
+/**
+ * Locks a repo that no longer belongs to a student or group, as archiveRepoAndLock does on GitHub: removes every
+ * collaborator, then renames it `archived-<timestamp>-<name>` so the name is free again, and marks it archived,
+ * which makes it read-only. Team access (the class's staff) stays. Returns the new owner/name, or null when the
+ * repo is already gone.
+ */
+export async function archiveRepo(config: ForgejoConfig, repository: string, now = new Date()): Promise<string | null> {
+  const path = repoPath(repository);
+  const [owner, name] = repository.split("/");
+  const collaborators = new Map<string, string>();
+  // Paged until X-Total-Count, not until a short page: Forgejo caps `limit` at [api].MAX_RESPONSE_ITEMS, and a
+  // collaborator left off the list would keep write access to a repo that is about to be read-only for everyone else.
+  for (let page = 1; page <= 1000; page++) {
+    const res = await forgejo(config, "GET", `/repos/${path}/collaborators?page=${page}&limit=50`);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      if (page === 1) return null;
+      throw new Error("Forgejo repo disappeared while its collaborators were read");
+    }
+    if (!res.ok) throw await failure(res, "collaborators read");
+    const total = res.headers.get("X-Total-Count");
+    const batch = (await res.json()) as { login: string }[];
+    for (const c of batch) collaborators.set(c.login.toLowerCase(), c.login);
+    if (batch.length === 0 || (total !== null && collaborators.size >= Number(total))) break;
+    if (page === 1000) throw new Error("Forgejo collaborators read failed: the list didn't end");
+  }
+  for (const login of collaborators.values()) {
+    const res = await forgejo(config, "DELETE", `/repos/${path}/collaborators/${encodeURIComponent(login)}`);
+    if (!res.ok && res.status !== 404) throw await failure(res, "collaborator remove");
+    await res.body?.cancel();
+  }
+  // Forgejo caps repo names at 100 characters; the timestamp keeps a cut name unique.
+  const archivedName = `archived-${now.toISOString().replace(/[:.]/g, "-")}-${name}`.slice(0, 100);
+  const res = await forgejo(config, "PATCH", `/repos/${path}`, { name: archivedName, archived: true });
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
+  if (!res.ok) throw await failure(res, "repo archive");
+  await res.body?.cancel();
+  return `${owner}/${archivedName}`;
+}

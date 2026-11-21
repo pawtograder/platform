@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
+  archiveRepo,
   ensureAccountForUser,
   ensureOrg,
   ensureRepoFromTemplate,
@@ -96,6 +97,19 @@ export async function existingRepositoryRow(
   repository: string,
   owner: RepoOwner
 ): Promise<number | null> {
+  // The old repo by this name is still on Forgejo with its old collaborators: adopting it would hand them the
+  // new student's work, and archiving it later would take the repo from the new owner. archiveUnlinkedRepos
+  // runs first in every pass, so this only waits a pass when that archive failed.
+  const { data: pending, error: pendingError } = await supabase
+    .from("forgejo_repo_archives")
+    .select("id")
+    .eq("repository", repository.toLowerCase())
+    .is("archived_at", null)
+    .limit(1);
+  if (pendingError) throw pendingError;
+  if (pending && pending.length > 0) {
+    throw new Error("The Forgejo repo name is waiting for its previous repo to be archived");
+  }
   const { data, error } = await supabase
     .from("repositories")
     .select("id, assignment_id, profile_id, assignment_group_id")
@@ -322,6 +336,52 @@ export async function reconcileForgejoWorkflowHashes(
   return result;
 }
 
+export const MAX_ARCHIVES_PER_PASS = 50;
+
+export type ArchiveResult = { archived: number; failures: { classId: number; error: unknown }[] };
+
+/**
+ * Archives Forgejo repos that were unlinked from their student or group (#1378), the Forgejo side of
+ * enqueue_github_archive_repo. Each is claimed first: a pass that listed it late must not archive a repo that
+ * was re-created under the same name after another pass archived the old one.
+ */
+export async function archiveUnlinkedRepos(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  archive: typeof archiveRepo = archiveRepo
+): Promise<ArchiveResult> {
+  // function-grants: service-role
+  const { data: due, error } = await supabase.rpc("forgejo_repo_archives_due", {
+    p_stale_minutes: STALE_CLAIM_MINUTES,
+    p_limit: MAX_ARCHIVES_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: ArchiveResult = { archived: 0, failures: [] };
+  for (const row of due ?? []) {
+    try {
+      // function-grants: service-role
+      const { data: claimed, error: claimError } = await supabase.rpc("claim_forgejo_repo_archive", {
+        p_id: row.id,
+        p_stale_minutes: STALE_CLAIM_MINUTES
+      });
+      if (claimError) throw claimError;
+      if (!claimed) continue;
+      // On failure the claim stays; once it's stale the next pass tries again.
+      const archivedAs = await archive(config, row.repository);
+      const { error: saveError } = await supabase
+        .from("forgejo_repo_archives")
+        .update({ archived_at: new Date().toISOString(), archived_as: archivedAs })
+        .eq("id", row.id);
+      if (saveError) throw saveError;
+      result.archived++;
+    } catch (failure) {
+      result.failures.push({ classId: row.class_id, error: failure });
+    }
+  }
+  return result;
+}
+
 export const MAX_REVOCATIONS_PER_PASS = 100;
 
 export type RevokeResult = { revoked: number; failures: { userId: string; error: unknown }[] };
@@ -371,7 +431,8 @@ export async function revokeDroppedTokens(
 }
 
 /**
- * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
+ * One pass: unlinked repos are archived first, so a name they free can be used again in the same pass; then
+ * accounts, so students who just got one get their repos in the same pass; then repos, group
  * repos and workflow hashes; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke).
  */
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
@@ -381,7 +442,9 @@ export async function reconcileForgejo(supabase: SupabaseClient<Database>, confi
   let repos: RepoReconcileResult | undefined;
   let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
+  let archives: ArchiveResult | undefined;
   try {
+    archives = await archiveUnlinkedRepos(supabase, config);
     accounts = await reconcileForgejoAccounts(supabase, config);
     repos = await reconcileForgejoRepos(supabase, config);
     groupRepos = await reconcileForgejoGroupRepos(supabase, config);
@@ -391,5 +454,12 @@ export async function reconcileForgejo(supabase: SupabaseClient<Database>, confi
   }
   const revocation = await revokeDroppedTokens(supabase, config);
   if (stepError !== undefined) throw stepError;
-  return { accounts: accounts!, repos: repos!, groupRepos: groupRepos!, hashes: hashes!, revocation };
+  return {
+    accounts: accounts!,
+    repos: repos!,
+    groupRepos: groupRepos!,
+    hashes: hashes!,
+    archives: archives!,
+    revocation
+  };
 }

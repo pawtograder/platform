@@ -31,7 +31,7 @@ type Member = {
   added_by?: string;
 };
 type Group = { id: number; assignment_id: number; class_id: number; name: string };
-type Repo = { id: number; assignment_group_id: number | null; repository: string };
+type Repo = { id: number; assignment_group_id: number | null; repository: string; git_provider: string };
 type Submission = {
   id: number;
   assignment_id: number;
@@ -68,7 +68,10 @@ class FakeDb {
   repoDeleteCalls: number[][] = [];
   private nextId = 1000;
 
-  addGroup(id: number, opts: { repo?: string; repoId?: number; classId?: number; assignmentId?: number } = {}) {
+  addGroup(
+    id: number,
+    opts: { repo?: string; repoId?: number; classId?: number; assignmentId?: number; gitProvider?: string } = {}
+  ) {
     this.groups.push({
       id,
       assignment_id: opts.assignmentId ?? ASSIGNMENT_ID,
@@ -76,7 +79,12 @@ class FakeDb {
       name: `group-${id}`
     });
     if (opts.repo) {
-      this.repos.push({ id: opts.repoId ?? id * 10, assignment_group_id: id, repository: opts.repo });
+      this.repos.push({
+        id: opts.repoId ?? id * 10,
+        assignment_group_id: id,
+        repository: opts.repo,
+        git_provider: opts.gitProvider ?? "github"
+      });
     }
   }
 
@@ -472,6 +480,21 @@ Deno.test("archive targets the stored owner, not the class github_org", async ()
 
   assertEquals(archives, [{ class_id: CLASS.id, org: "orgname", repo: "hw1-group-a" }]);
 });
+
+Deno.test(
+  "a Forgejo group repo is deleted without a GitHub archive job: the delete trigger queues its archive",
+  async () => {
+    const db = new FakeDb();
+    db.addGroup(1, { repo: "cs3100/cs3100-hw1-group-1", gitProvider: "forgejo" });
+    db.addMember(1, "alice");
+    const { deps, archives } = harness(db);
+
+    await moveStudentBetweenGroups(move(1, null), deps);
+
+    assertEquals(db.repoDeleteCalls, [[10]]);
+    assertEquals(archives, []);
+  }
+);
 
 // ---- other members remain ------------------------------------------------
 
