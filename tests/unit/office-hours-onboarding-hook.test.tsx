@@ -88,9 +88,11 @@ describe("useOnboardingCompleted", () => {
 
   it("starts over for another student signed in on the same page, without a reload", async () => {
     // Student A finished onboarding and closed a hint.
+    renderHook(() => useOnboardingCompleted(true, "profile-a"));
     act(() => completeOnboarding());
     const hint = renderHook(() => useOnboardingHint("read-queue-description"));
     act(() => hint.result.current.dismiss());
+    const readsBefore = (hasSeenOnboarding as jest.Mock).mock.calls.length;
 
     // Student B signs in on the same tab. A's answer and dismissals must not carry over.
     const { result } = renderHook(() => ({
@@ -99,7 +101,7 @@ describe("useOnboardingCompleted", () => {
     }));
     await waitFor(() => expect(result.current.completed).toBe(false));
     expect(result.current.dismissed).toBe(false);
-    expect(hasSeenOnboarding).toHaveBeenCalledTimes(2);
+    expect(hasSeenOnboarding).toHaveBeenCalledTimes(readsBefore + 1);
   });
 
   it("ignores a read that finishes after another student took over", async () => {

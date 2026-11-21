@@ -175,8 +175,8 @@ export default function OfficeHoursPage() {
   // Ask for it only while the browse view is showing the list. queueListShown mirrors the early
   // returns below, where the loading message and the connection error replace the list. The
   // header holds the New Request hint back on the queue list until the student closes this one,
-  // and it checks queueListShown with the same values, so it never waits for a hint this page
-  // isn't asking for (see queueDescriptionHintPending).
+  // including while this page is still loading (see queueDescriptionHintPending and the comment
+  // in office-hours-header.tsx).
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingActive = onboardingOn && isStudent;
