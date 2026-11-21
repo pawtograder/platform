@@ -1,4 +1,5 @@
 import type * as Sentry from "npm:@sentry/deno@10.10.0";
+import { forgejoConfig, startGrading as startForgejoGrading } from "./ForgejoWrapper.ts";
 import * as github from "./GitHubWrapper.ts";
 
 /**
@@ -24,7 +25,26 @@ const gitHubProvider: GitProvider = {
   cloneRepository: github.cloneRepository
 };
 
-/** Every class is on GitHub until Forgejo repositories exist (#1093). */
+/** GitHub's. Forgejo repositories (#1093) call ForgejoWrapper directly, or `startGradingOn` below. */
 export function getGitProvider(): GitProvider {
   return gitHubProvider;
+}
+
+/**
+ * Runs grade.yml at `sha` on the repository's own host: a Forgejo repository tags the commit and dispatches
+ * through Forgejo's API (#1257), as autograder-trigger-grading-workflow does for a single rerun.
+ */
+export async function startGradingOn(
+  gitProvider: string | null | undefined,
+  repository: string,
+  sha: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  if (gitProvider !== "forgejo") {
+    await getGitProvider().startGrading(repository, sha, scope);
+    return;
+  }
+  const config = forgejoConfig();
+  if (!config) throw new Error("Forgejo grading isn't configured on this deployment");
+  await startForgejoGrading(config, repository, sha);
 }

@@ -529,7 +529,7 @@ forgejoCoderSecrets:
     coderOIDCPath: apps/pawtograder/coder-oidc-staging
     # dispatcher_token / mirror_token of the forgejo-actions-bot site admin; scripts/setup-forgejo-runner-tokens.sh.
     runnerPath: apps/pawtograder/forgejo-runner-staging
-    # Run scripts/setup-coder-forgejo-auth.sh --env staging before deploying coder.externalAuth.
+    # The Pawtograder GitHub App's client id and secret, for Coder's external auth provider.
     coderExternalAuthPath: apps/pawtograder/coder-external-auth-staging
 
 # Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
@@ -539,6 +539,8 @@ networkPolicy:
 
 forgejo:
   enabled: true
+  # Inferred, not yet confirmed with `forgejo admin auth list` on staging.
+  authSourceId: 1
   # global.nodeSelector/tolerations don't reach subcharts.
   nodeSelector: { tier: prod-staging }
   tolerations:
@@ -593,7 +595,7 @@ coder:
   oidc:
     enabled: true
   externalAuth:
-    forgejo:
+    github:
       enabled: true
   coder:
     nodeSelector: { tier: prod-staging }

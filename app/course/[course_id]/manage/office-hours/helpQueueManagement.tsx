@@ -3,6 +3,8 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import useModalManager from "@/hooks/useModalManager";
 import { useConnectionStatus, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { getQueueTypeColor } from "@/lib/utils";
@@ -30,19 +32,18 @@ export default function HelpQueueManagement() {
 
   const { mutateAsync: deleteQueue } = useDelete();
 
+  // refine's success/errorNotification options do nothing here (no notificationProvider), so report
+  // the outcome with the toaster directly.
   const handleDeleteQueue = async (queueId: number) => {
-    await deleteQueue({
-      resource: "help_queues",
-      id: queueId,
-      successNotification: {
-        message: "Help queue deleted successfully",
-        type: "success"
-      },
-      errorNotification: {
-        message: "Failed to delete help queue",
-        type: "error"
-      }
-    });
+    try {
+      await deleteQueue({ resource: "help_queues", id: queueId });
+      toaster.success({ title: "Help queue deleted successfully" });
+    } catch (error) {
+      toaster.error({
+        title: "Failed to delete help queue",
+        description: getErrorMessage(error)
+      });
+    }
   };
 
   const handleCreateSuccess = () => {

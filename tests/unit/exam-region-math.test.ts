@@ -2,7 +2,8 @@
  * @jest-environment node
  */
 
-import { boxCenterInRegion, cropAspect, wordsInRegion, type WordBox } from "@/lib/exam/regionMath";
+import { boxCenterInRegion, cropAspect, wordsInRegion } from "@/lib/exam/regionMath";
+import { wordsInRegion as sharedWordsInRegion } from "@/supabase/functions/_shared/examRegionText";
 
 describe("boxCenterInRegion", () => {
   const region = { x: 0.2, y: 0.2, width: 0.4, height: 0.4 }; // covers 0.2..0.6
@@ -18,22 +19,11 @@ describe("boxCenterInRegion", () => {
   });
 });
 
+// wordsInRegion's behavior is tested in supabase/functions/_shared/examVision.test.ts (Deno, run by
+// CI deno-unit-tests). This file only checks that regionMath re-exports that one implementation (#1188).
 describe("wordsInRegion", () => {
-  const region = { x: 0, y: 0, width: 0.5, height: 1 }; // left half
-  const words: WordBox[] = [
-    { text: "world", x: 0.1, y: 0.5, width: 0.1, height: 0.03 },
-    { text: "hello", x: 0.1, y: 0.1, width: 0.1, height: 0.03 },
-    { text: "RIGHT", x: 0.8, y: 0.1, width: 0.1, height: 0.03 }
-  ];
-  it("keeps only words inside the region", () => {
-    const text = wordsInRegion(words, region);
-    expect(text).not.toContain("RIGHT");
-  });
-  it("returns words in top-to-bottom reading order", () => {
-    expect(wordsInRegion(words, region)).toBe("hello world");
-  });
-  it("returns empty string when nothing matches", () => {
-    expect(wordsInRegion(words, { x: 0.9, y: 0.9, width: 0.05, height: 0.05 })).toBe("");
+  it("is the worker's implementation, not a copy", () => {
+    expect(wordsInRegion).toBe(sharedWordsInRegion);
   });
 });
 

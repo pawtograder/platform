@@ -8,6 +8,12 @@ import { Box, Flex, Spinner, Text, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 import { useHelpRequest, useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { createClient } from "@/utils/supabase/client";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
+import { CheckInAlertBanner, useCheckInAlert } from "@/hooks/useEscalationAlert";
 
 type LoadState = "pending" | "loaded" | "not_found" | "error";
 
@@ -128,6 +134,79 @@ export default function RequestDetailPage() {
     return queueRequests.findIndex((r) => r.id === shownRequest.id) + 1;
   }, [shownRequest, queueRequests]);
 
+  // The turn alert counts only waiting requests, so a request becomes position 1 as soon as it is first in line.
+  const turnPosition = useMemo(() => {
+    if (!shownRequest || shownRequest.status !== "open") return 0;
+    const waiting = queueRequests.filter((r) => r.status === "open");
+    return waiting.findIndex((r) => r.id === shownRequest.id) + 1;
+  }, [shownRequest, queueRequests]);
+
+  const { private_profile_id } = useClassProfiles();
+  // Ask the database whether this student is on the request. The realtime membership list can lag behind
+  // a request that was just created, so it isn't reliable for this check. Students can read their own rows.
+  // The result is stored with the request and profile it was computed for, so it can't be used after either changes.
+  // The realtime list is still the signal for rechecking: when it changes its mind about this viewer, someone
+  // was added to or removed from the request, so the database answer is read again.
+  const realtimeSaysMember = private_profile_id != null && memberProfileIds.includes(private_profile_id);
+  const [memberCheck, setMemberCheck] = useState<{ requestId: number; profileId: string; isMember: boolean } | null>(
+    null
+  );
+  const isRequestMember =
+    memberCheck !== null &&
+    memberCheck.requestId === requestIdNum &&
+    memberCheck.profileId === private_profile_id &&
+    memberCheck.isMember;
+  useEffect(() => {
+    if (private_profile_id == null || !Number.isFinite(requestIdNum)) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    // A recheck starts from unknown rather than from the last answer. Someone was added to or
+    // removed from the request, so the stored answer may be wrong, and if the read fails it would
+    // otherwise stand: a student removed from a request would keep getting its alerts.
+    setMemberCheck(null);
+    const read = async (attempt: number) => {
+      const { data, error } = await createClient()
+        .from("help_request_students")
+        .select("profile_id")
+        .eq("help_request_id", requestIdNum)
+        .eq("profile_id", private_profile_id);
+      if (cancelled) return;
+      if (error) {
+        // A failed read is not an answer. Recording "not a member" here would turn the alert off
+        // for the rest of the visit, because this effect only reruns when the request, the profile
+        // or the realtime list changes. Leave membership unknown, which keeps the alert off, and
+        // try again with a widening gap.
+        retry = setTimeout(() => read(attempt + 1), Math.min(30_000, 1_000 * 2 ** attempt));
+        return;
+      }
+      setMemberCheck({ requestId: requestIdNum, profileId: private_profile_id, isMember: data.length > 0 });
+    };
+    read(0);
+    return () => {
+      cancelled = true;
+      if (retry !== undefined) clearTimeout(retry);
+    };
+  }, [private_profile_id, requestIdNum, realtimeSaysMember]);
+  const turnAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_TURN_ALERT, false);
+  const turnMessage = useTurnAlert({
+    // The help drawer moves between requests without remounting this page, so the alert needs to
+    // know when it is looking at a different one.
+    subject: `${private_profile_id ?? "unknown"}:${requestIdNum}`,
+    status: shownRequest?.status,
+    assignee: shownRequest?.assignee,
+    position: turnPosition,
+    enabled: turnAlertsOn && isRequestMember
+  });
+
+  // Same membership gate as the turn alert: only a student on the request hears about its check-in.
+  const escalationAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_ESCALATION_ALERT, false);
+  const checkInMessage = useCheckInAlert({
+    subject: `${private_profile_id ?? "unknown"}:${requestIdNum}`,
+    status: shownRequest?.status,
+    checkInExpiresAt: shownRequest?.check_in_expires_at,
+    enabled: escalationAlertsOn && isRequestMember
+  });
+
   if (!shownRequest || correctQueueId != null) {
     if (inOtherCourse) {
       return <div>Request not found.</div>;
@@ -173,6 +252,9 @@ export default function RequestDetailPage() {
         />
       </Box>
       <Box flex={{ lg: 8 }} minW={0}>
+        <TurnAlertPrompt enabled={turnAlertsOn} />
+        <TurnAlertBanner message={turnMessage} />
+        <CheckInAlertBanner message={checkInMessage} />
         <CurrentRequest request={shownRequest} position={position} />
       </Box>
     </Flex>

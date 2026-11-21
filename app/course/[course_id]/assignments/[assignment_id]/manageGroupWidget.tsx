@@ -6,6 +6,7 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
+import { useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -873,8 +874,32 @@ function GroupDetails({
   );
 }
 
+function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
+  const instanceUrl = useForgejoInstanceUrl();
+  const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
+  if (!instanceUrl) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {label}
+      </Text>
+    );
+  }
+  return (
+    <Link
+      href={`${instanceUrl}/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {label}
+    </Link>
+  );
+}
+
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
+  if (repository.git_provider === "forgejo") {
+    return <ForgejoRepositoryLabel repository={repository} />;
+  }
   if (!role.github_org_confirmed) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
