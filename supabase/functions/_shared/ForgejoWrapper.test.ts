@@ -514,7 +514,7 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
       assertEquals(calls.at(-1)?.body, {
         type: "forgejo",
         active: true,
-        events: ["push"],
+        events: ["push", "action_run_success", "action_run_failure"],
         branch_filter: "*",
         config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
       });
@@ -525,7 +525,14 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
     [
       ok({ username: "cs4535" }),
       ...ownedBy("pawtograder-admin"),
-      ok([{ id: 9, active: false, config: { url: hooked.pushHook!.url } }]),
+      ok([
+        {
+          id: 9,
+          active: false,
+          events: ["push", "action_run_success", "action_run_failure"],
+          config: { url: hooked.pushHook!.url }
+        }
+      ]),
       ok({})
     ],
     async (calls) => {
@@ -536,11 +543,56 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
       );
       assertEquals(calls.at(-1)?.body, {
         active: true,
-        events: ["push"],
+        events: ["push", "action_run_success", "action_run_failure"],
         branch_filter: "*",
         config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
       });
       assertEquals(calls.filter((c) => c.method === "POST").length, 0);
+    }
+  );
+});
+
+Deno.test("ensureOrg: replaces a hook without the action_run events, which Forgejo's PATCH can't add", async () => {
+  const stale = [{ id: 9, active: true, events: ["push"], config: { url: hooked.pushHook!.url } }];
+  await withForgejo(
+    [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      ok(stale),
+      new Response(null, { status: 204 }),
+      ok({}, 201)
+    ],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(
+        calls.slice(-2).map((c) => `${c.method} ${c.url}`),
+        [
+          "DELETE https://git.example.edu/api/v1/orgs/cs4535/hooks/9",
+          "POST https://git.example.edu/api/v1/orgs/cs4535/hooks"
+        ]
+      );
+      assertEquals(calls.at(-1)?.body, {
+        type: "forgejo",
+        active: true,
+        events: ["push", "action_run_success", "action_run_failure"],
+        branch_filter: "*",
+        config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
+      });
+      assertEquals(calls.filter((c) => c.method === "PATCH").length, 0);
+    }
+  );
+  // Deleted since the read (another pass replaced it): still created.
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), status(404), ok({}, 201)],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(calls.at(-1)?.method, "POST");
+    }
+  );
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), status(403, "forbidden")],
+    async () => {
+      await assertRejects(() => ensureOrg(hooked, "cs4535"), Error, "org hook replace failed: 403");
     }
   );
 });

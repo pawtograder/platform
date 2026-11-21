@@ -414,7 +414,7 @@ export function repoPath(repository: string): string {
 /**
  * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
  * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
- * created there would belong to them. Then gives the org its push hook, so student pushes reach Commit History.
+ * created there would belong to them. Then gives the org its hook, so student pushes and finished grading runs reach Commit History.
  */
 export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
   await claimOrg(config, org);
@@ -422,24 +422,43 @@ export async function ensureOrg(config: ForgejoConfig, org: string): Promise<voi
 }
 
 /**
+ * What the org hook is subscribed to: pushes for Commit History, and finished Actions runs so a failed,
+ * cancelled or errored grading run is recorded with a link to it. Forgejo (as of 15.0.9) has no event for
+ * a run being requested or starting, only these.
+ */
+export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failure"] as const;
+
+/**
  * An org hook, not a system one: classes can share an instance, and an org's hook covers every repo in it,
  * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
  * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
  * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
+ *
+ * Forgejo's hook PATCH (15.0.9) sets every event except the action_run ones, which it leaves as they were.
+ * So a hook that was created before it needed them, and doesn't list them, is replaced instead.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
   const hooks = await forgejo(config, "GET", `${path}?limit=50`);
   if (!hooks.ok) throw await failure(hooks, "org hooks read");
-  const existing = ((await hooks.json()) as { id: number; config?: { url?: string } }[]).find(
+  const existing = ((await hooks.json()) as { id: number; events?: string[] | null; config?: { url?: string } }[]).find(
     (h) => h.config?.url === hook.url
   );
   const settings = {
     active: true,
-    events: ["push"],
+    events: [...ORG_HOOK_EVENTS],
     branch_filter: "*",
     config: { url: hook.url, content_type: "json", secret: hook.secret }
   };
+  if (existing && !ORG_HOOK_EVENTS.every((e) => existing.events?.includes(e))) {
+    const removed = await forgejo(config, "DELETE", `${path}/${existing.id}`);
+    if (!removed.ok && removed.status !== 404) throw await failure(removed, "org hook replace");
+    await removed.body?.cancel();
+    const created = await forgejo(config, "POST", path, { type: "forgejo", ...settings });
+    if (!created.ok) throw await failure(created, "org hook create");
+    await created.body?.cancel();
+    return;
+  }
   const res = existing
     ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
     : await forgejo(config, "POST", path, { type: "forgejo", ...settings });

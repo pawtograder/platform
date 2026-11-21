@@ -1,5 +1,6 @@
 /**
- * In-memory stand-in for the admin Supabase client, covering only the calls RepoPush.ts makes.
+ * In-memory stand-in for the admin Supabase client, covering only the calls RepoPush.ts and
+ * forgejo-repo-webhook make.
  * `eq` and `ilike` filters are applied to the rows, so a test can tell a provider-scoped lookup from
  * one that ignores the provider, and an escaped ILIKE pattern from a wildcard. Used by RepoPush.test.ts and forgejo-repo-webhook/webhook.test.ts.
  */
@@ -38,9 +39,12 @@ export function fakeSupabase(
 ) {
   const queries: FakeQuery[] = [];
   const inserts: { table: string; row: Row }[] = [];
+  const updates: { table: string; values: Row; filters: [string, unknown][] }[] = [];
+  const upserts: { table: string; row: Row; options: unknown }[] = [];
   const client = {
     from(table: string) {
       const query: FakeQuery = { table, filters: [] };
+      let updateValues: Row | null = null;
       const rows = () => (tables[table] ?? []).filter((row) => query.filters.every((filter) => matches(row, filter)));
       const chain = {
         select: () => chain,
@@ -58,10 +62,25 @@ export function fakeSupabase(
           queries.push(query);
           return Promise.resolve({ data: rows()[0] ?? null, error: null });
         },
-        // Awaiting the chain without maybeSingle() resolves to every matching row.
-        then(resolve: (result: { data: Row[]; error: null }) => unknown) {
+        // Awaiting the chain without maybeSingle() resolves to every matching row, or, after
+        // update(), applies the update to them.
+        then(resolve: (result: { data: Row[] | null; error: null }) => unknown) {
+          if (updateValues) {
+            const values = updateValues;
+            for (const row of rows()) Object.assign(row, values);
+            updates.push({ table, values, filters: query.filters });
+            return Promise.resolve({ data: null, error: null }).then(resolve);
+          }
           queries.push(query);
           return Promise.resolve({ data: rows(), error: null }).then(resolve);
+        },
+        update(values: Row) {
+          updateValues = values;
+          return chain;
+        },
+        upsert(row: Row, options?: unknown) {
+          upserts.push({ table, row, options });
+          return Promise.resolve({ error: null });
         },
         insert(row: Row) {
           if (opts.insertError) return Promise.resolve({ error: opts.insertError });
@@ -73,7 +92,7 @@ export function fakeSupabase(
       return chain;
     }
   };
-  return { client: client as unknown as SupabaseClient<Database>, queries, inserts };
+  return { client: client as unknown as SupabaseClient<Database>, queries, inserts, updates, upserts };
 }
 
 /** A `repositories` row with the fields the push handler reads. */
