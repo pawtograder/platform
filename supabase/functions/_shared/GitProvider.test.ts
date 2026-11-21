@@ -22,7 +22,10 @@ async function withEnv(vars: Record<string, string>, fn: () => Promise<void>) {
   try {
     await fn();
   } finally {
-    for (const [k, v] of Object.entries(before)) v === undefined ? Deno.env.delete(k) : Deno.env.set(k, v);
+    for (const [k, v] of Object.entries(before)) {
+      if (v === undefined) Deno.env.delete(k);
+      else Deno.env.set(k, v);
+    }
   }
 }
 
