@@ -5,6 +5,8 @@
  * only decide what to show.
  */
 
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+
 export const ESCALATION_NOTE_MAX_LENGTH = 500;
 
 type QueueOrderFields = { escalation_count: number; created_at: string };
@@ -109,4 +111,29 @@ export function latestEscalationNoteByRequest(
 export function escalationBadgeLabel(escalationCount: number): string | null {
   if (escalationCount <= 0) return null;
   return escalationCount > 1 ? `Escalated ×${escalationCount}` : "Escalated";
+}
+
+/** HINT that answer_help_request_check_in sets when "not fixed" would give the student two open solo requests in one queue. */
+export const SOLO_REOPEN_CONFLICT_HINT = "help_request_solo_reopen_conflict";
+
+/** Used only if the error arrives without the blocking request's id. */
+export const SOLO_REOPEN_CONFLICT_MESSAGE =
+  "You already have another open request of your own in this queue. Finish or close it first, then answer this check-in again.";
+
+/**
+ * Student-facing text for a failed check-in answer. The solo-request conflict gets its own copy,
+ * because the generic 23505 text says to refresh, and refreshing doesn't close the other request.
+ * The blocker is a specific request (same queue and privacy, no other students), and the student
+ * may have other open requests in the queue, so the copy names it as "Request #id", the label the
+ * office hours header shows. Every other error goes through getStudentFacingErrorMessage.
+ */
+export function checkInErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && (error as { hint?: unknown }).hint === SOLO_REOPEN_CONFLICT_HINT) {
+    const details = (error as { details?: unknown }).details;
+    if (typeof details === "string" && /^\d+$/.test(details)) {
+      return `Your Request #${details} is still open in this queue. Finish or close it first, then answer this check-in again.`;
+    }
+    return SOLO_REOPEN_CONFLICT_MESSAGE;
+  }
+  return getStudentFacingErrorMessage(error);
 }
