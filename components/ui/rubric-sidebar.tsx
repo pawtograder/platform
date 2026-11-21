@@ -1511,7 +1511,7 @@ function RubricMenu() {
   }
 
   return (
-    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2} data-visual-test="removed">
+    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2} data-visual-test="removed" data-rubric-menu>
       <NativeSelectRoot>
         <NativeSelectField
           aria-label="Select active rubric"
@@ -1716,8 +1716,16 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
     if (!container || !target) return;
 
     isManuallySelecting.current = true;
-    // Centered rather than at the top, where the sticky rubric menu would cover it.
-    scrollSidebarTo(container, target, (container.clientHeight - target.offsetHeight) / 2);
+    // The scroll handler is held off during the jump and won't run again once it lands, so make the
+    // check's rubric active here, as the rubric menu does.
+    const rubricId = rubrics.find((r) => rubricRefs.current[r.id]?.contains(target))?.id;
+    if (rubricId !== undefined) setActiveRubricId(rubricId);
+    // Centered in the space below the sticky rubric menu. A check taller than that space starts just
+    // under the menu instead, so its name and first options stay on screen.
+    const menuHeight = container.querySelector<HTMLElement>("[data-rubric-menu]")?.offsetHeight ?? 0;
+    const room = container.clientHeight - menuHeight;
+    const offset = target.offsetHeight > room ? menuHeight + 8 : menuHeight + (room - target.offsetHeight) / 2;
+    scrollSidebarTo(container, target, offset);
     clearFocus();
     target.dataset.focused = "true";
     focused.current = {
@@ -1727,7 +1735,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
         clearFocus();
       }, 2000)
     };
-  }, [scrollToExamQuestionId, scrollRootRef, setScrollToExamQuestionId, clearFocus]);
+  }, [scrollToExamQuestionId, scrollRootRef, setScrollToExamQuestionId, clearFocus, rubrics, setActiveRubricId]);
   useEffect(() => clearFocus, [clearFocus]);
 
   // Callback to set refs
