@@ -136,8 +136,9 @@ describe("TableController with an ID-only broadcast payload", () => {
     expect(fetchStub).toHaveBeenCalledTimes(1);
 
     sendIdOnlyUpdate(2);
+    // The check and the fetch it would allow happen in the same synchronous pass of the update
+    // batch, so once the check has run, a fetch would already have been made.
     await waitFor(() => shouldRefetch.mock.calls.length > 0);
-    await new Promise((r) => setTimeout(r, 50));
 
     expect(shouldRefetch).toHaveBeenCalledWith(2);
     expect(fetchStub).toHaveBeenCalledTimes(1);
