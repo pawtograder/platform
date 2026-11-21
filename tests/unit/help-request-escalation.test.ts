@@ -11,6 +11,8 @@
  */
 
 import {
+  checkInErrorMessage,
+  SOLO_REOPEN_CONFLICT_MESSAGE,
   compareHelpRequestQueueOrder,
   escalationBadgeLabel,
   formatWaitDuration,
@@ -148,5 +150,30 @@ describe("notes and labels", () => {
   it("formats wait durations", () => {
     expect(formatWaitDuration(18 * MINUTE)).toBe("18 min");
     expect(formatWaitDuration(65 * MINUTE)).toBe("1 hr 5 min");
+  });
+});
+
+describe("checkInErrorMessage", () => {
+  it("explains the solo-request conflict instead of saying to refresh", () => {
+    const message = checkInErrorMessage({
+      code: "23505",
+      message: "you already have a public solo help request in this queue; finish it before reopening this one",
+      details: null,
+      hint: "help_request_solo_reopen_conflict"
+    });
+    expect(message).toBe(SOLO_REOPEN_CONFLICT_MESSAGE);
+    expect(message).not.toMatch(/refresh/i);
+  });
+
+  it("keeps the generic copy for any other 23505", () => {
+    expect(
+      checkInErrorMessage({ code: "23505", message: "duplicate key value violates unique constraint", hint: null })
+    ).toBe("This was already saved or conflicts with existing data. Refresh the page and try again.");
+  });
+
+  it("passes other errors through the shared mapper", () => {
+    expect(
+      checkInErrorMessage({ code: "22023", message: "this help request is no longer waiting for a check-in" })
+    ).toBe("this help request is no longer waiting for a check-in");
   });
 });

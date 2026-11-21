@@ -5,6 +5,8 @@
  * only decide what to show.
  */
 
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+
 export const ESCALATION_NOTE_MAX_LENGTH = 500;
 
 type QueueOrderFields = { escalation_count: number; created_at: string };
@@ -109,4 +111,23 @@ export function latestEscalationNoteByRequest(
 export function escalationBadgeLabel(escalationCount: number): string | null {
   if (escalationCount <= 0) return null;
   return escalationCount > 1 ? `Escalated ×${escalationCount}` : "Escalated";
+}
+
+/** HINT that answer_help_request_check_in sets when "not fixed" would give the student two open solo requests in one queue. */
+export const SOLO_REOPEN_CONFLICT_HINT = "help_request_solo_reopen_conflict";
+
+export const SOLO_REOPEN_CONFLICT_MESSAGE =
+  "You already have another open help request in this queue. Finish or close that request first, then answer this check-in again.";
+
+/**
+ * Student-facing text for a failed check-in answer. The solo-request conflict gets its own copy,
+ * because the generic 23505 text says to refresh, and refreshing doesn't close the other request.
+ * The rule allows at most one other open solo request per queue, so "your other request" is
+ * unambiguous. Every other error goes through getStudentFacingErrorMessage.
+ */
+export function checkInErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && (error as { hint?: unknown }).hint === SOLO_REOPEN_CONFLICT_HINT) {
+    return SOLO_REOPEN_CONFLICT_MESSAGE;
+  }
+  return getStudentFacingErrorMessage(error);
 }

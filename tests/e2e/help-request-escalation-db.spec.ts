@@ -204,6 +204,8 @@ test.describe("help request escalation RPCs", () => {
       p_note: "Still stuck"
     });
     expect(error?.code).toBe("23505");
+    // The client shows dedicated copy for this hint instead of the generic "refresh" text.
+    expect(error?.hint).toBe("help_request_solo_reopen_conflict");
     const r = await row(first);
     expect(r).toMatchObject({ status: "resolved", escalation_count: 0 });
     expect(r.check_in_expires_at).not.toBeNull();

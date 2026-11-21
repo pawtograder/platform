@@ -79,7 +79,10 @@ BEGIN
       IF v_other_solo_count > 0 THEN
         RAISE EXCEPTION 'you already have a % solo help request in this queue; finish it before reopening this one',
           CASE WHEN v_request.is_private THEN 'private' ELSE 'public' END
-          USING ERRCODE = '23505';
+          USING ERRCODE = '23505',
+                -- The client keys its student-facing copy on this hint, so other 23505 errors keep
+                -- their generic message (lib/helpRequestEscalation.ts, checkInErrorMessage).
+                HINT = 'help_request_solo_reopen_conflict';
       END IF;
     END IF;
 
