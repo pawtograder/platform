@@ -11,9 +11,13 @@ export SB_API_PORT=$((54321 + SB_PORT_OFFSET))
 export PAW_PORT="${PAW_PORT:-3300}"
 export FORGEJO_PORT="${FORGEJO_PORT:-3100}"
 export CODER_PORT="${CODER_PORT:-7080}"
+export FUNCTIONS_PORT="${FUNCTIONS_PORT:-3150}"
 PAW_BASE_URL="http://127.0.0.1:${PAW_PORT}"
 FORGEJO_BASE_URL="http://127.0.0.1:${FORGEJO_PORT}"
 CODER_BASE_URL="http://127.0.0.1:${CODER_PORT}"
+FUNCTIONS_BASE_URL="http://127.0.0.1:${FUNCTIONS_PORT}"
+# The lane's GitHub: the same Forgejo under another origin (docker-compose.yml, CODER_EXTERNAL_AUTH_0_*).
+GITHUB_STANDIN_URL="http://localhost:${FORGEJO_PORT}"
 export FORGEJO_AUTH_SOURCE_NAME=pawtograder
 [ "${ONLY:-}" = "1" ] && { KEEP_UP=1; SKIP_SUPABASE=1; }
 
@@ -43,7 +47,9 @@ TOOL_PID=""
 cleanup() {
   if [ "${KEEP_UP:-}" != "1" ]; then
     [ -n "$TOOL_PID" ] && kill -- "-$TOOL_PID" 2>/dev/null || true
-    for s in forgejo coder; do $COMPOSE logs --no-color "$s" >"$LOGS/$s.log" 2>&1 || true; done
+    for s in forgejo coder functions workspace; do $COMPOSE logs --no-color "$s" >"$LOGS/$s.log" 2>&1 || true; done
+    rm -rf "$LOGS/agents"
+    $COMPOSE cp workspace:/agents "$LOGS/agents" >/dev/null 2>&1 || true
     $COMPOSE down -v >/dev/null 2>&1 || true
     [ "${SKIP_SUPABASE:-}" = "1" ] || $SB stop --no-backup >/dev/null 2>&1 || true
   fi
@@ -99,16 +105,14 @@ else
   unset OAUTH_FIRST_PARTY_REDIRECT_URIS
 fi
 
+# Coder starts once Forgejo has the OAuth app that plays GitHub's (below).
 if [ "${SKIP_APPS:-}" != "1" ]; then
-  log "Starting Forgejo and Coder"
-  $COMPOSE up -d --force-recreate
+  log "Starting Forgejo"
+  $COMPOSE up -d --force-recreate loopback forgejo coder-db agents-init workspace
 else
-  log "Restarting Coder with the re-minted OIDC client"
-  $COMPOSE up -d
-  $COMPOSE up -d --force-recreate --no-deps coder
+  $COMPOSE up -d loopback forgejo coder-db agents-init workspace
 fi
 wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
-wait_for "$CODER_BASE_URL/healthz" 60 "Coder"
 
 log "Bootstrapping Forgejo admin + Pawtograder login source"
 FJ="$COMPOSE exec -T forgejo forgejo admin"
@@ -136,10 +140,45 @@ wait_for "$FORGEJO_BASE_URL/api/v1/version" 60 "Forgejo"
 # GoTrue requires PKCE, and Forgejo's first sign-in after a CLI-added source skips it; burn that request.
 curl -fsS -o /dev/null "$FORGEJO_BASE_URL/user/oauth2/$FORGEJO_AUTH_SOURCE_NAME" || true
 
+log "Creating the Forgejo OAuth app that plays GitHub's for Coder"
+json() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);console.log(process.argv[1].split(".").reduce((o,k)=>o?.[k],v)??"")})' "$1"; }
+STANDIN_APP="$(curl -fsS -X POST "$FORGEJO_BASE_URL/api/v1/user/applications/oauth2" \
+  -u "$FORGEJO_ADMIN_USER:$FORGEJO_ADMIN_PASSWORD" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"coder-github-standin-$(date +%s)\",\"confidential_client\":true,\"redirect_uris\":[\"$CODER_BASE_URL/external-auth/github/callback\"]}")"
+export GITHUB_STANDIN_CLIENT_ID="$(echo "$STANDIN_APP" | json client_id)"
+export GITHUB_STANDIN_CLIENT_SECRET="$(echo "$STANDIN_APP" | json client_secret)"
+[ -n "$GITHUB_STANDIN_CLIENT_ID" ] || { echo "ERROR: no OAuth app: $STANDIN_APP"; exit 1; }
+
+log "Starting Coder"
+$COMPOSE up -d --force-recreate --no-deps coder
+wait_for "$CODER_BASE_URL/healthz" 60 "Coder"
+
 log "Bootstrapping Coder first owner"
 curl -fsS -o /dev/null -X POST "$CODER_BASE_URL/api/v2/users/first" -H 'Content-Type: application/json' \
   -d "{\"email\":\"$CODER_ADMIN_EMAIL\",\"username\":\"coder-admin\",\"name\":\"Coder Admin\",\"password\":\"$CODER_ADMIN_PASSWORD\",\"trial\":false}" \
   || echo "  (first owner already exists)"
+
+log "Pushing the lane's kubernetes template and minting workspace-open's Coder token"
+CODER_SESSION="$(curl -fsS -X POST "$CODER_BASE_URL/api/v2/users/login" -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$CODER_ADMIN_EMAIL\",\"password\":\"$CODER_ADMIN_PASSWORD\"}" | json session_token)"
+[ -n "$CODER_SESSION" ] || { echo "ERROR: Coder admin login failed"; exit 1; }
+$COMPOSE exec -T -e CODER_URL="$CODER_BASE_URL" -e CODER_SESSION_TOKEN="$CODER_SESSION" coder \
+  /opt/coder templates push kubernetes --directory /pawtograder-template --yes \
+  --variable "forgejo_url=$FORGEJO_BASE_URL" --variable "github_url=$GITHUB_STANDIN_URL" \
+  --variable github_external_auth_id=github
+# 24h; CODER_API_TOKEN belongs to an owner, as in the chart.
+export CODER_API_TOKEN="$(curl -fsS -X POST "$CODER_BASE_URL/api/v2/users/me/keys/tokens" \
+  -H "Coder-Session-Token: $CODER_SESSION" -H 'Content-Type: application/json' \
+  -d "{\"token_name\":\"pawtograder-e2e-$(date +%s)\",\"lifetime\":86400000000000}" | json key)"
+[ -n "$CODER_API_TOKEN" ] || { echo "ERROR: couldn't mint a Coder API token"; exit 1; }
+
+log "Starting the edge functions the cloud workspaces journey reaches"
+export FORGEJO_ADMIN_USER FORGEJO_ADMIN_PASSWORD SOURCE_ID
+export FORGEJO_WEBHOOK_SECRET="forgejo-e2e-webhook-secret"
+E2E_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
+export E2E_GITHUB_PRIVATE_KEY_STRING="$(printf '%s\n' "$E2E_KEY" | awk 'BEGIN{ORS=""} {printf "%s\\n", $0}')"
+$COMPOSE up -d --force-recreate --no-deps functions
+wait_for "$FUNCTIONS_BASE_URL/health" 90 "Edge functions" || { $COMPOSE logs --no-color --tail 60 functions; exit 1; }
 
 if [ "${SKIP_TOOL:-}" != "1" ]; then
   if port_in_use "$PAW_PORT"; then
@@ -159,6 +198,8 @@ if [ "${SKIP_TOOL:-}" != "1" ]; then
     echo "$PUBLIC_ENV" >"$BUILD_STAMP"
   fi
   log "Starting Pawtograder on $PAW_BASE_URL"
+  # Opens /api/e2e/revalidate-course, which stands in for the classes cache webhook (TestingUtils.revalidateCourseCache).
+  export E2E_ENABLE=true
   # Own process group, so cleanup also stops the next server npx spawns.
   set -m
   npx next start -H 127.0.0.1 -p "$PAW_PORT" >"$LOGS/next.log" 2>&1 &
@@ -169,7 +210,8 @@ fi
 
 log "Writing $OUT_JSON"
 export PAW_BASE_URL FORGEJO_BASE_URL CODER_BASE_URL SB_ISSUER SOURCE_ID FORGEJO_OIDC_CLIENT_ID \
-  FORGEJO_ADMIN_USER FORGEJO_ADMIN_PASSWORD CODER_ADMIN_EMAIL CODER_ADMIN_PASSWORD OUT_JSON
+  FORGEJO_ADMIN_USER FORGEJO_ADMIN_PASSWORD CODER_ADMIN_EMAIL CODER_ADMIN_PASSWORD OUT_JSON \
+  FUNCTIONS_BASE_URL GITHUB_STANDIN_URL
 node -e '
 const e = process.env;
 const out = {
@@ -183,7 +225,14 @@ const out = {
   autoApproveForgejo: e.AUTO_APPROVE === "1",
   autoApproveCoder: e.AUTO_APPROVE === "1",
   forgejoLoginRedirect: true,
-  thirdParty: { clientId: e.THIRD_OIDC_CLIENT_ID, redirectUri: e.THIRD_PARTY_REDIRECT_URI }
+  thirdParty: { clientId: e.THIRD_OIDC_CLIENT_ID, redirectUri: e.THIRD_PARTY_REDIRECT_URI },
+  // cloud-workspaces-journey.forgejo-coder.spec.ts; run-remote.sh writes none, and the journey skips.
+  journey: {
+    functionsBaseUrl: e.FUNCTIONS_BASE_URL,
+    githubStandinUrl: e.GITHUB_STANDIN_URL,
+    composeFile: require("path").join(process.cwd(), "tests/e2e/forgejo-coder/docker-compose.yml"),
+    webhookSecret: e.FORGEJO_WEBHOOK_SECRET
+  }
 };
 require("fs").writeFileSync(e.OUT_JSON, JSON.stringify(out, null, 2));
 '

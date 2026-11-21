@@ -25,5 +25,12 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next-sso-e2e/types/**/*.ts"],
-  "exclude": ["node_modules", "supabase", ".next", ".next-sso-e2e", "charts"]
+  "exclude": [
+    "node_modules",
+    "supabase",
+    ".next",
+    ".next-sso-e2e",
+    "charts",
+    "tests/e2e/forgejo-coder/functions-router.ts"
+  ]
 }
