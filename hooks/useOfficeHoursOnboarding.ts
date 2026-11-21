@@ -21,11 +21,15 @@ import { createClient } from "@/utils/supabase/client";
  * - `owner` is the class profile that `completed` and `dismissed` belong to. Signing out and in as
  *   someone else, or moving to another course, doesn't always reload the page, so when the profile
  *   changes, the store forgets both and reads the table again.
+ * - `ownerChanges` goes up by one each time `owner` changes. A read keeps its answer only if no
+ *   change happened while it was in flight, so a read that started before the student signed out
+ *   is ignored even after they sign back in.
  */
 const ONBOARDING_KEY = ONBOARDING_KEYS.OFFICE_HOURS_STUDENT_ONBOARDING;
 const wanted = new Map<OnboardingHintId, number>();
 const dismissed = new Set<OnboardingHintId>();
 let owner: string | null = null;
+let ownerChanges = 0;
 let completed: boolean | null = null;
 let completedRead: Promise<void> | null = null;
 let version = 0;
@@ -46,6 +50,7 @@ function subscribe(listener: () => void) {
 function startOverFor(profileId: string) {
   if (owner === profileId) return;
   owner = profileId;
+  ownerChanges++;
   completed = null;
   completedRead = null;
   dismissed.clear();
@@ -54,10 +59,11 @@ function startOverFor(profileId: string) {
 
 function readCompletedOnce() {
   if (completedRead) return;
-  const readFor = owner;
+  const ownerChangesAtStart = ownerChanges;
   completedRead = onboardingCompletedFrom(() => hasSeenOnboarding(createClient(), ONBOARDING_KEY)).then((value) => {
-    // Another profile took over while the read was in flight, and it has its own read.
-    if (owner !== readFor) return;
+    // The profile changed while the read was in flight, maybe from A to B and back to A. The read
+    // that started after the last change has the current answer, so this one is dropped.
+    if (ownerChanges !== ownerChangesAtStart) return;
     // completeOnboarding may have run while the read was in flight. Keep its answer.
     if (completed === null) completed = value;
     notify();

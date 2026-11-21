@@ -117,6 +117,24 @@ describe("useOnboardingCompleted", () => {
     expect(result.current).toBe(false);
   });
 
+  it("ignores a read that started before the student signed out and back in", async () => {
+    // G's first read is in flight when H signs in on the same tab, and then G signs in again. In
+    // between, G clicked New Request on another device, so the first read's "not seen" is out of
+    // date and the second read's "seen" is the answer.
+    const finishFirstReadForG = pendingRead();
+    renderHook(() => useOnboardingCompleted(true, "profile-g"));
+    const finishReadForH = pendingRead();
+    renderHook(() => useOnboardingCompleted(true, "profile-h"));
+    const finishSecondReadForG = pendingRead();
+    const { result } = renderHook(() => useOnboardingCompleted(true, "profile-g"));
+
+    // The first read for G answers first. It started before H signed in, so G must not take it.
+    await act(async () => finishFirstReadForG(false));
+    await act(async () => finishReadForH(false));
+    await act(async () => finishSecondReadForG(true));
+    expect(result.current).toBe(true);
+  });
+
   it("keeps a New Request click made while the read is still in flight", async () => {
     const finishRead = pendingRead();
     const { result } = renderHook(() => useOnboardingCompleted(true, "profile-e"));
