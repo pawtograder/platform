@@ -65,6 +65,15 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.help_request_students hrs
                     WHERE hrs.help_request_id = v_request.id
                       AND hrs.profile_id <> v_request.created_by) THEN
+      -- The row lock above covers only this request. Two "not fixed" answers on different
+      -- resolved requests with the same queue, creator and privacy could otherwise both pass the
+      -- check below before either reopens. This lock makes the second wait until the first
+      -- commits; its check then runs on a fresh snapshot and sees the first request open.
+      -- Key: 'help_request_solo:<queue>:<creator>:<is_private>'. Any other path that applies the
+      -- solo rule should take the same lock. create_help_request_with_participants does not
+      -- take it yet.
+      PERFORM pg_advisory_xact_lock(hashtextextended(
+        format('help_request_solo:%s:%s:%s', v_request.help_queue, v_request.created_by, v_request.is_private), 0));
       SELECT hr.id
         INTO v_blocking_request_id
         FROM public.help_requests hr
