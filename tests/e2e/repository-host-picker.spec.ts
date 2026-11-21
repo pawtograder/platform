@@ -338,4 +338,16 @@ test.describe("Repository host picker and GitHub prompts", () => {
     const githubRow = page.getByRole("row").filter({ hasText: githubAssignment.title });
     await expect(githubRow.getByText("Forgejo", { exact: true })).toHaveCount(0);
   });
+
+  test("the assignment page shows a Forgejo assignment's real repos, not GitHub guesses", async ({ page }) => {
+    await loginAsUser(page, instructorOn, flagOn);
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}`);
+    // No grader repo is set, so nothing is guessed from the course's GitHub org.
+    await expect(page.getByText("No grader repository").first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/-solution-/)).toHaveCount(0);
+    // The handout is on Forgejo, and this lane has no Forgejo account to find its host: the name shows, unlinked.
+    const handout = `e2e-ignore/fh-handout-${suffix}`;
+    await expect(page.getByText(handout).first()).toBeVisible();
+    await expect(page.locator(`a[href="https://github.com/${handout}"]`)).toHaveCount(0);
+  });
 });
