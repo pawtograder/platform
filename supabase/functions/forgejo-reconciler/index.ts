@@ -74,12 +74,13 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos, groupRepos, hashes, revocation } = await reconcileForgejo(supabase, config);
+    const { accounts, repos, groupRepos, hashes, staffTeams, revocation } = await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
-        `workflow hashes ${hashes.set} (failed ${hashes.failures.length})`
+        `workflow hashes ${hashes.set} (failed ${hashes.failures.length}), ` +
+        `staff teams ${staffTeams.synced} (failed ${staffTeams.failures.length})`
     );
     console.log(`[forgejo-reconciler] Revoked ${revocation.revoked} tokens, failed ${revocation.failures.length}`);
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
@@ -113,6 +114,15 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(hashes.failures[0].error, hashScope);
     }
+    if (staffTeams.failures.length > 0) {
+      const staffScope = scope.clone();
+      staffScope.setFingerprint(["forgejo-reconciler", "staff-team-failed"]);
+      staffScope.setContext("failures", {
+        count: staffTeams.failures.length,
+        class_ids: staffTeams.failures.slice(0, 20).map((f) => f.classId)
+      });
+      Sentry.captureException(staffTeams.failures[0].error, staffScope);
+    }
     reportFailures(scope, "revoke-failed", revocation.failures);
     await Sentry.flush(2000);
     return json({
@@ -124,6 +134,8 @@ Deno.serve(async (req) => {
       group_repos_failed: groupRepos.failures.length,
       workflow_hashes_set: hashes.set,
       workflow_hashes_failed: hashes.failures.length,
+      staff_teams_synced: staffTeams.synced,
+      staff_teams_failed: staffTeams.failures.length,
       revoked: revocation.revoked,
       revoke_failed: revocation.failures.length
     });

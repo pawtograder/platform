@@ -2553,6 +2553,14 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].name": "handle",
     "$[*].template_repo": "none"
   },
+  forgejo_staff_teams: {
+    "$[*].class_id": "none",
+    "$[*].org": "none",
+    "$[*].team": "none",
+    "$[*].logins": "handle",
+    // Student repo names end in a Forgejo login, and group repo names in a name students choose.
+    "$[*].repositories": "free_text"
+  },
   generate_anon_name: "name",
   get_all_class_metrics: "none",
   // UNCERTAIN: Returns a vault secret (hashing pepper), not personal data; no 'secret' kind exists, so marked free_text so it is always redacted

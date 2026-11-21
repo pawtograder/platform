@@ -659,3 +659,146 @@ export async function grantWrite(config: ForgejoConfig, repository: string, logi
   const { permission } = (await res.json()) as { permission: string };
   return permission === "write" || permission === "admin";
 }
+
+// Forgejo has no "maintain", which GitHub gives the staff team. Write is the closest: staff can push, review
+// and run Actions on every repo, but can't delete one, change its collaborators or edit its settings.
+const STAFF_TEAM_UNITS: Record<string, "read" | "write"> = {
+  "repo.code": "write",
+  "repo.issues": "write",
+  "repo.pulls": "write",
+  "repo.releases": "write",
+  "repo.wiki": "write",
+  "repo.projects": "write",
+  "repo.packages": "write",
+  "repo.actions": "write",
+  "repo.ext_issues": "read",
+  "repo.ext_wiki": "read"
+};
+
+type ForgejoTeam = { id: number; name: string; permission: string; includes_all_repositories: boolean };
+
+/**
+ * Every item of a list endpoint. A short page doesn't end the list: Forgejo caps `limit` at
+ * [api].MAX_RESPONSE_ITEMS, which an operator may set below 50. So the list ends at X-Total-Count, or at an
+ * empty page when Forgejo doesn't send the count.
+ */
+async function listAll<T>(config: ForgejoConfig, path: string, what: string): Promise<T[]> {
+  const items: T[] = [];
+  const separator = path.includes("?") ? "&" : "?";
+  for (let page = 1; page <= 1000; page++) {
+    const res = await forgejo(config, "GET", `${path}${separator}page=${page}&limit=50`);
+    if (!res.ok) throw await failure(res, what);
+    const total = res.headers.get("X-Total-Count");
+    const batch = (await res.json()) as T[];
+    items.push(...batch);
+    if (batch.length === 0 || (total !== null && items.length >= Number(total))) return items;
+  }
+  throw new Error(`Forgejo ${what} failed: the list didn't end`);
+}
+
+/**
+ * The id of the class's staff team in org, created if it doesn't exist. Its permission is write, and it holds
+ * only the repos it's given, never every repo in the org: two classes can share an org. An existing team with
+ * other settings (someone edited it by hand) is set back.
+ */
+export async function ensureStaffTeam(config: ForgejoConfig, org: string, name: string): Promise<number> {
+  const orgPath = `/orgs/${encodeURIComponent(org)}`;
+  const settings = {
+    name,
+    description: "Course staff. Managed by Pawtograder.",
+    permission: "write",
+    includes_all_repositories: false,
+    can_create_org_repo: false,
+    units: Object.keys(STAFF_TEAM_UNITS),
+    units_map: STAFF_TEAM_UNITS
+  };
+  const teams = await listAll<ForgejoTeam>(config, `${orgPath}/teams`, "org teams read");
+  const existing = teams.find((t) => t.name.toLowerCase() === name.toLowerCase());
+  if (!existing) {
+    const res = await forgejo(config, "POST", `${orgPath}/teams`, settings);
+    if (!res.ok) throw await failure(res, "staff team create");
+    return ((await res.json()) as ForgejoTeam).id;
+  }
+  // An owner team is the org's Owners, whose members own every repo in it; never repurpose it.
+  if (existing.permission === "owner") throw new Error("The Forgejo staff team name belongs to the org's owners");
+  if (existing.permission !== "write" || existing.includes_all_repositories) {
+    const res = await forgejo(config, "PATCH", `/teams/${existing.id}`, settings);
+    if (!res.ok) throw await failure(res, "staff team update");
+    await res.body?.cancel();
+  }
+  return existing.id;
+}
+
+/**
+ * Makes the team's members exactly `logins`: adds the missing ones, then removes the rest. Names are compared
+ * case-insensitively, as Forgejo does. A login Forgejo no longer knows is skipped, not fatal, so one deleted
+ * account can't keep the rest of the staff out.
+ */
+export async function syncTeamMembers(
+  config: ForgejoConfig,
+  teamId: number,
+  logins: string[]
+): Promise<{ added: number; removed: number }> {
+  const path = `/teams/${teamId}/members`;
+  const current = new Map(
+    (await listAll<{ login: string }>(config, path, "team members read")).map((m) => [m.login.toLowerCase(), m.login])
+  );
+  const wanted = new Set(logins.map((l) => l.toLowerCase()));
+  let added = 0;
+  let removed = 0;
+  for (const login of wanted) {
+    if (current.has(login)) continue;
+    const res = await forgejo(config, "PUT", `${path}/${encodeURIComponent(login)}`);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      continue;
+    }
+    if (!res.ok) throw await failure(res, "team member add");
+    await res.body?.cancel();
+    added++;
+  }
+  for (const [lower, login] of current) {
+    if (wanted.has(lower)) continue;
+    const res = await forgejo(config, "DELETE", `${path}/${encodeURIComponent(login)}`);
+    if (!res.ok && res.status !== 404) throw await failure(res, "team member remove");
+    await res.body?.cancel();
+    removed++;
+  }
+  return { added, removed };
+}
+
+/**
+ * Adds each of `repositories` to the team, if it isn't already there. Every one must be in `org`, the team's
+ * own org. A repo that doesn't exist (a handout deleted by hand) is skipped. Repos are only ever added: like
+ * GitHub, staff keep access to a repo that is no longer linked to a student.
+ */
+export async function grantTeamRepos(
+  config: ForgejoConfig,
+  teamId: number,
+  org: string,
+  repositories: string[]
+): Promise<number> {
+  const current = new Set(
+    (await listAll<{ full_name: string }>(config, `/teams/${teamId}/repos`, "team repos read")).map((r) =>
+      r.full_name.toLowerCase()
+    )
+  );
+  let added = 0;
+  for (const repository of repositories) {
+    if (current.has(repository.toLowerCase())) continue;
+    const path = repoPath(repository);
+    if (repository.split("/")[0].toLowerCase() !== org.toLowerCase()) {
+      throw new Error("A staff repo isn't in the class's Forgejo org");
+    }
+    const res = await forgejo(config, "PUT", `/teams/${teamId}/repos/${path}`);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      continue;
+    }
+    if (!res.ok) throw await failure(res, "team repo add");
+    await res.body?.cancel();
+    current.add(repository.toLowerCase());
+    added++;
+  }
+  return added;
+}

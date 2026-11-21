@@ -14395,6 +14395,16 @@ export type Database = {
           template_repo: string;
         }[];
       };
+      forgejo_staff_teams: {
+        Args: { p_instance_url: string; p_limit: number };
+        Returns: {
+          class_id: number;
+          logins: string[];
+          org: string;
+          repositories: string[];
+          team: string;
+        }[];
+      };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
       get_assessment_export_pepper: { Args: never; Returns: string };
