@@ -2,6 +2,7 @@
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { toaster } from "@/components/ui/toaster";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
@@ -712,6 +713,12 @@ const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
 export default function RepositoriesPage() {
   const { assignment_id, course_id } = useParams();
   const courseController = useCourseController();
+  // Retry creation, Fix Permissions and Cleanup need manage_student_repositories (#1010). The page
+  // itself stays open: the table is for anyone on staff to look at.
+  const canManageStudentRepositories = useCapability("manage_student_repositories");
+  // Sync calls queue_repository_syncs, which checks manage_assignments because Edit Assignment
+  // uses it too. Without it, the Sync buttons and the checkboxes that pick rows to sync are hidden.
+  const canSync = useCapability("manage_assignments");
 
   // Get assignment data for latest template SHA
   const { data: assignment } = useOne<Database["public"]["Tables"]["assignments"]["Row"]>({
@@ -845,7 +852,9 @@ export default function RepositoriesPage() {
                     {row.original.creation_error}
                   </Text>
                 </ReportBlock>
-                <RetryRepoCreationButton repoId={row.original.id} tableController={repositories} />
+                {canManageStudentRepositories && (
+                  <RetryRepoCreationButton repoId={row.original.id} tableController={repositories} />
+                )}
               </VStack>
             ) : row.original.assignment_group_id != null ? (
               // Group repo: there is no single student's org membership to read
@@ -939,7 +948,11 @@ export default function RepositoriesPage() {
         }
       }
     ],
-    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha]
+    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha, canManageStudentRepositories]
+  );
+  const visibleColumns = useMemo(
+    () => (canSync ? columns : columns.filter((column) => column.id !== "select" && column.id !== "actions")),
+    [columns, canSync]
   );
 
   const {
@@ -956,9 +969,9 @@ export default function RepositoriesPage() {
     getSelectedRowModel,
     toggleAllRowsSelected
   } = useTableControllerTable({
-    columns,
+    columns: visibleColumns,
     tableController: repositories,
-    enableRowSelection: true,
+    enableRowSelection: canSync,
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -1087,7 +1100,7 @@ export default function RepositoriesPage() {
         </Box>
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />
 
-        {selectedCount > 0 && (
+        {canSync && selectedCount > 0 && (
           <HStack w="100%" justifyContent="space-between" p={4} bg="bg.subtle" borderRadius="md">
             <Text fontWeight="medium">{selectedCount} repository(ies) selected</Text>
             <Button colorPalette="blue" onClick={handleBulkSync} loading={isBulkSyncing} disabled={isBulkSyncing}>
@@ -1099,19 +1112,21 @@ export default function RepositoriesPage() {
         <Box overflowX="auto" maxW="100vw" w="100%">
           <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2} flexWrap="wrap" gap={2}>
             <Heading size="sm">Repository Status</Heading>
-            <HStack flexWrap="wrap" gap={2} justifyContent="flex-end">
-              <CleanupIndividualReposButton
-                courseId={Number(course_id)}
-                assignmentId={Number(assignment_id)}
-                tableController={repositories}
-                individualRepoCount={individualRepoCount}
-              />
-              <FixRepoPermissionsButton
-                courseId={Number(course_id)}
-                assignmentId={Number(assignment_id)}
-                tableController={repositories}
-              />
-            </HStack>
+            {canManageStudentRepositories && (
+              <HStack flexWrap="wrap" gap={2} justifyContent="flex-end">
+                <CleanupIndividualReposButton
+                  courseId={Number(course_id)}
+                  assignmentId={Number(assignment_id)}
+                  tableController={repositories}
+                  individualRepoCount={individualRepoCount}
+                />
+                <FixRepoPermissionsButton
+                  courseId={Number(course_id)}
+                  assignmentId={Number(assignment_id)}
+                  tableController={repositories}
+                />
+              </HStack>
+            )}
           </HStack>
           <Box ref={rowWindow.containerRef} onScroll={rowWindow.onScroll} overflowY="auto" maxH="70vh">
             <Table.Root minW="0" w="100%">
