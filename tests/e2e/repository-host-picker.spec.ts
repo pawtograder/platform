@@ -350,4 +350,14 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(page.getByText(handout).first()).toBeVisible();
     await expect(page.locator(`a[href="https://github.com/${handout}"]`)).toHaveCount(0);
   });
+
+  test("Repository Status describes a Forgejo assignment's repos, not GitHub's", async ({ page }) => {
+    await loginAsUser(page, instructorOn, flagOn);
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/repositories`);
+    await expect(page.getByText(/Student repositories are created on Forgejo from the handout/)).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(page.getByText(/rate-limited by GitHub/)).toHaveCount(0);
+    await expect(page.getByText("GitHub Ready", { exact: true })).toHaveCount(0);
+  });
 });
