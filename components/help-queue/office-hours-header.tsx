@@ -19,9 +19,15 @@ import {
   completeOnboarding,
   useOnboardingCompleted,
   useOnboardingDataLoaded,
-  useOnboardingHint
+  useOnboardingHint,
+  useOnboardingHintDismissed
 } from "@/hooks/useOfficeHoursOnboarding";
-import { newRequestHint, nextOfficeHoursStart } from "@/lib/officeHoursOnboarding";
+import {
+  countTextQueues,
+  newRequestHint,
+  nextOfficeHoursStart,
+  queueDescriptionHintPending
+} from "@/lib/officeHoursOnboarding";
 import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
 import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -143,11 +149,24 @@ export function OfficeHoursHeader({
   const onboardingActive = onboardingOn && isStudent && !isManageMode;
   const onboardingCompleted = useOnboardingCompleted(onboardingActive);
   const onboardingDataLoaded = useOnboardingDataLoaded();
+  // On the queue list, the queue description hint on the page comes first. The header holds its
+  // hint back until the student closes that one, so the order doesn't depend on which code loads
+  // first (see queueDescriptionHintPending).
+  const onQueueList = mode === "browse" && (pathname === officeHoursBaseHref || pathname === `${officeHoursBaseHref}/`);
+  const queueDescriptionDismissed = useOnboardingHintDismissed("read-queue-description");
   const newRequestHintId = newRequestHint({
     featureEnabled: onboardingOn,
     isStudent: isStudent && !isManageMode,
     completed: onboardingCompleted,
-    staffOnDuty: queuesWithActiveStaff.length > 0
+    staffOnDuty: queuesWithActiveStaff.length > 0,
+    waitForQueueDescription: queueDescriptionHintPending({
+      onQueueList,
+      featureEnabled: onboardingOn,
+      isStudent: isStudent && !isManageMode,
+      completed: onboardingCompleted,
+      textQueueCount: countTextQueues(helpQueues),
+      dismissed: queueDescriptionDismissed
+    })
   });
   const completeOnboardingOnClick = onboardingActive ? completeOnboarding : undefined;
   const newRequestOnboarding = useOnboardingHint(onboardingDataLoaded ? newRequestHintId : null);

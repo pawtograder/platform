@@ -6,13 +6,17 @@
  */
 
 import { act, renderHook } from "@testing-library/react";
-import { completeOnboarding, useOnboardingCompleted, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
+import {
+  completeOnboarding,
+  useOnboardingCompleted,
+  useOnboardingHint,
+  useOnboardingHintDismissed
+} from "@/hooks/useOfficeHoursOnboarding";
 import type { OnboardingHintId } from "@/lib/officeHoursOnboarding";
 
 // The hook module also exports useOnboardingDataLoaded, which these tests don't use.
 jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
-  useOfficeHoursController: () => ({}),
-  useConnectionStatus: () => ({ isLoading: false })
+  useOfficeHoursController: () => ({})
 }));
 jest.mock("@/lib/TableController", () => ({ useIsTableControllerReady: () => true }));
 
@@ -51,6 +55,13 @@ describe("useOnboardingHint", () => {
     act(() => result.current.description.dismiss());
     expect(result.current.description.open).toBe(false);
     expect(result.current.newRequest.open).toBe(true);
+  });
+
+  it("tells the header that the student closed the queue description hint", () => {
+    // The header holds the New Request hint back on the queue list until this is true.
+    // The test above closed the queue description hint, and the store keeps that for the page load.
+    expect(renderHook(() => useOnboardingHintDismissed("read-queue-description")).result.current).toBe(true);
+    expect(renderHook(() => useOnboardingHintDismissed("staff-on-duty")).result.current).toBe(false);
   });
 
   it("keeps the New Request hint open on every render when staff come on duty while the page is open", () => {

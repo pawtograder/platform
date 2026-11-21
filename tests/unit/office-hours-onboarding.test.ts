@@ -4,11 +4,13 @@
 
 import { COURSE_FEATURES, courseFeatureEnabled, MANAGEABLE_COURSE_FEATURES } from "../../lib/courseFeatures";
 import {
+  countTextQueues,
   hintToShow,
   markOnboardingCompleted,
   newRequestFormHelperText,
   newRequestHint,
   nextOfficeHoursStart,
+  queueDescriptionHintPending,
   readOnboardingCompleted,
   wantsQueueDescriptionHint,
   type OnboardingHintId
@@ -57,8 +59,44 @@ describe("wantsQueueDescriptionHint", () => {
   });
 });
 
+describe("countTextQueues", () => {
+  it("counts the available text queues, the ones a student picks between", () => {
+    const queues = [
+      { available: true, queue_type: "text" },
+      { available: true, queue_type: "text" },
+      { available: false, queue_type: "text" },
+      { available: true, queue_type: "video" },
+      { available: true, queue_type: "in_person" }
+    ];
+    expect(countTextQueues(queues)).toBe(2);
+  });
+});
+
+describe("queueDescriptionHintPending", () => {
+  const onList = { onQueueList: true, featureEnabled: true, isStudent: true, completed: false, dismissed: false };
+
+  it("holds the New Request hint back on the queue list until the queue description hint is closed", () => {
+    expect(queueDescriptionHintPending({ ...onList, textQueueCount: 2 })).toBe(true);
+    expect(queueDescriptionHintPending({ ...onList, textQueueCount: 2, dismissed: true })).toBe(false);
+  });
+
+  it("doesn't hold it back where the queue description hint never shows", () => {
+    expect(queueDescriptionHintPending({ ...onList, textQueueCount: 2, onQueueList: false })).toBe(false);
+    expect(queueDescriptionHintPending({ ...onList, textQueueCount: 1 })).toBe(false);
+    expect(queueDescriptionHintPending({ ...onList, textQueueCount: 2, completed: true })).toBe(false);
+    expect(queueDescriptionHintPending({ ...onList, textQueueCount: 2, featureEnabled: false })).toBe(false);
+  });
+});
+
 describe("newRequestHint", () => {
-  const student = { featureEnabled: true, isStudent: true, completed: false };
+  const student = { featureEnabled: true, isStudent: true, completed: false, waitForQueueDescription: false };
+
+  it("waits while the queue description hint comes first, even though its own data is ready", () => {
+    // On a first visit the header can load before the page. Without this, the New Request hint
+    // would open for a moment before the queue description hint replaced it.
+    expect(newRequestHint({ ...student, staffOnDuty: true, waitForQueueDescription: true })).toBeNull();
+    expect(newRequestHint({ ...student, staffOnDuty: false, waitForQueueDescription: true })).toBeNull();
+  });
 
   it("says nobody is on duty while the button is disabled", () => {
     expect(newRequestHint({ ...student, staffOnDuty: false })).toBe("no-staff-on-duty");

@@ -31,6 +31,11 @@ export const ONBOARDING_HINT_ORDER: readonly OnboardingHintId[] = [
 const COMPLETED_KEY = "pawtograder:onboarding:oh-student:v1";
 const PROBE_KEY = `${COMPLETED_KEY}:probe`;
 
+/** The text queues a student can pick between on the office hours page: available ones only. */
+export function countTextQueues(queues: readonly { available: boolean; queue_type: string }[]): number {
+  return queues.filter((queue) => queue.available && queue.queue_type === "text").length;
+}
+
 /** Whether the queue description hint should show. */
 export function wantsQueueDescriptionHint({
   featureEnabled,
@@ -46,19 +51,50 @@ export function wantsQueueDescriptionHint({
   return featureEnabled && isStudent && !completed && textQueueCount >= 2;
 }
 
+/**
+ * Whether the New Request hint has to wait because the queue description hint comes first: the
+ * student is on the queue list, the queue description hint applies, and they haven't closed it yet.
+ *
+ * The header decides this from its own data instead of waiting to see whether the page asks for
+ * its hint. On a first visit the header's code can load before the page's, and the New Request
+ * hint would open for a moment before the queue description hint replaced it.
+ */
+export function queueDescriptionHintPending({
+  onQueueList,
+  featureEnabled,
+  isStudent,
+  completed,
+  textQueueCount,
+  dismissed
+}: {
+  onQueueList: boolean;
+  featureEnabled: boolean;
+  isStudent: boolean;
+  completed: boolean;
+  textQueueCount: number;
+  dismissed: boolean;
+}): boolean {
+  return (
+    onQueueList && !dismissed && wantsQueueDescriptionHint({ featureEnabled, isStudent, completed, textQueueCount })
+  );
+}
+
 /** Which hint, if any, the New Request button should show. */
 export function newRequestHint({
   featureEnabled,
   isStudent,
   completed,
-  staffOnDuty
+  staffOnDuty,
+  waitForQueueDescription
 }: {
   featureEnabled: boolean;
   isStudent: boolean;
   completed: boolean;
   staffOnDuty: boolean;
+  /** See queueDescriptionHintPending. */
+  waitForQueueDescription: boolean;
 }): OnboardingHintId | null {
-  if (!featureEnabled || !isStudent || completed) return null;
+  if (!featureEnabled || !isStudent || completed || waitForQueueDescription) return null;
   return staffOnDuty ? "staff-on-duty" : "no-staff-on-duty";
 }
 
