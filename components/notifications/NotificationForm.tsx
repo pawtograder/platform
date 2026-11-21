@@ -252,6 +252,7 @@ export default function NotificationForm({
 
             <Field label="Message" required>
               <MdEditor
+                textareaProps={{ "aria-label": "Message" }}
                 value={formData.message}
                 style={{ minWidth: "100%", width: "100%" }}
                 onChange={(value) => {

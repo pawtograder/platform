@@ -420,6 +420,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "classes.late_tokens_per_student": "none",
   "classes.name": "none",
   "classes.office_hours_description": "none",
+  // Two integers the instructor sets (waiting limit and minutes); no user text is stored.
+  "classes.office_hours_health_thresholds": "none",
   "classes.office_hours_ics_url": "none",
   "classes.slug": "none",
   "classes.solution_template_repo": "none",
@@ -918,6 +920,13 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_repo_tokens.id": "none",
+  "forgejo_repo_tokens.instance_url": "none",
+  "forgejo_repo_tokens.recorded_at": "none",
+  "forgejo_repo_tokens.repository_id": "none",
+  "forgejo_repo_tokens.revoke_claim_id": "none",
+  "forgejo_repo_tokens.revoke_claimed_at": "none",
+  "forgejo_repo_tokens.user_id": "none",
   "git_accounts.claimed_at": "none",
   "git_accounts.created_at": "none",
   "git_accounts.id": "none",
@@ -2396,6 +2405,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
   cloud_workspaces_enabled: "none",
@@ -2498,6 +2508,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   exam_create: "none",
   // DRAFT: new entry, review and remove this comment
   exam_create_submission: "none",
+  // Reviewed: service-role only (the exam worker); returns [{exam_index, scanned_submission_id, match_status}].
+  exam_link_scan_groups: "none",
   // DRAFT: new entry, review and remove this comment
   exam_sync_rubric_from_questions: "none",
   // DRAFT: new entry, review and remove this comment
@@ -2511,6 +2523,34 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  forgejo_group_repos_needed: {
+    "$[*].all_members_have_logins": "none",
+    "$[*].assignment_group_id": "none",
+    "$[*].assignment_id": "none",
+    "$[*].class_id": "none",
+    "$[*].logins": "handle",
+    "$[*].owner": "none",
+    // The repo name ends in the group's name, which students choose.
+    "$[*].name": "free_text",
+    "$[*].template_repo": "none"
+  },
+  forgejo_repo_token_revocable: "none",
+  forgejo_repo_tokens_to_revoke: {
+    "$[*].id": "none",
+    "$[*].login": "handle",
+    "$[*].repository_id": "none",
+    "$[*].user_id": "none"
+  },
+  forgejo_repos_needed: {
+    "$[*].assignment_id": "none",
+    "$[*].class_id": "none",
+    "$[*].profile_id": "none",
+    "$[*].login": "handle",
+    "$[*].owner": "none",
+    // The repo name ends in the student's Forgejo login.
+    "$[*].name": "handle",
+    "$[*].template_repo": "none"
+  },
   generate_anon_name: "name",
   get_all_class_metrics: "none",
   // UNCERTAIN: Returns a vault secret (hashing pepper), not personal data; no 'secret' kind exists, so marked free_text so it is always redacted
@@ -2903,6 +2943,18 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   metrics_workflow_run_percentiles: { "$[*].class_id": "none", "$[*].p50": "none", "$[*].p95": "none" },
   metrics_workflow_runs_by_conclusion: { "$[*].class_id": "none", "$[*].conclusion": "none", "$[*].count": "none" },
+  // Queue names are course content (see the decision in PRIVACY_REVIEW.md); the rest are counts and times.
+  office_hours_queue_health: {
+    "$[*].helping": "none",
+    "$[*].median_wait_seconds_today": "none",
+    "$[*].oldest_wait_seconds": "none",
+    "$[*].queue_id": "none",
+    "$[*].queue_name": "none",
+    "$[*].resolved_today": "none",
+    "$[*].staffed_tas": "none",
+    "$[*].unstaffed_seconds": "none",
+    "$[*].waiting": "none"
+  },
   only_calendar_or_discord_ids_changed: "none",
   only_discord_ids_changed: "none",
   open_discord_circuit: "none",
@@ -2936,6 +2988,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   record_bug_report_retention_purge: "none",
   record_discord_async_error: "none",
   record_discord_membership_status: "none",
+  record_forgejo_repo_token: "none",
   record_github_async_error: "none",
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",
@@ -2964,6 +3017,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // UNCERTAIN: pure helper; output is a sanitized fragment of a repo name (group name, slug, or possibly username)
   sanitize_repo_name_component: "handle",
   save_error_pin: "none",
+  save_forgejo_group_repo: "none",
   // DRAFT: new entry, review and remove this comment
   seed_default_class_roles: "none",
   send_signup_welcome_message: "none",

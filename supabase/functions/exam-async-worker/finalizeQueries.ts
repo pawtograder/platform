@@ -19,4 +19,4 @@
  * question belong to the same exam.
  */
 export const FINALIZE_ANSWER_REGION_SELECT =
-  "exam_question_id, page_number, x, y, width, height, exam_questions!exam_question_regions_question_exam_fkey(answer_type)";
+  "exam_question_id, page_number, x, y, width, height, exam_questions!exam_question_regions_question_exam_fkey(answer_type, label)";

@@ -406,6 +406,7 @@ const DiscussionThreadContent = memo(
                       enableFilePicker={true}
                       enableGiphyPicker={true}
                       sendButtonText="Edit"
+                      ariaLabel="Edit reply"
                       value={thread.body}
                     />
                   ) : (
