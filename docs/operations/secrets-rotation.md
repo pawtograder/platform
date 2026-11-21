@@ -115,6 +115,12 @@ and the long-lived API keys. Rotating it is disruptive by design:
   autogenerate bootstrap does not fix this for you: it only ever _backfills_ a
   missing key, never overwrites an existing one.
 
+- **`MCP_JWT_SECRET` (HMAC, MCP/CLI API tokens):** independent of every other
+  key, so it never needs to move with `JWT_PRIVATE_JWKS`. Rotating it
+  invalidates every `mcp_` API token users have created; they must mint new ones
+  from **user menu → API Tokens**. Rotate it on suspected leak, not on a
+  schedule.
+
 - **`ANON_KEY` / `SERVICE_ROLE_KEY` (HS256, derived from `JWT_SECRET`):** these
   are **baked into the web image at build time** (`NEXT_PUBLIC_SUPABASE_ANON_KEY`).
   Rotating `JWT_SECRET` therefore also requires a **new web image build** with
