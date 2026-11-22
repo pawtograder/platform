@@ -41,6 +41,9 @@
  * release_grades is on the instructor role only. seed_default_class_roles() names the shared #1010
  * grader list (DEFAULT_GRADER_SEED_LIST), and a new class's grader holds the names on it that exist.
  *
+ * 20261122150100_regrades_by_capability.sql: handle_regrades is also on the default grader role, so a
+ * new custom role copies it (DEFAULT_GRADER_CAPABILITIES).
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -57,6 +60,7 @@ import {
 
 const SEEDED_CAPABILITIES = [
   "grade_submissions",
+  "handle_regrades",
   "manage_assignments",
   "manage_flashcards",
   "manage_gradebook",
@@ -139,7 +143,7 @@ test.describe("class roles and capabilities", () => {
 
   const roleFor = (roles: typeof rolesA, app_role: string) => roles.find((r) => r.default_for === app_role)!;
 
-  test("a new class gets default roles: instructor holds every seeded capability, grader holds grade_submissions and manage_flashcards", async () => {
+  test("a new class gets default roles: instructor holds every seeded capability, grader holds DEFAULT_GRADER_CAPABILITIES", async () => {
     expect(rolesA.map((r) => r.default_for).sort()).toEqual(DEFAULT_ROLES);
     const capabilitiesOf = (app_role: string) =>
       roleFor(rolesA, app_role)
@@ -581,7 +585,7 @@ test.describe("custom class roles", () => {
       expect(extraError).toBeNull();
       expect(extra).toHaveLength(0);
     } finally {
-      // Other tests in this class expect only the seeded grader capabilities.
+      // Other tests in this class expect the default grader role to hold only DEFAULT_GRADER_CAPABILITIES.
       const { error } = await supabase
         .from("role_capabilities")
         .delete()
@@ -893,13 +897,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
   });
 
   test("a grader on a custom role holds what that role turns on", async () => {
-    expect(await roleCapabilities(headTaRoleId)).toEqual([
-      "grade_submissions",
-      "manage_flashcards",
-      "manage_review_assignments",
-      "publish_groups",
-      "run_polls"
-    ]);
+    expect(await roleCapabilities(headTaRoleId)).toEqual(
+      [...DEFAULT_GRADER_CAPABILITIES, "manage_review_assignments", "publish_groups"].sort()
+    );
     expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
     expect(await holds(headTa, "publish_groups"), "copied from the default grader role").toBe(true);
     expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
@@ -991,12 +991,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("id")
       .single();
     expect(copyError).toBeNull();
-    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual([
-      "grade_submissions",
-      "manage_flashcards",
-      "publish_groups",
-      "run_polls"
-    ]);
+    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual(
+      [...DEFAULT_GRADER_CAPABILITIES, "publish_groups"].sort()
+    );
 
     // Nor take it away: removing manage_assignments from the default grader role is refused, since
     // the instructor couldn't give it back. Removing publish_groups, which they hold, still works.
@@ -1080,6 +1077,7 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
   test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
     expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
       `${classF.id}:grade_submissions`,
+      `${classF.id}:handle_regrades`,
       `${classF.id}:manage_flashcards`,
       `${classF.id}:manage_review_assignments`,
       `${classF.id}:publish_groups`,
@@ -1087,16 +1085,15 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     ]);
     expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
       `${classF.id}:grade_submissions`,
+      `${classF.id}:handle_regrades`,
       `${classF.id}:manage_flashcards`,
       `${classF.id}:publish_groups`,
       `${classF.id}:run_polls`
     ]);
-    // graderG holds the default grader capabilities in classG (seeded there), not anything from classF.
-    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([
-      `${classG.id}:grade_submissions`,
-      `${classG.id}:manage_flashcards`,
-      `${classG.id}:run_polls`
-    ]);
+    // graderG holds class G's default grader capabilities, and nothing from class F.
+    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual(
+      DEFAULT_GRADER_CAPABILITIES.map((capability) => `${classG.id}:${capability}`)
+    );
     expect(await capabilitiesOf(studentF), "a student gets nothing from the grader role").toEqual([]);
   });
 
