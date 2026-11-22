@@ -67,7 +67,7 @@ Deno.test(
   async () => {
     const time = new FakeTime();
     const fake = fakeClient();
-    let release: ((seconds?: number) => Promise<void>) | undefined;
+    let release: ((seconds?: number) => Promise<void>) | null | undefined;
     try {
       release = await holdLease(fake.client, "exam_processing", msg);
       // The first call has returned before holdLease does.
@@ -95,7 +95,7 @@ Deno.test(
 Deno.test("once the message is no longer this reader's, it stops renewing", async () => {
   const time = new FakeTime();
   const fake = fakeClient([HELD, { data: false, error: null }]);
-  let release: ((seconds?: number) => Promise<void>) | undefined;
+  let release: ((seconds?: number) => Promise<void>) | null | undefined;
   try {
     release = await holdLease(fake.client, "exam_processing", msg);
     await advance(time, 1);
@@ -116,9 +116,11 @@ Deno.test("an error, a throw or an odd reply does not end the lease, and is logg
     new Error("aborted"),
     { data: "yes", error: null }
   ]);
-  let release: ((seconds?: number) => Promise<void>) | undefined;
+  let release: ((seconds?: number) => Promise<void>) | null | undefined;
   try {
     release = await holdLease(fake.client, "exam_processing", msg);
+    // A first call that failed proves nothing about the claim, so the lease is still held.
+    assert(release !== null);
     await advance(time, 4);
     // Three failures, then two successes, one per period.
     assertEquals(fake.calls.length, 5);
@@ -137,7 +139,7 @@ Deno.test("release() stops renewing and makes no call of its own", async () => {
   const time = new FakeTime();
   const fake = fakeClient();
   try {
-    const release = await holdLease(fake.client, "exam_processing", msg);
+    const release = (await holdLease(fake.client, "exam_processing", msg))!;
     await advance(time, 1);
     await release();
     assertEquals(fake.calls.length, 2);
@@ -156,7 +158,7 @@ Deno.test("release(seconds) waits for the call in flight, then sets the lease on
   });
   const fake = fakeClient([HELD, slowRenewal]);
   try {
-    const release = await holdLease(fake.client, "exam_processing", msg);
+    const release = (await holdLease(fake.client, "exam_processing", msg))!;
     await advance(time, 1); // the second call is now waiting on slowRenewal
     assertEquals(fake.calls.length, 2);
     const released = release(120);
@@ -183,7 +185,7 @@ Deno.test("release() waits for a renewal in flight, and no call is open when it 
   });
   const fake = fakeClient([HELD, blockedRenewal]);
   try {
-    const release = await holdLease(fake.client, "exam_processing", msg);
+    const release = (await holdLease(fake.client, "exam_processing", msg))!;
     await advance(time, 1); // the second call is now waiting on blockedRenewal
     assertEquals(fake.calls.length, 2);
     assertEquals(fake.active(), 1);
@@ -201,6 +203,22 @@ Deno.test("release() waits for a renewal in flight, and no call is open when it 
     assertEquals(fake.calls.length, 2);
   } finally {
     finishRenewal();
+    time.restore();
+  }
+});
+
+Deno.test("a first call that finds the message gone returns no lease, and nothing renews", async () => {
+  const time = new FakeTime();
+  const fake = fakeClient([{ data: false, error: null }]);
+  try {
+    const release = await holdLease(fake.client, "exam_processing", msg);
+    // The worker skips the handler on null: this reader no longer holds the message.
+    assertEquals(release, null);
+    assertEquals(fake.calls.length, 1);
+    await advance(time, 10);
+    assertEquals(fake.calls.length, 1);
+    assertEquals(fake.active(), 0);
+  } finally {
     time.restore();
   }
 });

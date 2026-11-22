@@ -17,7 +17,13 @@ import {
   REVIEW_FROM,
   type BatchStatus
 } from "../../supabase/functions/exam-async-worker/batchTransitions";
-import { MAX_OCR_WAITS, nextOcrWait, OCR_WAIT_COUNT_MS } from "../../supabase/functions/exam-async-worker/ocrWait";
+import {
+  MAX_OCR_WAITS,
+  nextOcrWait,
+  OCR_WAIT_COUNT_MS,
+  OCR_WAIT_GUARD_MS,
+  ocrWaitBoundaryMs
+} from "../../supabase/functions/exam-async-worker/ocrWait";
 import * as cw from "../../supabase/functions/exam-async-worker/claimWindow";
 
 const ALL: BatchStatus[] = ["uploaded", "ocr", "matching", "review", "finalizing", "completed", "error"];
@@ -84,11 +90,33 @@ describe("issue #1158: worker batch status transitions", () => {
       expect(outside).not.toMatch(/from\("exam_scan_batches"\)\s*\.update\(/);
     });
 
+    // The rest of the ownership boundary (examWorkerFence.ts): every disposition of a held message
+    // and every match-phase write goes through a claim-checked function, so none may be written
+    // directly. The database half is exam-worker-batch-status-db.spec.ts.
+    test("no queue call bypasses the claim check", () => {
+      expect(source).not.toMatch(/rpc\("archive"/);
+      expect(source).not.toMatch(/rpc\("send"/);
+      expect(source).not.toMatch(/rpc\("delete"/);
+      expect(source).toMatch(/await ack\(admin, fence\)/);
+      expect(source).toMatch(/await requeueFenced\(admin, fence, next\.message, next\.delaySeconds, next\.countWait\)/);
+      expect(source).toMatch(/await giveUpFenced\(admin, fence, \{/);
+    });
+
+    test("no match write bypasses the claim and phase check", () => {
+      expect(source).not.toMatch(/rpc\("exam_link_scan_groups"/);
+      expect(source).not.toMatch(/matched_profile_id:/);
+      expect(source).toMatch(/await linkScanGroups\(\s*admin,\s*fence,/);
+      expect(source).toMatch(/await setMatchSuggestion\(admin, fence, batch\.id, scannedId, \{/);
+    });
+
+    test("giving up goes through the one-transaction function, with this message's phase", () => {
+      expect(source).toMatch(/giveUpMessage\(admin, fence, env, env\.batch_id \?\? null, from, error\)/);
+    });
+
     test("each status write passes its table", () => {
       expect(source).toMatch(/setBatchStatus\(admin, fence, batch\.id, "matching", MATCHING_FROM\)/);
       expect(source.match(/setBatchStatus\(admin, fence, batch\.id, "review", REVIEW_FROM\)/g)).toHaveLength(2);
       expect(source).toMatch(/setBatchStatus\(admin, fence, batchId, "completed", COMPLETED_FROM\)/);
-      expect(source).toMatch(/setBatchStatus\(admin, fence, batchId, "error", from, message\)/);
       expect(source).toMatch(
         /const giveUp = async \(error: unknown, from: readonly BatchStatus\[\] = errorFrom\(env\.method\)\)/
       );
@@ -96,103 +124,151 @@ describe("issue #1158: worker batch status transitions", () => {
     });
   });
 
-  // Aryan's question on #1308, and Jon's and CodeRabbit's counterexample: with a reader reaching the
-  // message every 25s, the old rule (a 30s re-queue delay, error on the 31st read) waits 25 minutes,
-  // so "30 waits and 15 minutes" with 5s waits errored 10 minutes sooner. nextOcrWait counts a wait
-  // only 30s after the last counted one, which is never sooner than the old rule.
+  // Aryan's question on #1308, then Jon's and CodeRabbit's counterexamples. Before #1158 every wait
+  // re-queued with a 30s delay, computed by pgmq.send from clock_timestamp() at the send, and the
+  // 31st read errored the batch. #1308 first errored after 30 waits and 15 minutes (sooner, with a
+  // reader every 25s), then counted from the worker's read time (sooner, when the re-queue reaches
+  // the database seconds after the read: CodeRabbit's 31s readers and 2s send). Now a counted wait
+  // is stamped by the database at the replacement's own send (ocr_wait_from), as the old delay was.
   describe("match gives up on OCR no sooner than before #1158", () => {
     const S = 1000;
     const MIN = 60 * S;
 
     test.each([
-      // waits, countedMs, nowMs -> result
-      [0, undefined, 0, { exhausted: false, waits: 1, countedMs: 0 }], // the first wait counts
-      [5, 100 * S, 120 * S, { exhausted: false, waits: 5, countedMs: 100 * S }], // too soon: not counted
-      [5, 100 * S, 130 * S, { exhausted: false, waits: 6, countedMs: 130 * S }], // 30s on: counted
-      [29, 0, 30 * S, { exhausted: false, waits: 30, countedMs: 30 * S }],
-      [30, 0, 29 * S, { exhausted: false, waits: 30, countedMs: 0 }], // limit reached, but too soon
-      [30, 0, 30 * S, { exhausted: true }],
-      [30, undefined, 0, { exhausted: true }] // a message queued by the old worker, already at 30
-    ])("nextOcrWait(%p, %p, %p)", (waits, countedMs, nowMs, expected) => {
-      expect(nextOcrWait(waits, countedMs, nowMs)).toEqual(expected);
+      // waits, boundaryMs, readDbMs -> result
+      [0, undefined, 0, { exhausted: false, waits: 1, counted: true }], // the first wait counts
+      [5, 100 * S, 130 * S, { exhausted: false, waits: 5, counted: false }], // 30s on: still inside the guard
+      [5, 100 * S, 131 * S - 1, { exhausted: false, waits: 5, counted: false }],
+      [5, 100 * S, 131 * S, { exhausted: false, waits: 6, counted: true }], // 30s + 1s guard: counted
+      [29, 0, 31 * S, { exhausted: false, waits: 30, counted: true }],
+      [30, 0, 30 * S, { exhausted: false, waits: 30, counted: false }], // limit reached, but too soon
+      [30, 0, 31 * S, { exhausted: true }],
+      [30, undefined, 0, { exhausted: true }]
+    ])("nextOcrWait(%p, %p, %p)", (waits, boundaryMs, readDbMs, expected) => {
+      expect(nextOcrWait(waits, boundaryMs, readDbMs)).toEqual(expected);
     });
 
-    // When the batch errors, given when readers reach the waiting message. `firstReadAt(t)` is the
-    // first moment at or after t that a reader takes the message if it is visible.
+    test("the boundary is the stamp; a message an older worker re-queued uses its enqueued_at", () => {
+      expect(ocrWaitBoundaryMs(3, "2026-11-22T10:00:00.000Z", 5)).toBe(Date.parse("2026-11-22T10:00:00.000Z"));
+      // Before the first counted wait there is no boundary: the first read counts.
+      expect(ocrWaitBoundaryMs(0, undefined, 5)).toBeUndefined();
+      // Re-queued by staging (30s delay) or by the previous #1308 rule (ocr_wait_counted_ms): no
+      // stamp, so enqueued_at, the send's now(), which is no later than its clock_timestamp().
+      expect(ocrWaitBoundaryMs(4, undefined, 777)).toBe(777);
+      expect(ocrWaitBoundaryMs(4, "not a date", 777)).toBe(777);
+    });
+
+    // A schedule: when readers reach the waiting message if it is visible, how long a read takes to
+    // reach its re-queue's send (the same handler and network either way), any extra wait for the
+    // claim lock (new rule only), and how long the re-queue's transaction stays uncommitted.
     type Readers = (t: number) => number;
+    type Schedule = { readers: Readers; sendLatency: number; lockWait?: number; commitDelay?: number };
     const every =
-      (gap: number): Readers =>
+      (gap: number, offset = 0): Readers =>
       (t) =>
-        Math.ceil(t / gap) * gap;
+        offset + Math.ceil(Math.max(0, t - offset) / gap) * gap;
     const irregular = (seed: number): Readers => {
       const times: number[] = [0];
       let x = seed;
-      while (times[times.length - 1] < 4 * 60 * MIN) {
+      while (times[times.length - 1] < 8 * 60 * MIN) {
         x = (x * 1103515245 + 12345) % 2147483648;
         times.push(times[times.length - 1] + 1 * S + (x % (90 * S)));
       }
       return (t) => times.find((r) => r >= t)!;
     };
-    /** Before #1158: re-queued with a 30s delay; the read that finds 30 waits errors. */
-    const stagingErrorsAt = (firstReadAt: Readers) => {
-      let t = firstReadAt(0);
-      for (let waits = 0; waits < MAX_OCR_WAITS; waits++) t = firstReadAt(t + 30 * S);
+    /** Before #1158: every read counts; the replacement is visible 30s after its send, once committed. */
+    const stagingErrorsAt = ({ readers, sendLatency, commitDelay = 0 }: Schedule) => {
+      let t = readers(0);
+      for (let waits = 0; waits < MAX_OCR_WAITS; waits++) {
+        const sentAt = t + sendLatency;
+        t = readers(Math.max(sentAt + 30 * S, sentAt + commitDelay));
+      }
       return t;
     };
-    /** Now: re-queued with a 5s delay, counted by nextOcrWait. */
-    const nowErrorsAt = (firstReadAt: Readers) => {
-      let t = firstReadAt(0);
+    /** Now: 5s re-queues; a counted one is stamped with its own send instant (after the claim lock). */
+    const nowErrorsAt = ({ readers, sendLatency, lockWait = 0, commitDelay = 0 }: Schedule) => {
+      let t = readers(0);
       let waits = 0;
-      let countedMs: number | undefined;
-      for (let reads = 0; reads < 10_000; reads++) {
-        const step = nextOcrWait(waits, countedMs, t);
+      let boundary: number | undefined;
+      for (let reads = 0; reads < 100_000; reads++) {
+        const step = nextOcrWait(waits, boundary, t);
         if (step.exhausted) return t;
-        ({ waits, countedMs } = step);
-        t = firstReadAt(t + 5 * S);
+        const sentAt = t + sendLatency + lockWait;
+        if (step.counted) boundary = sentAt;
+        waits = step.waits;
+        t = readers(Math.max(sentAt + 5 * S, sentAt + commitDelay));
       }
       throw new Error("never gave up");
     };
-    /** The rule this replaces: 5s waits, error once 30 waits AND 15 minutes have passed. */
-    const previousErrorsAt = (firstReadAt: Readers) => {
-      let t = firstReadAt(0);
-      for (let waits = 0; ; waits++) {
-        if (waits >= 30 && t >= 15 * MIN) return t;
-        t = firstReadAt(t + 5 * S);
+    /** The rule this replaces: counted from the worker's read time (b86af546). */
+    const readTimeRuleErrorsAt = ({ readers, sendLatency, commitDelay = 0 }: Schedule) => {
+      let t = readers(0);
+      let waits = 0;
+      let counted: number | undefined;
+      for (let reads = 0; reads < 100_000; reads++) {
+        if (counted === undefined || t - counted >= 30 * S) {
+          if (waits >= MAX_OCR_WAITS) return t;
+          waits++;
+          counted = t;
+        }
+        const sentAt = t + sendLatency;
+        t = readers(Math.max(sentAt + 5 * S, sentAt + commitDelay));
       }
+      throw new Error("never gave up");
     };
 
-    test.each([
-      ["idle readers (every 1s)", every(1 * S)],
-      ["every 5s", every(5 * S)],
-      ["every 25s (the review's case)", every(25 * S)],
-      ["every 31s", every(31 * S)],
-      ["every 45s", every(45 * S)],
-      ["every 60s (cron only)", every(60 * S)],
-      ["irregular, seed 1", irregular(1)],
-      ["irregular, seed 42", irregular(42)]
-    ])("%s: never sooner than before #1158", (_name, readers) => {
-      expect(nowErrorsAt(readers)).toBeGreaterThanOrEqual(stagingErrorsAt(readers));
+    const schedules: [string, Schedule][] = [];
+    for (const gap of [1, 5, 25, 29, 30, 31, 32, 45, 60]) {
+      for (const sendLatency of [0, 2 * S, 5 * S]) {
+        schedules.push([`every ${gap}s, send ${sendLatency / S}s`, { readers: every(gap * S), sendLatency }]);
+      }
+    }
+    schedules.push([
+      "every 31s, send 2s, lock wait 3s",
+      { readers: every(31 * S), sendLatency: 2 * S, lockWait: 3 * S }
+    ]);
+    schedules.push([
+      "every 31s, send 2s, commit 3s late",
+      { readers: every(31 * S), sendLatency: 2 * S, commitDelay: 3 * S }
+    ]);
+    schedules.push(["every 1s, commit 40s late", { readers: every(1 * S), sendLatency: 0, commitDelay: 40 * S }]);
+    for (const seed of [1, 42, 7]) {
+      for (const sendLatency of [0, 2 * S]) {
+        schedules.push([`irregular seed ${seed}, send ${sendLatency / S}s`, { readers: irregular(seed), sendLatency }]);
+      }
+    }
+
+    test.each(schedules)("%s: never sooner than before #1158", (_name, schedule) => {
+      expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
     });
 
-    test("the review's case: the previous rule erred at 15 minutes, now it waits the old 25", () => {
-      const readers = every(25 * S);
-      expect(stagingErrorsAt(readers)).toBe(25 * MIN);
-      expect(previousErrorsAt(readers)).toBe(15 * MIN);
-      expect(nowErrorsAt(readers)).toBeGreaterThanOrEqual(25 * MIN);
+    test("CodeRabbit's case fails the read-time rule and passes this one", () => {
+      const schedule: Schedule = { readers: every(31 * S), sendLatency: 2 * S };
+      // The old worker missed every other reader: the replacement was visible 30s after a send 2s
+      // after the read, so a reader 31s after the read found it invisible.
+      expect(stagingErrorsAt(schedule)).toBe(30 * 62 * S); // 31 minutes
+      // Counting from the read time counted every reader, erroring in half the time.
+      expect(readTimeRuleErrorsAt(schedule)).toBe(30 * 31 * S); // 15.5 minutes
+      expect(readTimeRuleErrorsAt(schedule)).toBeLessThan(stagingErrorsAt(schedule));
+      expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
     });
 
-    test("with idle readers it still gives up in about 15 minutes, not later than 18", () => {
-      expect(nowErrorsAt(every(1 * S))).toBeLessThanOrEqual(18 * MIN);
-      expect(nowErrorsAt(every(1 * S))).toBeGreaterThanOrEqual(15 * MIN);
+    test("with idle readers it still gives up in about 15.5 minutes, not later than 18", () => {
+      const idle: Schedule = { readers: every(1 * S), sendLatency: 0 };
+      expect(nowErrorsAt(idle)).toBeGreaterThanOrEqual(15 * MIN);
+      expect(nowErrorsAt(idle)).toBeLessThanOrEqual(18 * MIN);
     });
 
-    test("the limits are the old count and delay, and doMatch uses them", () => {
+    test("the limits are the old count and delay, and doMatch reads both times from the database", () => {
       expect(MAX_OCR_WAITS).toBe(30);
       expect(OCR_WAIT_COUNT_MS).toBe(30 * S);
+      expect(OCR_WAIT_GUARD_MS).toBe(1 * S);
       const source = readFileSync(WORKER, "utf8");
-      expect(source).toMatch(/const step = nextOcrWait\(env\.ocr_waits \?\? 0, env\.ocr_wait_counted_ms, now\);/);
-      expect(source).toMatch(/if \(step\.exhausted\) \{/);
-      expect(source).not.toMatch(/ocrWaitExhausted/);
+      expect(source).toMatch(/readDbMs: Date\.parse\(msg\.vt\) - READ_VISIBILITY_SECONDS \* 1000/);
+      expect(source).toMatch(/enqueuedAtMs: Date\.parse\(msg\.enqueued_at\)/);
+      expect(source).toMatch(/const step = nextOcrWait\(waits, boundaryMs, read\.readDbMs\);/);
+      expect(source).toMatch(/countWait: step\.counted/);
+      expect(source).not.toMatch(/Date\.now\(\)[^\n]*nextOcrWait|nextOcrWait\([^)]*Date\.now/);
     });
   });
 

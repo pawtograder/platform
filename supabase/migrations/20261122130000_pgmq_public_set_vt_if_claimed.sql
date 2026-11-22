@@ -106,3 +106,303 @@ comment on function public.exam_worker_set_batch_status(bigint, integer, bigint,
   'Set an exam scan batch''s status for exam-async-worker, only while the caller still holds queue '
   'message p_msg_id at read_ct p_read_ct and the batch is in one of p_from, in one transaction. '
   'Returns applied, state_changed or not_owner (#1158).';
+
+-- ---------------------------------------------------------------------------------------------
+-- The rest of the worker's ownership boundary (#1158 review, round 3).
+--
+-- exam_worker_set_batch_status fences batch-status writes. A worker whose lease lapsed could still
+-- (a) archive, re-queue or dead-letter the message by msg_id after another reader claimed it, and
+-- (b) rewrite match results (links, suggestions) after the batch had moved on to review. (a) let a
+-- stale give-up leave a batch in 'error' with its work finished, let a stale retry fork a second
+-- live copy of the work, and let a stale acknowledgment remove the newer holder's message. (b) let
+-- a late worker overwrite a suggestion, or a staff member's unconfirmed pick, under review.
+--
+-- Every function below starts with the same claim check as exam_worker_set_batch_status: lock the
+-- message row while read_ct is still the caller's, else return 'not_owner' and change nothing.
+-- pgmq.read claims with FOR UPDATE SKIP LOCKED, so each call happens wholly before a newer read
+-- or not at all. Lock order everywhere: queue row, then batch, then scanned exam rows.
+--
+-- Service role only. Rollback: revert the worker. These functions can stay, unused; the
+-- enqueue_exam_finalize guard at the end is reverted by re-creating the body in
+-- 20261107120000_exam_grading.sql.
+-- ---------------------------------------------------------------------------------------------
+
+-- The worker refuses to claim anything until this returns the version it was built for, so a
+-- worker deployed before this migration (the chart does not order the two) leaves the queue alone
+-- instead of running without these guarantees. Bump it when the worker needs a new function.
+create or replace function public.exam_worker_contract_version()
+returns integer
+language sql
+immutable
+set search_path to ''
+as $function$ select 1 $function$;
+
+revoke all on function public.exam_worker_contract_version() from public, anon, authenticated;
+grant execute on function public.exam_worker_contract_version() to service_role;
+
+-- Acknowledge a handled message: archive it, only while the caller still holds it. A handler that
+-- finished after its lease lapsed leaves the message to the reader that holds it now.
+create or replace function public.exam_worker_ack(p_msg_id bigint, p_read_ct integer)
+returns text
+language plpgsql
+set search_path to ''
+as $function$
+begin
+  if p_msg_id is null or p_read_ct is null then
+    raise exception 'exam_worker_ack: p_msg_id and p_read_ct are required';
+  end if;
+  perform 1 from pgmq.q_exam_processing q
+   where q.msg_id = p_msg_id and q.read_ct = p_read_ct
+   for update;
+  if not found then
+    return 'not_owner';
+  end if;
+  perform pgmq.archive('exam_processing', p_msg_id);
+  return 'acked';
+end;
+$function$;
+
+revoke all on function public.exam_worker_ack(bigint, integer) from public, anon, authenticated;
+grant execute on function public.exam_worker_ack(bigint, integer) to service_role;
+
+-- Replace the caller's message with p_message, visible p_delay seconds from now, in one
+-- transaction: the replacement and the archive both happen, or neither does. A crash between them
+-- can no longer leave two live copies, and a reader that lost the message cannot fork it.
+--
+-- p_count_wait: this re-queue follows a counted OCR wait (ocrWait.ts). The replacement then
+-- carries ocr_wait_from, the instant its own visibility is computed from, which is the instant
+-- the old worker's 30s re-queue delay ran from. It is read with clock_timestamp() after the claim
+-- lock, so time spent waiting for the lock never makes the boundary earlier.
+create or replace function public.exam_worker_requeue(
+  p_msg_id bigint,
+  p_read_ct integer,
+  p_message jsonb,
+  p_delay integer,
+  p_count_wait boolean default false
+)
+returns text
+language plpgsql
+set search_path to ''
+as $function$
+declare
+  v_at timestamptz;
+begin
+  if p_msg_id is null or p_read_ct is null or p_message is null or jsonb_typeof(p_message) <> 'object'
+     or p_delay is null or p_delay < 0 or p_count_wait is null then
+    raise exception 'exam_worker_requeue: a message object, a delay >= 0 and the claim are required';
+  end if;
+  perform 1 from pgmq.q_exam_processing q
+   where q.msg_id = p_msg_id and q.read_ct = p_read_ct
+   for update;
+  if not found then
+    return 'not_owner';
+  end if;
+  v_at := clock_timestamp();
+  perform pgmq.send(
+    'exam_processing',
+    case when p_count_wait then p_message || jsonb_build_object('ocr_wait_from', v_at) else p_message end,
+    null::jsonb,
+    v_at + make_interval(secs => p_delay)
+  );
+  perform pgmq.archive('exam_processing', p_msg_id);
+  return 'requeued';
+end;
+$function$;
+
+revoke all on function public.exam_worker_requeue(bigint, integer, jsonb, integer, boolean)
+  from public, anon, authenticated;
+grant execute on function public.exam_worker_requeue(bigint, integer, jsonb, integer, boolean) to service_role;
+
+-- Give up on the caller's message, in one transaction: error the batch (only from p_from), record
+-- the failure, archive the message. Either all of it happens or none of it, so a give-up can no
+-- longer error a batch and then leave the message to be finished by a redelivery.
+--
+-- The failure is recorded twice, as before: a message on exam_processing_dlq (replayable) and a row
+-- in exam_async_worker_dlq_messages (queryable). Either one suffices, so each runs in its own
+-- savepoint and only both failing raises, which rolls everything back and leaves the message to
+-- come back. The audit row casts nothing that can fail. p_batch_id may be null (a message whose
+-- body is not an envelope at all). Returns 'not_owner', 'given_up', or 'given_up' with
+-- ':no_dlq_message' or ':no_audit_row' when one record failed.
+create or replace function public.exam_worker_give_up(
+  p_msg_id bigint,
+  p_read_ct integer,
+  p_batch_id bigint,
+  p_from text[],
+  p_error text,
+  p_error_type text,
+  p_envelope jsonb
+)
+returns text
+language plpgsql
+set search_path to ''
+as $function$
+declare
+  v_obj boolean := jsonb_typeof(p_envelope) = 'object';
+  v_queued boolean := false;
+  v_audited boolean := false;
+  v_queue_err text;
+  v_audit_err text;
+begin
+  if p_msg_id is null or p_read_ct is null then
+    raise exception 'exam_worker_give_up: p_msg_id and p_read_ct are required';
+  end if;
+  perform 1 from pgmq.q_exam_processing q
+   where q.msg_id = p_msg_id and q.read_ct = p_read_ct
+   for update;
+  if not found then
+    return 'not_owner';
+  end if;
+
+  if p_batch_id is not null and p_from is not null then
+    update public.exam_scan_batches b
+       set status = 'error', error = p_error
+     where b.id = p_batch_id and b.status = any (p_from);
+  end if;
+
+  begin
+    perform pgmq.send(
+      'exam_processing_dlq',
+      case when v_obj then p_envelope else jsonb_build_object('malformed_envelope', p_envelope) end
+    );
+    v_queued := true;
+  exception when others then
+    v_queue_err := sqlerrm;
+  end;
+
+  begin
+    insert into public.exam_async_worker_dlq_messages
+      (original_msg_id, method, envelope, error_message, error_type, retry_count, class_id, debug_id)
+    values (
+      p_msg_id,
+      case when v_obj then p_envelope->>'method' end,
+      p_envelope,
+      p_error,
+      p_error_type,
+      case when v_obj and (p_envelope->>'retry_count') ~ '^[0-9]{1,9}$'
+           then (p_envelope->>'retry_count')::integer else 0 end,
+      case when v_obj and (p_envelope->>'class_id') ~ '^[0-9]{1,18}$'
+           then (p_envelope->>'class_id')::bigint end,
+      case when v_obj then p_envelope->>'debug_id' end
+    );
+    v_audited := true;
+  exception when others then
+    v_audit_err := sqlerrm;
+  end;
+
+  if not v_queued and not v_audited then
+    raise exception 'exam_worker_give_up: both dead-letter records failed (queue: %; audit: %)',
+      v_queue_err, v_audit_err;
+  end if;
+
+  perform pgmq.archive('exam_processing', p_msg_id);
+  return case
+    when not v_queued then 'given_up:no_dlq_message'
+    when not v_audited then 'given_up:no_audit_row'
+    else 'given_up'
+  end;
+end;
+$function$;
+
+revoke all on function public.exam_worker_give_up(bigint, integer, bigint, text[], text, text, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.exam_worker_give_up(bigint, integer, bigint, text[], text, text, jsonb)
+  to service_role;
+
+-- Link a batch's page groups (exam_link_scan_groups), only while the caller holds its match
+-- message and the batch is still 'matching'. The batch row is share-locked for the transaction, so
+-- a status write moving it to review waits for this, or this sees review and changes nothing.
+-- Returns {"outcome": "not_owner" | "state_changed"} or {"outcome": "applied", "rows": [...]}.
+-- exam_link_scan_groups's own errors (EX409: it would regroup a decided exam) propagate.
+create or replace function public.exam_worker_link_scan_groups(
+  p_msg_id bigint,
+  p_read_ct integer,
+  p_batch_id bigint,
+  p_groups jsonb
+)
+returns jsonb
+language plpgsql
+set search_path to ''
+as $function$
+declare
+  v_status text;
+begin
+  if p_msg_id is null or p_read_ct is null or p_batch_id is null or p_groups is null then
+    raise exception 'exam_worker_link_scan_groups: every argument is required';
+  end if;
+  perform 1 from pgmq.q_exam_processing q
+   where q.msg_id = p_msg_id and q.read_ct = p_read_ct
+   for update;
+  if not found then
+    return jsonb_build_object('outcome', 'not_owner');
+  end if;
+  select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for share;
+  if v_status is distinct from 'matching' then
+    return jsonb_build_object('outcome', 'state_changed');
+  end if;
+  return jsonb_build_object('outcome', 'applied', 'rows', public.exam_link_scan_groups(p_batch_id, p_groups));
+end;
+$function$;
+
+revoke all on function public.exam_worker_link_scan_groups(bigint, integer, bigint, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.exam_worker_link_scan_groups(bigint, integer, bigint, jsonb) to service_role;
+
+-- Write the worker's identity suggestion for one scanned exam, only while the caller holds its
+-- match message and the batch is still 'matching' (share-locked, as above). Never over a human
+-- decision: a confirmed or skipped exam is not undecided, and an unconfirmed pick made in review is
+-- stored as 'suggested' with a null confidence, which the worker never writes (matchProfile always
+-- gives a confidence). A pick whose pages a re-link changed was already cleared to 'unmatched' by
+-- exam_link_scan_groups, so the worker re-detects it. Returns 'not_owner', 'state_changed',
+-- 'applied' or 'skipped' (the row is decided, picked, or not in this batch).
+create or replace function public.exam_worker_set_match_suggestion(
+  p_msg_id bigint,
+  p_read_ct integer,
+  p_batch_id bigint,
+  p_scanned_id bigint,
+  p_detected_name text,
+  p_detected_sis_id text,
+  p_matched_profile_id uuid,
+  p_match_confidence numeric
+)
+returns text
+language plpgsql
+set search_path to ''
+as $function$
+declare
+  v_status text;
+  v_rows integer;
+begin
+  if p_msg_id is null or p_read_ct is null or p_batch_id is null or p_scanned_id is null
+     or p_match_confidence is null then
+    raise exception 'exam_worker_set_match_suggestion: the claim, batch, scanned exam and confidence are required';
+  end if;
+  perform 1 from pgmq.q_exam_processing q
+   where q.msg_id = p_msg_id and q.read_ct = p_read_ct
+   for update;
+  if not found then
+    return 'not_owner';
+  end if;
+  select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for share;
+  if v_status is distinct from 'matching' then
+    return 'state_changed';
+  end if;
+  update public.exam_scanned_submissions s
+     set detected_name = p_detected_name,
+         detected_sis_id = p_detected_sis_id,
+         matched_profile_id = p_matched_profile_id,
+         match_confidence = p_match_confidence,
+         match_status = case when p_matched_profile_id is null then 'unmatched' else 'suggested' end
+   where s.id = p_scanned_id
+     and s.batch_id = p_batch_id
+     and s.match_status in ('suggested', 'unmatched')
+     and not (s.match_status = 'suggested' and s.match_confidence is null);
+  get diagnostics v_rows = row_count;
+  return case when v_rows > 0 then 'applied' else 'skipped' end;
+end;
+$function$;
+
+revoke all on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric)
+  from public, anon, authenticated;
+grant execute on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric)
+  to service_role;
+

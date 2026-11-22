@@ -18,6 +18,13 @@ import { addDays } from "date-fns";
 import { backendPid, beginAsUser, privilegedClient, waitUntilBlocked } from "./courseGeminiKeyDb";
 import { runExamWorker } from "./examScanFixture";
 import { createClass, createUserInClass, insertAssignment, supabase } from "./TestingUtils";
+import {
+  ackArgs,
+  giveUpArgs,
+  linkArgs,
+  requeueArgs,
+  suggestionArgs
+} from "../../supabase/functions/_shared/examWorkerFence";
 
 type Claim = { msgId: number; readCt: number; tag: string };
 
@@ -55,6 +62,15 @@ async function seedBatch(status: string) {
  * the row, before touching any batch.
  */
 async function queueAndClaim(client: Client, classId: number, batchId: number): Promise<Claim> {
+  // Sent and claimed in one transaction, so a running worker never sees it unclaimed.
+  await client.query("BEGIN");
+  const claim = await queueAndClaimInTx(client, classId, batchId);
+  await client.query("COMMIT");
+  return claim;
+}
+
+/** queueAndClaim inside the caller's transaction. */
+async function queueAndClaimInTx(client: Client, classId: number, batchId: number): Promise<Claim> {
   const tag = randomUUID();
   const message = {
     method: "finalize",
@@ -63,13 +79,10 @@ async function queueAndClaim(client: Client, classId: number, batchId: number): 
     args: { scanned_submission_id: -1 },
     test_tag: tag
   };
-  // Sent and claimed in one transaction, so a running worker never sees it unclaimed.
-  await client.query("BEGIN");
   const sent = await client.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
     JSON.stringify(message)
   ]);
   const claim = await claimAs(client, tag);
-  await client.query("COMMIT");
   expect(claim?.msgId).toBe(Number(sent.rows[0].id));
   return claim!;
 }
@@ -436,18 +449,490 @@ test.describe("a leftover finalize does not complete a batch that is back in rev
   });
 });
 
+/** Call a worker function through PostgREST as the service role, with the worker's own argument builder. */
+async function callFn<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const rpc = supabase.rpc as unknown as (
+    f: string,
+    a: Record<string, unknown>
+  ) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+  const { data, error } = await rpc.call(supabase, fn, args);
+  expect(error, `${fn}: ${error?.message}`).toBeNull();
+  return data as T;
+}
+
+/** The messages of this test still queued, and archived, by tag. */
+async function tagged(client: Client, tag: string) {
+  const q = await client.query<{ msg_id: string; read_ct: number; vt: Date; message: Record<string, unknown> }>(
+    "SELECT msg_id, read_ct, vt, message FROM pgmq.q_exam_processing WHERE message->>'test_tag' = $1 ORDER BY msg_id",
+    [tag]
+  );
+  const a = await client.query<{ msg_id: string }>(
+    "SELECT msg_id FROM pgmq.a_exam_processing WHERE message->>'test_tag' = $1 ORDER BY msg_id",
+    [tag]
+  );
+  return { queued: q.rows, archived: a.rows.map((r) => Number(r.msg_id)) };
+}
+
+async function dlqRecords(client: Client, tag: string) {
+  const queue = await client.query(
+    "SELECT msg_id FROM pgmq.q_exam_processing_dlq WHERE message->>'test_tag' = $1 OR message->'malformed_envelope'->>'test_tag' = $1",
+    [tag]
+  );
+  const audit = await client.query<{ method: string | null; envelope: unknown; error_message: string }>(
+    "SELECT method, envelope, error_message FROM public.exam_async_worker_dlq_messages " +
+      "WHERE envelope->>'test_tag' = $1 OR envelope->'malformed_envelope'->>'test_tag' = $1",
+    [tag]
+  );
+  return { queue: queue.rows.length, audit: audit.rows };
+}
+
+async function cleanupTag(client: Client, tag: string) {
+  await client.query(
+    "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE message->>'test_tag' = $1",
+    [tag]
+  );
+  await client.query(
+    "SELECT pgmq.archive('exam_processing_dlq', msg_id) FROM pgmq.q_exam_processing_dlq WHERE message->>'test_tag' = $1",
+    [tag]
+  );
+}
+
 /**
- * A reader whose lease lapsed keeps running, and archives by msg_id, so it can archive the message a
- * newer reader now holds (#1158; CodeRabbit and Jon on #1308). These run the three ways an expired
- * holder A ends a process_page message while the real worker B holds it, and check that no
- * unfinished work is lost.
+ * The rest of the ownership boundary (#1158 review): acknowledging, re-queueing and giving up on a
+ * message, each only while the caller still holds it (20261122130000; _shared/examWorkerFence.ts).
+ * A stale claim is set up the way it happens: our read, our lease lapses, a second read.
+ */
+test.describe("queue disposition: only the message's current holder acks, re-queues or gives up (#1158)", () => {
+  async function staleAndCurrent(client: Client) {
+    const { classId, batchId } = await seedBatch("finalizing");
+    // Claim, lapse and re-claim in one transaction, so no running worker takes the message between.
+    await client.query("BEGIN");
+    const ours = await queueAndClaimInTx(client, classId, batchId);
+    await lapse(client, ours.msgId);
+    const theirs = (await claimAs(client, ours.tag))!;
+    // Keep it hidden for the rest of the test.
+    await client.query(
+      "UPDATE pgmq.q_exam_processing SET vt = clock_timestamp() + interval '1 hour' WHERE msg_id = $1",
+      [ours.msgId]
+    );
+    await client.query("COMMIT");
+    expect(theirs.readCt).toBe(ours.readCt + 1);
+    return { classId, batchId, stale: ours, current: theirs };
+  }
+
+  test("ack: a stale claim archives nothing; the holder's ack archives the message", async () => {
+    const client = await privilegedClient();
+    try {
+      const { stale, current } = await staleAndCurrent(client);
+      expect(await callFn("exam_worker_ack", ackArgs(stale))).toBe("not_owner");
+      let state = await tagged(client, stale.tag);
+      expect(state.queued.map((m) => m.read_ct)).toEqual([current.readCt]);
+      expect(state.archived).toEqual([]);
+      expect(await callFn("exam_worker_ack", ackArgs(current))).toBe("acked");
+      state = await tagged(client, stale.tag);
+      expect(state.queued).toEqual([]);
+      expect(state.archived).toEqual([current.msgId]);
+      await cleanupTag(client, stale.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("requeue: a stale claim sends and archives nothing; the holder's replaces the message in one step", async () => {
+    const client = await privilegedClient();
+    try {
+      const { classId, batchId, stale, current } = await staleAndCurrent(client);
+      const replacement = {
+        method: "finalize",
+        class_id: classId,
+        batch_id: batchId,
+        args: { scanned_submission_id: -1 },
+        test_tag: stale.tag,
+        retry_count: 1
+      };
+      expect(await callFn("exam_worker_requeue", requeueArgs(stale, replacement, 3600, true))).toBe("not_owner");
+      let state = await tagged(client, stale.tag);
+      expect(state.queued.map((m) => Number(m.msg_id))).toEqual([current.msgId]);
+      expect(state.archived).toEqual([]);
+
+      expect(await callFn("exam_worker_requeue", requeueArgs(current, replacement, 3600, true))).toBe("requeued");
+      state = await tagged(client, stale.tag);
+      expect(state.archived).toEqual([current.msgId]);
+      expect(state.queued).toHaveLength(1);
+      const [next] = state.queued;
+      expect(next.read_ct).toBe(0);
+      expect(next.message.retry_count).toBe(1);
+      // The stamp is the instant the replacement's own visibility was computed from (ocrWait.ts).
+      const stamp = Date.parse(String(next.message.ocr_wait_from));
+      expect(next.vt.getTime() - stamp).toBe(3600 * 1000);
+      await cleanupTag(client, stale.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("requeue: the stamp is taken after waiting for the claim lock, and nothing is visible before commit", async () => {
+    const client = await privilegedClient();
+    const blocker = await privilegedClient();
+    const monitor = await privilegedClient();
+    const observer = await privilegedClient();
+    try {
+      const { classId, batchId } = await seedBatch("matching");
+      const ours = await queueAndClaim(client, classId, batchId);
+      const message = {
+        method: "match",
+        class_id: classId,
+        batch_id: batchId,
+        args: { batch_id: batchId },
+        test_tag: ours.tag
+      };
+      // A renewal-sized lock on the message row held for 2s: the requeue waits for it.
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT 1 FROM pgmq.q_exam_processing WHERE msg_id = $1 FOR UPDATE", [ours.msgId]);
+      const clientPid = await backendPid(client);
+      const blockerPid = await backendPid(blocker);
+      await client.query("BEGIN");
+      const pending = client.query<{ outcome: string }>(
+        "SELECT public.exam_worker_requeue($1, $2, $3::jsonb, 3600, true) AS outcome",
+        [ours.msgId, ours.readCt, JSON.stringify(message)]
+      );
+      expect((await waitUntilBlocked(monitor, clientPid, blockerPid, 5000)).observed).toBe(true);
+      await new Promise((r) => setTimeout(r, 2000));
+      const released = (await blocker.query<{ t: Date }>("SELECT clock_timestamp() AS t")).rows[0].t;
+      await blocker.query("COMMIT");
+      expect((await pending).rows[0].outcome).toBe("requeued");
+      // Uncommitted: another session sees neither the replacement nor the archive.
+      let seen = await tagged(observer, ours.tag);
+      expect(seen.queued.map((m) => Number(m.msg_id))).toEqual([ours.msgId]);
+      expect(seen.archived).toEqual([]);
+      await new Promise((r) => setTimeout(r, 1500));
+      await client.query("COMMIT");
+      seen = await tagged(observer, ours.tag);
+      expect(seen.archived).toEqual([ours.msgId]);
+      expect(seen.queued).toHaveLength(1);
+      const stamp = Date.parse(String(seen.queued[0].message.ocr_wait_from));
+      expect(stamp).toBeGreaterThanOrEqual(released.getTime());
+      await cleanupTag(client, ours.tag);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => {});
+      await client.end();
+      await blocker.end();
+      await monitor.end();
+      await observer.end();
+    }
+  });
+
+  test("give up: a stale claim changes nothing; the holder's errors the batch, records it twice and archives", async () => {
+    const client = await privilegedClient();
+    try {
+      const { batchId, stale, current } = await staleAndCurrent(client);
+      const envelope = { method: "finalize", batch_id: batchId, test_tag: stale.tag, retry_count: 5 };
+      const g = { batchId, from: ["finalizing"], error: "gave up", errorType: "Error", envelope };
+      expect(await callFn("exam_worker_give_up", giveUpArgs(stale, g))).toBe("not_owner");
+      expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
+      expect(await dlqRecords(client, stale.tag)).toEqual({ queue: 0, audit: [] });
+      expect((await tagged(client, stale.tag)).queued).toHaveLength(1);
+
+      expect(await callFn("exam_worker_give_up", giveUpArgs(current, g))).toBe("given_up");
+      expect(await batchRow(batchId)).toEqual({ status: "error", error: "gave up" });
+      const dlq = await dlqRecords(client, stale.tag);
+      expect(dlq.queue).toBe(1);
+      expect(dlq.audit).toHaveLength(1);
+      expect(dlq.audit[0]).toMatchObject({ method: "finalize", error_message: "gave up" });
+      expect(await tagged(client, stale.tag)).toEqual({ queued: [], archived: [current.msgId] });
+      await cleanupTag(client, stale.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("give up: a batch outside the allowed states keeps its status; a message with no envelope still goes to the DLQ", async () => {
+    const client = await privilegedClient();
+    try {
+      const { batchId, current } = await staleAndCurrent(client);
+      await supabase.from("exam_scan_batches").update({ status: "completed" }).eq("id", batchId);
+      const g = {
+        batchId: null,
+        from: [],
+        error: "no envelope",
+        errorType: "Error",
+        envelope: { not_an_envelope: true, test_tag: current.tag }
+      };
+      expect(await callFn("exam_worker_give_up", giveUpArgs(current, g))).toBe("given_up");
+      expect(await batchRow(batchId)).toEqual({ status: "completed", error: null });
+      const dlq = await dlqRecords(client, current.tag);
+      expect(dlq.queue).toBe(1);
+      expect(dlq.audit[0].method).toBeNull();
+      expect((await tagged(client, current.tag)).archived).toEqual([current.msgId]);
+      await cleanupTag(client, current.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  // Either dead-letter record suffices; only both failing rolls the give-up back. A second session
+  // holds the record's table so the insert times out (lock_timeout), inside transactions that roll back.
+  for (const blocked of ["queue", "audit", "both"] as const) {
+    test(`give up with the ${blocked} record unavailable`, async () => {
+      const client = await privilegedClient();
+      const blocker = await privilegedClient();
+      try {
+        const { batchId, current } = await staleAndCurrent(client);
+        const envelope = { method: "finalize", batch_id: batchId, test_tag: current.tag };
+        await blocker.query("BEGIN");
+        if (blocked !== "audit") await blocker.query("LOCK TABLE pgmq.q_exam_processing_dlq IN ACCESS EXCLUSIVE MODE");
+        if (blocked !== "queue") {
+          await blocker.query("LOCK TABLE public.exam_async_worker_dlq_messages IN ACCESS EXCLUSIVE MODE");
+        }
+        await client.query("BEGIN");
+        await client.query("SET LOCAL lock_timeout = '200ms'");
+        await client.query("SET LOCAL ROLE service_role");
+        await client.query("SAVEPOINT before_give_up");
+        const call = client.query<{ outcome: string }>(
+          "SELECT public.exam_worker_give_up($1, $2, $3, ARRAY['finalizing'], 'gave up', 'Error', $4::jsonb) AS outcome",
+          [current.msgId, current.readCt, batchId, JSON.stringify(envelope)]
+        );
+        if (blocked === "both") {
+          await expect(call).rejects.toThrow(/both dead-letter records failed/);
+          await client.query("ROLLBACK TO SAVEPOINT before_give_up");
+          const { rows } = await client.query("SELECT status FROM public.exam_scan_batches WHERE id = $1", [batchId]);
+          expect(rows[0].status).toBe("finalizing");
+          const { rows: q } = await client.query("SELECT 1 FROM pgmq.q_exam_processing WHERE msg_id = $1", [
+            current.msgId
+          ]);
+          expect(q).toHaveLength(1);
+        } else {
+          expect((await call).rows[0].outcome).toBe(
+            blocked === "queue" ? "given_up:no_dlq_message" : "given_up:no_audit_row"
+          );
+          const { rows } = await client.query("SELECT status FROM public.exam_scan_batches WHERE id = $1", [batchId]);
+          expect(rows[0].status).toBe("error");
+          const { rows: a } = await client.query("SELECT 1 FROM pgmq.a_exam_processing WHERE msg_id = $1", [
+            current.msgId
+          ]);
+          expect(a).toHaveLength(1);
+        }
+        await client.query("ROLLBACK");
+        await blocker.query("ROLLBACK");
+        await cleanupTag(client, current.tag);
+      } finally {
+        await client.query("ROLLBACK").catch(() => {});
+        await blocker.query("ROLLBACK").catch(() => {});
+        await client.end();
+        await blocker.end();
+      }
+    });
+  }
+
+  test("claim first: a give-up that waits on a new reader's claim then finds it is not the holder", async () => {
+    const { classId, batchId } = await seedBatch("finalizing");
+    const writer = await privilegedClient();
+    const reader = await privilegedClient();
+    const monitor = await privilegedClient();
+    try {
+      const ours = await queueAndClaim(writer, classId, batchId);
+      await reader.query("BEGIN");
+      await lapse(reader, ours.msgId);
+      const theirs = await claimAs(reader, ours.tag);
+      expect(theirs?.readCt).toBe(ours.readCt + 1);
+      const writerPid = await backendPid(writer);
+      const readerPid = await backendPid(reader);
+      const pending = writer.query<{ outcome: string }>(
+        "SELECT public.exam_worker_give_up($1, $2, $3, ARRAY['finalizing'], 'stale', 'Error', $4::jsonb) AS outcome",
+        [ours.msgId, ours.readCt, batchId, JSON.stringify({ test_tag: ours.tag })]
+      );
+      expect((await waitUntilBlocked(monitor, writerPid, readerPid, 5000)).observed).toBe(true);
+      await reader.query("COMMIT");
+      expect((await pending).rows[0].outcome).toBe("not_owner");
+      expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
+      expect(await dlqRecords(writer, ours.tag)).toEqual({ queue: 0, audit: [] });
+      await cleanupTag(writer, ours.tag);
+    } finally {
+      await writer.end();
+      await reader.end();
+      await monitor.end();
+    }
+  });
+});
+
+/**
+ * Match results (links and suggestions) are written only while the worker holds its match message
+ * and the batch is still 'matching', and never over a human decision (#1158 review).
+ */
+test.describe("match writes: only the holder, only while matching, never over a decision (#1158)", () => {
+  async function matchingBatch(pages: number) {
+    const { classId, examId, batchId } = await seedBatch("matching");
+    await supabase.from("exam_scan_batches").update({ total_pages: pages, pages_per_exam: 1 }).eq("id", batchId);
+    const ids: number[] = [];
+    for (let i = 0; i < pages; i++) {
+      const { data, error } = await supabase
+        .from("exam_scan_pages")
+        .insert({
+          class_id: classId,
+          exam_id: examId,
+          batch_id: batchId,
+          page_index: i,
+          image_path: `classes/${classId}/exams/${examId}/batches/${batchId}/page-${i}.png`,
+          width: 1000,
+          height: 1400
+        })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      ids.push(data!.id);
+    }
+    const student = await createUserInClass({ role: "student", class_id: classId });
+    return { classId, batchId, pages: ids, profileId: student.private_profile_id };
+  }
+  const groupsOf = (pageIds: number[]) => pageIds.map((id, i) => ({ exam_index: i, page_ids: [id] }));
+  async function rows(batchId: number) {
+    const { data } = await supabase
+      .from("exam_scanned_submissions")
+      .select("id, exam_index, match_status, matched_profile_id, match_confidence, detected_name")
+      .eq("batch_id", batchId)
+      .order("exam_index");
+    return data ?? [];
+  }
+  const suggestion = (profileId: string | null) => ({
+    detectedName: "Detected Name",
+    detectedSisId: null,
+    matchedProfileId: profileId,
+    confidence: profileId ? 0.9 : 0
+  });
+
+  test("link: a stale claim links nothing; a batch past matching links nothing; the holder links", async () => {
+    const client = await privilegedClient();
+    try {
+      const { classId, batchId, pages } = await matchingBatch(2);
+      await client.query("BEGIN");
+      const stale = await queueAndClaimInTx(client, classId, batchId);
+      await lapse(client, stale.msgId);
+      const current = (await claimAs(client, stale.tag))!;
+      await client.query("COMMIT");
+      expect(await callFn("exam_worker_link_scan_groups", linkArgs(stale, batchId, groupsOf(pages)))).toEqual({
+        outcome: "not_owner"
+      });
+      expect(await rows(batchId)).toEqual([]);
+      await supabase.from("exam_scan_batches").update({ status: "review" }).eq("id", batchId);
+      expect(await callFn("exam_worker_link_scan_groups", linkArgs(current, batchId, groupsOf(pages)))).toEqual({
+        outcome: "state_changed"
+      });
+      expect(await rows(batchId)).toEqual([]);
+      await supabase.from("exam_scan_batches").update({ status: "matching" }).eq("id", batchId);
+      const linked = await callFn<{ outcome: string; rows: unknown[] }>(
+        "exam_worker_link_scan_groups",
+        linkArgs(current, batchId, groupsOf(pages))
+      );
+      expect(linked.outcome).toBe("applied");
+      expect(linked.rows).toHaveLength(2);
+      expect(await rows(batchId)).toHaveLength(2);
+      await cleanupTag(client, stale.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("suggestion: only the holder, only while matching, never over a confirmed, skipped or picked exam", async () => {
+    const client = await privilegedClient();
+    try {
+      const { classId, batchId, pages, profileId } = await matchingBatch(4);
+      await client.query("BEGIN");
+      const stale = await queueAndClaimInTx(client, classId, batchId);
+      await lapse(client, stale.msgId);
+      const current = (await claimAs(client, stale.tag))!;
+      await client.query("COMMIT");
+      await callFn("exam_worker_link_scan_groups", linkArgs(current, batchId, groupsOf(pages)));
+      const [fresh, confirmed, skipped, picked] = await rows(batchId);
+      await supabase
+        .from("exam_scanned_submissions")
+        .update({ match_status: "confirmed", matched_profile_id: profileId, match_confidence: 1 })
+        .eq("id", confirmed.id);
+      await supabase.from("exam_scanned_submissions").update({ match_status: "skipped" }).eq("id", skipped.id);
+      // A staff pick in review: suggested, with no confidence (MatchReview.tsx).
+      await supabase
+        .from("exam_scanned_submissions")
+        .update({ match_status: "suggested", matched_profile_id: profileId, match_confidence: null })
+        .eq("id", picked.id);
+      const before = await rows(batchId);
+
+      const write = (claim: { msgId: number; readCt: number }, id: number) =>
+        callFn("exam_worker_set_match_suggestion", suggestionArgs(claim, batchId, id, suggestion(profileId)));
+      expect(await write(stale, fresh.id)).toBe("not_owner");
+      expect(await rows(batchId)).toEqual(before);
+      await supabase.from("exam_scan_batches").update({ status: "review" }).eq("id", batchId);
+      expect(await write(current, fresh.id)).toBe("state_changed");
+      expect(await rows(batchId)).toEqual(before);
+      await supabase.from("exam_scan_batches").update({ status: "matching" }).eq("id", batchId);
+      for (const decided of [confirmed, skipped, picked]) expect(await write(current, decided.id)).toBe("skipped");
+      expect(await rows(batchId)).toEqual(before);
+      expect(await write(current, fresh.id)).toBe("applied");
+      const after = await rows(batchId);
+      expect(after[0]).toMatchObject({
+        match_status: "suggested",
+        matched_profile_id: profileId,
+        detected_name: "Detected Name"
+      });
+      expect(after.slice(1)).toEqual(before.slice(1));
+      await cleanupTag(client, stale.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("a staff pick survives a re-link that keeps its pages, and is cleared by one that changes them", async () => {
+    const client = await privilegedClient();
+    try {
+      const { classId, batchId, pages, profileId } = await matchingBatch(2);
+      const ours = await queueAndClaim(client, classId, batchId);
+      await callFn("exam_worker_link_scan_groups", linkArgs(ours, batchId, groupsOf(pages)));
+      const [first] = await rows(batchId);
+      await supabase
+        .from("exam_scanned_submissions")
+        .update({ match_status: "suggested", matched_profile_id: profileId, match_confidence: null })
+        .eq("id", first.id);
+
+      // Same pages (a re-Process of an unchanged scan): the pick stays, and the worker leaves it.
+      await callFn("exam_worker_link_scan_groups", linkArgs(ours, batchId, groupsOf(pages)));
+      expect(
+        await callFn("exam_worker_set_match_suggestion", suggestionArgs(ours, batchId, first.id, suggestion(null)))
+      ).toBe("skipped");
+      expect((await rows(batchId))[0]).toMatchObject({
+        match_status: "suggested",
+        matched_profile_id: profileId,
+        match_confidence: null
+      });
+
+      // Other pages on that exam: the pick described other paper, so the link clears it
+      // (exam_link_scan_groups step 4) and the worker suggests afresh.
+      await callFn("exam_worker_link_scan_groups", linkArgs(ours, batchId, groupsOf([...pages].reverse())));
+      expect((await rows(batchId))[0]).toMatchObject({
+        match_status: "unmatched",
+        matched_profile_id: null,
+        match_confidence: null
+      });
+      expect(
+        await callFn("exam_worker_set_match_suggestion", suggestionArgs(ours, batchId, first.id, suggestion(profileId)))
+      ).toBe("applied");
+      await cleanupTag(client, ours.tag);
+    } finally {
+      await client.end();
+    }
+  });
+});
+
+/**
+ * A reader whose lease lapsed keeps running. Before #1158's review it could archive, re-queue or
+ * dead-letter the message by msg_id while a newer reader held it. Now each of those is refused
+ * (exam_worker_ack / _requeue / _give_up). These run an expired holder A's three endings against the
+ * real worker B holding the message, and check that A changes nothing and B finishes alone.
  *
  * Interleaving: A claims the message and lets its lease lapse; a row lock on the page makes B, once
  * it has claimed the message, read the page and called the provider, wait at its OCR write; A then
- * acts inside the lock's transaction and commits, and B carries on. Needs exam-async-worker running
- * (CI's e2e-local serves it) with the fake vision provider.
+ * acts, and B carries on. Needs exam-async-worker running (CI's e2e-local serves it) with the fake
+ * vision provider.
  */
-test.describe("an expired holder that archives the newer holder's message loses no work (#1158)", () => {
+test.describe("an expired holder cannot end the newer holder's message (#1158)", () => {
   type Base = {
     a: Client;
     tag: string;
@@ -459,7 +944,11 @@ test.describe("an expired holder that archives the newer holder's message loses 
   };
   type Race = Base & { lock: Client; workerPid: number };
 
-  /** Set up the race up to the point where B waits at its OCR write and A is free to act. */
+  /**
+   * Set up the race up to the point where B waits at its OCR write and A is free to act. If setup
+   * fails, everything it opened is rolled back and closed before the error is rethrown; once it
+   * returns, the caller's end() does that.
+   */
   async function raceToOcrWrite(label: string, beforeLapse?: (base: Base) => Promise<void>): Promise<Race> {
     // A batch in OCR with one uploaded page, at a path inside the batch's scope (#1078).
     const { classId, examId, batchId } = await seedBatch("ocr");
@@ -482,185 +971,155 @@ test.describe("an expired holder that archives the newer holder's message loses 
       .select("id")
       .single();
     expect(pageErr).toBeNull();
-    const course = { id: classId };
     const tag = randomUUID();
     const envelope = {
       method: "process_page",
-      class_id: course.id,
+      class_id: classId,
       batch_id: batchId,
       args: { scan_page_id: page!.id },
       test_tag: tag
     };
     const a = await privilegedClient();
     const lock = await privilegedClient();
-    // A sends and claims in one transaction, so no running worker sees the message unclaimed.
-    await a.query("BEGIN");
-    const sent = await a.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
-      JSON.stringify(envelope)
-    ]);
-    const claimA = await claimAs(a, tag);
-    await a.query("COMMIT");
-    const msgId = Number(sent.rows[0].id);
-    expect(claimA).toEqual({ msgId, readCt: 1, tag });
-    const base: Base = { a, tag, msgId, pageId: page!.id, batchId, classId: course.id, envelope };
-    await beforeLapse?.(base);
+    try {
+      // A sends and claims in one transaction, so no running worker sees the message unclaimed.
+      await a.query("BEGIN");
+      const sent = await a.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
+        JSON.stringify(envelope)
+      ]);
+      const claimA = await claimAs(a, tag);
+      await a.query("COMMIT");
+      const msgId = Number(sent.rows[0].id);
+      expect(claimA).toEqual({ msgId, readCt: 1, tag });
+      const base: Base = { a, tag, msgId, pageId: page!.id, batchId, classId, envelope };
+      await beforeLapse?.(base);
 
-    await lock.query("BEGIN");
-    await lock.query("SELECT 1 FROM public.exam_scan_pages WHERE id = $1 FOR UPDATE", [page!.id]);
-    const lockPid = await backendPid(lock);
-    await lapse(a, msgId);
-    // B: the worker claims the message (read_ct 2), reads the page, OCRs it, and waits on our lock.
-    let workerPid: number | undefined;
-    const start = Date.now();
-    let lastRun = 0;
-    while (!workerPid && Date.now() - start < 45_000) {
-      if (Date.now() - lastRun > 5_000) {
-        lastRun = Date.now();
-        await runExamWorker();
+      await lock.query("BEGIN");
+      await lock.query("SELECT 1 FROM public.exam_scan_pages WHERE id = $1 FOR UPDATE", [page!.id]);
+      const lockPid = await backendPid(lock);
+      await lapse(a, msgId);
+      // B: the worker claims the message (read_ct 2), reads the page, OCRs it, and waits on our lock.
+      let workerPid: number | undefined;
+      const start = Date.now();
+      let lastRun = 0;
+      while (!workerPid && Date.now() - start < 45_000) {
+        if (Date.now() - lastRun > 5_000) {
+          lastRun = Date.now();
+          await runExamWorker();
+        }
+        const { rows } = await a.query<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))",
+          [lockPid]
+        );
+        workerPid = rows[0]?.pid;
+        if (!workerPid) await new Promise((r) => setTimeout(r, 100));
       }
-      const { rows } = await a.query<{ pid: number }>(
-        "SELECT pid FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))",
-        [lockPid]
+      expect(workerPid, "the worker never reached its OCR write").toBeDefined();
+      const { rows: held } = await a.query<{ read_ct: number }>(
+        "SELECT read_ct FROM pgmq.q_exam_processing WHERE msg_id = $1",
+        [msgId]
       );
-      workerPid = rows[0]?.pid;
-      if (!workerPid) await new Promise((r) => setTimeout(r, 100));
+      expect(held[0]?.read_ct, "B holds the message with the next read").toBe(2);
+      return { ...base, lock, workerPid: workerPid! };
+    } catch (error) {
+      await end({ a, lock, tag } as Race);
+      throw error;
     }
-    expect(workerPid, "the worker never reached its OCR write").toBeDefined();
-    const { rows: held } = await a.query<{ read_ct: number }>(
-      "SELECT read_ct FROM pgmq.q_exam_processing WHERE msg_id = $1",
-      [msgId]
-    );
-    expect(held[0]?.read_ct, "B holds the message with the next read").toBe(2);
-    return { ...base, lock, workerPid: workerPid! };
   }
 
-  /** A commits; then wait until B's OCR write has finished (its connection no longer waits on a lock). */
+  /** Let B's OCR write go, then wait until B has finished with the message (it is no longer queued). */
   async function releaseAndWaitForB(r: Race) {
     await r.lock.query("COMMIT");
-    await expect
-      .poll(
-        async () =>
-          (
-            await r.a.query<{ waiting: boolean }>(
-              "SELECT coalesce(bool_or(wait_event_type = 'Lock'), false) AS waiting FROM pg_stat_activity WHERE pid = $1",
-              [r.workerPid]
-            )
-          ).rows[0].waiting,
-        { timeout: 10_000 }
-      )
-      .toBe(false);
-    // B's handler then archives (a no-op) and releases its lease; give it a moment to finish.
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await expect.poll(async () => (await tagged(r.a, r.tag)).queued.length, { timeout: 30_000 }).toBe(0);
   }
 
   async function pageOcr(pageId: number) {
-    const { data } = await supabase.from("exam_scan_pages").select("ocr_text, ocr_data").eq("id", pageId).single();
-    return data;
+    const { data, error } = await supabase
+      .from("exam_scan_pages")
+      .select("ocr_text, ocr_data")
+      .eq("id", pageId)
+      .single();
+    expect(error).toBeNull();
+    return data!;
   }
 
-  async function queued(r: Base) {
-    return (await r.a.query("SELECT msg_id FROM pgmq.q_exam_processing WHERE message->>'test_tag' = $1", [r.tag])).rows;
-  }
-
-  async function deadLettered(r: Base) {
-    return (
-      await r.a.query("SELECT id FROM public.exam_async_worker_dlq_messages WHERE envelope->>'test_tag' = $1", [r.tag])
-    ).rows;
-  }
-
-  async function end(r: Race) {
+  async function end(r: Pick<Race, "a" | "lock" | "tag">) {
     await r.lock.query("ROLLBACK").catch(() => {});
-    await r.a.query(
-      "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE message->>'test_tag' = $1",
-      [r.tag]
-    );
-    await r.a.end();
-    await r.lock.end();
+    await cleanupTag(r.a, r.tag).catch(() => {});
+    await r.a.end().catch(() => {});
+    await r.lock.end().catch(() => {});
   }
 
-  test("A finished: its OCR stays, B's late result is dropped, nothing is redone or dead-lettered", async () => {
+  /** While B is held at its write: A's attempt was refused, and B's message is untouched. */
+  async function expectOnlyBHolds(r: Race) {
+    const state = await tagged(r.a, r.tag);
+    expect(state.queued.map((m) => [Number(m.msg_id), m.read_ct])).toEqual([[r.msgId, 2]]);
+    expect(state.archived).toEqual([]);
+  }
+
+  /** After B: exactly B's message archived, nothing else ever queued, nothing dead-lettered. */
+  async function expectBFinishedAlone(r: Race) {
+    expect(await tagged(r.a, r.tag)).toEqual({ queued: [], archived: [r.msgId] });
+    expect(await dlqRecords(r.a, r.tag)).toEqual({ queue: 0, audit: [] });
+    expect(await batchRow(r.batchId)).toEqual({ status: "ocr", error: null });
+  }
+
+  test("A finished and acks: refused; its OCR stays, B's late result is dropped, B acks", async () => {
     const r = await raceToOcrWrite("expired holder finished");
     try {
-      // A's success path: write OCR, then archive the message by msg_id, so B's claim on it too.
+      // A's success: its OCR write lands first (inside the lock's transaction), then its ack.
       await r.lock.query(
         "UPDATE public.exam_scan_pages SET ocr_text = 'first result', ocr_data = $2::jsonb WHERE id = $1",
         [r.pageId, JSON.stringify({ words: [{ text: "first", x: 0.1, y: 0.1, width: 0.1, height: 0.02 }] })]
       );
-      await r.lock.query("SELECT pgmq.archive('exam_processing', $1::bigint)", [r.msgId]);
+      expect(await callFn("exam_worker_ack", ackArgs({ msgId: r.msgId, readCt: 1 }))).toBe("not_owner");
+      await expectOnlyBHolds(r);
       await releaseAndWaitForB(r);
-      // B's write found OCR already there and matched no row: the stored OCR is still A's.
-      expect((await pageOcr(r.pageId))?.ocr_text).toBe("first result");
-      const { rows: archived } = await r.a.query("SELECT msg_id FROM pgmq.a_exam_processing WHERE msg_id = $1", [
-        r.msgId
-      ]);
-      expect(archived).toHaveLength(1);
-      expect(await queued(r)).toHaveLength(0);
-      expect(await deadLettered(r)).toHaveLength(0);
-      expect(await batchRow(r.batchId)).toEqual({ status: "ocr", error: null });
+      // B's write found OCR already there and matched no row.
+      expect((await pageOcr(r.pageId)).ocr_text).toBe("first result");
+      await expectBFinishedAlone(r);
     } finally {
       await end(r);
     }
   });
 
-  test("A failed and re-queued: B's OCR is kept, and the replacement finds the page done", async () => {
+  test("A failed and re-queues: refused, so no replacement exists, and the page's OCR is B's", async () => {
     const r = await raceToOcrWrite("expired holder retried");
     try {
-      // A's transient-error path: send the replacement first, then archive the message by msg_id.
-      await r.lock.query("SELECT pgmq.send('exam_processing', $1::jsonb)", [
-        JSON.stringify({ ...r.envelope, retry_count: 1 })
-      ]);
-      await r.lock.query("SELECT pgmq.archive('exam_processing', $1::bigint)", [r.msgId]);
-      await releaseAndWaitForB(r);
-      // B's OCR is the page's (the fake provider reads the object path, not 'first result').
-      const afterB = await pageOcr(r.pageId);
-      expect(afterB?.ocr_data).not.toBeNull();
-      // The replacement runs, finds OCR there, and is archived: at worst a duplicate run.
-      await expect
-        .poll(
-          async () => {
-            await runExamWorker();
-            return (await queued(r)).length;
-          },
-          { timeout: 60_000, intervals: [1000, 2000, 3000] }
+      expect(
+        await callFn(
+          "exam_worker_requeue",
+          requeueArgs({ msgId: r.msgId, readCt: 1 }, { ...r.envelope, retry_count: 1 }, 0, false)
         )
-        .toBe(0);
-      const { rows: replacement } = await r.a.query(
-        "SELECT msg_id FROM pgmq.a_exam_processing WHERE message->>'test_tag' = $1 AND msg_id <> $2",
-        [r.tag, r.msgId]
-      );
-      expect(replacement).toHaveLength(1);
-      expect(await pageOcr(r.pageId)).toEqual(afterB);
-      expect(await deadLettered(r)).toHaveLength(0);
-      expect(await batchRow(r.batchId)).toEqual({ status: "ocr", error: null });
+      ).toBe("not_owner");
+      await expectOnlyBHolds(r);
+      await releaseAndWaitForB(r);
+      // No other message for this page ever existed, so the OCR stored now can only be B's write.
+      const ocr = await pageOcr(r.pageId);
+      expect(ocr.ocr_data).not.toBeNull();
+      expect(ocr.ocr_text).not.toBe("first result");
+      await expectBFinishedAlone(r);
     } finally {
       await end(r);
     }
   });
 
-  test("A gave up: the batch keeps A's error and one DLQ record, and B cannot undo it", async () => {
-    const r = await raceToOcrWrite("expired holder gave up", async (base) => {
-      // A's give-up while it still held the message: the fenced error write applies.
-      expect(
-        await setStatus(base.a, { msgId: base.msgId, readCt: 1 }, base.batchId, "error", ["ocr"], "A gave up")
-      ).toBe("applied");
-    });
+  test("A gave up: refused, so the batch is not errored, nothing is dead-lettered, and B finishes", async () => {
+    const r = await raceToOcrWrite("expired holder gave up");
     try {
-      // After its lease lapsed and B claimed: dead-letter, then archive by msg_id.
-      await r.lock.query(
-        "INSERT INTO public.exam_async_worker_dlq_messages " +
-          "(original_msg_id, method, envelope, error_message, error_type, class_id) " +
-          "VALUES ($1, 'process_page', $2::jsonb, 'A gave up', 'Error', $3)",
-        [r.msgId, JSON.stringify(r.envelope), r.classId]
-      );
-      await r.lock.query("SELECT pgmq.archive('exam_processing', $1::bigint)", [r.msgId]);
+      expect(
+        await callFn(
+          "exam_worker_give_up",
+          giveUpArgs(
+            { msgId: r.msgId, readCt: 1 },
+            { batchId: r.batchId, from: ["ocr"], error: "A gave up", errorType: "Error", envelope: r.envelope }
+          )
+        )
+      ).toBe("not_owner");
+      await expectOnlyBHolds(r);
       await releaseAndWaitForB(r);
-      // The failure stays visible (Retry recovers it), B's work did not move the batch, and with
-      // its message gone B's own status writes are refused.
-      expect(await batchRow(r.batchId)).toEqual({ status: "error", error: "A gave up" });
-      expect(await deadLettered(r)).toHaveLength(1);
-      expect(await queued(r)).toHaveLength(0);
-      expect(await setStatus(r.a, { msgId: r.msgId, readCt: 2 }, r.batchId, "ocr", ["error"])).toBe("not_owner");
-      expect(await batchRow(r.batchId)).toEqual({ status: "error", error: "A gave up" });
+      expect((await pageOcr(r.pageId)).ocr_data).not.toBeNull();
+      await expectBFinishedAlone(r);
     } finally {
       await end(r);
     }

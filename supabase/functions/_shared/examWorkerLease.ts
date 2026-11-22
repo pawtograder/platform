@@ -87,21 +87,25 @@ export async function setLease(
 // the lease once more, to that. That is best effort: a call the client abandoned can still commit
 // later, on a slow database, and leave the shorter lease in place. `renewMs` is for tests; the
 // worker uses LEASE_RENEW_MS.
+//
+// Returns null, with no chain running, when the first call says this reader no longer holds the
+// message (it was archived, or read again after this read's window): the caller must not run the
+// handler. A first call that fails proves nothing either way, so the lease is held as above.
 export async function holdLease(
   client: LeaseClient,
   queue: string,
   msg: LeasedMessage,
   { renewMs = LEASE_RENEW_MS }: { renewMs?: number } = {}
-): Promise<(seconds?: number) => Promise<void>> {
+): Promise<((seconds?: number) => Promise<void>) | null> {
   let stopped = false;
   let warned = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<LeaseResult> | undefined;
-  const renew = async () => {
+  const renew = async (): Promise<LeaseResult> => {
     let reason = "";
     inFlight = setLease(client, queue, msg, LEASE_SECONDS, (r) => (reason = r));
     const result = await inFlight;
-    if (stopped || result === "released") return;
+    if (stopped || result === "released") return result;
     if (result === "failed" && !warned) {
       warned = true;
       // Once per message, with the cause: a timeout, a PostgREST error (PGRST202 means the
@@ -109,8 +113,9 @@ export async function holdLease(
       console.warn(`exam-async-worker lease: set_vt_if_claimed failed for msg ${msg.msg_id} (${reason}); retrying`);
     }
     timer = setTimeout(renew, renewMs);
+    return result;
   };
-  await renew();
+  if ((await renew()) === "released") return null;
   return async (seconds?: number) => {
     stopped = true;
     clearTimeout(timer);
