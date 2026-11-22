@@ -3,6 +3,7 @@
 // CODER_API_TOKEN belongs to a Coder owner. workspace-open creates users and workspaces on students'
 // behalf and reads their OIDC link, and only owners may read a link (GET /debug/{user}/debug-link).
 
+import { UserVisibleError } from "./HandlerUtils.ts";
 import { redactSecret } from "./SentryScrub.ts";
 
 export type CoderConfig = { url: string; token: string; fetch?: typeof fetch };
@@ -112,6 +113,19 @@ async function coder<T>(
     parsed = null;
   }
   if (res.ok) return { status: res.status, data: parsed as T, error: null };
+  // 401 means Coder rejected CODER_API_TOKEN itself. The common cause is expiry: Coder caps an
+  // admin-minted token at CODER_MAX_ADMIN_TOKEN_LIFETIME (168h by default), so a token minted
+  // without a longer lifetime stops working after a week, and every call here 401s with "API key
+  // expired". Left as a CoderApiError it reached the student as a generic 500, and nothing in the
+  // message told an operator to re-mint the token. Named so the logs and the student's error both
+  // point at it.
+  if (res.status === 401) {
+    const detail = (parsed as CoderResponse | null)?.message ?? text.slice(0, 200);
+    throw new UserVisibleError(
+      `Coder rejected CODER_API_TOKEN (${res.status}: ${detail}). Re-mint it with "coder tokens create --lifetime" and update the coder-api secret bundle.`,
+      502
+    );
+  }
   return {
     status: res.status,
     data: null,

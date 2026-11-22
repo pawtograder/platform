@@ -2945,6 +2945,9 @@ forgejoRunner:
 coder:
   enabled: false
   database: pawtograder
+  # CODER_MAX_ADMIN_TOKEN_LIFETIME: Coder caps an admin-minted token at this, default 168h. The edge
+  # functions' CODER_API_TOKEN is one, so keep it long and mint that token with an explicit lifetime.
+  maxAdminTokenLifetime: 8760h
   oidc:
     enabled: false
     signInText: Sign in with Pawtograder
