@@ -602,13 +602,69 @@ export async function readFile(
   path: string,
   ref?: string
 ): Promise<string | null> {
+  return (await readFileEntry(config, repository, path, ref))?.content ?? null;
+}
+
+/** Like readFile, with the blob sha that changeFiles needs to update or delete the file. */
+export async function readFileEntry(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  ref?: string
+): Promise<{ content: string; sha: string } | null> {
   const file = path.split("/").map(encodeURIComponent).join("/");
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}${query}`);
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
   if (!res.ok) throw await failure(res, "file read");
-  const { content } = (await res.json()) as { content: string };
-  return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+  const { content, sha } = (await res.json()) as { content: string; sha: string };
+  return {
+    content: new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0))),
+    sha
+  };
+}
+
+/**
+ * One change in a changeFiles commit. `sha` is the blob sha of the file being changed (of `fromPath` for a
+ * rename), so a file someone changed since it was read fails the commit instead of being overwritten.
+ */
+export type ForgejoFileChange =
+  | { operation: "create"; path: string; content: string }
+  | { operation: "update"; path: string; content: string; sha: string; fromPath?: string }
+  | { operation: "delete"; path: string; sha: string };
+
+function base64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** Applies `changes` to `branch` as one commit and returns its sha. */
+export async function changeFiles(
+  config: ForgejoConfig,
+  repository: string,
+  changes: ForgejoFileChange[],
+  message: string,
+  branch = "main"
+): Promise<string> {
+  const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/contents`, {
+    branch,
+    message,
+    files: changes.map((c) => ({
+      operation: c.operation,
+      path: c.path,
+      ...(c.operation === "delete" ? {} : { content: base64(c.content) }),
+      ...(c.operation === "create" ? {} : { sha: c.sha }),
+      ...(c.operation === "update" && c.fromPath ? { from_path: c.fromPath } : {})
+    }))
+  });
+  if (!res.ok) throw await failure(res, "file change");
+  const body = (await res.json()) as { commit?: { sha?: string } };
+  if (!body.commit?.sha) throw new Error("Forgejo file change returned no commit");
+  return body.commit.sha;
 }
 
 /** The same fields of a commit that GitHub's commit API gives. */

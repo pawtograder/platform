@@ -118,11 +118,11 @@ export const FORGEJO_DETACH_REASON = "Removing a Forgejo handout from an assignm
 
 /**
  * A Forgejo assignment's grader repository stays on GitHub (D6), so the Autograder page sets it up.
- * Turning the autograder on or off syncs grade.yml through assignment-sync-autograder-workflow,
- * which rejects Forgejo, so that stays on Edit Assignment.
+ * Turning the autograder on or off adds or parks grade.yml in the Forgejo handout, through
+ * assignment-sync-autograder-workflow, as it does for GitHub.
  */
 export const FORGEJO_GRADER_SETUP_REASON =
-  "The grader repository for a Forgejo assignment stays on GitHub. Turn the autograder on or off from Edit Assignment.";
+  "The grader repository for a Forgejo assignment stays on GitHub. Enter it below.";
 
 /** The saved row an edit form was loaded with, or undefined on the create form. */
 export type SavedHostValues = {

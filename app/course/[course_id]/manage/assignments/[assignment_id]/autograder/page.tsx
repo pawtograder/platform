@@ -95,12 +95,6 @@ export default function AutograderPage() {
       const supabase = createClient();
       const priorHasAutograder = savedHasAutograder.current;
       const nextHasAutograder = values.assignments.has_autograder;
-      // The grade.yml sync below rejects Forgejo assignments, whose handout is on Forgejo. Returning
-      // before it needs the flag unchanged, which the disabled radio keeps.
-      if (values.assignments?.git_provider === "forgejo" && priorHasAutograder !== nextHasAutograder) {
-        throw new Error(FORGEJO_GRADER_SETUP_REASON);
-      }
-
       // Only validate the grader repo when the autograder will REMAIN enabled.
       // This reads pawtograder.yml from that repo, so doing it unconditionally
       // meant a broken or missing grader repo blocked the save — making it
@@ -417,7 +411,7 @@ export default function AutograderPage() {
           <Fieldset.Content>
             <Field
               label="Autograder configuration for this assignment"
-              helperText="Disabling the autograder removes the grading workflow from the handout repository, so no GitHub Actions run and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
+              helperText="Disabling the autograder removes the grading workflow from the handout repository, so no grading runs start and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
               errorText={errors.enabled?.message?.toString()}
               invalid={errors.enabled ? true : false}
             >
@@ -427,7 +421,6 @@ export default function AutograderPage() {
                 render={({ field }) => (
                   <RadioGroup.Root
                     name={field.name}
-                    disabled={currentAssignment?.git_provider === "forgejo"}
                     value={field.value ? "true" : "false"}
                     onValueChange={(details) => field.onChange(details.value === "true")}
                   >

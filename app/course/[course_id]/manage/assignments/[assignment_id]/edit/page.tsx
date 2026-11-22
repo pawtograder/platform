@@ -632,6 +632,35 @@ export default function EditAssignment() {
             throw syncError;
           }
         }
+        // A Forgejo handout has no webhook to point, but its grade.yml still has to follow the flag: the sync
+        // adds or parks it through the Forgejo API. Only when the flag changed, as for GitHub above.
+        if (
+          values.template_repo &&
+          isForgejo &&
+          typeof values.has_autograder === "boolean" &&
+          queryData?.has_autograder !== undefined &&
+          queryData.has_autograder !== values.has_autograder
+        ) {
+          try {
+            await assignmentSyncAutograderWorkflow(
+              {
+                assignment_id: Number.parseInt(assignment_id as string),
+                class_id: Number.parseInt(course_id as string)
+              },
+              supabase
+            );
+          } catch (syncError) {
+            // The sync reads the flag from the row, so it was saved first. Put it back while the row still
+            // holds what this save wrote, so the flag and the handout agree.
+            const { error: rollbackError } = await supabase
+              .from("assignments")
+              .update({ has_autograder: queryData.has_autograder })
+              .eq("id", Number.parseInt(assignment_id as string))
+              .eq("has_autograder", values.has_autograder);
+            if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
+            throw syncError;
+          }
+        }
         toaster.create({
           title: "Assignment Updated",
           description: "The assignment has been successfully updated.",

@@ -8,16 +8,19 @@ import {
   getDefaultBranchHeadSha,
   getFileFromRepo,
   GRADE_WORKFLOW_PATH,
+  publicSupabaseUrl,
   renameFileInRepo,
   updateAutograderWorkflowHash,
   writeFileToRepo,
   RenameDestinationExistsError
 } from "../_shared/GitHubWrapper.ts";
+import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
 import { assertUserHasCapabilityOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { syncForgejoAssignmentWorkflow } from "./forgejo.ts";
 
 /**
  * Where the live workflow is parked while the autograder is off. GitHub only runs
@@ -170,16 +173,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("*, classes(slug,github_org)")
+    .select("*, classes(slug,github_org,forgejo_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
 
   if (!assignment) {
     throw new UserVisibleError("Assignment not found", 400);
-  }
-  if (assignment.git_provider !== "github") {
-    throw new UserVisibleError("This assignment uses Forgejo. GitHub workflow synchronization is unavailable.", 400);
   }
 
   // PR-mode assignments never have an autograder: their submissions are ingested by
@@ -222,6 +222,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return { action: "unchanged" as const, has_autograder: hasAutograder, template_repo: null };
   }
   scope.setTag("template_repo", templateRepo);
+
+  // A Forgejo handout's grade.yml is written through the Forgejo API (forgejo.ts). Everything below is GitHub's.
+  if (assignment.git_provider === "forgejo") {
+    const config = forgejoConfig();
+    if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
+    return await syncForgejoAssignmentWorkflow(
+      adminSupabase,
+      config,
+      {
+        id: assignment.id,
+        class_id: assignment.class_id,
+        template_repo: templateRepo,
+        forgejo_org: assignment.classes?.forgejo_org ?? null,
+        class_slug: assignment.classes?.slug ?? ""
+      },
+      hasAutograder,
+      publicSupabaseUrl()
+    );
+  }
+  if (assignment.git_provider !== "github") {
+    throw new UserVisibleError("This assignment's repository host is not supported.", 400);
+  }
 
   // E2E fixtures must never hit real GitHub.
   if (

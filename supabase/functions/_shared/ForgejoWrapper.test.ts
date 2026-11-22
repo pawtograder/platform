@@ -6,6 +6,7 @@
  */
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@^1";
 import {
+  changeFiles,
   coderTokenName,
   ArchiveTooLargeError,
   downloadArchive,
@@ -20,6 +21,7 @@ import {
   IDLE_TOKEN_MS,
   mintRepoToken,
   readFile,
+  readFileEntry,
   REPLACED_TOKEN_GRACE_MS,
   repoPath,
   revokeAllCoderTokens,
@@ -1192,4 +1194,52 @@ Deno.test("token list: a list that keeps changing is an error, so nothing is tak
       await assertRejects(() => revokeIdleTokens(config, "alex.kim", 1, now + IDLE_TOKEN_MS), Error, "kept changing");
     }
   );
+});
+
+Deno.test("readFileEntry: returns the content with its blob sha, and null for a missing file", async () => {
+  const text = "name: grade\n";
+  await withForgejo([ok({ content: btoa(text), sha: "b10b" }), new Response("{}", { status: 404 })], async () => {
+    assertEquals(await readFileEntry(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), {
+      content: text,
+      sha: "b10b"
+    });
+    assertEquals(await readFileEntry(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), null);
+  });
+});
+
+Deno.test("changeFiles: sends every change in one commit on main and returns its sha", async () => {
+  await withForgejo([ok({ commit: { sha: "c0ffee" } }, 201)], async (calls) => {
+    const sha = await changeFiles(
+      config,
+      "cs4535/hw1-handout",
+      [
+        { operation: "update", path: "a.disabled", fromPath: "a", sha: "s1", content: "é" },
+        { operation: "delete", path: "b", sha: "s2" },
+        { operation: "create", path: "c", content: "new" }
+      ],
+      "Park a"
+    );
+    assertEquals(sha, "c0ffee");
+    assertEquals(calls[0].method, "POST");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-handout/contents");
+    assertEquals(calls[0].body, {
+      branch: "main",
+      message: "Park a",
+      files: [
+        { operation: "update", path: "a.disabled", content: btoa("\u00c3\u00a9"), sha: "s1", from_path: "a" },
+        { operation: "delete", path: "b", sha: "s2" },
+        { operation: "create", path: "c", content: btoa("new") }
+      ]
+    });
+  });
+});
+
+Deno.test("changeFiles: a refused commit throws with Forgejo's status", async () => {
+  await withForgejo([unprocessable("sha does not match")], async () => {
+    await assertRejects(
+      () => changeFiles(config, "cs4535/hw1-handout", [{ operation: "delete", path: "b", sha: "s" }], "x"),
+      Error,
+      "422"
+    );
+  });
 });
