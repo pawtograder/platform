@@ -227,7 +227,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (assignment.git_provider === "forgejo") {
     const config = forgejoConfig();
     if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
-    return await syncForgejoAssignmentWorkflow(
+    const forgejoResult = await syncForgejoAssignmentWorkflow(
       adminSupabase,
       config,
       {
@@ -235,11 +235,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         class_id: assignment.class_id,
         template_repo: templateRepo,
         forgejo_org: assignment.classes?.forgejo_org ?? null,
-        class_slug: assignment.classes?.slug ?? ""
+        class_slug: assignment.classes?.slug ?? "",
+        latest_template_sha: assignment.latest_template_sha ?? null
       },
       hasAutograder,
       publicSupabaseUrl()
     );
+    const { existing_repositories_unchanged: unchanged, ...rest } = forgejoResult;
+    if (unchanged > 0) {
+      // The GitHub path queues these repositories; Forgejo has no handout sync yet, so the honest
+      // outcome is to hand the instructor the gap rather than report a success that stops at the handout.
+      scope.setTag("forgejo_existing_repositories_unchanged", String(unchanged));
+    }
+    return { ...rest, ...(unchanged > 0 ? { forgejo_existing_repositories_unchanged: unchanged } : {}) };
   }
   if (assignment.git_provider !== "github") {
     throw new UserVisibleError("This assignment's repository host is not supported.", 400);

@@ -233,6 +233,25 @@ export default function AutograderPage() {
             type: "warning"
           });
         }
+        if ((syncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
+          // Forgejo's counterpart of repo_sync_queue_failed, except that no job repairs it later:
+          // there is no Forgejo handout sync yet, so these repositories keep the grade.yml they were
+          // generated with until they are recreated. Saying nothing would leave an instructor
+          // believing the change reached students it never touched.
+          const stale = syncResult!.forgejo_existing_repositories_unchanged!;
+          toaster.create({
+            title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
+              stale === 1 ? "has" : "have"
+            } the previous setup`,
+            description: nextHasAutograder
+              ? "The handout repository was updated, but Forgejo repositories created before now keep their " +
+                "own copy of grade.yml, so pushes to them are still not graded. Only repositories created " +
+                "from now on get the autograder."
+              : "The handout repository was updated, but Forgejo repositories created before now keep their " +
+                "live grade.yml, so pushes to them still start a grading run.",
+            type: "warning"
+          });
+        }
         if ((syncResult?.unsynced_other_class_count ?? 0) > 0) {
           // Count only: naming assignments in another class would disclose them to an
           // instructor who is not authorized for it.

@@ -436,34 +436,49 @@ export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failur
  *
  * Forgejo's hook PATCH (15.0.9) sets every event except the action_run ones, which it leaves as they were.
  * So a hook that was created before it needed them, and doesn't list them, is replaced instead.
+ *
+ * The replacement is created BEFORE the stale hook is removed. Deleting first and failing to create left the
+ * org with no hook at all, and pushes in that gap were never delivered: Commit History simply missed them,
+ * and nothing retried. Two hooks on the same URL for the moment in between is the safe side of that trade —
+ * the webhook's own handlers are idempotent, so a duplicate delivery records what the first one did.
+ *
+ * Leftovers heal: every hook on this URL is considered, one that already has the events is kept and
+ * rewritten, and the rest are deleted. A pass that died between the create and the delete therefore
+ * converges on the next one instead of leaving a second hook behind for good.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
   const hooks = await forgejo(config, "GET", `${path}?limit=50`);
   if (!hooks.ok) throw await failure(hooks, "org hooks read");
-  const existing = ((await hooks.json()) as { id: number; events?: string[] | null; config?: { url?: string } }[]).find(
-    (h) => h.config?.url === hook.url
-  );
+  const matching = (
+    (await hooks.json()) as { id: number; events?: string[] | null; config?: { url?: string } }[]
+  ).filter((h) => h.config?.url === hook.url);
   const settings = {
     active: true,
     events: [...ORG_HOOK_EVENTS],
     branch_filter: "*",
     config: { url: hook.url, content_type: "json", secret: hook.secret }
   };
-  if (existing && !ORG_HOOK_EVENTS.every((e) => existing.events?.includes(e))) {
-    const removed = await forgejo(config, "DELETE", `${path}/${existing.id}`);
-    if (!removed.ok && removed.status !== 404) throw await failure(removed, "org hook replace");
-    await removed.body?.cancel();
+  const subscribed = matching.find((h) => ORG_HOOK_EVENTS.every((e) => h.events?.includes(e)));
+  // Keeping the subscribed hook means PATCH only has to repair the secret and active state (#1365's job),
+  // never the events it cannot add.
+  const keep = subscribed ?? null;
+  if (keep) {
+    const res = await forgejo(config, "PATCH", `${path}/${keep.id}`, settings);
+    if (!res.ok) throw await failure(res, "org hook update");
+    await res.body?.cancel();
+  } else {
     const created = await forgejo(config, "POST", path, { type: "forgejo", ...settings });
     if (!created.ok) throw await failure(created, "org hook create");
     await created.body?.cancel();
-    return;
   }
-  const res = existing
-    ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
-    : await forgejo(config, "POST", path, { type: "forgejo", ...settings });
-  if (!res.ok) throw await failure(res, existing ? "org hook update" : "org hook create");
-  await res.body?.cancel();
+  // Only now: the org has a hook with every event, so removing the stale ones cannot lose a delivery.
+  for (const stale of matching) {
+    if (keep && stale.id === keep.id) continue;
+    const removed = await forgejo(config, "DELETE", `${path}/${stale.id}`);
+    if (!removed.ok && removed.status !== 404) throw await failure(removed, "org hook replace");
+    await removed.body?.cancel();
+  }
 }
 
 async function claimOrg(config: ForgejoConfig, org: string): Promise<void> {

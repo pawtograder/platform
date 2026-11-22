@@ -184,6 +184,14 @@ export async function handleForgejoActionRun(
 /**
  * Puts the run's URL and outcome on the commit's check-run row. Feedback sets completed_at when the
  * grader reports, which a failed or cancelled run never does, so it is filled in here if still empty.
+ *
+ * Deliveries are not ordered. Re-running grading on the same commit produces a second run, and the
+ * first run's completion can arrive after the second's — Forgejo retries a hook the receiver was slow
+ * to answer, so a failure from the superseded run could otherwise land on top of the re-run's success
+ * and show the student a failing check for a run that is no longer the current one. The row therefore
+ * keeps whichever run id is highest: Forgejo's run ids increase, so that is the most recent run for
+ * this commit. A delivery of the run already recorded changes nothing, which makes the duplicate that
+ * `action_run_recover` (and any hook retry) produces a no-op rather than a rewrite.
  */
 async function recordRunOnCheckRun(
   adminSupabase: SupabaseClient<Database>,
@@ -211,6 +219,21 @@ async function recordRunOnCheckRun(
     return;
   }
   const status = (checkRun.status ?? {}) as CheckRunStatus;
+  const recordedRunId = typeof status.workflow_run_id === "number" ? status.workflow_run_id : null;
+  if (recordedRunId !== null && run.id < recordedRunId) {
+    // A superseded run's completion, delivered late. The row already holds a newer run for this commit.
+    scope.setTag("stale_action_run", "true");
+    console.log(
+      `[forgejo-repo-webhook] run ${run.id} for ${run.commit_sha} is older than the recorded run ` +
+        `${recordedRunId}; leaving the check run as it is`
+    );
+    return;
+  }
+  if (recordedRunId === run.id && status.conclusion === run.status && status.workflow_run_url === run.html_url) {
+    // The same run delivered twice (a hook retry, or action_run_recover's copy of the success).
+    scope.setTag("duplicate_action_run", "true");
+    return;
+  }
   const newStatus: CheckRunStatus = {
     ...status,
     completed_at: status.completed_at ?? stoppedAt ?? new Date().toISOString(),

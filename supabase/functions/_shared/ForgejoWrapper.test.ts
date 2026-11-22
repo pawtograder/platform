@@ -561,19 +561,21 @@ Deno.test("ensureOrg: replaces a hook without the action_run events, which Forge
       ok({ username: "cs4535" }),
       ...ownedBy("pawtograder-admin"),
       ok(stale),
-      new Response(null, { status: 204 }),
-      ok({}, 201)
+      ok({}, 201),
+      new Response(null, { status: 204 })
     ],
     async (calls) => {
       await ensureOrg(hooked, "cs4535");
+      // Created BEFORE the stale hook is deleted. Deleting first and then failing to create left the
+      // org with no hook at all, and the pushes in that gap were never delivered.
       assertEquals(
         calls.slice(-2).map((c) => `${c.method} ${c.url}`),
         [
-          "DELETE https://git.example.edu/api/v1/orgs/cs4535/hooks/9",
-          "POST https://git.example.edu/api/v1/orgs/cs4535/hooks"
+          "POST https://git.example.edu/api/v1/orgs/cs4535/hooks",
+          "DELETE https://git.example.edu/api/v1/orgs/cs4535/hooks/9"
         ]
       );
-      assertEquals(calls.at(-1)?.body, {
+      assertEquals(calls.at(-2)?.body, {
         type: "forgejo",
         active: true,
         events: ["push", "action_run_success", "action_run_failure"],
@@ -583,18 +585,62 @@ Deno.test("ensureOrg: replaces a hook without the action_run events, which Forge
       assertEquals(calls.filter((c) => c.method === "PATCH").length, 0);
     }
   );
-  // Deleted since the read (another pass replaced it): still created.
+  // A failed create leaves the stale hook in place: it still delivers pushes, which is the whole
+  // point of creating first, and the next pass tries the upgrade again.
   await withForgejo(
-    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), status(404), ok({}, 201)],
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), status(403, "forbidden")],
+    async (calls) => {
+      await assertRejects(() => ensureOrg(hooked, "cs4535"), Error, "org hook create failed: 403");
+      assertEquals(calls.filter((c) => c.method === "DELETE").length, 0);
+    }
+  );
+  // Deleted since the read (another pass replaced it): the create still stands.
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), ok({}, 201), status(404)],
     async (calls) => {
       await ensureOrg(hooked, "cs4535");
-      assertEquals(calls.at(-1)?.method, "POST");
+      assertEquals(calls.at(-1)?.method, "DELETE");
     }
   );
   await withForgejo(
-    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), status(403, "forbidden")],
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), ok({}, 201), status(403, "forbidden")],
     async () => {
       await assertRejects(() => ensureOrg(hooked, "cs4535"), Error, "org hook replace failed: 403");
+    }
+  );
+});
+
+Deno.test("ensureOrg: a hook left behind by an interrupted replace is cleaned up, not duplicated", async () => {
+  // A pass that created the replacement and died before the delete leaves two hooks on the URL. The
+  // subscribed one is kept and rewritten (so #1365's secret and active-state repair still runs) and
+  // the stale one is removed, so the org converges on exactly one hook.
+  const both = [
+    { id: 9, active: true, events: ["push"], config: { url: hooked.pushHook!.url } },
+    {
+      id: 10,
+      active: false,
+      events: ["push", "action_run_success", "action_run_failure"],
+      config: { url: hooked.pushHook!.url }
+    }
+  ];
+  await withForgejo(
+    [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      ok(both),
+      ok({}),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(
+        calls.slice(-2).map((c) => `${c.method} ${c.url}`),
+        [
+          "PATCH https://git.example.edu/api/v1/orgs/cs4535/hooks/10",
+          "DELETE https://git.example.edu/api/v1/orgs/cs4535/hooks/9"
+        ]
+      );
+      assertEquals(calls.filter((c) => c.method === "POST").length, 0);
     }
   );
 });

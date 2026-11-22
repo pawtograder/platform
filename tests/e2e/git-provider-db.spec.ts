@@ -268,10 +268,11 @@ test("course deletion explains the restriction and preserves the course", async 
   );
   expect(await ok(supabase.from("assignments").select("id").eq("id", assignment.id))).toHaveLength(0);
 });
+// assignment-sync-autograder-workflow is NOT in this list any more: it writes grade.yml to the Forgejo
+// handout instead of refusing (#1386). Its Forgejo path is covered by the test below.
 for (const endpoint of [
   "assignment-create-all-repos",
   "assignment-create-solution-repo",
-  "assignment-sync-autograder-workflow",
   "github-repo-configure-webhook"
 ]) {
   test(`${endpoint} rejects a Forgejo assignment`, async () => {
@@ -300,6 +301,29 @@ for (const endpoint of [
     expect(await ok(reposFor(assignment.id))).toHaveLength(0);
   });
 }
+
+test("assignment-sync-autograder-workflow takes the Forgejo path instead of refusing the assignment", async () => {
+  // It used to answer the GitHub refusal above. Now it syncs the Forgejo handout's grade.yml, so on a
+  // deployment with no Forgejo settings — which is what CI is — it reports that rather than refusing
+  // the assignment for its host. Either way it must not touch GitHub or create a repository.
+  const { course, assignment } = await fixture("forgejo");
+  const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
+  await ok(
+    supabase
+      .from("assignments")
+      .update({ release_date: new Date(Date.now() - 60_000).toISOString(), template_repo: "e2e-ignore/staff" })
+      .eq("id", assignment.id)
+  );
+  const { error } = await supabase.functions.invoke("assignment-sync-autograder-workflow", {
+    headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
+    body: { class_id: course.id, assignment_id: assignment.id }
+  });
+  expect(error?.context.status).toBe(503);
+  const body = await error.context.text();
+  expect(body).toContain("Forgejo is not set up on this deployment");
+  expect(body).not.toContain("This assignment uses Forgejo");
+  expect(await ok(reposFor(assignment.id))).toHaveLength(0);
+});
 test("github-repo-configure-webhook reads a Forgejo assignment's grader repo, which stays on GitHub", async () => {
   const { course, assignment } = await fixture("forgejo");
   const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });

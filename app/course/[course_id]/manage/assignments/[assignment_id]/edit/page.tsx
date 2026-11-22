@@ -469,6 +469,20 @@ export default function EditAssignment() {
                   type: "warning"
                 });
               }
+              if ((syncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
+                // Forgejo has no handout sync, so unlike repo_sync_queue_failed above nothing repairs
+                // these repositories later: they keep the grade.yml they were generated with.
+                const stale = syncResult!.forgejo_existing_repositories_unchanged!;
+                toaster.create({
+                  title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
+                    stale === 1 ? "has" : "have"
+                  } the previous setup`,
+                  description:
+                    "The handout repository was updated, but Forgejo repositories created before now keep " +
+                    "their own copy of grade.yml. Only repositories created from now on follow this setting.",
+                  type: "warning"
+                });
+              }
               const reconcileBlockedBy = syncResult?.reconcile_blocked_by ?? [];
               if (reconcileBlockedBy.length > 0) {
                 // The reconcile declined to park the workflow because another in-class assignment

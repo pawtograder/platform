@@ -206,3 +206,67 @@ Deno.test("a run in a repository that isn't a Forgejo student repo is logged wit
   assertEquals(updates, []);
   assertEquals(upserts, []);
 });
+
+Deno.test("a superseded run's late completion never overwrites the newer run's outcome", async () => {
+  // Re-running grading makes a second run for the same commit, and deliveries are not ordered:
+  // Forgejo retries a delivery the receiver was slow to answer, so the first run's failure can
+  // arrive after the second's success. Applying it would show the student a failing check for a
+  // run that is no longer the current one.
+  const { client, updates } = fakeSupabase(
+    tables({
+      checkRunStatus: {
+        created_at: "2026-11-09T16:53:34.000Z",
+        completed_at: "2026-11-09T16:55:00.000Z",
+        conclusion: "success",
+        workflow_run_id: 99,
+        workflow_run_url: `${FORGEJO_URL}/cs101/hw1-alex/actions/runs/9`
+      }
+    })
+  );
+  const run = actionRunPayload(FORGEJO_URL, { action: "failure", status: "failure" }).run;
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  assertEquals(
+    updates.filter((u) => u.table === "repository_check_runs"),
+    []
+  );
+});
+
+Deno.test("the same run delivered twice changes nothing", async () => {
+  // action_run_recover carries the success a second time, and a hook retry can too.
+  const { client, updates } = fakeSupabase(
+    tables({
+      checkRunStatus: {
+        created_at: "2026-11-09T16:53:34.000Z",
+        completed_at: "2026-11-09T16:55:00.000Z",
+        conclusion: "success",
+        workflow_run_id: 42,
+        workflow_run_url: RUN_URL
+      }
+    })
+  );
+  const run = actionRunPayload(FORGEJO_URL, { action: "success", status: "success" }).run;
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  assertEquals(
+    updates.filter((u) => u.table === "repository_check_runs"),
+    []
+  );
+});
+
+Deno.test("a re-run's outcome does replace the earlier run's", async () => {
+  const { client, updates } = fakeSupabase(
+    tables({
+      checkRunStatus: {
+        created_at: "2026-11-09T16:53:34.000Z",
+        completed_at: "2026-11-09T16:55:00.000Z",
+        conclusion: "failure",
+        workflow_run_id: 7,
+        workflow_run_url: `${FORGEJO_URL}/cs101/hw1-alex/actions/runs/1`
+      }
+    })
+  );
+  const run = actionRunPayload(FORGEJO_URL, { action: "success", status: "success" }).run;
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  const checkRun = updates.find((u) => u.table === "repository_check_runs");
+  assertEquals((checkRun?.values.status as Record<string, unknown>).conclusion, "success");
+  assertEquals((checkRun?.values.status as Record<string, unknown>).workflow_run_id, 42);
+});
