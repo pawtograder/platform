@@ -74,8 +74,22 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
   const repository = membership.assignment_groups!.repositories[0];
   if (repository) {
     if (remaining_members.length === 0) {
-      //Archive
-      await enqueueGithubArchiveRepo(membership.class_id, membership.classes!.github_org!, repository.repository);
+      //Archive, on the host this row is on. The name alone can't decide it: a class can hold the same
+      //owner/name on GitHub and on Forgejo, and the other one belongs to someone else (#1378).
+      if (repository.git_provider === "forgejo") {
+        // The row stays, so the repositories delete trigger never queues it; queue it here.
+        // function-grants: service-role
+        const { error: archive_error } = await adminSupabase.rpc("queue_forgejo_repo_archives", {
+          p_class_ids: [membership.class_id],
+          p_repositories: [repository.repository]
+        });
+        if (archive_error) {
+          console.error(archive_error);
+          throw new Error("Failed to queue the group's Forgejo repository for archiving");
+        }
+      } else {
+        await enqueueGithubArchiveRepo(membership.class_id, membership.classes!.github_org!, repository.repository);
+      }
     } else {
       //Update the repo permissions
       await enqueueSyncRepoPermissions({

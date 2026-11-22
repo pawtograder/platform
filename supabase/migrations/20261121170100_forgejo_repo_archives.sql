@@ -13,8 +13,11 @@
 -- start of each pass:
 --   1. deleting a Forgejo repositories row, by any path (group dissolve, individual repo cleanup,
 --      instructor move), through a statement-level trigger;
---   2. enqueue_github_archive_repo called for a Forgejo name (the last member leaving a group keeps the
---      row, so only this catches it). Its GitHub path is unchanged.
+--   2. assignment-group-leave, when the last member leaves a group whose row is Forgejo (the row stays,
+--      so the trigger doesn't see it), calls queue_forgejo_repo_archives itself.
+-- enqueue_github_archive_repo stays GitHub-only. Its callers pass a name, often after deleting the GitHub
+-- row, and a class can hold the same owner/name on both hosts, so routing by name could archive a live
+-- Forgejo repo that belongs to another assignment. Callers that hold a Forgejo row route by its provider.
 -- Rows stay after archiving, with the new name, as a record of where the repo went.
 
 CREATE TABLE IF NOT EXISTS public.forgejo_repo_archives (
@@ -97,35 +100,6 @@ DROP TRIGGER IF EXISTS repositories_validate_git_provider ON public.repositories
 CREATE TRIGGER repositories_validate_git_provider
   BEFORE INSERT OR UPDATE OF git_provider, assignment_id ON public.repositories
   FOR EACH ROW EXECUTE FUNCTION public.repositories_validate_git_provider();
-
--- From 20261118140100_repository_names_per_provider.sql. A name held only by a Forgejo row now queues a
--- Forgejo archive instead of returning without one; the GitHub path is unchanged. Still returns null for it:
--- no GitHub job was queued.
-CREATE OR REPLACE FUNCTION public.enqueue_github_archive_repo( p_class_id bigint, p_org text, p_repo text, p_debug_id text default null
-) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-declare
-  log_id bigint; message_id bigint;
-  v_full_name text := case when strpos(p_repo, '/') > 0 then p_repo else p_org || '/' || p_repo end;
-begin
-  -- Match the same owner/name that archiveRepoAndLock will use.
-  -- Skip only a name that is on another host and not on GitHub: a name is unique per provider.
-  if exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
-                and git_provider <> 'github')
-     and not exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
-                and git_provider = 'github') then
-    if exists (select 1 from public.repositories where class_id = p_class_id and repository = v_full_name
-                  and git_provider = 'forgejo') then
-      perform public.queue_forgejo_repo_archives(array[p_class_id], array[v_full_name]);
-    end if;
-    return null;
-  end if;
-  insert into public.api_gateway_calls(method, status_code, class_id, debug_id) values ('archive_repo_and_lock', 0, p_class_id, p_debug_id)
-  returning id into log_id;
-  select pgmq_public.send('async_calls', jsonb_build_object( 'method', 'archive_repo_and_lock', 'class_id', p_class_id,
-      'debug_id', p_debug_id, 'log_id', log_id, 'args', jsonb_build_object('org', p_org, 'repo', p_repo) )) into message_id;
-  return message_id;
-end;
-$$;
 
 -- Pending archives, never-claimed first and then oldest claim, so one that keeps failing can't hold every place.
 CREATE OR REPLACE FUNCTION public.forgejo_repo_archives_due(p_stale_minutes integer, p_limit integer)
