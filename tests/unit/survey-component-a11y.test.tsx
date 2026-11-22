@@ -18,7 +18,7 @@
  *      uncontrolled and get written back imperatively, that silently replaced
  *      whatever the user had typed into the focused field.
  */
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen } from "@testing-library/react";
 import SurveyComponent from "@/components/Survey";
 
 // The component only needs a color mode; the real hook pulls in next-themes.
@@ -149,5 +149,48 @@ describe("SurveyComponent (issue #881)", () => {
 
     expect(onValueChanged).toHaveBeenCalled();
     expect(document.activeElement).toBe(input);
+  });
+});
+
+// #914: NVDA's browse-mode read made the survey's controls sound unnamed, but each one is named in
+// the accessibility tree. axe skips SurveyJS (DEFAULT_EXCLUDES in tests/e2e/axeStudentA11y.ts), so
+// these are what would catch a SurveyJS upgrade or a wrapper change that drops the names.
+describe("SurveyComponent control names (issue #914)", () => {
+  const NAMED_SURVEY_JSON = {
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          ...SURVEY_JSON.pages[0].elements,
+          { type: "checkbox", name: "q3", title: "Which topics were hardest?", choices: ["Graphs", "DP", "Systems"] },
+          { type: "comment", name: "q4", title: "Any other feedback?" }
+        ]
+      }
+    ]
+  };
+
+  it.each([
+    ["radio", "Too slow"],
+    ["radio", "Just right"],
+    ["radio", "Too fast"],
+    ["checkbox", "Graphs"],
+    ["checkbox", "DP"],
+    ["checkbox", "Systems"]
+  ] as const)("names each %s by its choice text: %s", (role, name) => {
+    render(<SurveyComponent surveyJson={NAMED_SURVEY_JSON} />);
+    expect(screen.getByRole(role, { name })).toBeInTheDocument();
+  });
+
+  it.each(["What is your name?", "Any other feedback?"])("names a text question by its title: %s", (name) => {
+    render(<SurveyComponent surveyJson={NAMED_SURVEY_JSON} />);
+    expect(screen.getByRole("textbox", { name })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["radiogroup", "How is the course pace?"],
+    ["group", "Which topics were hardest?"]
+  ] as const)("names each choice %s by its question", (role, name) => {
+    render(<SurveyComponent surveyJson={NAMED_SURVEY_JSON} />);
+    expect(screen.getByRole(role, { name })).toBeInTheDocument();
   });
 });
