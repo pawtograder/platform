@@ -982,7 +982,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("capability");
     expect(removeError).toBeNull();
     expect(removed, "removing a capability the instructor holds").toHaveLength(1);
-    expect(await roleCapabilities(roleX("grader"))).toEqual(["manage_assignments", "manage_flashcards"]);
+    expect(await roleCapabilities(roleX("grader"))).toEqual(
+      [...GRADER_SEEDED_CAPABILITIES, "manage_assignments"].sort()
+    );
   });
 });
 
