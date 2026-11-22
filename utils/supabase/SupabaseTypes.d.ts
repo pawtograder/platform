@@ -4374,8 +4374,8 @@ export type Database = {
           class_id: number;
           created_at: string;
           instance_url: string;
-          org: Pii<"handle", string>;
-          team: Pii<"handle", string>;
+          org: string;
+          team: string;
           team_id: number | null;
         };
         Insert: {

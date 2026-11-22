@@ -83,7 +83,13 @@ REVOKE ALL ON FUNCTION public.forgejo_group_members_left(bigint[], uuid[]) FROM 
 
 -- From the same migration, now also returning repository_id. Mismatched rows are NOT filtered out here:
 -- the reconciler has to claim them to delete them, and a filter would leave them queued for good.
-CREATE OR REPLACE FUNCTION public.forgejo_group_repo_revocations_needed(
+--
+-- Dropped first: adding a column to a RETURNS TABLE changes the return type, which CREATE OR REPLACE
+-- refuses (42P13). Nothing in the database depends on it — only the reconciler calls it — so the drop is
+-- safe, and the grants below are reapplied to the new function.
+DROP FUNCTION IF EXISTS public.forgejo_group_repo_revocations_needed(text, integer, integer);
+
+CREATE FUNCTION public.forgejo_group_repo_revocations_needed(
   p_instance_url text,
   p_stale_minutes integer,
   p_limit integer
