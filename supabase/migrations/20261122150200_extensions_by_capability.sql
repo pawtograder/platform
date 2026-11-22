@@ -22,11 +22,18 @@
 --      - DELETE: needs grant_extensions in the row's class.
 --   3. student_deadline_extensions: writing needs grant_extensions in the row's class. Reading stays
 --      with every grader and instructor of the class, and students still read their own.
+--   4. extend_review_assignments_on_due_date_exception (the trigger that moves a student's review
+--      assignment due dates by a new extension) runs as SECURITY DEFINER with search_path ''
+--      (#1411). It ran as the caller, and only instructors can update review_assignments, so when a
+--      grader granted an extension the review due dates didn't move. It only runs from the AFTER
+--      INSERT trigger on assignment_due_date_exceptions, so on an insert RLS already allowed. The
+--      logic is unchanged; table names are schema-qualified for the empty search_path.
 --
 -- Who gains or loses: instructors, default graders and existing custom roles hold grant_extensions,
 -- so nothing they can do changes. A custom role an instructor turns it off for loses granting,
 -- deleting and editing extensions. Students keep using late tokens and finishing early, and can't
--- update an extension. Admins hold nothing new.
+-- update an extension. Admins hold nothing new. Whoever grants an extension, the student's review
+-- assignment due dates now move with it, as they did when an instructor granted it.
 --
 -- Not changed: gift_tokens_to_student and update_class_late_tokens_per_student (instructor-only),
 -- apply_late_token_extension (service role), the SELECT policy on assignment_due_date_exceptions, the
@@ -190,3 +197,51 @@ CREATE POLICY "Extension granters can edit class-wide extensions" ON public.stud
 CREATE POLICY "Extension granters can delete class-wide extensions" ON public.student_deadline_extensions
   FOR DELETE TO authenticated
   USING (class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions')));
+
+-- ---------------------------------------------------------------------------
+-- 4. Review assignment due dates move with an extension, whoever grants it (#1411)
+-- ---------------------------------------------------------------------------
+
+-- The body from 20260504120000_fix_extend_review_assignments_trigger_search_path.sql, with table
+-- names schema-qualified for the empty search_path.
+CREATE OR REPLACE FUNCTION public.extend_review_assignments_on_due_date_exception()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    extension_interval INTERVAL;
+    affected_student_ids UUID[];
+BEGIN
+    IF COALESCE(NEW.hours, 0) < 0 OR COALESCE(NEW.minutes, 0) < 0 THEN
+        RETURN NEW;
+    END IF;
+
+    IF COALESCE(NEW.hours, 0) = 0 AND COALESCE(NEW.minutes, 0) = 0 THEN
+        RETURN NEW;
+    END IF;
+
+    extension_interval := make_interval(hours => COALESCE(NEW.hours, 0), mins => COALESCE(NEW.minutes, 0));
+
+    IF NEW.student_id IS NOT NULL THEN
+        affected_student_ids := ARRAY[NEW.student_id];
+    ELSIF NEW.assignment_group_id IS NOT NULL THEN
+        SELECT ARRAY_AGG(profile_id) INTO affected_student_ids
+        FROM public.assignment_groups_members
+        WHERE assignment_group_id = NEW.assignment_group_id;
+    ELSE
+        RETURN NEW;
+    END IF;
+
+    UPDATE public.review_assignments
+    SET due_date = due_date + extension_interval
+    WHERE assignment_id = NEW.assignment_id
+      AND assignee_profile_id = ANY(affected_student_ids);
+
+    RETURN NEW;
+END;
+$$;
+
+-- Only the trigger runs it. CREATE OR REPLACE keeps the old EXECUTE grants, so take them away.
+REVOKE ALL ON FUNCTION public.extend_review_assignments_on_due_date_exception() FROM PUBLIC, anon, authenticated;

@@ -8,7 +8,8 @@
  * them; a custom role that turns it off loses all three. Staff still edit only extensions they created,
  * and only staff with grant_extensions can update an extension. Every grader and instructor of the
  * class can still read extensions, students still use late tokens, and gifting tokens stays
- * instructor-only.
+ * instructor-only. Whoever grants an extension, the student's review assignment due dates move with
+ * it (#1411).
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
@@ -19,6 +20,7 @@ import {
   createClass,
   createUserInClass,
   insertAssignment,
+  insertPreBakedSubmission,
   supabase,
   type TestingUser
 } from "./TestingUtils";
@@ -36,6 +38,7 @@ test.describe("due date extensions follow grant_extensions", () => {
   let classWideStudentA: TestingUser;
   let graderB: TestingUser;
   let assignmentId: number;
+  let gradingRubricId: number;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -79,6 +82,7 @@ test.describe("due date extensions follow grant_extensions", () => {
       name: "Extensions by capability"
     });
     assignmentId = assignment.id;
+    gradingRubricId = assignment.grading_rubric_id!;
   });
 
   async function createRole(class_id: number, name: string) {
@@ -340,6 +344,70 @@ test.describe("due date extensions follow grant_extensions", () => {
       .select("id");
     expect(deleteError).toBeNull();
     expect(deleted).toHaveLength(1);
+  });
+
+  /** A new student with an unfinished review assignment on the assignment, made with the service client. */
+  async function studentWithReviewAssignment() {
+    const student = await createUserInClass({ role: "student", class_id: classA.id });
+    const submission = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignmentId,
+      class_id: classA.id
+    });
+    const { data, error } = await supabase
+      .from("review_assignments")
+      .insert({
+        assignee_profile_id: student.private_profile_id,
+        class_id: classA.id,
+        assignment_id: assignmentId,
+        submission_id: submission.submission_id,
+        submission_review_id: submission.grading_review_id,
+        rubric_id: gradingRubricId,
+        due_date: addDays(new Date(), 3).toISOString()
+      })
+      .select("id, due_date")
+      .single();
+    expect(error).toBeNull();
+    return { student, reviewAssignment: data! };
+  }
+
+  async function reviewDueDate(id: number) {
+    const { data, error } = await supabase.from("review_assignments").select("due_date").eq("id", id).single();
+    expect(error).toBeNull();
+    return new Date(data!.due_date).getTime();
+  }
+
+  test("a review assignment's due date moves with an extension a default grader grants, as it does for an instructor (#1411)", async () => {
+    const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+    for (const [granter, who] of [
+      [graderA, "a default grader"],
+      [instructorA, "an instructor"]
+    ] as const) {
+      const { student, reviewAssignment } = await studentWithReviewAssignment();
+      const before = new Date(reviewAssignment.due_date).getTime();
+      const client = await createAuthenticatedClient(granter);
+      const { error } = await client
+        .from("assignment_due_date_exceptions")
+        .insert({ ...extensionBy(granter, 5), student_id: student.private_profile_id });
+      expect(error, who).toBeNull();
+      expect((await reviewDueDate(reviewAssignment.id)) - before, who).toBe(FIVE_HOURS_MS);
+    }
+  });
+
+  test("a student with an unfinished review assignment can spend a late token, and the review's due date moves", async () => {
+    const { student, reviewAssignment } = await studentWithReviewAssignment();
+    const before = new Date(reviewAssignment.due_date).getTime();
+    const client = await createAuthenticatedClient(student);
+    const { error } = await client.from("assignment_due_date_exceptions").insert({
+      assignment_id: assignmentId,
+      student_id: student.private_profile_id,
+      class_id: classA.id,
+      creator_id: student.private_profile_id,
+      hours: 24,
+      tokens_consumed: 1
+    });
+    expect(error, "spending a late token").toBeNull();
+    expect((await reviewDueDate(reviewAssignment.id)) - before).toBe(24 * 60 * 60 * 1000);
   });
 
   test("gifting late tokens stays instructor-only", async () => {
