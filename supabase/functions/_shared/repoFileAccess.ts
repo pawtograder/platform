@@ -30,6 +30,49 @@ export function forgejoOrgForClass(cls: { slug: string | null; forgejo_org: stri
 }
 
 /**
+ * Refuses a GitHub repo that is neither in the course's github_org nor one of the course's own grader repos.
+ * Forgejo assignments keep their grader repo on GitHub (D6), usually outside any course org, and a
+ * Forgejo-only course has no github_org at all, so the grader repos are matched by name. Only assignments in
+ * this course count, which keeps one course's staff out of another course's graders. GitHub matches names
+ * case-insensitively, so this does too.
+ */
+export async function assertGitHubCourseRepo(
+  supabase: SupabaseClient<Database>,
+  courseId: number,
+  orgName: string,
+  repoName: string,
+  { allowPawtograderOrg }: { allowPawtograderOrg: boolean }
+): Promise<void> {
+  const { data: course, error } = await supabase.from("classes").select("github_org").eq("id", courseId).single();
+  if (error) {
+    throw new UserVisibleError(`Could not look up the GitHub org for course ${courseId}: ${error.message}`, 500);
+  }
+  if (typeof orgName !== "string" || typeof repoName !== "string") {
+    throw new UserVisibleError("orgName and repoName must be strings", 400);
+  }
+  const org = orgName.toLowerCase();
+  if (course.github_org?.toLowerCase() === org) return;
+  if (allowPawtograderOrg && org === "pawtograder") return;
+
+  const { data: assignments, error: graderError } = await supabase
+    .from("assignments")
+    .select("autograder(grader_repo)")
+    .eq("class_id", courseId);
+  if (graderError) {
+    throw new UserVisibleError(
+      `Could not look up the grader repos for course ${courseId}: ${graderError.message}`,
+      500
+    );
+  }
+  const repo = `${org}/${repoName.toLowerCase()}`;
+  if (assignments.some((a) => a.autograder?.grader_repo?.trim().toLowerCase() === repo)) return;
+  throw new UserVisibleError(
+    `Requested ${orgName}/${repoName} on GitHub but it is not in the course's GitHub org (${course.github_org ?? "not set"}) or one of its grader repos`,
+    403
+  );
+}
+
+/**
  * Refuses a Forgejo org that isn't the course's. Pawtograder's admin can read every org on the instance, so
  * this check is what keeps one course's staff out of another course's repos, as the github_org check does on
  * GitHub. Forgejo matches names case-insensitively, so this does too. Like the GitHub check, it scopes to

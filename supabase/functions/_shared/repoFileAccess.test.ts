@@ -8,9 +8,8 @@ import { UserVisibleError } from "./HandlerUtils.ts";
 
 // repoFileAccess imports GitProvider, whose GitHubWrapper builds a GitHub App at import time and needs a private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { assertForgejoCourseOrg, forgejoOrgForClass, parseGitProvider, repoFilesFor } = await import(
-  "./repoFileAccess.ts"
-);
+const { assertForgejoCourseOrg, assertGitHubCourseRepo, forgejoOrgForClass, parseGitProvider, repoFilesFor } =
+  await import("./repoFileAccess.ts");
 
 Deno.test("parseGitProvider: omitted means GitHub, and anything but the two hosts is refused", () => {
   assertEquals(parseGitProvider(undefined), "github");
@@ -60,6 +59,79 @@ Deno.test("assertForgejoCourseOrg: a failed class lookup is a 500, not a refusal
     UserVisibleError
   );
   assertEquals(error.status, 500);
+});
+
+/** Course 1 has no GitHub org unless given one; course 2 is another course with its own grader. */
+function githubCourseClient(githubOrg: string | null) {
+  const assignments = [
+    { class_id: 1, autograder: { grader_repo: "pawtograder-playground/test-e2e-java-solution" } },
+    { class_id: 1, autograder: null },
+    { class_id: 2, autograder: { grader_repo: "other-org/cs3500-hw1-solution" } }
+  ];
+  return {
+    from: (table: string) => {
+      const filters: Record<string, unknown> = {};
+      const query = {
+        select: () => query,
+        eq: (column: string, value: unknown) => {
+          filters[column] = value;
+          return query;
+        },
+        single: () => Promise.resolve({ data: { github_org: githubOrg }, error: null }),
+        then: (resolve: (result: unknown) => void) => {
+          if (table !== "assignments") throw new Error(`unexpected list query on ${table}`);
+          resolve({ data: assignments.filter((a) => a.class_id === filters.class_id), error: null });
+        }
+      };
+      return query;
+    }
+  } as unknown as Parameters<typeof assertGitHubCourseRepo>[0];
+}
+
+Deno.test("assertGitHubCourseRepo: a repo in the course's org passes, case-insensitively", async () => {
+  await assertGitHubCourseRepo(githubCourseClient("neu-cs4535"), 1, "NEU-CS4535", "hw1", {
+    allowPawtograderOrg: false
+  });
+});
+
+Deno.test("assertGitHubCourseRepo: with no org, the course's own grader repo passes, case-insensitively", async () => {
+  await assertGitHubCourseRepo(githubCourseClient(null), 1, "Pawtograder-Playground", "Test-E2E-Java-Solution", {
+    allowPawtograderOrg: false
+  });
+});
+
+Deno.test("assertGitHubCourseRepo: with no org, another course's grader repo is a 403", async () => {
+  const refused = await assertRejects(
+    () =>
+      assertGitHubCourseRepo(githubCourseClient(null), 1, "other-org", "cs3500-hw1-solution", {
+        allowPawtograderOrg: true
+      }),
+    UserVisibleError
+  );
+  assertEquals(refused.status, 403);
+});
+
+Deno.test("assertGitHubCourseRepo: a random repo is a 403, even next to the course's grader", async () => {
+  for (const [org, repo] of [
+    ["someone-else", "secrets"],
+    ["pawtograder-playground", "another-solution"]
+  ]) {
+    const refused = await assertRejects(
+      () => assertGitHubCourseRepo(githubCourseClient("neu-cs4535"), 1, org, repo, { allowPawtograderOrg: true }),
+      UserVisibleError
+    );
+    assertEquals(refused.status, 403);
+  }
+});
+
+Deno.test("assertGitHubCourseRepo: the pawtograder org passes only when the caller allows it", async () => {
+  await assertGitHubCourseRepo(githubCourseClient(null), 1, "pawtograder", "template", { allowPawtograderOrg: true });
+  await assertRejects(
+    () =>
+      assertGitHubCourseRepo(githubCourseClient(null), 1, "pawtograder", "template", { allowPawtograderOrg: false }),
+    UserVisibleError,
+    "not in the course's GitHub org (not set)"
+  );
 });
 
 Deno.test("repoFilesFor: Forgejo without its settings is a 503", () => {

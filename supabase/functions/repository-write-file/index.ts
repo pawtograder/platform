@@ -1,5 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { assertForgejoCourseOrg, parseGitProvider, repoFilesFor } from "../_shared/repoFileAccess.ts";
+import {
+  assertForgejoCourseOrg,
+  assertGitHubCourseRepo,
+  parseGitProvider,
+  repoFilesFor
+} from "../_shared/repoFileAccess.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -87,25 +92,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (provider === "forgejo") {
     await assertForgejoCourseOrg(supabase, courseId, orgName);
   } else {
-    const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
-    // Surface a real (retryable) lookup failure instead of letting a null `data` fall through
-    // to a misleading "...associated with undefined" 403 below.
-    if (courseOrgName.error) {
-      throw new UserVisibleError(
-        `Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`,
-        500
-      );
-    }
-    // NOTE: this only checks the course's github_org, not that repoName belongs to this course.
+    // NOTE: inside the course's github_org this checks only the org, not that repoName belongs to this course.
     // A shared org means an instructor of one course could target another course's repo. Scoping
     // writes to repos the course actually owns needs a repo->course ownership model — tracked as
     // a follow-up. See PR #831 discussion.
-    if (courseOrgName.data?.github_org !== orgName) {
-      throw new UserVisibleError(
-        `Requested to write a file to ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`,
-        403
-      );
-    }
+    await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { allowPawtograderOrg: false });
   }
 
   if (!message || message.trim() === "") {
