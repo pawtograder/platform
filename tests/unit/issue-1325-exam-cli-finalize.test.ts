@@ -5,8 +5,9 @@
 /**
  * #1325: `pawtograder exams scans process` and `finalize --dry-run`.
  *
- * enqueue_exam_process_batch has no status guard; the Scans page only offers Process for a new or
- * errored batch. Without the same rule, processing a completed batch sends it back to review.
+ * The Scans page only offers Process for a new or errored batch, and the CLI keeps the same rule.
+ * enqueue_exam_process_batch itself refuses only a batch that is busy or completed (#1329), so
+ * without this check the CLI could reprocess a batch in review.
  *
  * The dry run is what an operator checks before creating submissions, so it has to say what
  * enqueue_exam_finalize will actually do: only confirmed exams that are not yet finalized become

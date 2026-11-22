@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122120000_flashcards_manage_by_capability.sql`, `20261122120100_surveys_polls_by_capability.sql`, `20261122120200_office_hours_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122200000_flashcards_manage_by_capability.sql`, `20261122200100_surveys_polls_by_capability.sql`, `20261122200200_office_hours_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -124,6 +124,15 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## A capability that also decides who can see something
+
+Most capabilities are actions, and any staff member can still see what they saw before. One
+exception: **`manage_gradebook` covers the whole staff gradebook**, seeing it as well as changing it.
+Without it, a staff member can't open the gradebook page, read other students' gradebook cells,
+override a score or use Convert Missing to 0, and the private grades on a student's profile page are
+hidden. It is instructor-only by default, so graders on the default grader role don't have the
+gradebook until an instructor gives it to their role. Students still see their own released grades.
+
 ## For the UI: useCapability
 
 ```tsx
@@ -146,14 +155,16 @@ role hold it, so instructors and default graders keep the management access grad
 instructor can then turn it off for the default grader role or a custom role. Before this capability,
 the person who created a deck could still update and delete it and manage its cards without the
 staff check; that creator path is gone so the capability is the only rule for those writes. The
-Course Settings "Flashcard Decks" entry and the create / edit / delete controls follow
-`useCapability("manage_flashcards")`. Left as views: class members reading decks and cards, students
+create / edit / delete controls follow `useCapability("manage_flashcards")`. The Course Settings
+"Flashcard Decks" entry and deck pages remain available to all staff for viewing. Left as views: class members reading decks and cards, students
 writing their own progress and interaction logs, and staff reading class-wide progress and logs for
 analytics.
 
-CLI `flashcards.copy` asks `user_class_ids_with_capability('manage_flashcards')` through the
-caller-scoped client (`ctx.supabase`) for both the source and the target class, matching the RLS
-policies rather than joining `role_capabilities` by hand.
+CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
+decks. It requires `manage_flashcards` only in the target class. The target check asks
+`user_class_ids_with_capability('manage_flashcards')` through the caller-scoped client
+(`ctx.supabase`), using the same capability lookup as RLS. Source read policies do not require
+`manage_flashcards`.
 
 ## manage_surveys and run_polls
 
@@ -181,11 +192,9 @@ and every existing custom role hold it. Create / open / close / delete controls 
 `live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
 and cannot change them), and the anon/student insert path through `can_access_poll_response`.
 
-With a write-scoped API token, an active grader of both classes can copy surveys between them with
-`surveys copy` (one or all, keeping the source status) without `manage_surveys`. `assignments copy`
-needs an instructor in the target class, so linked-survey copying there is not a grader path.
-Creating a survey in the app needs `manage_surveys`. The team must decide whether `surveys copy`
-should require `manage_surveys` on both classes, which would take it away from default graders.
+CLI `surveys.copy` requires active instructor or grader access in the source class and
+`manage_surveys` in the target class. The target check uses the caller-scoped capability RPC,
+including for dry runs. `assignments.copy` requires instructor access in the target class.
 
 ## help_students and manage_office_hours
 

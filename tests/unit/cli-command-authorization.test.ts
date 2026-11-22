@@ -184,11 +184,37 @@ describe("CLI command authorization audit", () => {
       const entry = allCommands.find((c) => c.name === commandName);
       expect(entry).toBeDefined();
       const body = entry!.mod.functions.get(entry!.handler)!;
-      const checks =
-        body.match(/assertUserCanAccessClass|assertUserIsClassInstructor|assertUserHasClassCapability/g) ?? [];
-      expect(checks.length).toBeGreaterThanOrEqual(2);
-      expect(body).toMatch(/sourceClass\.id/);
-      expect(body).toMatch(/targetClass\.id/);
+      expect(body).toMatch(/assertUserCanAccessClass\(supabase, ctx\.userId, sourceClass\.id\)/);
+      if (commandName === "flashcards.copy" || commandName === "surveys.copy") {
+        const capability = commandName === "flashcards.copy" ? "manage_flashcards" : "manage_surveys";
+        expect(body).toMatch(
+          new RegExp(
+            `assertUserHasClassCapability\\(ctx\\.supabase, ctx\\.userId, targetClass\\.id, "${capability}"\\)`
+          )
+        );
+        expect(body).not.toMatch(/assertUserHasClassCapability\([^;]*sourceClass\.id/);
+      } else {
+        const targetHelper =
+          commandName === "assignments.copy" ? "assertUserIsClassInstructor" : "assertUserCanAccessClass";
+        expect(body).toContain(`${targetHelper}(supabase, ctx.userId, targetClass.id)`);
+      }
+    }
+  });
+
+  it("authorizes survey copying before reading surveys or returning a dry run", () => {
+    const entry = allCommands.find((c) => c.name === "surveys.copy")!;
+    const body = entry.mod.functions.get(entry.handler)!;
+    const sourceCheck = body.indexOf("await assertUserCanAccessClass(");
+    const targetCheck = body.indexOf("await assertUserHasClassCapability(");
+    expect(sourceCheck).toBeGreaterThanOrEqual(0);
+    expect(targetCheck).toBeGreaterThan(sourceCheck);
+    for (const operation of [
+      "await resolveSurvey(",
+      "await fetchLatestSurveysForClass(",
+      "if (dryRun)",
+      "await copySurveyToClass("
+    ]) {
+      expect(body.indexOf(operation)).toBeGreaterThan(targetCheck);
     }
   });
 

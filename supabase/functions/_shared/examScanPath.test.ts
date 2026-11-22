@@ -7,7 +7,12 @@
  * Run from supabase/functions:  deno test --no-check _shared/examScanPath.test.ts
  */
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
-import { assertScanPathInScope, parseScanPath, ScanPathRejectedError } from "./examScanPath.ts";
+import {
+  assertScanPathInScope,
+  assertTemplatePathInScope,
+  parseScanPath,
+  ScanPathRejectedError
+} from "./examScanPath.ts";
 
 const SCOPE = { classId: 12, examId: 34, batchId: 56 };
 
@@ -59,5 +64,20 @@ Deno.test("assertScanPathInScope: malformed and ambiguous paths are rejected", (
       ScanPathRejectedError,
       "not a canonical exam scan path"
     );
+  }
+});
+
+Deno.test("assertTemplatePathInScope: only the uploader's key for this class and exam passes", () => {
+  // Catches the worker OCR'ing another course's template image, which a staff-written row could name.
+  assertTemplatePathInScope("classes/12/exams/34/template/page-2.png", SCOPE, "template page 2");
+  for (const path of [
+    "classes/99/exams/34/template/page-2.png",
+    "classes/12/exams/99/template/page-2.png",
+    "classes/12/exams/34/template/generated.pdf",
+    "classes/12/exams/34/batches/56/page-0.png",
+    "classes/12/exams/34/template/../page-2.png",
+    "classes/12/exams/34/template/page-2.png/x"
+  ]) {
+    assertThrows(() => assertTemplatePathInScope(path, SCOPE, "template page"), ScanPathRejectedError, undefined, path);
   }
 });

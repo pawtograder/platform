@@ -263,12 +263,11 @@ CREATE OR REPLACE FUNCTION public.soft_delete_survey(p_survey_id uuid, p_survey_
  RETURNS void
  LANGUAGE plpgsql
  SECURITY DEFINER
+ SET search_path TO 'public'
 AS $function$
 DECLARE
   v_class_id BIGINT;
 BEGIN
-  SET LOCAL search_path = pg_catalog, public;
-
   SELECT class_id
   INTO v_class_id
   FROM public.surveys

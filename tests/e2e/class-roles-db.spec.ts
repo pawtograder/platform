@@ -27,16 +27,16 @@
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
- * 20261122120000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * 20261122200000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
  * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
  * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
  * the capability (or a demoted former grader) cannot manage decks they made.
  *
- * 20261122120100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
+ * 20261122200100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *
- * 20261122120200_office_hours_by_capability.sql: staff help-request actions follow help_students
+ * 20261122200200_office_hours_by_capability.sql: staff help-request actions follow help_students
  * (on the default grader role and every custom role); instructor-only office-hours configuration
  * follows manage_office_hours.
  *
@@ -60,6 +60,7 @@ const SEEDED_CAPABILITIES = [
   "help_students",
   "manage_assignments",
   "manage_flashcards",
+  "manage_gradebook",
   "manage_office_hours",
   "manage_review_assignments",
   "manage_roles",
@@ -2095,7 +2096,23 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
       .single();
     expect(error).toBeNull();
 
+    const otherMembership = await createUserInClass({ email: headTa.email, role: "grader", class_id: otherClass.id });
+    expect(otherMembership.user_id).toBe(headTa.user_id);
     const client = await createAuthenticatedClient(headTa);
+    const { data: matching, error: matchingError } = await client
+      .from("flashcards")
+      .insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Matching class",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(matchingError).toBeNull();
+    expect(matching).not.toBeNull();
     expectRlsBlocked(
       await client.from("flashcards").insert({
         class_id: classH.id,
@@ -2195,12 +2212,19 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
       await client.from("flashcards").delete().eq("id", otherCard!.id).select("id"),
       "deleting another class's card"
     );
+    // The rows are hidden from headTa, so check with the service role that nothing changed.
     const { data: stillThere, error: checkError } = await supabase
       .from("flashcard_decks")
-      .select("id")
+      .select("id, description")
       .eq("id", otherDeck!.id);
     expect(checkError).toBeNull();
-    expect(stillThere ?? []).toHaveLength(1);
+    expect(stillThere ?? []).toEqual([{ id: otherDeck!.id, description: "not this class" }]);
+    const { data: cardStillThere, error: cardCheckError } = await supabase
+      .from("flashcards")
+      .select("id, title")
+      .eq("id", otherCard!.id);
+    expect(cardCheckError).toBeNull();
+    expect(cardStillThere ?? []).toEqual([{ id: otherCard!.id, title: "Other class card" }]);
   });
 });
 
@@ -2600,8 +2624,13 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       .select("id");
     expect(deleteBError).toBeNull();
     expect(deleteB ?? [], "deleting a B assignment without manage_surveys in B").toHaveLength(0);
-    const { data: stillB } = await supabase.from("survey_assignments").select("id").eq("id", assignmentB!.id);
+    const { data: stillB, error: stillBError } = await supabase
+      .from("survey_assignments")
+      .select("id, profile_id")
+      .eq("id", assignmentB!.id);
+    expect(stillBError).toBeNull();
     expect(stillB ?? []).toHaveLength(1);
+    expect(stillB?.[0].profile_id).toBe(studentB.private_profile_id);
   });
 
   test("a manage_surveys holder can repair or delete a legacy mismatched assignment", async () => {
