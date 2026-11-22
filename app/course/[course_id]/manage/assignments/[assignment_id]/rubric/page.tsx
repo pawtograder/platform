@@ -1318,18 +1318,27 @@ function InnerRubricPage() {
         activeReviewRound,
         allHydratedRubrics
       );
-      // A draft that started as a new rubric must not save over one someone else created for this
-      // round in the meantime.
-      if (draftBaseRubricIdRef.current[activeReviewRound] === 0 && (existingRubricForRound || resolvedExistingId)) {
+      // A draft saves only to the rubric it started from. One that started from a rubric that is now
+      // gone must not save over this round's new rubric, and one that started as a new rubric must
+      // not save over one someone else created for this round in the meantime.
+      const draftBaseRubricId = draftBaseRubricIdRef.current[savedRound];
+      if (draftBaseRubricId > 0 && !allHydratedRubrics.some((r) => r.id === draftBaseRubricId)) {
+        throw new RubricSaveConflictError(
+          "This round's rubric changed while you were editing, so your changes weren't saved. Copy your unsaved YAML before reloading the page to edit it."
+        );
+      }
+      if (draftBaseRubricId === 0 && (existingRubricForRound || resolvedExistingId)) {
         throw new RubricSaveConflictError(
           "A rubric for this round was just created by someone else, so your changes weren't saved. Reload the page to edit it."
         );
       }
       const rubricId =
-        (activeRubric && activeRubric.id > 0 ? activeRubric.id : 0) ||
-        existingRubricForRound?.id ||
-        resolvedExistingId ||
-        0;
+        draftBaseRubricId > 0
+          ? draftBaseRubricId
+          : (activeRubric && activeRubric.id > 0 ? activeRubric.id : 0) ||
+            existingRubricForRound?.id ||
+            resolvedExistingId ||
+            0;
 
       // Resolve cross-rubric YAML references against the live set of sibling
       // rubrics. We pass the resolved (referencing, referenced) pairs in the
