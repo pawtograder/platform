@@ -8,6 +8,9 @@
  * update_rubric_full also links a new rubric to its assignment, so a Head TA with manage_rubrics
  * but not manage_assignments can create one.
  *
+ * A part or criterion can't move to another rubric, and a reference must use its rubric's
+ * assignment.
+ *
  * PostgREST reports a blocked insert as an error, but an update or delete that RLS hides changes 0
  * rows without one, so each blocked write is checked and then confirmed through the service client.
  *
@@ -350,6 +353,105 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .eq("id", own.id)
       .single();
     expect(stillLinked!.meta_grading_rubric_id).toBe(created!.id);
+  });
+
+  test("a part or criterion can't be moved to another rubric", async () => {
+    // Another rubric in the same class, with a part, so the policies alone would allow the moves.
+    const other = await newAssignment("move");
+    const otherRubricId = other.grading_rubric_id!;
+    const { data: otherPart, error: otherPartError } = await supabase
+      .from("rubric_parts")
+      .insert({
+        class_id: classR.id,
+        assignment_id: other.id,
+        rubric_id: otherRubricId,
+        name: "Other part",
+        ordinal: 0
+      })
+      .select("id")
+      .single();
+    expect(otherPartError).toBeNull();
+
+    const client = await createAuthenticatedClient(headTa);
+    const movePart = await client
+      .from("rubric_parts")
+      .update({ rubric_id: otherRubricId })
+      .eq("id", partId)
+      .select("id");
+    expect((movePart.error as { code?: string } | null)?.code, "moving a part").toBe("23514");
+    const moveCriterion = await client
+      .from("rubric_criteria")
+      .update({ rubric_id: otherRubricId, rubric_part_id: otherPart!.id })
+      .eq("id", criteriaId)
+      .select("id");
+    expect((moveCriterion.error as { code?: string } | null)?.code, "moving a criterion").toBe("23514");
+
+    const { data: part } = await supabase.from("rubric_parts").select("rubric_id").eq("id", partId).single();
+    expect(part!.rubric_id).toBe(rowIds.rubrics);
+    const { data: criterion } = await supabase
+      .from("rubric_criteria")
+      .select("rubric_id, rubric_part_id")
+      .eq("id", criteriaId)
+      .single();
+    expect(criterion).toEqual({ rubric_id: rowIds.rubrics, rubric_part_id: partId });
+
+    // Moving a criterion to another part of the same rubric still works.
+    const base = { class_id: classR.id, assignment_id: assignment.id, rubric_id: rowIds.rubrics };
+    const { data: secondPart, error: secondPartError } = await supabase
+      .from("rubric_parts")
+      .insert({ ...base, name: "Second fixture part", ordinal: 51 })
+      .select("id")
+      .single();
+    expect(secondPartError).toBeNull();
+    const { data: movable, error: movableError } = await supabase
+      .from("rubric_criteria")
+      .insert({ ...base, rubric_part_id: partId, name: "Movable criterion", total_points: 1, is_additive: true })
+      .select("id")
+      .single();
+    expect(movableError).toBeNull();
+    const { data: moved, error: moveError } = await client
+      .from("rubric_criteria")
+      .update({ rubric_part_id: secondPart!.id })
+      .eq("id", movable!.id)
+      .select("id");
+    expect(moveError).toBeNull();
+    expect(moved ?? []).toHaveLength(1);
+  });
+
+  test("a rubric check reference must use its rubric's assignment", async () => {
+    const other = await newAssignment("ref");
+    const client = await createAuthenticatedClient(headTa);
+    const onFixture = { class_id: classR.id, rubric_id: rowIds.rubrics };
+
+    const { data: fixtureChecks } = await supabase
+      .from("rubric_checks")
+      .select("id")
+      .eq("rubric_criteria_id", criteriaId)
+      .order("ordinal")
+      .limit(2);
+    const inserted = await client
+      .from("rubric_check_references")
+      .insert({
+        ...onFixture,
+        assignment_id: other.id,
+        referencing_rubric_check_id: fixtureChecks![1].id,
+        referenced_rubric_check_id: fixtureChecks![0].id
+      })
+      .select("id");
+    expectRlsBlocked(inserted, "a reference with another assignment's id");
+
+    const updated = await client
+      .from("rubric_check_references")
+      .update({ assignment_id: other.id })
+      .eq("id", rowIds.rubric_check_references)
+      .select("id");
+    expectBlocked(updated, "moving a reference to another assignment");
+    const { data: reference } = await supabase
+      .from("rubric_check_references")
+      .select("assignment_id")
+      .eq("id", rowIds.rubric_check_references)
+      .single();
+    expect(reference!.assignment_id).toBe(assignment.id);
   });
 
   test("an instructor still saves rubrics", async () => {

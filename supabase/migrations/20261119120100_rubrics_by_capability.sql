@@ -19,6 +19,7 @@
 --      self_review_rubric_id or meta_grading_rubric_id). The editor used to write that link itself,
 --      which needs manage_assignments, so a Head TA's new rubric would have been saved but not
 --      attached.
+--   4. A rubric part or criterion can't be moved to another rubric.
 --
 -- Default graders lose the direct writes on rubrics, rubric_parts and rubric_checks. No screen or
 -- edge function used them (the editor saves through update_rubric_full, which was already
@@ -99,9 +100,10 @@ CREATE POLICY "Rubric managers can delete rubrics" ON public.rubrics
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')));
 
 -- The four child tables: the class, a rubric in that class, and parents that match. A criterion's
--- part and a check's criterion sit on the same rubric; a reference's own check sits on its rubric
--- and the check it points to is in the same class. There are no composite foreign keys, so without
--- these a row could hang off another class's part, criterion or check.
+-- part and a check's criterion sit on the same rubric; a reference's own check sits on its rubric,
+-- its assignment is the rubric's, and the check it points to is in the same class. There are no
+-- composite foreign keys, so without these a row could hang off another class's part, criterion
+-- or check.
 CREATE POLICY "Rubric managers can add rubric parts" ON public.rubric_parts
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -148,6 +150,36 @@ CREATE POLICY "Rubric managers can delete rubric criteria" ON public.rubric_crit
   FOR DELETE TO authenticated
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')));
 
+-- A part or criterion stays on the rubric it was made on. A policy can't see the old row, so the
+-- policies above would let a rubric manager move a part to another rubric in the class while its
+-- criteria stay behind, and those criteria would drop out of the rubric's totals. Nothing in the
+-- app moves them: update_rubric_full and the CLI insert new rows instead. Moving a criterion to
+-- another part of the same rubric still works.
+CREATE OR REPLACE FUNCTION public.rubric_child_keep_rubric()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
+BEGIN
+  IF NEW.rubric_id IS DISTINCT FROM OLD.rubric_id THEN
+    RAISE EXCEPTION '% % belongs to rubric % and can''t be moved to another rubric',
+      TG_TABLE_NAME, OLD.id, OLD.rubric_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS rubric_parts_keep_rubric ON public.rubric_parts;
+CREATE TRIGGER rubric_parts_keep_rubric
+  BEFORE UPDATE OF rubric_id ON public.rubric_parts
+  FOR EACH ROW EXECUTE FUNCTION public.rubric_child_keep_rubric();
+
+DROP TRIGGER IF EXISTS rubric_criteria_keep_rubric ON public.rubric_criteria;
+CREATE TRIGGER rubric_criteria_keep_rubric
+  BEFORE UPDATE OF rubric_id ON public.rubric_criteria
+  FOR EACH ROW EXECUTE FUNCTION public.rubric_child_keep_rubric();
+
 CREATE POLICY "Rubric managers can add rubric checks" ON public.rubric_checks
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -182,6 +214,7 @@ CREATE POLICY "Rubric managers can add rubric check references" ON public.rubric
     AND EXISTS (
       SELECT 1 FROM public.rubrics r
       WHERE r.id = rubric_check_references.rubric_id AND r.class_id = rubric_check_references.class_id
+        AND r.assignment_id = rubric_check_references.assignment_id
     )
     AND EXISTS (
       SELECT 1 FROM public.rubric_checks c
@@ -203,6 +236,7 @@ CREATE POLICY "Rubric managers can edit rubric check references" ON public.rubri
     AND EXISTS (
       SELECT 1 FROM public.rubrics r
       WHERE r.id = rubric_check_references.rubric_id AND r.class_id = rubric_check_references.class_id
+        AND r.assignment_id = rubric_check_references.assignment_id
     )
     AND EXISTS (
       SELECT 1 FROM public.rubric_checks c
