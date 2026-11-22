@@ -10,7 +10,7 @@ import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
   useClassSections,
@@ -632,10 +632,17 @@ export function AdjustDueDateDialog({
   assignment: Assignment;
 }) {
   const [open, setOpen] = useState(false);
+  // Granting and deleting an extension follow grant_extensions (#1010). On this page, a submission
+  // page and a student's page, both go through this dialog.
+  const canGrantExtensions = useCapability("grant_extensions");
 
   const handleOpenChange = useCallback((details: { open: boolean }) => {
     setOpen(details.open);
   }, []);
+
+  if (!canGrantExtensions) {
+    return null;
+  }
 
   return (
     <Dialog.Root size="xl" open={open} onOpenChange={handleOpenChange} lazyMount>
@@ -699,6 +706,8 @@ export default function DueDateExceptions() {
   const course = useCourse();
   const { assignment_id } = useParams();
   const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
+  // Anyone on staff can read this page; the bulk actions need grant_extensions (#1010).
+  const canGrantExtensions = useCapability("grant_extensions");
   // TableControllers already hydrate/fetch and stay realtime; avoid forced mount refetches on large classes.
   const controller = useCourseController();
 
@@ -1244,39 +1253,44 @@ export default function DueDateExceptions() {
       </Box>
 
       <VStack w="100%" gap={0}>
-        {selectedRows.length === 0 ? (
-          <Box w="100%" mb={2}>
-            <Text fontSize="sm" color="fg.muted">
-              Select students below to extend or set their deadline in bulk.
-            </Text>
-          </Box>
-        ) : (
-          <HStack alignItems="center" gap={2} w="100%" mb={2}>
-            <Text fontSize="sm" fontWeight="medium" whiteSpace="nowrap">
-              {selectedRows.length} selected
-            </Text>
-            <Button colorPalette="green" variant="subtle" onClick={() => setBulkAction("extend")}>
-              Add extension
-            </Button>
-            <Button colorPalette="green" variant="subtle" onClick={() => setBulkAction("set")}>
-              Set due date to...
-            </Button>
-          </HStack>
+        {canGrantExtensions &&
+          (selectedRows.length === 0 ? (
+            <Box w="100%" mb={2}>
+              <Text fontSize="sm" color="fg.muted">
+                Select students below to extend or set their deadline in bulk.
+              </Text>
+            </Box>
+          ) : (
+            <HStack alignItems="center" gap={2} w="100%" mb={2}>
+              <Text fontSize="sm" fontWeight="medium" whiteSpace="nowrap">
+                {selectedRows.length} selected
+              </Text>
+              <Button colorPalette="green" variant="subtle" onClick={() => setBulkAction("extend")}>
+                Add extension
+              </Button>
+              <Button colorPalette="green" variant="subtle" onClick={() => setBulkAction("set")}>
+                Set due date to...
+              </Button>
+            </HStack>
+          ))}
+        {canGrantExtensions && (
+          <>
+            <BulkAddExtensionDialog
+              open={bulkAction === "extend"}
+              setOpen={(open) => setBulkAction(open ? "extend" : null)}
+              targets={bulkTargets}
+              assignment={assignment}
+              onApplied={() => table.resetRowSelection()}
+            />
+            <BulkSetDeadlineDialog
+              open={bulkAction === "set"}
+              setOpen={(open) => setBulkAction(open ? "set" : null)}
+              targets={bulkTargets}
+              assignment={assignment}
+              onApplied={() => table.resetRowSelection()}
+            />
+          </>
         )}
-        <BulkAddExtensionDialog
-          open={bulkAction === "extend"}
-          setOpen={(open) => setBulkAction(open ? "extend" : null)}
-          targets={bulkTargets}
-          assignment={assignment}
-          onApplied={() => table.resetRowSelection()}
-        />
-        <BulkSetDeadlineDialog
-          open={bulkAction === "set"}
-          setOpen={(open) => setBulkAction(open ? "set" : null)}
-          targets={bulkTargets}
-          assignment={assignment}
-          onApplied={() => table.resetRowSelection()}
-        />
 
         {/* Column Visibility Controls */}
         <Box w="100%" p={4} bg="bg.subtle" borderRadius="md" mb={0}>

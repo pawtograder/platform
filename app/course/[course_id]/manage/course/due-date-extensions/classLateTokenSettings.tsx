@@ -78,13 +78,10 @@ export default function ClassLateTokenSettings() {
     }
   });
 
-  // Verify instructor access
+  // Changing the allocation is instructor-only (update_class_late_tokens_per_student). Graders with
+  // grant_extensions reach this page too (#1010), so for them the card is left out.
   if (!role || role.role !== "instructor") {
-    return (
-      <Box p={6}>
-        <Text>Access denied. This page is only available to instructors.</Text>
-      </Box>
-    );
+    return null;
   }
 
   if (!course || !assignments) {

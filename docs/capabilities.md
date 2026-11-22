@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`, `20261126150200_grading_and_release_by_capability.sql`, `20261126150300_regrades_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`, `20261126150200_grading_and_release_by_capability.sql`, `20261126150300_regrades_by_capability.sql`, `20261122150200_extensions_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -221,6 +221,14 @@ It covers resolving a request and commenting on any request as staff. Closing an
 and editing a request's points stay instructor-only (`authorizeforclassinstructor`), so a grader
 with `handle_regrades` still can't make the final decision. Every grader and instructor of the class
 can read its regrade requests with or without the capability.
+
+Like `handle_regrades`, **`grant_extensions`** is on the default grader role and on every custom
+role, because any grader could grant an extension before it existed.
+It covers adding, editing and deleting a student's extension on one assignment
+(`assignment_due_date_exceptions`) and a student's class-wide extension
+(`student_deadline_extensions`). Gifting late tokens and setting the class's late token allocation
+stay instructor-only. Every grader and instructor of the class can read its extensions with or without
+the capability, and students still use their own late tokens.
 
 ## For the UI: useCapability
 

@@ -44,6 +44,9 @@
  * 20261126150300_regrades_by_capability.sql: handle_regrades is also on the default grader role, so a
  * new custom role copies it (DEFAULT_GRADER_CAPABILITIES).
  *
+ * 20261122150200_extensions_by_capability.sql: grant_extensions is also on the default grader role,
+ * so a new custom role copies it (DEFAULT_GRADER_CAPABILITIES).
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -60,6 +63,7 @@ import {
 
 const SEEDED_CAPABILITIES = [
   "grade_submissions",
+  "grant_extensions",
   "handle_regrades",
   "manage_assignments",
   "manage_flashcards",
@@ -1079,6 +1083,7 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
   test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
     expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
       `${classF.id}:grade_submissions`,
+      `${classF.id}:grant_extensions`,
       `${classF.id}:handle_regrades`,
       `${classF.id}:manage_flashcards`,
       `${classF.id}:manage_review_assignments`,
@@ -1087,6 +1092,7 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     ]);
     expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
       `${classF.id}:grade_submissions`,
+      `${classF.id}:grant_extensions`,
       `${classF.id}:handle_regrades`,
       `${classF.id}:manage_flashcards`,
       `${classF.id}:publish_groups`,

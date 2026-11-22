@@ -5,6 +5,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAllStudentProfiles, useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useModalManager from "@/hooks/useModalManager";
@@ -56,6 +57,8 @@ export default function DueDateExceptionsTable() {
 
   const addOpen = useModalManager<AddExtensionDefaults>();
   const giftOpen = useModalManager<GiftTokenDefaults>();
+  // gift_tokens_to_student stays instructor-only; everyone who reaches this page holds grant_extensions.
+  const isInstructor = useIsInstructor();
   const assignmentFilter = useModalManager<number | undefined>();
   const studentFilter = useModalManager<string | undefined>();
   const tokenFilter = useModalManager<"any" | "has" | "none">();
@@ -260,9 +263,11 @@ export default function DueDateExceptionsTable() {
           <Button onClick={() => addOpen.openModal({})}>
             <Icon as={FaPlus} /> Add Exception
           </Button>
-          <Button onClick={() => giftOpen.openModal({})}>
-            <Icon as={FaGift} /> Gift Tokens
-          </Button>
+          {isInstructor && (
+            <Button onClick={() => giftOpen.openModal({})}>
+              <Icon as={FaGift} /> Gift Tokens
+            </Button>
+          )}
         </HStack>
       </HStack>
 
