@@ -89,7 +89,11 @@ test.describe("user_onboarding_seen RLS", () => {
     expect(error?.code).toBe("42501");
   });
 
-  test("keys are lowercase words joined by dashes", async () => {
+  test("keys are lowercase words joined by dashes or colons", async () => {
+    // A colon can mark a guide's version, as the escalation walkthrough in #1261 does.
+    const { error: versioned } = await clientB.from("user_onboarding_seen").insert({ key: "oh-escalation:v1" });
+    expect(versioned).toBeNull();
+
     const { error } = await clientA.from("user_onboarding_seen").insert({ key: "Office Hours" });
     expect(error?.code).toBe("23514");
   });
