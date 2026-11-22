@@ -494,6 +494,19 @@ function InnerRubricPage() {
       }
     >
   >({});
+  // For each round with unsaved changes: the id of the rubric the draft started from, or 0 if it
+  // started as a new rubric. activeRubric can't tell: when someone else creates this round's rubric,
+  // the effect below swaps it in while the draft text stays, so a save would overwrite theirs.
+  const draftBaseRubricIdRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!activeReviewRound) return;
+    if (!hasUnsavedChanges) {
+      delete draftBaseRubricIdRef.current[activeReviewRound];
+    } else if (!(activeReviewRound in draftBaseRubricIdRef.current)) {
+      draftBaseRubricIdRef.current[activeReviewRound] = activeRubric && activeRubric.id > 0 ? activeRubric.id : 0;
+    }
+  }, [hasUnsavedChanges, activeReviewRound, activeRubric]);
+
   const rubric = useHydratedRubricByReviewRound(activeReviewRound);
   useEffect(() => {
     setActiveRubric(rubric);
@@ -1298,6 +1311,13 @@ function InnerRubricPage() {
         activeReviewRound,
         allHydratedRubrics
       );
+      // A draft that started as a new rubric must not save over one someone else created for this
+      // round in the meantime.
+      if (draftBaseRubricIdRef.current[activeReviewRound] === 0 && (existingRubricForRound || resolvedExistingId)) {
+        throw new RubricSaveConflictError(
+          "A rubric for this round was just created by someone else, so your changes weren't saved. Reload the page to edit it."
+        );
+      }
       const rubricId =
         (activeRubric && activeRubric.id > 0 ? activeRubric.id : 0) ||
         existingRubricForRound?.id ||

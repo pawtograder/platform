@@ -127,4 +127,41 @@ test.describe("rubric editing gated by manage_rubrics", () => {
       )
       .toContain(newName);
   });
+
+  // Editing an existing rubric after switching round tabs still saves to it: only a draft that
+  // started as a new rubric is refused when one now exists.
+  test("a Head TA's edit still saves after switching round tabs and back", async ({ page }) => {
+    await loginAsUser(page, headTa, course);
+    await page.goto(`${assignmentUrl()}/rubric`);
+    const gradingTab = rubricEditor(page).getByRole("tab", {
+      name: /^\s*Grading Review\s*(\*\s*\(Unsaved Changes\))?\s*$/i
+    });
+    const selfReviewTab = rubricEditor(page).getByRole("tab", {
+      name: /^\s*Self Review\s*(\*\s*\(Unsaved Changes\))?\s*$/i
+    });
+    await gradingTab.click();
+    await selfReviewTab.click();
+    await expect(selfReviewTab).toHaveAttribute("aria-selected", "true");
+    await gradingTab.click();
+    await expect(gradingTab).toHaveAttribute("aria-selected", "true");
+
+    const firstPart = rubricEditor(page).getByRole("region", { name: /^Part 1:/ });
+    await firstPart.scrollIntoViewIfNeeded();
+    const newName = `Head TA tab part ${Date.now().toString(36)}`;
+    await firstPart.getByLabel("Name").first().fill(newName);
+    await rubricEditor(page).getByRole("button", { name: "Save" }).click();
+
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("rubric_parts")
+            .select("name")
+            .eq("rubric_id", assignment.grading_rubric_id!);
+          return (data ?? []).map((part) => part.name);
+        },
+        { timeout: 30_000 }
+      )
+      .toContain(newName);
+  });
 });
