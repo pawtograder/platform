@@ -11652,32 +11652,6 @@ export type Database = {
           }
         ];
       };
-      user_onboarding_seen: {
-        Row: {
-          key: string;
-          seen_at: string;
-          user_id: string;
-        };
-        Insert: {
-          key: string;
-          seen_at?: string;
-          user_id?: string;
-        };
-        Update: {
-          key?: string;
-          seen_at?: string;
-          user_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "user_onboarding_seen_user_id_fkey";
-            columns: ["user_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
-          }
-        ];
-      };
       user_privileges: {
         Row: {
           class_id: number;

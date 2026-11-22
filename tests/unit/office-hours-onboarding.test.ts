@@ -202,7 +202,7 @@ describe("nextOfficeHoursStart", () => {
 });
 
 describe("onboardingCompletedFrom", () => {
-  it("is complete only when the student has a row in user_onboarding_seen", async () => {
+  it("is complete only when the student has a row in user_whats_new_seen", async () => {
     await expect(onboardingCompletedFrom(async () => false)).resolves.toBe(false);
     await expect(onboardingCompletedFrom(async () => true)).resolves.toBe(true);
   });

@@ -145,7 +145,7 @@ export function OfficeHoursHeader({
   //
   // Only a student on the student pages of a course with the feature on takes part. For everyone
   // else, clicking New Request doesn't mark the onboarding complete, and nothing reads or writes
-  // user_onboarding_seen.
+  // user_whats_new_seen.
   const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
   const isStudent = useIsStudent();
   const onboardingActive = onboardingOn && isStudent && !isManageMode;

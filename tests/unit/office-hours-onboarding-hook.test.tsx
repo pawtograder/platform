@@ -37,7 +37,7 @@ jest.mock("@/lib/TableController", () => ({
   useIsTableControllerReady: (table: object) => loadedTables.has(table)
 }));
 
-/** A read of user_onboarding_seen that the test finishes when it wants to. */
+/** A read of user_whats_new_seen that the test finishes when it wants to. */
 function pendingRead() {
   let finish: (seen: boolean) => void = () => undefined;
   const promise = new Promise<boolean>((resolve) => {
@@ -47,8 +47,8 @@ function pendingRead() {
   return finish;
 }
 
-// The student's row in user_onboarding_seen. The table's RLS is tested against a real database in
-// tests/e2e/user-onboarding-seen-db.spec.ts.
+// The student's row in user_whats_new_seen. The table's RLS is tested against a real database in
+// tests/e2e/user-whats-new-seen-db.spec.ts.
 const fakeClient = {};
 jest.mock("@/utils/supabase/client", () => ({ createClient: () => fakeClient }));
 jest.mock("@/lib/onboardingSeen", () => ({

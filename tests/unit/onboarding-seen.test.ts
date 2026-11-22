@@ -1,7 +1,7 @@
 /**
- * The client side of user_onboarding_seen (lib/onboardingSeen.ts). The table's RLS is checked
- * against a real database in tests/e2e/user-onboarding-seen-db.spec.ts. These tests check which
- * queries the helpers send and how they report the results.
+ * The client side of the onboarding guides' rows in user_whats_new_seen (lib/onboardingSeen.ts).
+ * The table's RLS is checked against a real database in tests/e2e/user-whats-new-seen-db.spec.ts
+ * (#1261). These tests check which queries the helpers send and how they report the results.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -22,11 +22,11 @@ function fakeClient(result: { data?: unknown; error?: unknown }) {
 }
 
 describe("hasSeenOnboarding", () => {
-  it("reads the guide's row from user_onboarding_seen", async () => {
-    const fake = fakeClient({ data: { key: KEY } });
+  it("reads the guide's row from user_whats_new_seen", async () => {
+    const fake = fakeClient({ data: { item: KEY } });
     await expect(hasSeenOnboarding(fake.client, KEY)).resolves.toBe(true);
-    expect(fake.from).toHaveBeenCalledWith("user_onboarding_seen");
-    expect(fake.eq).toHaveBeenCalledWith("key", KEY);
+    expect(fake.from).toHaveBeenCalledWith("user_whats_new_seen");
+    expect(fake.eq).toHaveBeenCalledWith("item", KEY);
   });
 
   it("says not seen when the user has no row for the guide", async () => {
@@ -40,11 +40,11 @@ describe("hasSeenOnboarding", () => {
 });
 
 describe("markOnboardingSeen", () => {
-  it("inserts the key and lets the database fill in the user", async () => {
+  it("inserts the guide as the item and lets the database fill in the user", async () => {
     const fake = fakeClient({});
     await markOnboardingSeen(fake.client, KEY);
-    expect(fake.from).toHaveBeenCalledWith("user_onboarding_seen");
-    expect(fake.upsert).toHaveBeenCalledWith({ key: KEY }, { onConflict: "user_id,key", ignoreDuplicates: true });
+    expect(fake.from).toHaveBeenCalledWith("user_whats_new_seen");
+    expect(fake.upsert).toHaveBeenCalledWith({ item: KEY }, { onConflict: "user_id,item", ignoreDuplicates: true });
   });
 
   it("throws when the insert fails", async () => {

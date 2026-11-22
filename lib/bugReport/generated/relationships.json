@@ -2817,10 +2817,6 @@
       }
     ]
   },
-  "user_onboarding_seen": {
-    "kind": "table",
-    "fks": [{ "name": "user_onboarding_seen_user_id_fkey", "columns": ["user_id"], "ref": "users" }]
-  },
   "user_privileges": { "kind": "table", "fks": [] },
   "user_roles": {
     "kind": "table",

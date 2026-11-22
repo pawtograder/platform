@@ -10,10 +10,10 @@
  *
  * The student sees these hints on every visit until they click New Request while it is enabled.
  * After that, the onboarding is complete and no hint opens on its own again. Completion is stored
- * per user in user_onboarding_seen (lib/onboardingSeen.ts), so it holds on every browser and device.
+ * per user in user_whats_new_seen (lib/onboardingSeen.ts), so it holds on every browser and device.
  *
  * All of it is behind the course feature "office-hours-student-onboarding", which is off by default.
- * With the feature off, no hint opens, nothing reads or writes user_onboarding_seen, and the new
+ * With the feature off, no hint opens, nothing reads or writes user_whats_new_seen, and the new
  * request form keeps the helper text it had before.
  *
  * Everything in this file is a pure function, so the rules can be tested without rendering the
@@ -175,7 +175,7 @@ export function nextOfficeHoursStart(events: readonly { start_time: string }[], 
 
 /**
  * Whether this student has completed the onboarding, given a call that reads their row in
- * user_onboarding_seen.
+ * user_whats_new_seen.
  *
  * If the read fails, this says completed. Otherwise the hints would open on every page load while
  * the database can't be reached, and the click that completes the onboarding couldn't be saved.

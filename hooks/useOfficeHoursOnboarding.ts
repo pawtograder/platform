@@ -16,7 +16,7 @@ import { createClient } from "@/utils/supabase/client";
  *   when it mounts and removes it when it unmounts.
  * - `dismissed` holds the hints the student closed since the page loaded. It is kept in memory
  *   only, so the hints come back on the next page load until the onboarding is complete.
- * - `completed` comes from the student's row in user_onboarding_seen. It is null until that read
+ * - `completed` comes from the student's row in user_whats_new_seen. It is null until that read
  *   finishes, and the read happens once per profile, the first time an active component asks.
  * - `owner` is the class profile that `completed` and `dismissed` belong to. Signing out and in as
  *   someone else, or moving to another course, doesn't always reload the page, so when the profile
@@ -73,7 +73,7 @@ function readCompletedOnce() {
 /**
  * Whether this student has completed the onboarding.
  *
- * This returns true until the student's row in user_onboarding_seen has been read, so no hint opens
+ * This returns true until the student's row in user_whats_new_seen has been read, so no hint opens
  * during the server render or before the answer arrives. If the read fails, it stays true.
  *
  * `active` is false when the course hasn't turned the feature on, or the user isn't a student
