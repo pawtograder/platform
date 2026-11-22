@@ -1425,8 +1425,7 @@ export async function validateOIDCTokenOrAllowE2E(
       typ: string;
       kid: string;
     };
-    // For E2E, we allow the kid to be either the secret or 'not-a-secret' (the default)
-    if (header.kid !== END_TO_END_SECRET && header.kid !== "not-a-secret") {
+    if (header.kid !== END_TO_END_SECRET) {
       throw new SecurityError("E2E repo provided, but secret is incorrect");
     }
     // E2E repos live in the GitHub playground org.
