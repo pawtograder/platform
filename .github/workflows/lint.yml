@@ -397,6 +397,8 @@ jobs:
             tests/unit/exam-region-math.test.ts \
             tests/unit/exam-split.test.ts \
             tests/unit/exam-to-surveyjs.test.ts \
+            tests/unit/issue-1013-use-now.test.ts \
+            tests/unit/issue-1013-refresh-current-page.test.ts \
             tests/unit/useCapability.test.tsx \
             tests/unit/course-gemini-key.test.ts \
             tests/unit/course-gemini-key-panel.test.tsx \

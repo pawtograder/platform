@@ -232,10 +232,9 @@ test.describe("Student dashboard survey countdown", () => {
       await showAgain(page);
       await answered;
 
-      // Still failing through a second show, so what the student sees is checked while the failure
-      // lasts. Retried because the page handles a failure a moment after the route answers it. Not
-      // required: a stopped router sends no second refresh, and the new card below is what must catch
-      // that, on what the student sees and not on this count.
+      // This poll only drives repeated shows while the failure lasts. Its timeout is ignored:
+      // a stopped router sends no second refresh. The visible card and the new survey below
+      // check that the dashboard survives the failure and refreshes after it.
       await expect
         .poll(
           async () => {
