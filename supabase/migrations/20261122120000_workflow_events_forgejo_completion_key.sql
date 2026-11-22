@@ -1,6 +1,4 @@
--- One workflow_events row per Forgejo run completion; forgejo-repo-webhook treats a unique violation as
--- "already logged". Re-runs keep the run id, so run_updated_at (the stop time) keeps them distinct.
--- Plain CREATE INDEX: migrate.sh runs each migration in one transaction, where CONCURRENTLY fails.
+-- Not CONCURRENTLY: migrate.sh runs each migration in a transaction, where CONCURRENTLY fails.
 
 DELETE FROM public.workflow_events a
 USING public.workflow_events b

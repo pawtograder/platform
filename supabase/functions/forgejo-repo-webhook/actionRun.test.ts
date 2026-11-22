@@ -269,7 +269,6 @@ const noResultsWritten = (inserts: { table: string }[], upserts: unknown[]) => {
 Deno.test(
   "a later attempt's submission within the skew allowance of the stop makes the attempt ambiguous",
   async () => {
-    // Attempt 1 stopped at 16:55:02; attempt 2's submission 3s later could be either side of it.
     const { client, inserts, upserts } = fakeSupabase(
       tables({
         submissions: [
@@ -304,7 +303,6 @@ Deno.test("without start and stop times no attempt is guessed", async () => {
 });
 
 Deno.test("a re-run that made no submission is not credited with the earlier attempt's", async () => {
-  // Attempt 2 started at 17:00 (a re-run resets `started`); attempt 1's submission predates it.
   const run = actionRunPayload(FORGEJO_URL).run;
   run.started = "2026-11-09T17:00:00Z";
   run.stopped = "2026-11-09T17:05:00Z";
@@ -330,9 +328,7 @@ Deno.test("attributeRunAttempt: only a submission strictly inside the run's wind
     submissions: [s(1, "2026-11-09T16:54:00.000Z")],
     ambiguous: false
   });
-  // Just before the start is within the skew allowance: ambiguous.
   assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:53:38.000Z")], start, stop).ambiguous, true);
-  // Two attempts inside one window: ambiguous.
   assertEquals(
     attributeRunAttempt([s(1, "2026-11-09T16:54:00.000Z"), s(2, "2026-11-09T16:54:30.000Z")], start, stop).ambiguous,
     true

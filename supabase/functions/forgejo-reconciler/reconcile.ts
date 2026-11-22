@@ -430,10 +430,7 @@ export const PASS_STEPS = {
   orgHooks: reconcileForgejoOrgHooks
 };
 
-/**
- * One pass: revocation first, since it has no other trigger and nothing later may time the pass out before
- * it; then accounts, so new students get repos in the same pass; then repos, group repos, hashes, org hooks.
- */
+/** Revocation runs first: it has no other trigger, and a later step may time the pass out. */
 export async function reconcileForgejo(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
@@ -444,7 +441,6 @@ export async function reconcileForgejo(
   try {
     revocation = await steps.revoke(supabase, config);
   } catch (e) {
-    // A failed revocation list must not hold up account and repo creation; the pass still fails below.
     revocationError = e;
   }
   let stepError: unknown;

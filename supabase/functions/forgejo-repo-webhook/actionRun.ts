@@ -67,16 +67,11 @@ type RunSubmission = {
   created_at: string;
 };
 
-/** Forgejo-to-DB clock skew: a submission this close outside a run's window can't be placed with confidence. */
 const CLOCK_SKEW_MS = 5_000;
 
 export type RunAttribution = { runAttempt: number; submissions: RunSubmission[]; ambiguous: boolean };
 
-/**
- * Forgejo sends no attempt number, re-runs keep the run id, and a re-run resets `started`, so the attempt is
- * the one whose submissions were created inside [started, stopped]. Results are written only when that is
- * certain: missing times, or a submission within the skew allowance of either edge, leave them unwritten.
- */
+/** Forgejo sends no attempt number, and a re-run keeps the run id but resets `started`. */
 export function attributeRunAttempt(
   submissions: RunSubmission[],
   startedAt: string | null,
@@ -203,7 +198,6 @@ async function insertWorkflowEvent(
     pull_requests: null,
     payload: { provider: "forgejo", run } as unknown as Json
   });
-  // workflow_events_forgejo_completion_key: this completion is already logged; the rest of the handler is idempotent.
   if (insertError?.code === "23505") {
     scope.setTag("duplicate_action_run", "true");
     return;

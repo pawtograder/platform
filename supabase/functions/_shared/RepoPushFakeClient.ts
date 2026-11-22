@@ -61,7 +61,6 @@ export function fakeSupabase(
   tables: Record<string, Row[]>,
   opts: {
     insertError?: { code: string; message: string };
-    /** A unique index per table: rows with the same non-null key collide with 23505. */
     uniqueKeys?: Record<string, (row: Row) => string | null>;
   } = {}
 ) {
