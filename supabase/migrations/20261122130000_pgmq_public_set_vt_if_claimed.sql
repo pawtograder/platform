@@ -435,10 +435,12 @@ begin
   -- were still in flight) queued those exams again, and two finalizes of one exam can then run at
   -- the same time (they duplicate the submission's page-file rows). Lock the batch, after the staff
   -- check so no one else can hold it, so two Creates run one after the other, and refuse while any
-  -- finalize message for this batch is still queued. A message stays queued until its worker
-  -- acknowledges, re-queues or gives it up, so this covers one that is running. With none queued,
-  -- Create works as before, including on a batch left in 'finalizing' with nothing behind it, which
-  -- it can still restart.
+  -- finalize message for this batch is still queued. A message stays queued until the reader that
+  -- holds it acknowledges, re-queues or gives it up, so this covers a finalize that reader is
+  -- running. It does not cover a former reader still running after its lease lapsed and another
+  -- reader disposed of the message (the remaining duplicate-finalize case, tracked separately).
+  -- With none queued, Create works as before, including on a batch left in 'finalizing' with
+  -- nothing behind it, which it (the CLI's `exams scans finalize`, or the RPC) can still restart.
   perform 1 from public.exam_scan_batches b where b.id = p_batch_id for update;
   if exists (
     select 1 from pgmq.q_exam_processing q

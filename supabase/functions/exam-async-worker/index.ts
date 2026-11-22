@@ -1094,7 +1094,10 @@ async function runBatch(): Promise<number> {
       console.warn(`[exam-async-worker] ${status.reason}; not claiming until the migration is applied`);
       if (!contractGapReported) {
         contractGapReported = true;
-        Sentry.captureMessage(`exam-async-worker is not claiming: ${status.reason}`, "warning");
+        Sentry.captureMessage(`exam-async-worker is not claiming: ${status.reason}`, {
+          level: "warning",
+          tags: { function: "exam-async-worker" }
+        });
       }
       log(`run done: 0 message(s) attempted, 0 failed, in ${Date.now() - startedAt}ms`);
       return 0;

@@ -992,10 +992,26 @@ test.describe("Create refuses a batch that is already creating submissions (#115
       );
       expect(await queuedFor()).toBe(1);
 
-      // With nothing queued, Create works: on a batch whose finalize failed (error), and on one left
-      // in 'finalizing' with nothing behind it, which it can still restart.
+      // With no finalize for this batch queued, Create works, whatever else is queued: another
+      // method for this batch, or another batch's finalize. Hidden, so no worker runs them.
       await drop();
-      expect(await createHidden()).toBe(1);
+      const other = await seedBatch("review");
+      const unrelated = await monitor.query<{ id: string }>(
+        "SELECT pgmq.send('exam_processing', m, 3600) AS id FROM (VALUES " +
+          "(jsonb_build_object('method','match','class_id',$1::bigint,'batch_id',$2::bigint,'args',jsonb_build_object('batch_id',$2::bigint)))," +
+          "(jsonb_build_object('method','finalize','class_id',$3::bigint,'batch_id',$4::bigint,'args',jsonb_build_object('scanned_submission_id',-1)))" +
+          ") AS v(m)",
+        [classId, batchId, other.classId, other.batchId]
+      );
+      try {
+        // With nothing queued, Create works: on a batch whose finalize failed (error), and on one
+        // left in 'finalizing' with nothing behind it, which it can still restart.
+        expect(await createHidden()).toBe(1);
+      } finally {
+        await monitor.query("SELECT pgmq.archive('exam_processing', id::bigint) FROM unnest($1::text[]) AS id", [
+          unrelated.rows.map((r) => r.id)
+        ]);
+      }
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
       await drop();
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
