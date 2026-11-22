@@ -910,6 +910,12 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   const env = msg.message;
   scope.setTag("exam_method", env.method);
   scope.setTag("batch_id", String(env.batch_id));
+  // #1293: every captureException below is a give-up. This says whether the budget ran out on the
+  // first failure or the sixth, which is the difference between a hard failure and a provider
+  // having a bad few minutes -- the context the per-retry events used to carry before they stopped
+  // being sent. One exception (#1158): a reader that was taken over captures before giveUp finds
+  // that out and leaves the batch, the DLQ and the archive to the new holder, which carries on.
+  scope.setTag("attempt", String((env.retry_count ?? 0) + 1));
   const fence: Fence = { msgId: msg.msg_id, readCt: msg.read_ct };
 
   // A message that used up its budget errors its batch, then goes to the DLQ. If the batch write
@@ -949,8 +955,11 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
     await archive(admin, msg.msg_id);
   } catch (error) {
     if (error instanceof NotOwnerError) {
-      // Another reader holds this message now; it requeues, dead-letters or archives it.
-      console.warn(`exam-async-worker: ${error.message} (msg ${msg.msg_id}); stopping without side effects`);
+      // Another reader holds this message now; it requeues, dead-letters or archives it. This
+      // reader stops here. Writes it made earlier in the handler stay, and rely on their own guards.
+      console.warn(
+        `exam-async-worker: ${error.message} (msg ${msg.msg_id}); stopping, leaving the message to its holder`
+      );
       return;
     }
     if (error instanceof ScanPathRejectedError) {
@@ -970,7 +979,15 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
         await giveUp(error);
         return;
       }
-      // requeue this message with the provider's backoff; archive the current copy
+      // requeue this message with the provider's backoff; archive the current copy.
+      // This path never captured, so #1293 changes nothing here beyond making the retry visible
+      // in the logs the same way the transient path below now is. Logged separately from that
+      // one because a run full of rate limits means the quota is too small, while a run full of
+      // transient errors means the provider is unwell, and those want different responses.
+      log(
+        `rate-limit retry ${(env.retry_count ?? 0) + 1} for ${env.method} ` +
+          `(batch ${env.batch_id}) in ${error.retryAfterSeconds}s`
+      );
       await requeue(admin, env, error.retryAfterSeconds);
       await archive(admin, msg.msg_id);
       return;
@@ -982,8 +999,22 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       return;
     }
     // transient: requeue with exponential backoff
-    Sentry.captureException(error, scope);
+    //
+    // #1293: deliberately no captureException. Reaching here is the backoff working, not a
+    // failure -- the message is requeued and the next attempt usually succeeds. #1132 made
+    // transient provider failures propagate here instead of being swallowed, so capturing meant a
+    // 200-student finalize (about 1800 provider calls) could raise hundreds of Sentry events for
+    // a condition handled correctly and silently, burying the give-up paths above that actually
+    // need triage.
+    //
+    // The retry stays observable without them: this line makes the rate queryable in the function
+    // logs, and the `attempt` tag set at the top of this function tells any event that IS captured
+    // how many tries the message had already used.
     const delay = Math.min(300, 10 * Math.pow(2, retryCount));
+    log(
+      `retry ${retryCount + 1} for ${env.method} (batch ${env.batch_id}) in ${delay}s: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+    );
     await requeue(admin, env, delay);
     await archive(admin, msg.msg_id);
   }
