@@ -380,7 +380,8 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await loginAsUser(page, student, flagOn);
     await page.goto(`/course/${flagOn.id}/assignments`);
     await expect(page.getByRole("cell", { name: repository, exact: true }).first()).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByRole("columnheader", { name: "Repository", exact: true }).first()).toBeVisible();
+    // The header row's cells have the cell role, not columnheader.
+    await expect(page.getByRole("cell", { name: "Repository", exact: true }).first()).toBeVisible();
     await expect(page.getByText("GitHub Repository")).toHaveCount(0);
   });
 
