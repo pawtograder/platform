@@ -560,7 +560,10 @@ class FakeDb implements WorkspaceDb {
     return r ? { ...r } : null;
   }
   async updateWorkspaceRow(id: number, patch: Parameters<WorkspaceDb["updateWorkspaceRow"]>[1]) {
-    Object.assign(this.rows.find((r) => r.id === id)!, patch);
+    Object.assign(
+      this.rows.find((r) => r.id === id)!,
+      patch
+    );
   }
   restartClaims = 0;
   // Each is synchronous once called, like the single UPDATE it stands for.
@@ -685,14 +688,17 @@ Deno.test(
   }
 );
 
-Deno.test("an expired CODER_API_TOKEN: a 401 from Coder is an operator error naming the token, not a generic 500", async () => {
-  const { coder, deps } = setup();
-  coder.failOwnerAuth = true;
-  const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
-  assertEquals(err.status, 502);
-  assert(err.details.includes("CODER_API_TOKEN"), err.details);
-  assert(err.details.includes("coder tokens create --lifetime"), err.details);
-});
+Deno.test(
+  "an expired CODER_API_TOKEN: a 401 from Coder is an operator error naming the token, not a generic 500",
+  async () => {
+    const { coder, deps } = setup();
+    coder.failOwnerAuth = true;
+    const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
+    assertEquals(err.status, 502);
+    assert(err.details.includes("CODER_API_TOKEN"), err.details);
+    assert(err.details.includes("coder tokens create --lifetime"), err.details);
+  }
+);
 
 Deno.test("a lost account row: the 409 adopts our own unbound user, and one bound to the caller", async () => {
   const { coder, db, deps } = setup();
