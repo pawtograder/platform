@@ -8,7 +8,7 @@ import {
   useReferencingRubricChecks,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useCapabilityOnceLoaded, useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { fetchPostgrestAllPages, PossiblyTentativeResult } from "@/lib/TableController";
@@ -969,20 +969,31 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
   const assignments = useMyReviewAssignments(id);
 
   const { role } = useClassProfiles();
+  // #1010: staff write reviews by capability, as the comment and review policies decide. Until the
+  // capabilities load, use the old role rule (the same answer for the default roles), so a page
+  // that validates its URL against these reviews doesn't drop a review the viewer can write.
+  const isStaff = role.role === "instructor" || role.role === "grader";
+  const loadedCanRelease = useCapabilityOnceLoaded("release_grades");
+  const loadedCanGrade = useCapabilityOnceLoaded("grade_submissions");
+  const canReleaseGrades = loadedCanRelease ?? role.role === "instructor";
+  const canGradeSubmissions = loadedCanGrade ?? isStaff;
   const memoizedReviews = useMemo(() => {
     const writableRubrics: Rubric[] = [];
-    if (role.role === "instructor") {
-      writableRubrics.push(...rubrics);
-    }
-    if (role.role === "grader") {
-      writableRubrics.push(
-        ...rubrics.filter(
-          (r) =>
-            r.review_round === "grading-review" ||
-            r.review_round === "code-walk" ||
-            assignments.some((a) => a.rubric_id === r.id)
-        )
-      );
+    if (isStaff) {
+      if (canReleaseGrades) {
+        // release_grades: any review in the class.
+        writableRubrics.push(...rubrics);
+      } else {
+        // grade_submissions: the grading and code-walk reviews. Anyone on staff: reviews they are
+        // assigned to (the assignee policies don't need a capability).
+        writableRubrics.push(
+          ...rubrics.filter(
+            (r) =>
+              (canGradeSubmissions && (r.review_round === "grading-review" || r.review_round === "code-walk")) ||
+              assignments.some((a) => a.rubric_id === r.id)
+          )
+        );
+      }
     }
     if (role.role === "student") {
       writableRubrics.push(
@@ -993,13 +1004,13 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
       (sr) =>
         writableRubrics.some((r) => r.id === sr.rubric_id) &&
         (rubric_id === undefined || sr.rubric_id === rubric_id) &&
-        (role.role === "instructor" || role.role == "grader" || !sr.completed_at)
+        (isStaff || !sr.completed_at)
     );
     //Make sure no duplicates by review id
     const uniqueReviews = ret?.filter((sr, index, self) => index === self.findIndex((t) => t.id === sr.id));
     // Sort by name
     uniqueReviews?.sort((a, b) => a.name.localeCompare(b.name));
     return uniqueReviews;
-  }, [role, rubrics, submissionReviews, assignments, rubric_id]);
+  }, [role, isStaff, canReleaseGrades, canGradeSubmissions, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;
 }

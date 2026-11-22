@@ -2,6 +2,7 @@
 
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "@/components/ui/code-file-shared";
 import { useRubricChecksByRubric, useRubricCriteriaByRubric, useRubricWithParts } from "@/hooks/useAssignment";
+import { useGradingPermissions } from "@/hooks/useGradingPermissions";
 import { useSubmissionFileComments } from "@/hooks/useSubmission";
 import { useDefaultWritableSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
@@ -28,6 +29,9 @@ export type RubricContextMenuAction = {
  * Only checks from the default writable review's rubric are offered: graders should apply checks to a
  * review they can actually write to, never to a read-only one. We prefer the active review when it is
  * writable, otherwise fall back to the first writable review (the same default the workspace uses).
+ *
+ * A released review offers nothing to staff without release_grades (#1010): the database refuses
+ * their comments on it, so every menu built from this list hides itself, "Add comment" included.
  */
 export function useRubricAnnotationActions(file: SubmissionFile | null) {
   const review = useDefaultWritableSubmissionReview();
@@ -35,9 +39,11 @@ export function useRubricAnnotationActions(file: SubmissionFile | null) {
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
   const existingComments = useSubmissionFileComments({ file_id: file?.id ?? 0 });
+  const { isLockedByRelease } = useGradingPermissions();
+  const lockedByRelease = isLockedByRelease(review?.released);
 
   const menuActions = useMemo<RubricContextMenuAction[]>(() => {
-    if (!rubricCriteria || !rubricChecks || !file) {
+    if (!rubricCriteria || !rubricChecks || !file || lockedByRelease) {
       return [];
     }
 
@@ -97,7 +103,7 @@ export function useRubricAnnotationActions(file: SubmissionFile | null) {
     });
 
     return actions;
-  }, [rubricCriteria, rubricChecks, file, existingComments, rubric?.rubric_parts]);
+  }, [rubricCriteria, rubricChecks, file, existingComments, rubric?.rubric_parts, lockedByRelease]);
 
   const actionsByCriteria = useMemo(() => {
     const map = new Map<number, RubricContextMenuAction[]>();

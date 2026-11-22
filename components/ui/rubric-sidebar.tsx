@@ -56,14 +56,9 @@ import {
   useRubricParts,
   useRubrics
 } from "@/hooks/useAssignment";
-import {
-  useClassProfiles,
-  useIsGrader,
-  useIsGraderOrInstructor,
-  useIsInstructor,
-  useIsStudent
-} from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
+import { useGradingPermissions } from "@/hooks/useGradingPermissions";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -162,28 +157,23 @@ export function CommentActions({
 }) {
   const submissionController = useSubmissionController();
   const { private_profile_id, public_profile_id } = useClassProfiles();
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
-  const isStudent = useIsStudent();
+  const { canGradeSubmissions, canReleaseGrades } = useGradingPermissions();
 
   // Get the submission review to check completion and release (issue #446: no grader edits after release)
   const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id ?? undefined);
   const reviewRubric = useRubricById(submissionReview?.rubric_id);
   const errorRole = useViewerErrorRole();
 
-  // Check if current user can edit/delete this comment
-  // 1. Instructors can edit all comments
-  // 2. Graders can only edit their own comments while the review is not released to students
-  // 3. Students can edit their own comments IF the review is not completed (or no review exists),
-  //    and the review is not released
+  // Who can edit/delete this comment, as the comment UPDATE policy decides (#1010):
+  // 1. release_grades: every comment, released or not
+  // 2. grade_submissions: their own comments while the review is not released to students
+  // 3. Anyone else (students): their own comments while the review is not completed and not released
   const isCommentAuthor = comment.author === private_profile_id || comment.author === public_profile_id;
   const isReviewCompleted = comment.submission_review_id ? submissionReview?.completed_at != null : false;
   const isReviewReleased = Boolean(submissionReview?.released);
 
   const canEditComment =
-    isInstructor ||
-    (isGraderOrInstructor && isCommentAuthor && !isReviewReleased) ||
-    (isStudent && isCommentAuthor && !isReviewCompleted && !isReviewReleased);
+    canReleaseGrades || (isCommentAuthor && !isReviewReleased && (canGradeSubmissions || !isReviewCompleted));
 
   // Don't show actions if user can't edit
   if (!canEditComment) {
@@ -346,7 +336,7 @@ export function RubricCheckComment({
   const boxRef = useRef<HTMLDivElement>(null);
 
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
+  const { isLockedByRelease } = useGradingPermissions();
   const pathname = usePathname();
   const submissionReviewForComment = useSubmissionReviewOrGradingReview(comment?.submission_review_id ?? undefined);
 
@@ -386,8 +376,7 @@ export function RubricCheckComment({
           getStudentFacingErrorMessage(error, {
             isStudent,
             rubricReviewRound: rubricForCriteria?.review_round ?? null,
-            releasedReviewGraderBlocked:
-              isGraderOrInstructor && !isInstructor && Boolean(submissionReviewForComment?.released)
+            releasedReviewGraderBlocked: isLockedByRelease(submissionReviewForComment?.released)
           })
         );
       }
@@ -399,8 +388,7 @@ export function RubricCheckComment({
       submissionController,
       isStudent,
       rubricForCriteria?.review_round,
-      isGraderOrInstructor,
-      isInstructor,
+      isLockedByRelease,
       submissionReviewForComment?.released
     ]
   );
@@ -701,8 +689,11 @@ export function RubricCheckAnnotation({
     ? submission?.submission_artifacts?.find((a) => a.name === check.artifact)?.id
     : undefined;
   const activeAssignmentReview = useActiveReviewAssignment();
+  const { canGradeSubmissions, canReleaseGrades } = useGradingPermissions();
+  // Only shows referenced feedback (read-only), so the release lock doesn't apply here.
   const gradingIsPermitted =
-    isGrader ||
+    canGradeSubmissions ||
+    canReleaseGrades ||
     (activeAssignmentReview &&
       reviewForThisRubric &&
       activeAssignmentReview.submission_review_id === reviewForThisRubric.id);
@@ -846,8 +837,7 @@ export function RubricCheckGlobal({
 
   const submission = useSubmissionMaybe();
   const isGrader = useIsGraderOrInstructor();
-  const isTaOnly = useIsGrader();
-  const isInstructor = useIsInstructor();
+  const { canGradeSubmissions, canReleaseGrades, isLockedByRelease } = useGradingPermissions();
   const assignment = useAssignmentData();
   const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const pathname = usePathname();
@@ -859,7 +849,8 @@ export function RubricCheckGlobal({
     ? submission?.submission_files.find((file) => file.name === check.file)?.id
     : undefined;
   const activeAssignmentReview = useActiveReviewAssignment();
-  const taMarksLockedByRelease = isTaOnly && !isInstructor && Boolean(reviewForThisRubric?.released);
+  // Staff without release_grades can't add or change marks on a released review (#1010).
+  const taMarksLockedByRelease = isLockedByRelease(reviewForThisRubric?.released);
 
   // Check if this check should be visible to the current user
   const shouldShowCheck = useShouldShowRubricCheck({
@@ -906,7 +897,8 @@ export function RubricCheckGlobal({
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
   const gradingIsRequired = reviewForThisRubric && check.is_required && rubricCheckComments.length == 0;
   const gradingIsPermitted =
-    (isGrader ||
+    (canGradeSubmissions ||
+      canReleaseGrades ||
       (activeAssignmentReview &&
         reviewForThisRubric &&
         activeAssignmentReview.submission_review_id === reviewForThisRubric.id)) &&
@@ -1184,8 +1176,7 @@ function SubmissionCommentForm({
   const isStudent = useIsStudent();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
-  const isTaOnly = useIsGrader();
+  const { isLockedByRelease } = useGradingPermissions();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -1297,8 +1288,7 @@ function SubmissionCommentForm({
               getStudentFacingErrorMessage(error, {
                 isStudent,
                 rubricReviewRound: rubricForCriteria?.review_round ?? null,
-                releasedReviewGraderBlocked:
-                  isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(submissionReview?.released)
+                releasedReviewGraderBlocked: isLockedByRelease(submissionReview?.released)
               })
             );
           }
@@ -1400,8 +1390,7 @@ export function RubricCriteria({
     }
   }
   const isGrader = useIsGraderOrInstructor();
-  const isTaOnly = useIsGrader();
-  const isInstructor = useIsInstructor();
+  const { isLockedByRelease } = useGradingPermissions();
   const gradingIsRequired =
     isGrader && reviewForThisRubric && comments.length < (criteria.min_checks_per_submission || 0);
   let instructions = "";
@@ -1448,7 +1437,7 @@ export function RubricCriteria({
             <RubricDescription text={criteria.description} />
           </Fieldset.HelperText>
         )}
-        {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
+        {isLockedByRelease(reviewForThisRubric?.released) && (
           <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">
             {GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE}
           </Alert>
@@ -1560,7 +1549,7 @@ function RubricSidebarConfirmButton() {
   const activeReviewAssignment = useActiveReviewAssignment();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const ignoreAssignedReview = useIgnoreAssignedReview();
-  const isInstructorOrGrader = useIsGraderOrInstructor();
+  const { canGradeSubmissions, canReleaseGrades } = useGradingPermissions();
   const activeSubmissionReviewId = useActiveSubmissionReviewId();
   const review = useSubmissionReviewOrGradingReview(activeSubmissionReviewId ?? -1);
 
@@ -1572,7 +1561,8 @@ function RubricSidebarConfirmButton() {
     );
   }
 
-  if (!isInstructorOrGrader || assignedRubricParts.length > 0 || !review || review.completed_at) {
+  // Completing an incomplete review needs grade_submissions or release_grades (#1010).
+  if (!(canGradeSubmissions || canReleaseGrades) || assignedRubricParts.length > 0 || !review || review.completed_at) {
     return null;
   }
   return (
@@ -1823,7 +1813,10 @@ function AssignToStudentPart({
   currentRubricId?: number;
 }) {
   const review = useSubmissionReviewForRubric(currentRubricId);
-  const isGrader = useIsGraderOrInstructor();
+  const { canGradeSubmissions, canReleaseGrades } = useGradingPermissions();
+  // The assignment is saved on the review, so it follows the review UPDATE policy (#1010):
+  // release_grades always, grade_submissions while the review is unreleased or incomplete.
+  const canAssign = canReleaseGrades || (canGradeSubmissions && (!review?.released || !review?.completed_at));
   const assignments: RubricPartStudentAssignments =
     (review?.rubric_part_student_assignments as RubricPartStudentAssignments) ?? {};
   const assignedStudentId = assignments[String(part.id)] ?? null;
@@ -1862,7 +1855,7 @@ function AssignToStudentPart({
     [review, part.id]
   );
 
-  if (!isGrader) {
+  if (!canAssign) {
     if (!selectedStudent) return null;
     return (
       <Box w="100%" borderLeft="3px solid" borderColor="border.warning" pl={3}>

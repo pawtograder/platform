@@ -1,11 +1,6 @@
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
-import {
-  useClassProfiles,
-  useIsGrader,
-  useIsGraderOrInstructor,
-  useIsInstructor,
-  useIsReadOnly
-} from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useGradingPermissions } from "@/hooks/useGradingPermissions";
 import { useSubmissionController, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
 import {
   SubmissionFile,
@@ -46,8 +41,7 @@ export default function LineCommentForm({
   const submissionController = useSubmissionController();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
-  const isTaOnly = useIsGrader();
+  const { isLockedByRelease } = useGradingPermissions();
   const isReadOnly = useIsReadOnly();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
@@ -100,8 +94,7 @@ export default function LineCommentForm({
         toaster.error({
           title: "Error posting comment",
           description: getStudentFacingErrorMessage(err, {
-            releasedReviewGraderBlocked:
-              isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(fetchedSubmissionReview?.released)
+            releasedReviewGraderBlocked: isLockedByRelease(fetchedSubmissionReview?.released)
           })
         });
       } finally {
@@ -121,8 +114,7 @@ export default function LineCommentForm({
       rubricCheckId,
       defaultPoints,
       isGraderOrInstructor,
-      isInstructor,
-      isTaOnly,
+      isLockedByRelease,
       onSubmitted,
       onCancel
     ]
@@ -134,6 +126,11 @@ export default function LineCommentForm({
 
   // Read-only: an instructor viewing as a student cannot post comments.
   if (isReadOnly) {
+    return null;
+  }
+
+  // Staff without release_grades can't comment on a released review (#1010).
+  if (isLockedByRelease(fetchedSubmissionReview?.released)) {
     return null;
   }
 
