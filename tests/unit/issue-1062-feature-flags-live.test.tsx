@@ -28,7 +28,9 @@ jest.mock("@/hooks/useCourseController", () => ({
 }));
 
 jest.mock("@/hooks/useClassProfiles", () => ({
-  useClassProfiles: () => ({ role: { role: "instructor", classes: mockRoleClasses() } })
+  useClassProfiles: () => ({ role: { role: "instructor", classes: mockRoleClasses() } }),
+  // The page picks its error wording from useIsInstructor (useStaffErrorRole).
+  useIsInstructor: () => true
 }));
 
 jest.mock("next/navigation", () => ({
