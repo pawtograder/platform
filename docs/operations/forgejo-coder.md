@@ -254,12 +254,12 @@ Workspaces at `https://coder.staging.pawtograder.net` don't open or clone, or
 the deploy fails on the bootstrap Job or on coderd exiting. The bootstrap Job
 is a post-upgrade hook, and the staging upgrade runs without `--atomic`, so
 when it fails the upgraded workloads are already running. A red deploy doesn't
-mean the new version didn't ship. Check what is serving before you redeploy
-(#1357).
+mean the new version didn't ship. Check which images the ready pods run before
+you redeploy (#1357).
 
 ```bash
 helm -n "$NS" history pawtograder --max 3
-kubectl -n "$NS" get deploy -o wide                     # IMAGES shows the tags serving now
+kubectl -n "$NS" get pods -o custom-columns='NAME:.metadata.name,READY:.status.containerStatuses[*].ready,IMAGE:.status.containerStatuses[*].image'
 kubectl -n "$NS" get deploy,pod -l app.kubernetes.io/name=coder
 kubectl -n "$NS" logs deploy/coder -c first-owner
 kubectl -n "$NS" logs deploy/coder --since=1h
@@ -623,8 +623,11 @@ fork source, and every assignment forked from it, must also be on GitHub.
 5. The reconciler can skip every pass and answer 200. See live check 1.
 6. Nothing pages on a Forgejo, Coder or runner outage. Students notice first.
    Deploy failures, `PawtograderExternalSecretNotReady` and the Postgres alerts
-   are indirect. A failed deploy means a hook failed, not that the app is down,
-   since the staging upgrade runs without `--atomic`. A release left in `failed`
+   are indirect. A failed deploy doesn't mean the app is down. The staging
+   upgrade runs with `--wait --wait-for-jobs --timeout 15m` but without
+   `--atomic`, so a failed hook, an unhealthy rollout or the timeout each turn
+   it red while the pods that did start keep serving. Check the failed workflow
+   step and the pods before you redeploy. A release left in `failed`
    isn't cleared by "Recover stuck helm release", which handles only
    `pending-*`, so it stays red until someone intervenes (#1357).
 7. A failed webhook delivery can leave commit history missing or incomplete.
