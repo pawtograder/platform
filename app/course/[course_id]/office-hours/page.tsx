@@ -10,7 +10,7 @@ import {
   useStudentVisibleHelpRequests,
   useHelpRequestStudents
 } from "@/hooks/useOfficeHoursRealtime";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, Icon, Link, Stack, Text, VStack } from "@chakra-ui/react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -28,6 +28,12 @@ import {
   DialogTitle,
   DialogCloseTrigger
 } from "@/components/ui/dialog";
+import { compareHelpRequestQueueOrder } from "@/lib/helpRequestEscalation";
+import { useOnboardingCompleted, useOnboardingDataLoaded, useOnboardingHint } from "@/hooks/useOfficeHoursOnboarding";
+import { countTextQueues, queueListShown, wantsQueueDescriptionHint } from "@/lib/officeHoursOnboarding";
+import { OnboardingPopover } from "@/components/help-queue/onboarding-popover";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
@@ -122,7 +128,7 @@ export default function OfficeHoursPage() {
   // Get requests for selected queue
   const selectedQueueRequests = useMemo(() => {
     if (!selectedQueueId) return [];
-    return activeHelpRequests.filter((r) => r.help_queue === selectedQueueId);
+    return activeHelpRequests.filter((r) => r.help_queue === selectedQueueId).sort(compareHelpRequestQueueOrder);
   }, [activeHelpRequests, selectedQueueId]);
 
   // Get all requests where user is creator or participant (for My Requests view)
@@ -161,6 +167,41 @@ export default function OfficeHoursPage() {
     if (!selectedQueueId) return null;
     return availableQueues.find((q) => q.id === selectedQueueId);
   }, [selectedQueueId, availableQueues]);
+
+  // Onboarding hint on the queue list (see lib/officeHoursOnboarding.ts). It points at the list, not
+  // at the selected queue's description, because the selected queue can be an in-person or video
+  // queue while the hint is about picking between text queues.
+  //
+  // Ask for it only while the browse view is showing the list. queueListShown mirrors the early
+  // returns below, where the loading message and the connection error replace the list. The
+  // header holds the New Request hint back on the queue list until the student closes this one,
+  // including while this page is still loading (see queueDescriptionHintPending and the comment
+  // in office-hours-header.tsx).
+  const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
+  const isStudent = useIsStudent();
+  const onboardingActive = onboardingOn && isStudent;
+  const onboardingCompleted = useOnboardingCompleted(onboardingActive, private_profile_id);
+  const onboardingDataLoaded = useOnboardingDataLoaded();
+  const textQueueCount = countTextQueues(availableQueues);
+  const showsQueueList =
+    onboardingDataLoaded &&
+    queueListShown({
+      browseView: view === "browse",
+      loading: isLoading,
+      connectionError: !!connectionError,
+      disconnected: connectionStatus?.overall === "disconnected"
+    });
+  const queueDescriptionOnboarding = useOnboardingHint(
+    showsQueueList &&
+      wantsQueueDescriptionHint({
+        featureEnabled: onboardingOn,
+        isStudent,
+        completed: onboardingCompleted,
+        textQueueCount
+      })
+      ? "read-queue-description"
+      : null
+  );
 
   // Get upcoming schedule for selected queue
   const upcomingSchedule = useMemo(() => {
@@ -265,27 +306,38 @@ export default function OfficeHoursPage() {
       <Box height={{ base: "auto", lg: "100%" }} minH={0} overflow={{ base: "visible", lg: "hidden" }}>
         <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" height="100%" minH={0}>
           <Box flex={{ lg: 4 }} minW={0} overflowY={{ base: "visible", lg: "auto" }} minH={0}>
-            <Stack spaceY={1}>
-              {availableQueues.map((queue) => {
-                const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-                const openRequestCount = activeHelpRequests.filter((r) => r.help_queue === queue.id).length;
-                return (
-                  <QueueCard
-                    key={queue.id}
-                    queue={queue}
-                    selected={queue.id === selectedQueueId}
-                    onClickAction={() => {
-                      const next = new URLSearchParams(searchParams.toString());
-                      next.set("view", "browse");
-                      next.set("queue", queue.id.toString());
-                      router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
-                    }}
-                    openRequestCount={openRequestCount}
-                    activeAssignments={queueAssignments}
-                  />
-                );
-              })}
-            </Stack>
+            <OnboardingPopover
+              active={onboardingActive}
+              open={queueDescriptionOnboarding.open}
+              onDismiss={queueDescriptionOnboarding.dismiss}
+              message="This course has more than one text queue, and the purpose of each text queue is decided by the course staff. You can click each queue to read its description. Then choose the one that matches your question."
+              // To the right of the list on wide screens. On narrow screens the list takes the full
+              // width, so the hint goes below it instead.
+              placement="right-start"
+              fallbackPlacements={["bottom-start"]}
+            >
+              <Stack spaceY={1}>
+                {availableQueues.map((queue) => {
+                  const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+                  const openRequestCount = activeHelpRequests.filter((r) => r.help_queue === queue.id).length;
+                  return (
+                    <QueueCard
+                      key={queue.id}
+                      queue={queue}
+                      selected={queue.id === selectedQueueId}
+                      onClickAction={() => {
+                        const next = new URLSearchParams(searchParams.toString());
+                        next.set("view", "browse");
+                        next.set("queue", queue.id.toString());
+                        router.replace(`/course/${course_id}/office-hours?${next.toString()}`, { scroll: false });
+                      }}
+                      openRequestCount={openRequestCount}
+                      activeAssignments={queueAssignments}
+                    />
+                  );
+                })}
+              </Stack>
+            </OnboardingPopover>
           </Box>
 
           <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">

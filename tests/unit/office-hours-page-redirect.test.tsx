@@ -47,6 +47,9 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
   useHelpQueueAssignments: () => [],
   useStudentVisibleHelpRequests: () => [],
   useHelpRequestStudents: () => [],
+  // useOnboardingDataLoaded reads these tables' controllers. Without them it reports "not loaded",
+  // which keeps the onboarding hints closed in these navigation tests.
+  useOfficeHoursController: () => ({}),
   useConnectionStatus: () => ({
     connectionStatus: { overall: "connected" },
     connectionError: null,
@@ -55,8 +58,13 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
 }));
 
 jest.mock("@/hooks/useClassProfiles", () => ({
-  useClassProfiles: () => ({ private_profile_id: "priv-1", public_profile_id: "pub-1" })
+  useClassProfiles: () => ({ private_profile_id: "priv-1", public_profile_id: "pub-1" }),
+  useIsStudent: () => false
 }));
+
+// The page reads the onboarding course feature through useCourse(), which needs a provider. These
+// tests are about navigation, so the onboarding hints stay off.
+jest.mock("@/hooks/useCourseFeatures", () => ({ useFeatureEnabled: () => false }));
 
 jest.mock("@/hooks/useCalendarEvents", () => ({ useOfficeHoursSchedule: () => [] }));
 

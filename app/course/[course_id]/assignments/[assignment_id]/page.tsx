@@ -12,11 +12,12 @@ import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { isOwnRepositoryForAssignment } from "@/lib/ownRepositoryForAssignment";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
+  CourseWithFeatures,
   Repository,
   SelfReviewSettings,
   SubmissionWithGraderResultsAndReview,
@@ -35,6 +36,13 @@ import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
+import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
+import {
+  createWorkspaceClient,
+  isWorkspaceGitProvider,
+  shouldShowWorkspace,
+  workspaceRepoKey
+} from "@/lib/workspaceStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -170,6 +178,22 @@ export default function AssignmentPage() {
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
 
+  // Open in Coder (#1095): a student's Forgejo or GitHub repository, in a course with Cloud
+  // Workspaces on. workspace-open checks enrollment and the repository on the server; this only
+  // decides whether to offer it. Not while staff view as a student: the requests would carry the
+  // staff session and act on the staff member's own repository, not the student's.
+  const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
+  // useCourse(), not the controller's course: it re-renders when the flag changes.
+  const liveCourse = useCourse() as CourseWithFeatures;
+  const repoKey = workspaceRepoKey(repositories);
+  const showWorkspace = shouldShowWorkspace({
+    isReadOnly,
+    role: enrollment?.role,
+    assignmentGitProvider: assignment?.git_provider,
+    features: liveCourse.features,
+    repoKey
+  });
+
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
 
@@ -202,8 +226,8 @@ export default function AssignmentPage() {
     isPrMode;
   return (
     <Box p={4}>
-      <LinkAccount />
-      <ResendOrgInvitation />
+      <LinkAccount assignmentGitProvider={assignment.git_provider} />
+      <ResendOrgInvitation assignmentGitProvider={assignment.git_provider} />
       <Grid
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
@@ -275,6 +299,16 @@ export default function AssignmentPage() {
               }
             />
           </Box>
+          {showWorkspace && (
+            <Box m={4}>
+              <WorkspaceStatus
+                key={repoKey}
+                assignmentId={Number(assignment_id)}
+                client={workspaceClient}
+                gitProvider={isWorkspaceGitProvider(assignment.git_provider) ? assignment.git_provider : undefined}
+              />
+            </Box>
+          )}
           <SelfReviewNotice
             review_settings={review_settings ?? ({} as SelfReviewSettings)}
             assignment={assignment}
