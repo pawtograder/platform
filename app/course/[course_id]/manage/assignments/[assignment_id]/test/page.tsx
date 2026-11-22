@@ -50,6 +50,15 @@ export default function TestAssignmentPage() {
   });
   // github.com, or the Forgejo instance for a Forgejo assignment (undefined until it loads, so links wait).
   const repoHost = useRepoWebHost(assignment?.data?.git_provider);
+  // The row is written before the repository exists: provisionForgejoStudentRepo reserves it not ready,
+  // so a group deriving the same name can't take it, does the work on the host, and only then marks it
+  // ready. Template generation or the write grant failing leaves that reserved row behind, so keying this
+  // page on the row alone offered a link to a repository that may not be there and hid the only way to
+  // retry. Readiness decides instead, for both hosts: is_github_ready means the same thing on GitHub and
+  // Forgejo here (manageGroupWidget's labels and workspaceStatus both read it that way), so branching per
+  // provider would leave the same hole on GitHub.
+  const testRepo = repository?.data?.[0];
+  const testRepoReady = testRepo?.is_github_ready === true;
   if (!assignment?.data || !submissions?.data) {
     return <Skeleton height="100px" />;
   }
@@ -74,18 +83,26 @@ export default function TestAssignmentPage() {
       {/* {repository?.data.length ? (
         <CreateStudentReposButton syncAllPermissions />
       ): <></>} */}
-      {repository?.data.length ? (
+      {testRepo && (
         <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
           <Heading size="md">Repository</Heading>
           <Text fontSize="sm" color="fg.muted">
-            {repoHost ? (
-              <Link href={`${repoHost}/${repository.data[0].repository}`}>{repository.data[0].repository}</Link>
+            {testRepoReady && repoHost ? (
+              <Link href={`${repoHost}/${testRepo.repository}`}>{testRepo.repository}</Link>
             ) : (
-              repository.data[0].repository
+              // Same wording as the group widget's repository labels.
+              `${testRepo.repository}${testRepoReady ? "" : " (not yet ready ❌)"}`
             )}
           </Text>
+          {!testRepoReady && (
+            <Text fontSize="sm" color="fg.muted">
+              Creating it did not finish, so there is nothing to open yet. <em>Create my test repo</em> picks up where
+              it stopped.
+            </Text>
+          )}
         </Box>
-      ) : (
+      )}
+      {!testRepoReady && (
         <CreateStudentReposButton
           classId={Number.parseInt(course_id as string)}
           assignmentId={Number.parseInt(assignment_id as string)}

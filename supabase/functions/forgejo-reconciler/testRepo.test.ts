@@ -21,12 +21,21 @@ const assignment: ForgejoTestAssignment = {
   classes: { slug: "CS4535", forgejo_org: null }
 };
 
+type ReservedRow = {
+  id: number;
+  assignment_id: number;
+  profile_id: string | null;
+  assignment_group_id: number | null;
+};
 type Rows = { role?: { private_profile_id: string } | null; account?: { login: string } | null };
 
 function fakeSupabase(rows: Rows) {
   const filters: Record<string, string[]> = {};
   const inserted: Record<string, unknown>[] = [];
   const updated: Record<string, unknown>[] = [];
+  // The reserved row outlives a failed attempt on the same client, as the real table does, so the next
+  // attempt finds it instead of inserting again.
+  let reserved: ReservedRow | null = null;
   const chain = (table: string, result: () => unknown) => {
     const q: Record<string, unknown> = {};
     const record =
@@ -43,12 +52,18 @@ function fakeSupabase(rows: Rows) {
     from(table: string) {
       if (table === "user_roles") return chain(table, () => rows.role ?? null);
       if (table === "git_accounts") return chain(table, () => rows.account ?? null);
-      // repositories: no row yet, so one is reserved, then marked ready.
-      const lookup = chain(table, () => null);
+      // repositories: nothing reserved yet, so one is, then marked ready.
+      const lookup = chain(table, () => reserved);
       return {
         ...lookup,
         insert: (row: Record<string, unknown>) => {
           inserted.push(row);
+          reserved = {
+            id: 41,
+            assignment_id: row.assignment_id as number,
+            profile_id: (row.profile_id as string | null) ?? null,
+            assignment_group_id: (row.assignment_group_id as number | null) ?? null
+          };
           return { select: () => ({ single: () => Promise.resolve({ data: { id: 41 }, error: null }) }) };
         },
         update: (values: Record<string, unknown>) => ({
@@ -154,3 +169,40 @@ Deno.test("test repo: Forgejo not granting write access is reported as a failure
   );
   assertEquals(updated, []);
 });
+
+Deno.test(
+  "test repo: a failed attempt leaves the row reserved, and pressing the button again finishes it",
+  async () => {
+    // What the Test Assignment page now relies on. The row is reserved before Forgejo is called, so a failure
+    // partway leaves it behind, not ready; the page keeps offering Create my test repo, and this is the retry
+    // it offers. It has to reuse the reserved row: a second insert would hit the unique index on
+    // (git_provider, repository).
+    const { client, inserted, updated } = fakeSupabase({
+      role: { private_profile_id: "staff-profile" },
+      account: { login: "Pat.Lee" }
+    });
+    await assertRejects(
+      () => createForgejoTestRepo(client, config, assignment, "user-1", stubOps(false).ops),
+      UserVisibleError,
+      "write access"
+    );
+    assertEquals(inserted.length, 1);
+    assertEquals(inserted[0].is_github_ready, false);
+    assertEquals(updated, []);
+    // The same owner tuple, so existingRepositoryRow matches the reserved row and returns its id, and the
+    // ensure-shaped Forgejo steps finish the job.
+    const { ops, calls } = stubOps();
+    const result = await createForgejoTestRepo(client, config, assignment, "user-1", ops);
+    assertEquals(result, {
+      is_ok: true,
+      message: "Created your test repository cs4535/cs4535-hw1-pat.lee on Forgejo."
+    });
+    assertEquals(inserted.length, 1);
+    assertEquals(calls, [
+      "org cs4535",
+      "generate cs4535/cs4535-handout-hw1 -> cs4535/cs4535-hw1-pat.lee",
+      "write cs4535/cs4535-hw1-pat.lee Pat.Lee"
+    ]);
+    assertEquals(updated, [{ is_github_ready: true, id: 41 }]);
+  }
+);
