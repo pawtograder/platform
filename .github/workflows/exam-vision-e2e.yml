@@ -22,6 +22,7 @@ on:
     branches: [staging]
     paths:
       - supabase/functions/_shared/examVision.ts
+      - supabase/functions/_shared/examRegionText.ts
       - supabase/functions/_shared/ExamAsyncTypes.ts
       - supabase/functions/exam-async-worker/**
       - supabase/functions/exam-extract-template/**

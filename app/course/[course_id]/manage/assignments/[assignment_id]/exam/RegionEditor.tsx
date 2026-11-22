@@ -3,7 +3,7 @@
 import { examExtractTemplate } from "@/lib/edgeFunctions";
 import { EXAM_ANSWER_TYPES, normalizeAnswerType } from "@/lib/exam/answerTypes";
 import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
-import { preorder } from "@/lib/exam/questionTree";
+import { parentPointsMismatches, preorder, spreadParentPoints } from "@/lib/exam/questionTree";
 import { examRubricOutOfDate } from "@/lib/exam/rubricOutOfDate";
 import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
@@ -50,7 +50,13 @@ function uid() {
 // Structure-only snapshot used to decide whether the editor is ahead of the database.
 // client_ids are regenerated on every load, so ordering-stable field tuples are compared
 // instead of the raw objects.
-function snapshotOf(questions: EditorQuestion[], regions: EditorRegion[]): string {
+/**
+ * Exported for tests. It is the whole definition of "has anything changed since the last save",
+ * and the failure it guards is silent: a snapshot that omits a field lets an edit to that field
+ * read as clean, so the unsaved-changes warning never fires and the edit is lost at step 2.
+ * Testing it directly beats mocking the four queries the editor loads before it renders.
+ */
+export function snapshotOf(questions: EditorQuestion[], regions: EditorRegion[]): string {
   return JSON.stringify({
     questions: questions.map((q) => [
       q.id,
@@ -65,24 +71,49 @@ function snapshotOf(questions: EditorQuestion[], regions: EditorRegion[]): strin
       q.correct_answer,
       q.grading_tolerance
     ]),
-    regions: regions.map((r) => [r.kind, r.page_number, r.x, r.y, r.width, r.height])
+    // question_client_id is in here because the association is part of what a save writes.
+    // Without it, deleting a saved region for question A and redrawing the same rectangle for
+    // question B produces an identical snapshot: the editor reads as clean, the #1271 warning
+    // stays hidden, and the instructor walks to step 2 having lost the reassignment.
+    regions: regions.map((r) => [r.kind, r.question_client_id, r.page_number, r.x, r.y, r.width, r.height])
   });
 }
+
+/**
+ * What the next drawn box will be, in the words the instructor picked it with.
+ *
+ * Keyed on EditorRegion["kind"] rather than string: a fourth region kind should be a compile
+ * error here, not a silent fall through to "a region" in the overlay below.
+ */
+const DRAFT_KIND_LABELS: Record<EditorRegion["kind"], string> = {
+  answer: "answer region",
+  name: "student name region",
+  student_id: "student ID region"
+};
 
 export default function RegionEditor({
   examId,
   assignmentId,
-  gradingRubricId
+  gradingRubricId,
+  onDirtyChange
 }: {
   examId: number;
   assignmentId: number;
   gradingRubricId: number | null;
+  /**
+   * Reports whether there are structure edits that "Save structure" has not written yet.
+   *
+   * The template page needs this for the Next control it puts below the editor (#1271): leaving
+   * for step 2 with unsaved regions means scanning against the regions the exam had before, which
+   * is worth saying out loud at the moment someone is about to do it.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [pages, setPages] = useState<TemplatePage[]>([]);
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [questions, setQuestions] = useState<EditorQuestion[]>([]);
   const [regions, setRegions] = useState<EditorRegion[]>([]);
-  const [draftKind, setDraftKind] = useState<"answer" | "student_id" | "name">("answer");
+  const [draftKind, setDraftKind] = useState<EditorRegion["kind"]>("answer");
   const [draftQuestion, setDraftQuestion] = useState<string>("");
   const [saving, setSaving] = useState(false);
   // Snapshot of the structure as last persisted. "Build rubric from exam" runs entirely
@@ -241,7 +272,17 @@ export default function RegionEditor({
   const currentSnapshot = useMemo(() => snapshotOf(questions, regions), [questions, regions]);
   // Render order only: each question under its parent (#1264). `questions` keeps the load order.
   const orderedQuestions = useMemo(() => preorder(questions), [questions]);
-  const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
+  const pointsMismatches = useMemo(() => parentPointsMismatches(questions), [questions]);
+  // A null savedSnapshot means there is no baseline to compare against: the load effect has not
+  // finished, or it threw. Structure editing is disabled until there is one, because `dirty`
+  // cannot be computed without it. Leaving the controls live instead would let an instructor add
+  // a Part during the load, report dirty=false to the page, and walk to step 2 past a warning
+  // that was structurally unable to fire.
+  const hydrated = savedSnapshot !== null;
+  const dirty = hydrated && currentSnapshot !== savedSnapshot;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const addQuestion = useCallback((level: 1 | 2 | 3, parent: string | null) => {
     setQuestions((qs) => [
@@ -254,7 +295,10 @@ export default function RegionEditor({
         ordinal: qs.filter((q) => q.level === level).length,
         label: `${level === 1 ? "Part" : level === 2 ? "Question" : "Item"} ${qs.filter((q) => q.level === level).length + 1}`,
         answer_type: "free_text",
-        points: level === 3 ? 1 : 0,
+        // #1370: a question's own points stop counting once it has parts, so its first part takes them.
+        points:
+          (!qs.some((c) => c.parent_client_id === parent) && qs.find((c) => c.client_id === parent)?.points) ||
+          (level === 3 ? 1 : 0),
         prompt: "",
         choices: [],
         correct_answer: null,
@@ -295,6 +339,8 @@ export default function RegionEditor({
   };
 
   const onPointerDown = (page: number) => (e: React.PointerEvent<HTMLDivElement>) => {
+    // No baseline yet, so a region drawn now could not be reported as unsaved. See `hydrated`.
+    if (!hydrated) return;
     const { x, y } = normFromEvent(e, e.currentTarget);
     drawing.current = { page, startX: x, startY: y };
     setPreview({ page, x, y, width: 0, height: 0 });
@@ -435,24 +481,27 @@ export default function RegionEditor({
         return;
       }
       setQuestions(
-        proposal.questions.map((q) => {
-          const rawChoices = q.choices as unknown;
-          return {
-            id: null,
-            client_id: q.client_id,
-            parent_client_id: q.parent_client_id ?? null,
-            level: q.level,
-            ordinal: q.ordinal,
-            label: q.label ?? "",
-            // Extraction can return types the database rejects, and parents hide the type selector.
-            answer_type: normalizeAnswerType(q.answer_type),
-            points: q.points ?? 0,
-            prompt: q.prompt ?? "",
-            choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
-            correct_answer: null,
-            grading_tolerance: null
-          };
-        })
+        // #1370: points Gemini put on a question rather than its parts would count for nothing.
+        spreadParentPoints(
+          proposal.questions.map((q) => {
+            const rawChoices = q.choices as unknown;
+            return {
+              id: null,
+              client_id: q.client_id,
+              parent_client_id: q.parent_client_id ?? null,
+              level: q.level,
+              ordinal: q.ordinal,
+              label: q.label ?? "",
+              // Extraction can return types the database rejects, and parents hide the type selector.
+              answer_type: normalizeAnswerType(q.answer_type),
+              points: q.points ?? 0,
+              prompt: q.prompt ?? "",
+              choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
+              correct_answer: null,
+              grading_tolerance: null
+            };
+          })
+        )
       );
       setRegions(
         proposal.regions.map((r) => ({
@@ -525,7 +574,7 @@ export default function RegionEditor({
           <Heading size="sm" mb={2}>
             Question structure (3 levels)
           </Heading>
-          <Button size="xs" mb={2} onClick={() => addQuestion(1, null)}>
+          <Button size="xs" mb={2} disabled={!hydrated} onClick={() => addQuestion(1, null)}>
             + Part (level 1)
           </Button>
           <VStack align="stretch" gap={1}>
@@ -570,8 +619,20 @@ export default function RegionEditor({
                     />
                   </>
                 )}
+                {/* #1370: these points are hidden and count for nothing, so say what they were. */}
+                {pointsMismatches.has(q.client_id) && (
+                  <Text fontSize="xs" color="fg.warning">
+                    {pointsMismatches.get(q.client_id)!.points} pts on this question; its parts add up to{" "}
+                    {pointsMismatches.get(q.client_id)!.partsTotal}
+                  </Text>
+                )}
                 {q.level < 3 && (
-                  <Button size="xs" variant="ghost" onClick={() => addQuestion((q.level + 1) as 2 | 3, q.client_id)}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={!hydrated}
+                    onClick={() => addQuestion((q.level + 1) as 2 | 3, q.client_id)}
+                  >
                     + child
                   </Button>
                 )}
@@ -631,6 +692,12 @@ export default function RegionEditor({
               onPointerUp={onPointerUp(p.page_number)}
               borderWidth="1px"
               borderColor="border.emphasized"
+              // #1271: the page image was the thing you draw on and the only thing that never
+              // said so. The crosshair and the hover border are the affordance; the overlay
+              // below is the instruction, and it is on the page rather than in the side panel
+              // because the side panel is what instructors were not reading.
+              cursor="crosshair"
+              _hover={{ borderColor: "blue.400" }}
             >
               {urls[p.page_number] ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -642,6 +709,38 @@ export default function RegionEditor({
                 />
               ) : (
                 <Box h="400px" bg="bg.subtle" />
+              )}
+              {/* First contact only: once a single region exists the instructor has found the
+                  gesture, and a permanent banner over the template would be in the way. Gated on
+                  the first page as well as on having no regions, because this block is inside
+                  pages.map: without it a ten-page template stacks the same hint down all ten,
+                  which is the same crowding the line above argues against. */}
+              {regions.length === 0 && p.page_number === pages[0]?.page_number && (
+                <Box
+                  position="absolute"
+                  inset="0"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  // Nothing here may swallow the drag it is describing.
+                  pointerEvents="none"
+                >
+                  <Text
+                    fontSize="sm"
+                    fontWeight="medium"
+                    color="fg"
+                    bg="bg.panel"
+                    borderWidth="1px"
+                    borderColor="border.emphasized"
+                    borderRadius="md"
+                    px={3}
+                    py={2}
+                    textAlign="center"
+                    maxW="90%"
+                  >
+                    Drag on this page to draw {DRAFT_KIND_LABELS[draftKind] ?? "a region"}
+                  </Text>
+                </Box>
               )}
               {regions
                 .filter((r) => r.page_number === p.page_number)

@@ -1355,7 +1355,10 @@ export async function validateOIDCToken(
   ) {
     throw new JobTokenRejectedError("audience", `Unexpected OIDC token audience: ${String(verified.aud)}`);
   }
-  return { ...verified, provider: issuer.provider };
+  // Forgejo names are case-insensitive and Pawtograder stores Forgejo repositories lowercased (#1093), so
+  // an org created with capitals still finds its rows. GitHub names keep the case the rows were stored with.
+  const repository = issuer.provider === "forgejo" ? verified.repository.toLowerCase() : verified.repository;
+  return { ...verified, repository, provider: issuer.provider };
 }
 
 // E2E testing constants and helper
@@ -1436,26 +1439,54 @@ export async function validateOIDCTokenOrAllowE2E(
  * `owner/name`, which can exist on both hosts, so the token's provider must match the row's
  * `git_provider`. Repositories without a row (grader, handout, E2E) are on GitHub.
  */
+/**
+ * The Pawtograder user behind a job's `actor`: a GitHub username, or for Forgejo a login that only the
+ * accounts Pawtograder created on `forgejoUrl` map back to a user (#1110). Pawtograder's own Forgejo
+ * admin has no such account, so its dispatches match nobody, as the GitHub bot does.
+ */
+export async function findActorUserId(
+  supabase: SupabaseClient<Database>,
+  token: { actor: string; provider: JobTokenProvider },
+  forgejoUrl: string | undefined
+): Promise<string | null> {
+  if (token.provider === "forgejo") {
+    if (!forgejoUrl) return null;
+    const { data, error } = await supabase
+      .from("git_accounts")
+      .select("user_id")
+      .eq("provider", "forgejo")
+      .eq("instance_url", forgejoUrl)
+      .eq("login", token.actor)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.user_id ?? null;
+  }
+  const { data, error } = await supabase
+    .from("users")
+    .select("user_id")
+    .ilike("github_username", token.actor)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.user_id ?? null;
+}
+
 export async function assertJobTokenMatchesRepository(
   supabase: SupabaseClient<Database>,
   token: { repository: string; provider: JobTokenProvider },
   scope?: Sentry.Scope
 ): Promise<void> {
-  const { data, error } = await supabase
-    .from("repositories")
-    .select("git_provider")
-    .eq("repository", token.repository)
-    .maybeSingle();
+  // A name is unique per provider (#1093), so it can have a row on each host.
+  const { data, error } = await supabase.from("repositories").select("git_provider").eq("repository", token.repository);
   if (error) {
     // Both callers mute UserVisibleError, so report the outage here.
     Sentry.captureException(error, scope);
     throw new UserVisibleError(`Failed to query repositories: ${error.message}`);
   }
-  const repositoryProvider = data?.git_provider ?? "github";
-  if (repositoryProvider !== token.provider) {
+  const providers = data?.length ? data.map((row) => row.git_provider) : ["github"];
+  if (!providers.includes(token.provider)) {
     throw new JobTokenRejectedError(
       "provider",
-      `OIDC token from ${token.provider} names a ${repositoryProvider} repository: ${token.repository}`
+      `OIDC token from ${token.provider} names a ${providers.join(" and ")} repository: ${token.repository}`
     );
   }
 }

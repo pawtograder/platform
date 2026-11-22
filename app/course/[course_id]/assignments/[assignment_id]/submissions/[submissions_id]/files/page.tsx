@@ -43,6 +43,7 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
+import { artifactCheckMessage } from "@/lib/artifactCheckMessage";
 import { useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
@@ -61,12 +62,16 @@ import {
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
-import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import { useActiveReviewAssignmentId, useActiveRubricId, useScrollToExamQuestion } from "@/hooks/useSubmissionReview";
 import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { getPrBaseFiles } from "@/lib/edgeFunctions";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
-import { useFindTableControllerValue } from "@/lib/TableController";
+import {
+  useFindTableControllerValue,
+  useIsTableControllerReady,
+  useTableControllerTableValues
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricCriteria,
@@ -605,6 +610,17 @@ function ArtifactCheckPopover({
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
   const rubricParts = useRubricParts(reviewContext?.rubric_id ?? null);
+  const assignmentController = useAssignmentController();
+  const rubricChecksReady = useIsTableControllerReady(assignmentController.rubricChecksController);
+  // For the line shown when the popover has nothing to offer (#1269). Read straight from the loaded
+  // controller and keyed on the review's own rubric_id: useRubricWithParts and useRubricChecksByRubric
+  // update in effects, so for a render or two after the review arrives they still describe "no rubric".
+  const reviewRubricId = reviewContext?.rubric_id ?? null;
+  const allRubricChecks = useTableControllerTableValues(assignmentController.rubricChecksController);
+  const reviewChecks = useMemo(
+    () => (reviewRubricId == null ? [] : allRubricChecks.filter((c) => c.rubric_id === reviewRubricId)),
+    [allRubricChecks, reviewRubricId]
+  );
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
@@ -707,11 +723,21 @@ function ArtifactCheckPopover({
   }, [criteriaWithArtifactAnnotationChecks, rubricChecks]);
 
   if (!criteriaOptions || criteriaOptions.length === 0) {
-    return (
+    const message = artifactCheckMessage({
+      // reviewContext is undefined until the review loads, and stays undefined when the viewer can't
+      // see the review (a student before release); then nothing is shown.
+      ready: reviewContext !== undefined && rubricChecksReady,
+      isStaff: isGraderOrInstructor,
+      hasRubric: reviewRubricId != null,
+      checkCount: reviewChecks.length,
+      hasArtifactChecks: reviewChecks.some((c) => c.is_annotation && c.annotation_target === "artifact"),
+      isExamArtifact: (artifact.data as { format?: string } | null)?.format === "exam_v1"
+    });
+    return message ? (
       <Text fontSize="sm" color="fg.muted">
-        No rubric checks available for this artifact.
+        {message}
       </Text>
-    );
+    ) : null;
   }
 
   const selectComponentsConfig: SelectComponentsConfig<
@@ -903,6 +929,28 @@ function ArtifactWithComments({
     </Box>
   );
 }
+/**
+ * A paper exam's answer crops, each with a way to bring its rubric check into view in the grading
+ * sidebar (#1268), which scrolls on its own. Only questions the grading rubric has a check for get
+ * one: an auto-scored question has nothing to show.
+ */
+function ExamArtifact({ artifact }: { artifact: SubmissionArtifact }) {
+  const { assignment } = useAssignmentController();
+  const checks = useRubricChecksByRubric(assignment.grading_rubric_id);
+  const { setScrollToExamQuestionId } = useScrollToExamQuestion();
+  const checkedQuestionIds = useMemo(
+    () => new Set(checks.flatMap((c) => (c.exam_question_id == null ? [] : [c.exam_question_id]))),
+    [checks]
+  );
+  return (
+    <ExamSubmissionRenderer
+      artifact={artifact}
+      checkedQuestionIds={checkedQuestionIds}
+      onShowRubricCheck={setScrollToExamQuestionId}
+    />
+  );
+}
+
 function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtifact; artifactKey: string }) {
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
@@ -1060,7 +1108,7 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     }
     return <Spinner />;
   } else if (artifact.data.format === "exam_v1") {
-    return <ExamSubmissionRenderer artifact={artifact} />;
+    return <ExamArtifact artifact={artifact} />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }

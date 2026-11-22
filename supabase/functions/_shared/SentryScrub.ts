@@ -56,12 +56,59 @@ export function scrubEdgeBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
   return scrubbed;
 }
 
-/** Applies scrubEdgeBreadcrumb to the event's breadcrumbs. Never drops the event. */
+// No cap: an evicted credential would reach Sentry unredacted, and Forgejo tokens have no pattern
+// to fall back on. The set lives only as long as the isolate.
+const SECRETS = new Set<string>();
+const REDACTED = "[redacted]";
+const CODER_API_KEY = /\b[0-9A-Za-z]{10}-[0-9A-Za-z]{22}\b/g;
+
+/** Call as soon as a credential is in hand, before anything that could throw. */
+export function redactSecret(value: string): void {
+  if (value.length < 16) return;
+  SECRETS.add(value);
+}
+
+export function redactSecretsInText(text: string): string {
+  let out = text;
+  for (const secret of SECRETS) out = out.split(secret).join(REDACTED);
+  return out.replace(CODER_API_KEY, REDACTED);
+}
+
+const CIRCULAR = "[Circular]";
+const TRUNCATED = "[Truncated]";
+const MAX_DEPTH = 20;
+
+/**
+ * Copies: the event shares objects with the scopes. Processors run before the SDK's cycle-aware normalize, so
+ * this tracks identity itself: an object already on the path is a cycle, and an object reached again by another
+ * path reuses its copy. Without that, a small object referring to itself from a few keys is copied once per
+ * path, exponentially many times up to the depth limit. An object past the limit becomes a marker, never the
+ * original: its strings were not redacted, and a copy holding it could be reused where more depth was left.
+ */
+function redactDeep(value: unknown, depth = 0, copies = new Map<object, unknown>(), path = new Set<object>()): unknown {
+  if (typeof value === "string") return redactSecretsInText(value);
+  if (value === null || typeof value !== "object") return value;
+  if (depth > MAX_DEPTH) return TRUNCATED;
+  if (path.has(value)) return CIRCULAR;
+  if (copies.has(value)) return copies.get(value);
+  path.add(value);
+  let out: unknown;
+  if (Array.isArray(value)) out = value.map((v) => redactDeep(v, depth + 1, copies, path));
+  else {
+    const copy: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) copy[key] = redactDeep(v, depth + 1, copies, path);
+    out = copy;
+  }
+  path.delete(value);
+  copies.set(value, out);
+  return out;
+}
+
 export function scrubEdgeEvent<E extends Event>(event: E): E {
   if (event.breadcrumbs) {
     event.breadcrumbs = event.breadcrumbs.map(scrubEdgeBreadcrumb).filter((b): b is Breadcrumb => b !== null);
   }
-  return event;
+  return redactDeep(event) as E;
 }
 
 Sentry.getGlobalScope().addEventProcessor((event) => scrubEdgeEvent(event));

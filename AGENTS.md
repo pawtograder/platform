@@ -92,18 +92,20 @@ Requires **`pawtograder login`** with an API token from Settings → API Tokens:
 
 Read commands:
 
-| Command                                                               | Purpose                                                         |
-| --------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `classes list` / `classes show <id>`                                  | Classes visible to the token.                                   |
-| `assignments list` / `assignments show <id>`                          | Assignments in a class.                                         |
-| `submissions list -c <class> -a <assignment>`                         | Roster with active submission, autograder and total scores.     |
-| `reviews list -c <class> -a <assignment>`                             | Review assignments, with rubric parts and completion state.     |
-| `discussions list -c <class>`                                         | Discussion topics with thread, question, and unanswered counts. |
-| `help-requests list -c <class> [--status active]`                     | Office-hours help queue.                                        |
-| `rubrics list` / `rubrics export`                                     | Rubrics, and YAML export.                                       |
-| `flashcards list`                                                     | Flashcard decks.                                                |
-| `repos list -c <class> -a <assignment>`                               | Student repos + assignment summary (metadata only).             |
-| `submissions export` / `assessment export` / `assessment deanonymize` | Bulk data dumps (streaming NDJSON; PII-gated).                  |
+| Command                                                                | Purpose                                                         |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `classes list` / `classes show <id>`                                   | Classes visible to the token.                                   |
+| `assignments list` / `assignments show <id>`                           | Assignments in a class.                                         |
+| `submissions list -c <class> -a <assignment>`                          | Roster with active submission, autograder and total scores.     |
+| `reviews list -c <class> -a <assignment>`                              | Review assignments, with rubric parts and completion state.     |
+| `discussions list -c <class>`                                          | Discussion topics with thread, question, and unanswered counts. |
+| `help-requests list -c <class> [--status active]`                      | Office-hours help queue.                                        |
+| `rubrics list` / `rubrics export`                                      | Rubrics, and YAML export.                                       |
+| `flashcards list`                                                      | Flashcard decks.                                                |
+| `repos list -c <class> -a <assignment>`                                | Student repos + assignment summary (metadata only).             |
+| `exams list -c <class>` / `exams questions -c <class> -a <assignment>` | Paper exams; each question with its grading rubric check IDs.   |
+| `exams scans status -c <class> --batch <id>`                           | Scan batch state, pages uploaded, and match counts.             |
+| `submissions export` / `assessment export` / `assessment deanonymize`  | Bulk data dumps (streaming NDJSON; PII-gated).                  |
 
 Every `list` command accepts `--json` for machine-readable output.
 
@@ -116,6 +118,7 @@ Write commands:
 | `help-requests close --id <id>`                                      | Close or resolve a help request (instructor only).                |
 | `rubrics import` / `flashcards copy` / `surveys copy`                | Import a rubric; copy decks or surveys between classes.           |
 | `submissions comments import\|sync` / `submissions artifacts import` | Batch comment and artifact ingestion.                             |
+| `exams scans upload` / `process` / `finalize [--dry-run]`            | The exam Scans page steps, except confirming matches.             |
 
 `reviews assign` allocates round-robin across active graders and instructors, honoring `grading_conflicts` and never assigning someone their own submission — including for explicit `--file` manifests, which are validated against the same exclusions. Pass `--by-part` to fan out per rubric part, or `--file <manifest.json>` to supply explicit `{assignee_profile_id, submission_id, rubric_part_id}` triples. `--dry-run` shows the plan without writing.
 
@@ -145,6 +148,17 @@ Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Ad
 - The staging Supabase backend (`.env.local.staging`) has signups disabled; use local Supabase for full dev.
 - Docker in this cloud VM requires `fuse-overlayfs` storage driver and `iptables-legacy`. These are configured during initial setup.
 - Edge Functions should be started with `.env.local` when needed: `npx supabase functions serve --env-file .env.local`.
+
+### Errors from refine updates and deletes
+
+`lib/refineDataProvider.ts` wraps the refine Supabase data provider. When RLS refuses an `update` or `deleteOne`, PostgREST changes 0 rows and returns no error. The wrapper then throws an `Error` with `statusCode: 403` and a plain message meant for the user (no table name or id). Deleting a row that is already gone (another tab, a double click) still succeeds: when `deleteOne` changes nothing, the wrapper selects the row and throws only if the session can still see it. So a refused delete of a row the session can no longer read, such as one seen on a stale page before a capability was removed, still reports success. `updateMany` and `deleteMany` are not wrapped.
+
+refine never shows these errors itself. The `notificationProvider` in `components/ui/provider.tsx` is turned off, so the `successNotification` and `errorNotification` options of refine hooks do nothing, and `PopConfirm` only logs a rejected `onConfirm` to the console. Every call to `useUpdate` or `useDelete` has to report failures itself:
+
+- `mutateAsync`: wrap it in `try`/`catch` and call `toaster.error` in the `catch`.
+- `mutate`: pass `onError` in the second argument and call `toaster.error` there.
+
+To tell an RLS refusal apart from other errors, for example to show a permission message, call `isRefusedWriteError(error)` from `lib/refineDataProvider.ts` instead of checking `statusCode`. Other PostgREST errors carry their Postgres code in `statusCode`, so an RLS violation on insert arrives as 42501 and is not one of these refusals.
 
 ### Deleting repositories and submissions
 
