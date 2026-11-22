@@ -14362,6 +14362,10 @@ export type Database = {
           template_repo: string;
         }[];
       };
+      forgejo_groups_need_grants: {
+        Args: { p_group_ids: number[] };
+        Returns: undefined;
+      };
       forgejo_repo_token_revocable: {
         Args: { p_repository_id: number; p_user_id: string };
         Returns: boolean;
@@ -15314,6 +15318,17 @@ export type Database = {
       merge_duplicate_class_enrollments: {
         Args: { p_class_id?: number };
         Returns: number;
+      };
+      metrics_office_hours_queue_health: {
+        Args: never;
+        Returns: {
+          class_id: number;
+          oldest_wait_minutes: number;
+          queues_active: number;
+          queues_red: number;
+          queues_unstaffed: number;
+          requests_waiting: number;
+        }[];
       };
       metrics_workflow_errors_by_category: {
         Args: { window_hours?: number };

@@ -133,7 +133,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     "manage_assignments",
     req.headers.get("Authorization")
   );
-  if (autograder.assignments.git_provider !== "github") {
+  // A Forgejo assignment's grader repo stays on GitHub (D6), so only its handout is refused here.
+  const isForgejo = autograder.assignments.git_provider !== "github";
+  if (isForgejo && watch_type === "template_repo") {
     throw new UserVisibleError("This assignment uses Forgejo. GitHub configuration is unavailable.", 400);
   }
   if (watch_type === "template_repo" && autograder.assignments.has_autograder === false) {
@@ -246,7 +248,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       ? [...(newConfig.submissionFiles.files || []), ...(newConfig.submissionFiles.testFiles || [])]
       : [];
     const rehashedRows: Database["public"]["Tables"]["assignment_handout_file_hashes"]["Insert"][] = [];
-    if (handoutTarget?.template_repo && expectedFiles.length > 0) {
+    // The rehash reads the handout through GitHub, and a Forgejo assignment's handout is on Forgejo.
+    if (isForgejo) {
+      console.log(`Not rehashing handout revisions for assignment ${assignment_id}: the handout is on Forgejo`);
+    } else if (handoutTarget?.template_repo && expectedFiles.length > 0) {
       // Recompute EVERY recorded revision, not just the current head. The empty-submission check
       // compares a pushed tree against the stored hash for the revision that repository is on, and
       // student repositories sit on older handout revisions all the time. Reseeding only the latest

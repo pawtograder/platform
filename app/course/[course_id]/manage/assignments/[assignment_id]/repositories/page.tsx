@@ -3,6 +3,7 @@ import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
@@ -636,6 +637,7 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
     resource: "assignments",
     id: assignmentId
   });
+  const repoHost = useRepoWebHost(assignment?.data?.git_provider);
 
   const { data: commits, isLoading } = useList<Database["public"]["Tables"]["assignment_handout_commits"]["Row"]>({
     resource: "assignment_handout_commits",
@@ -678,12 +680,16 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
                 return (
                   <Table.Row key={commit.id}>
                     <Table.Cell>
-                      <Link
-                        href={`https://github.com/${assignment.data.template_repo}/commit/${commit.sha}`}
-                        target="_blank"
-                      >
+                      {repoHost ? (
+                        <Link
+                          href={`${repoHost}/${assignment.data.template_repo}/commit/${commit.sha}`}
+                          target="_blank"
+                        >
+                          <Code fontSize="xs">{commit.sha.slice(0, 7)}</Code>
+                        </Link>
+                      ) : (
                         <Code fontSize="xs">{commit.sha.slice(0, 7)}</Code>
-                      </Link>
+                      )}
                     </Table.Cell>
                     <Table.Cell fontSize="sm">
                       {formatRelative(commitDate, TZDate.tz(time_zone || "America/New_York"))}
@@ -718,6 +724,8 @@ export default function RepositoriesPage() {
     resource: "assignments",
     id: Number(assignment_id)
   });
+  const isForgejo = assignment?.data?.git_provider === "forgejo";
+  const repoHost = useRepoWebHost(assignment?.data?.git_provider);
 
   const [repositories, setRepositories] = useState<
     TableController<"repositories", typeof joinedSelect, number> | undefined
@@ -808,10 +816,16 @@ export default function RepositoriesPage() {
         accessorKey: "repository",
         cell: ({ row }) => (
           <HStack gap={2}>
-            <Link href={`https://github.com/${row.original.repository}`} target="_blank">
-              {row.original.repository}
-            </Link>
-            <Icon as={FaExternalLinkAlt} color="gray.500" />
+            {repoHost ? (
+              <>
+                <Link href={`${repoHost}/${row.original.repository}`} target="_blank">
+                  {row.original.repository}
+                </Link>
+                <Icon as={FaExternalLinkAlt} color="gray.500" />
+              </>
+            ) : (
+              <Text>{row.original.repository}</Text>
+            )}
           </HStack>
         ),
         filterFn: (row, _id, filterValue) => {
@@ -823,7 +837,7 @@ export default function RepositoriesPage() {
       },
       {
         id: "is_github_ready",
-        header: "GitHub Ready",
+        header: isForgejo ? "Ready" : "GitHub Ready",
         accessorKey: "is_github_ready",
         cell: ({ row }) => (
           <HStack>
@@ -858,7 +872,8 @@ export default function RepositoriesPage() {
             ) : (
               <>
                 <Icon as={FaTimes} color="red.500" />
-                {row.original.user_roles?.github_org_confirmed ? (
+                {/* Forgejo repos wait for the reconciler, not a GitHub org invitation. */}
+                {isForgejo || row.original.user_roles?.github_org_confirmed ? (
                   <Text color="fg.muted">Not Ready, pending creation</Text>
                 ) : (
                   <VStack gap={0} alignItems="flex-start">
@@ -885,9 +900,9 @@ export default function RepositoriesPage() {
         header: "Synced SHA",
         accessorKey: "synced_handout_sha",
         cell: ({ row }) => {
-          if (row.original.synced_handout_sha && assignment?.data?.template_repo) {
+          if (row.original.synced_handout_sha && assignment?.data?.template_repo && repoHost) {
             const sha = row.original.synced_handout_sha;
-            const commitUrl = `https://github.com/${assignment.data.template_repo}/commit/${sha}`;
+            const commitUrl = `${repoHost}/${assignment.data.template_repo}/commit/${sha}`;
             return (
               <Link href={commitUrl} target="_blank">
                 <Code fontSize="xs" color="blue.600">
@@ -897,7 +912,7 @@ export default function RepositoriesPage() {
             );
           }
           if (row.original.synced_handout_sha) {
-            // Fallback if template_repo not available
+            // Fallback if template_repo or its host isn't available
             return <Code fontSize="xs">{row.original.synced_handout_sha.substring(0, 7)}</Code>;
           }
           return (
@@ -939,7 +954,7 @@ export default function RepositoriesPage() {
         }
       }
     ],
-    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha]
+    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha, repoHost, isForgejo]
   );
 
   const {
@@ -1072,18 +1087,27 @@ export default function RepositoriesPage() {
       <VStack paddingBottom="55px" w="100%">
         <Box>
           <Heading size="sm">Repository Status</Heading>
-          <Text fontSize="sm" color="fg.muted">
-            Student repositories are generated from the template repository at the time of assignment release (usually
-            created at a rate of about 50 per-minute, as rate-limited by GitHub). The &quot;GitHub Ready&quot; column
-            shows the status of the student repository, confirming that the repository has been correctly provisioned or
-            show a loading/error state. Student repositories are created as a snapshot of the template repository at the
-            time of release, showing students ONLY a single &quot;Initial Commit&quot; of the template repository. If
-            you need to make changes to the template repository after release, you can use the &quot;Sync&quot; feature,
-            which will create a pull request to the student repository, auto-merging if there are no conflicts, which
-            will create a new submission. This procedure is also heavily rate-limited by GitHub, working at a rate of no
-            more than 50 pull requests per-minute per-class. The &quot;Sync&quot; feature is currently in beta, and may
-            not support all use cases; please do not rely heavily on it, and <SyncReportIssuesLink />.
-          </Text>
+          {isForgejo ? (
+            <Text fontSize="sm" color="fg.muted">
+              Student repositories are created on Forgejo from the handout when the assignment is released, and for
+              students who enroll later. The &quot;Ready&quot; column shows whether each repository exists and every
+              student it belongs to can push to it.
+            </Text>
+          ) : (
+            <Text fontSize="sm" color="fg.muted">
+              Student repositories are generated from the template repository at the time of assignment release (usually
+              created at a rate of about 50 per-minute, as rate-limited by GitHub). The &quot;GitHub Ready&quot; column
+              shows the status of the student repository, confirming that the repository has been correctly provisioned
+              or show a loading/error state. Student repositories are created as a snapshot of the template repository
+              at the time of release, showing students ONLY a single &quot;Initial Commit&quot; of the template
+              repository. If you need to make changes to the template repository after release, you can use the
+              &quot;Sync&quot; feature, which will create a pull request to the student repository, auto-merging if
+              there are no conflicts, which will create a new submission. This procedure is also heavily rate-limited by
+              GitHub, working at a rate of no more than 50 pull requests per-minute per-class. The &quot;Sync&quot;
+              feature is currently in beta, and may not support all use cases; please do not rely heavily on it, and{" "}
+              <SyncReportIssuesLink />.
+            </Text>
+          )}
         </Box>
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />
 
