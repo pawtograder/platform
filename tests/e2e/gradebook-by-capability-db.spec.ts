@@ -1,10 +1,14 @@
 /**
- * #1010: arranging the gradebook follows manage_gradebook (20261121160100_gradebook_by_capability.sql).
+ * #1010: the gradebook follows manage_gradebook (20261121160100_gradebook_by_capability.sql and
+ * 20261121200200_gradebook_view_by_capability.sql).
  *
  * Adding, editing and deleting gradebook columns, deleting cells and row state, renaming and
  * deleting column groups and topics, and the RPCs that reorder, auto-layout, group, import and
- * release columns need manage_gradebook in the class. The default instructor role holds it; the
- * default grader role doesn't. Reading the gradebook and overriding a cell stay as they are.
+ * release columns need manage_gradebook in the class. So do reading and editing other students'
+ * cells and row state, the staff records RPCs, overrides, and the private grades in
+ * get_student_summary. The default instructor role holds it; the default grader role doesn't.
+ * Students still read their own cells, and anyone in the class still reads the gradebook's columns,
+ * groups and topics.
  *
  * PostgREST reports a blocked insert as an error, but an update or delete that RLS hides changes 0
  * rows without one, so each blocked write is checked and then confirmed through the service client.
@@ -265,8 +269,9 @@ test.describe("gradebook changes follow manage_gradebook (#1010)", () => {
     expect(io).toEqual({ instructor_only: true, released: false });
   });
 
-  test("a default grader still reads the gradebook and overrides a cell", async () => {
+  test("a default grader can't see or change students' scores", async () => {
     const client = await createAuthenticatedClient(plainGrader);
+    // The columns, groups and topics stay readable to everyone in the class.
     for (const [table, id] of [
       ["gradebook_columns", columnId],
       ["gradebook_column_groups", groupId],
@@ -277,13 +282,141 @@ test.describe("gradebook changes follow manage_gradebook (#1010)", () => {
       expect(data ?? [], `${table} is readable`).toHaveLength(1);
     }
 
+    const { data: cells, error: cellsError } = await client
+      .from("gradebook_column_students")
+      .select("id")
+      .eq("class_id", classG.id);
+    expect(cellsError).toBeNull();
+    expect(cells ?? [], "no cells").toHaveLength(0);
+
+    await seedRowState();
+    const { data: rowState, error: rowStateError } = await client
+      .from("gradebook_row_recalc_state")
+      .select("student_id")
+      .eq("class_id", classG.id);
+    expect(rowStateError).toBeNull();
+    expect(rowState ?? [], "no row state").toHaveLength(0);
+
+    for (const fn of [
+      "get_gradebook_records_for_all_students",
+      "get_gradebook_records_for_all_students_array"
+    ] as const) {
+      const { data, error } = await client.rpc(fn, { p_class_id: classG.id });
+      expect(error, fn).toBeNull();
+      expect(data, fn).toEqual([]);
+    }
+
     const cell = await privateCell(columnId);
-    const { error } = await client.rpc("update_gradebook_column_student_with_recalc", {
-      p_id: cell.id,
-      p_updates: { score_override: 7 }
+    expectRefused(
+      await client.rpc("update_gradebook_column_student_with_recalc", {
+        p_id: cell.id,
+        p_updates: { score_override: 7 }
+      }),
+      "override"
+    );
+    // Convert Missing to 0 is a direct update of the column's cells.
+    expectBlocked(
+      await client
+        .from("gradebook_column_students")
+        .update({ score: 0, is_missing: false, score_override_note: "Missing value converted to 0" })
+        .eq("gradebook_column_id", columnId)
+        .eq("is_private", true)
+        .select("id"),
+      "convert missing"
+    );
+    const after = await privateCell(columnId);
+    expect(after.score_override).toBe(cell.score_override);
+    expect(after.score).toBe(cell.score);
+
+    expectBlocked(
+      await client
+        .from("gradebook_row_recalc_state")
+        .update({ dirty: false })
+        .eq("class_id", classG.id)
+        .select("student_id"),
+      "row state update"
+    );
+
+    // The rest of the student summary still works; only its private grades are left out.
+    const { data: summary, error: summaryError } = await client.rpc("get_student_summary", {
+      p_class_id: classG.id,
+      p_student_profile_id: student.private_profile_id
     });
-    expect(error).toBeNull();
+    expect(summaryError).toBeNull();
+    expect((summary as { grades_private: unknown[] }).grades_private).toEqual([]);
+  });
+
+  test("a Head TA with manage_gradebook sees and changes students' scores", async () => {
+    const client = await createAuthenticatedClient(headTa);
+
+    const { data: cells, error: cellsError } = await client
+      .from("gradebook_column_students")
+      .select("id")
+      .eq("class_id", classG.id);
+    expect(cellsError).toBeNull();
+    expect((cells ?? []).length, "reads the cells").toBeGreaterThan(0);
+
+    await seedRowState();
+    const { data: rowState } = await client
+      .from("gradebook_row_recalc_state")
+      .select("student_id")
+      .eq("class_id", classG.id);
+    expect((rowState ?? []).length, "reads the row state").toBeGreaterThan(0);
+
+    for (const fn of [
+      "get_gradebook_records_for_all_students",
+      "get_gradebook_records_for_all_students_array"
+    ] as const) {
+      const { data, error } = await client.rpc(fn, { p_class_id: classG.id });
+      expect(error, fn).toBeNull();
+      expect((data as unknown[]).length, fn).toBeGreaterThan(0);
+    }
+
+    const cell = await privateCell(columnId);
+    expect(
+      (
+        await client.rpc("update_gradebook_column_student_with_recalc", {
+          p_id: cell.id,
+          p_updates: { score_override: 7 }
+        })
+      ).error
+    ).toBeNull();
     expect(Number((await privateCell(columnId)).score_override)).toBe(7);
+
+    const { data: converted, error: convertError } = await client
+      .from("gradebook_column_students")
+      .update({ score: 0, is_missing: false, score_override_note: "Missing value converted to 0" })
+      .eq("id", cell.id)
+      .select("id");
+    expect(convertError).toBeNull();
+    expect(converted ?? [], "convert missing").toHaveLength(1);
+
+    const { data: summary, error: summaryError } = await client.rpc("get_student_summary", {
+      p_class_id: classG.id,
+      p_student_profile_id: student.private_profile_id
+    });
+    expect(summaryError).toBeNull();
+    expect((summary as { grades_private: unknown[] }).grades_private.length).toBeGreaterThan(0);
+  });
+
+  test("a student still reads only their own visible cells", async () => {
+    const client = await createAuthenticatedClient(student);
+    const { data, error } = await client
+      .from("gradebook_column_students")
+      .select("student_id, is_private, gradebook_column_id")
+      .eq("class_id", classG.id);
+    expect(error).toBeNull();
+    const rows = data ?? [];
+    expect(
+      rows.some((r) => r.gradebook_column_id === columnId),
+      "their cell in a visible column"
+    ).toBe(true);
+    for (const r of rows) {
+      expect(r.student_id).toBe(student.private_profile_id);
+      expect(r.is_private).toBe(false);
+    }
+    const { data: records } = await client.rpc("get_gradebook_records_for_all_students", { p_class_id: classG.id });
+    expect(records).toEqual([]);
   });
 
   test("a grader on a custom role with manage_gradebook can do each of these", async () => {
@@ -427,7 +560,7 @@ test.describe("gradebook changes follow manage_gradebook (#1010)", () => {
     expectRefused(await client.rpc("gradebook_auto_layout", { p_gradebook_id: otherGradebookId }), "other layout");
   });
 
-  test("an instructor still adds a column and calls the RPCs", async () => {
+  test("an instructor still reads and overrides cells, adds a column and calls the RPCs", async () => {
     const client = await createAuthenticatedClient(instructor);
     const { data: added, error } = await client
       .from("gradebook_columns")
@@ -441,6 +574,18 @@ test.describe("gradebook changes follow manage_gradebook (#1010)", () => {
       .select("id")
       .single();
     expect(error).toBeNull();
+    const { data: records } = await client.rpc("get_gradebook_records_for_all_students", { p_class_id: classG.id });
+    expect((records as unknown[]).length, "reads the records").toBeGreaterThan(0);
+    const cell = await privateCell(columnId);
+    expect(
+      (
+        await client.rpc("update_gradebook_column_student_with_recalc", {
+          p_id: cell.id,
+          p_updates: { score_override: 5 }
+        })
+      ).error
+    ).toBeNull();
+    expect(Number((await privateCell(columnId)).score_override)).toBe(5);
     expect((await client.rpc("gradebook_auto_layout", { p_gradebook_id: gradebookId })).error).toBeNull();
     expect(
       (await client.rpc("gradebook_columns_reorder", { p_ordered_column_ids: await columnIds() })).error
