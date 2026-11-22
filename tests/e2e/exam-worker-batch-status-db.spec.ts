@@ -1,7 +1,7 @@
 /**
  * #1158: exam_worker_set_batch_status changes a batch's status only while the calling worker still
  * holds its queue message, and only from the states the caller allows, in one transaction
- * (20261120170000_pgmq_public_set_vt_if_claimed.sql).
+ * (20261122130000_pgmq_public_set_vt_if_claimed.sql).
  *
  * A worker whose lease lapsed keeps running. If it checked its claim and then wrote in a separate
  * step, another reader could claim the message in between. These tests drive both interleavings
