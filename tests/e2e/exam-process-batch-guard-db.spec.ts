@@ -2,7 +2,7 @@
  * #1329: Process must not queue a batch again while it is already being processed.
  *
  * enqueue_exam_process_batch sends one OCR job per page plus a match job. Before the guard
- * (20261120140000_exam_process_batch_status_guard.sql), a second call while the batch was still in
+ * (20261122123000_exam_process_batch_status_guard.sql), a second call while the batch was still in
  * ocr or matching sent the whole round again, and every extra OCR job is a paid Vision call. It now
  * locks the batch row and refuses ocr, matching, finalizing and completed.
  *
