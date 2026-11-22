@@ -24,3 +24,14 @@ export function useRepoWebHost(gitProvider: string | null | undefined): string |
   const forgejoHost = useForgejoInstanceUrl(isForgejo);
   return isForgejo ? forgejoHost : "https://github.com";
 }
+
+export function repoWebUrl(
+  host: string | undefined,
+  repository: string | null | undefined,
+  path = ""
+): string | undefined {
+  if (!host || !repository) return undefined;
+  const base = host.replace(/\/$/, "");
+  const webPath = base === "https://github.com" ? path : path.replace(/^\/blob\//, "/src/commit/");
+  return `${base}/${repository}${webPath}`;
+}

@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 
 import {
   Box,
@@ -61,6 +62,7 @@ function WorkflowRunTable() {
 
   // Get data from TableControllers
   const assignmentsData = assignmentsController.rows;
+  const forgejoHost = useForgejoInstanceUrl(assignmentsData.some((a) => a.git_provider === "forgejo"));
   const profilesData = profilesController.rows;
 
   // Create maps for quick lookups
@@ -200,7 +202,13 @@ function WorkflowRunTable() {
           }
           return (
             <Link
-              href={`https://github.com/${repoName}/commit/${sha}`}
+              href={repoWebUrl(
+                assignmentsData.find((a) => a.id === row.original.assignment_id)?.git_provider === "forgejo"
+                  ? forgejoHost
+                  : "https://github.com",
+                repoName,
+                `/commit/${sha}`
+              )}
               target="_blank"
               rel="noopener noreferrer"
               color="blue.600"
@@ -414,7 +422,7 @@ function WorkflowRunTable() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [assignments, profiles]
+    [assignments, profiles, assignmentsData, forgejoHost]
   );
 
   const [tableController, setTableController] = useState<TableController<"workflow_runs"> | undefined>(undefined);

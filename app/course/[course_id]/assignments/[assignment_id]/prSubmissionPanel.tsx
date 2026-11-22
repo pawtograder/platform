@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { confirmPrLink } from "@/lib/edgeFunctions";
@@ -30,6 +31,7 @@ export default function PrSubmissionPanel({
   profileId?: string;
   onConfirmed?: () => void;
 }) {
+  const repoHost = useRepoWebHost(assignment.git_provider);
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
 
   const filters = useMemo(() => {
@@ -85,7 +87,7 @@ export default function PrSubmissionPanel({
       {assignment.upstream_repo ? (
         <Text fontSize="sm" color="fg.muted" mb={3}>
           Submit by opening a pull request against{" "}
-          <Link href={`https://github.com/${assignment.upstream_repo}`} target="_blank" rel="noopener noreferrer">
+          <Link href={repoWebUrl(repoHost, assignment.upstream_repo)} target="_blank" rel="noopener noreferrer">
             {assignment.upstream_repo}
           </Link>{" "}
           targeting the <code>{baseBranch}</code> branch
@@ -141,7 +143,7 @@ export default function PrSubmissionPanel({
                 <Table.Row key={link.id}>
                   <Table.Cell>
                     <Link
-                      href={`https://github.com/${link.pr_repo}/pull/${link.pr_number}`}
+                      href={repoWebUrl(repoHost, link.pr_repo, `/pull/${link.pr_number}`)}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
