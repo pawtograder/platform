@@ -146,11 +146,13 @@ role hold it, so instructors and default graders keep the management access grad
 instructor can then turn it off for the default grader role or a custom role. Before this capability,
 the person who created a deck could still update and delete it and manage its cards without the
 staff check; that creator path is gone so the capability is the only rule for those writes. The
-Course Settings "Flashcard Decks" entry and the create / edit / delete controls follow
-`useCapability("manage_flashcards")`. Left as views: class members reading decks and cards, students
+create / edit / delete controls follow `useCapability("manage_flashcards")`. The Course Settings
+"Flashcard Decks" entry and deck pages remain available to all staff for viewing. Left as views: class members reading decks and cards, students
 writing their own progress and interaction logs, and staff reading class-wide progress and logs for
 analytics.
 
-CLI `flashcards.copy` asks `user_class_ids_with_capability('manage_flashcards')` through the
-caller-scoped client (`ctx.supabase`) for both the source and the target class, matching the RLS
-policies rather than joining `role_capabilities` by hand.
+CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
+decks. It requires `manage_flashcards` only in the target class. The target check asks
+`user_class_ids_with_capability('manage_flashcards')` through the caller-scoped client
+(`ctx.supabase`), using the same capability lookup as RLS. Source read policies do not require
+`manage_flashcards`.
