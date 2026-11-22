@@ -208,8 +208,8 @@ export default function SurveyTakingPage() {
   const accessTokenRef = useRef<string | null>(null);
   // A Complete failed offline after it may have reached the database. The autosave queue stays
   // paused until the row has been read, once the browser is back online: a draft sent first would
-  // only be refused.
-  const submitCheckPendingRef = useRef(false);
+  // only be refused. Keep the sent answers so an earlier submission cannot satisfy this check.
+  const submitCheckPendingRef = useRef<ResponseData | null>(null);
   const checkSubmitOnReconnectRef = useRef<() => Promise<void>>(async () => {});
   // Live SurveyJS model, for restoring answers from a freshly fetched submitted row when editing
   // is no longer allowed. Becoming read-only does not update the model by itself.
@@ -418,25 +418,27 @@ export default function SurveyTakingPage() {
 
   // The student's response row as stored now: null when there is none, undefined when it can't be
   // read. Read when a save's reply (or the lack of one) doesn't say where the row stands.
-  const readStoredResponse = useCallback(async (): Promise<SurveyResponse | null | undefined> => {
-    if (!surveyId || !private_profile_id) return undefined;
-    try {
-      const { data, error } = await runWithTimeout(
-        async (signal) =>
+  const readStoredResponse = useCallback(
+    async (attemptSignal?: AbortSignal): Promise<SurveyResponse | null | undefined> => {
+      if (!surveyId || !private_profile_id || attemptSignal?.aborted) return undefined;
+      try {
+        const read = async (signal: AbortSignal) =>
           controller.client
             .from("survey_responses")
             .select("*")
             .eq("survey_id", surveyId)
             .eq("profile_id", private_profile_id)
             .abortSignal(signal)
-            .maybeSingle(),
-        SAVE_TIMEOUT_MS
-      );
-      return error ? undefined : data;
-    } catch {
-      return undefined;
-    }
-  }, [surveyId, private_profile_id, controller.client]);
+            .maybeSingle();
+        // An autosave read shares the save attempt's deadline. Complete checks have their own.
+        const { data, error } = await (attemptSignal ? read(attemptSignal) : runWithTimeout(read, SAVE_TIMEOUT_MS));
+        return error || attemptSignal?.aborted ? undefined : data;
+      } catch {
+        return undefined;
+      }
+    },
+    [surveyId, private_profile_id, controller.client]
+  );
 
   // The server holds a submitted response that this page took for a draft: a Complete whose reply
   // was lost, or a submit from another tab. Show it as submitted, as a reload would.
@@ -512,7 +514,7 @@ export default function SurveyTakingPage() {
           }
         }
         submitted = true;
-        submitCheckPendingRef.current = false;
+        submitCheckPendingRef.current = null;
         // Set before isSubmittingRef is cleared, so any autosave that fires after the submit
         // writes is_submitted:true rather than reverting the row.
         responseStateRef.current = "submitted";
@@ -548,7 +550,7 @@ export default function SurveyTakingPage() {
         if (!submitted) autosaveQueue?.schedule(surveyData);
         if (outcome === "unknown-until-online") {
           // The queue stays paused until checkSubmitOnReconnect has read the row.
-          submitCheckPendingRef.current = true;
+          submitCheckPendingRef.current = surveyData;
           if (navigator.onLine) void checkSubmitOnReconnectRef.current();
         } else {
           autosaveQueue?.resume();
@@ -560,14 +562,15 @@ export default function SurveyTakingPage() {
   );
 
   // Back online after a Complete that may have landed while offline: read the row before any draft
-  // goes out. If it is submitted, show that; otherwise the answers go back to autosaving.
+  // goes out. Confirm that it holds the sent answers; otherwise they go back to autosaving.
   checkSubmitOnReconnectRef.current = async () => {
     if (!submitCheckPendingRef.current || isSubmittingRef.current) return;
-    submitCheckPendingRef.current = false;
+    const sentData = submitCheckPendingRef.current;
+    submitCheckPendingRef.current = null;
     const row = await readStoredResponse();
     // A new Complete started meanwhile. It decides, and resumes the queue when it ends.
     if (isSubmittingRef.current) return;
-    if (row?.is_submitted) {
+    if (holdsSubmission(row, sentData)) {
       showSubmittedResponse(row);
     } else {
       setSubmitError(
@@ -620,6 +623,7 @@ export default function SurveyTakingPage() {
     try {
       await sendDraft(responseData, attempt);
     } catch (error) {
+      if (attempt.signal.aborted) throw error;
       const code = errorCode(error);
       if (!code || !REFUSED_AS_SUBMITTED_CODES.has(code)) throw error;
       // The page knew the response was submitted, so the survey itself refused the change: it was
@@ -629,8 +633,8 @@ export default function SurveyTakingPage() {
       // The database refuses a draft over a submitted response. If the row is submitted, it was
       // submitted where this page couldn't see it, so show that instead of retrying a request that
       // can only be refused again.
-      const row = await readStoredResponse();
-      if (!row?.is_submitted) throw error;
+      const row = await readStoredResponse(attempt.signal);
+      if (attempt.signal.aborted || !row?.is_submitted) throw error;
       showSubmittedResponse(row);
       // A survey that allows editing still takes the edit, now as a change to the submitted
       // response. responseStateRef now says submitted, so a refusal of that ends above.
