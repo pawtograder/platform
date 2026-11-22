@@ -143,8 +143,8 @@ instructor creates, renames or deletes is not broadcast, so it appears on the ne
 page (including when the staff channel rejoins after a gap).
 
 Updates and deletes ask for the rows they changed, because a policy can refuse those without an
-error; the page then reports the change as not saved and puts the control back. Inserts fail with
-an error, so they do not need a returning select.
+error; the page then reports the change as not saved and puts the control back. A refused insert
+fails with an error, so creating a role does not ask for rows back.
 
 ## For the UI: useCapability
 
