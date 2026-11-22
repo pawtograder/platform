@@ -5,10 +5,20 @@ from one that has failed.
 
 Paper exams are off by default. A course turns them on with the `exams` course flag ("Paper exams"
 under Course Settings > Feature flags). The flag gates the pages themselves, not just the nav:
-`ExamFeatureGate` renders a notice for a pasted URL, so a course that never opted in cannot enqueue
-worker jobs or spend the shared Gemini budget. Turning the flag off is the rollback for anything in
-this document. It stops new work immediately. It does not cancel work already queued, which drains
-on its own.
+`ExamFeatureGate` renders a notice for a pasted URL, so a course that never opted in does not reach
+a live upload form.
+
+**Turning the flag off is not a complete rollback, and that is worth knowing before you reach for
+it.** The gate is a render-time check in the UI. `enqueue_exam_process_batch` and
+`enqueue_exam_finalize` check only that the caller is an instructor or grader for the batch's class
+(`20261107120000_exam_grading.sql:972` and `:1051`); neither looks at the course's `exams` feature.
+So after the flag is off, staff with an already-open Scans or Match Review page, and anyone calling
+the RPC directly, can still queue worker jobs and spend the shared Gemini budget. It also does not
+cancel work already queued, which drains on its own.
+
+To actually stop work, turn the flag off **and** confirm the queue is empty (see
+[Checking it by hand](#checking-it-by-hand)). Pushing the check down into the two RPCs is in the gap
+list below.
 
 Scanning is asynchronous. Staff upload a PDF, press Process, and everything after that happens in
 the `exam-async-worker` edge function reading a PGMQ queue. Nothing about that is visible in the
@@ -114,8 +124,10 @@ group by match_status;
 `unmatched` and `suggested` need a human. `confirmed` and `skipped` are done. `finalized_at` is the
 single completion marker, set transactionally once the submission, its page files and the exam
 artifact are all written, so `submissions > finalized` means a finalize started and did not finish.
-Those are exactly the rows `enqueue_exam_finalize` re-enqueues, so they generally recover on their
-own.
+Those are the rows `enqueue_exam_finalize` re-enqueues, but **nothing calls it automatically.** The
+cron worker drains queued messages; it never creates new finalize messages. A row whose finalize
+message is no longer queued stays unfinished until staff re-run `exams scans finalize` or the match
+review action. Do not wait for a recovery that will not come.
 
 **Start every give-up investigation here**, because dead-lettered messages are kept in a normal
 table rather than only in the queue:
@@ -128,10 +140,22 @@ order by created_at desc
 limit 50;
 ```
 
-Every row corresponds to a batch that was also set to `error`, and `error_type` separates the four
-give-up paths (poison pill, rejected scan path, rate-limit budget exhausted, retry budget exhausted)
-without reading any logs. `envelope` holds the original message, so a reproduction does not need the
-queue.
+Every row corresponds to a batch that was also set to `error`. `envelope` holds the original
+message, so a reproduction does not need the queue.
+
+`error_type` is the error's class name (`index.ts:126`), which identifies two of the four give-up
+paths and not the other two. Read the row like this:
+
+| Give-up path                | How to recognize it                                           |
+| --------------------------- | ------------------------------------------------------------- |
+| Rejected scan path          | `error_type` is `ScanPathRejectedError` or a subclass of it   |
+| Rate-limit budget exhausted | `error_type` is `ProviderRateLimitError`, `retry_count` at 20 |
+| Poison pill                 | `error_message` starts with `read_ct=`                        |
+| Retry budget exhausted      | neither of the above, `retry_count` at 5                      |
+
+The last two both store a plain `Error`: the poison-pill guard raises one itself, and the retry path
+stores whatever the final attempt threw. So `error_message` and `retry_count` do the work there, not
+`error_type`.
 
 The queue itself lives in the `pgmq` schema, which is **not exposed over PostgREST**, so depth
 cannot be read from the app or from a Supabase client. It needs a direct database connection:
@@ -192,9 +216,16 @@ This rejects immediately rather than after five retries, because it will reject 
 time. It means a page row points somewhere it should not, which is a data problem, not a transient
 one. Do not retry it; find out how the path got written.
 
-**No log lines at all.** The worker is not being invoked. It is driven both by database triggers on
-enqueue and by a periodic invocation, so both would have to fail. Check the edge function is
-deployed and check `net.http_post` is reaching it.
+**No log lines at all.** The worker is not being invoked, and two separate things would have to have
+failed. The scheduled path is the pg_cron job `invoke-exam-async-worker-every-minute`
+(`20261107120000_exam_grading.sql:1181`), which runs every minute and calls
+`invoke_exam_async_worker_background_task()`: it does nothing when the queue is empty, starts 5
+workers when 10 or more messages are waiting, and 2 otherwise. The other path is not a trigger; the
+two enqueue RPCs invoke the worker themselves after sending.
+
+Check `cron.job_run_details` for that job first. If the job is running and the queue is not empty,
+the problem is between the database and the function: confirm the edge function is deployed and that
+`net.http_post` is reaching it.
 
 **After a deploy, "did my change actually ship?"** Be careful here, because the obvious answer is
 wrong. `helm upgrade --install` runs without `--atomic`
@@ -212,8 +243,13 @@ Stating these plainly so January inherits the list rather than discovering it.
 - **No metrics.** No gauge for queue depth, batch age, retry rate or time-in-stage. Everything above
   is a manual query. Queue depth specifically needs a new RPC and a migration, because `pgmq` is not
   exposed over PostgREST.
-- **No alert.** Nothing pages or posts when a batch sits in `error`. The first person to know is
-  whichever staff member reloads the Scans page.
+- **No alert, and no column to build one on.** Nothing pages or posts when a batch sits in `error`,
+  so the first person to know is whichever staff member reloads the Scans page. `exam_scan_batches`
+  also records no stage-entry time, only `created_at`, so "this batch has been stuck for two hours"
+  cannot be expressed in SQL today. See [Suggested alert](#suggested-alert-not-shipped).
+- **The `exams` flag is not enforced where the work is queued.** `enqueue_exam_process_batch` and
+  `enqueue_exam_finalize` check staff role and not the course feature, so turning the flag off does
+  not reliably stop new worker jobs or new spend. Raised by CodeRabbit on this PR.
 - **No load test at the size we claim to support.** The largest real run is 4 students
   (staging, 2026-11-11) and the seeder caps at 60 papers and bypasses the worker entirely. #1337
   covers running 200 through the real pipeline, and the per-stage timings it produces should replace
@@ -235,6 +271,13 @@ from public.exam_scan_batches
 where status in ('uploaded', 'ocr', 'matching', 'finalizing')
   and created_at < now() - interval '2 hours';
 ```
+
+**This query is wrong as written, and it cannot be written correctly today.** `exam_scan_batches`
+has `created_at` and nothing else: no column records when a batch entered its current status. A
+batch that sat in `review` for three days and then started finalize normally has a `created_at`
+three days old, so this fires immediately on a healthy finalize. Measuring time in the active stage
+needs a stage-entry timestamp that does not exist yet, which is the first thing to add before
+anyone ships this alert.
 
 Two hours rather than thirty minutes because a 200-paper Process legitimately takes about 35
 minutes, and an alert that fires on a large exam running normally is an alert people learn to
