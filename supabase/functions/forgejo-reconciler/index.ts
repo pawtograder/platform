@@ -85,7 +85,8 @@ Deno.serve(async (req) => {
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
         `workflow hashes ${hashes.set} (failed ${hashes.failures.length}), ` +
         `staff teams ${staffTeams.synced} (failed ${staffTeams.failures.length}), ` +
-        `group leavers removed ${groupLeavers.removed} (failed ${groupLeavers.failures.length})`
+        `group leavers removed ${groupLeavers.removed} (discarded ${groupLeavers.discarded}, ` +
+        `failed ${groupLeavers.failures.length})`
     );
     console.log(`[forgejo-reconciler] Revoked ${revocation.revoked} tokens, failed ${revocation.failures.length}`);
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
@@ -153,6 +154,7 @@ Deno.serve(async (req) => {
       staff_teams_synced: staffTeams.synced,
       staff_teams_failed: staffTeams.failures.length,
       group_leavers_removed: groupLeavers.removed,
+      group_leavers_discarded: groupLeavers.discarded,
       group_leavers_failed: groupLeavers.failures.length,
       revoked: revocation.revoked,
       revoke_failed: revocation.failures.length

@@ -361,6 +361,19 @@ export async function reconcileForgejoStaffTeams(
   for (const cls of classes ?? []) {
     try {
       const teamId = await ops.ensureStaffTeam(config, cls.org, cls.team);
+      // Recorded as soon as the team exists, before the steps that can fail: the backlog lists a class
+      // only while it has live Forgejo repos, and the team outlives them (#1398 archives a deleted
+      // assignment's repos but leaves the team holding its grants). Without this marker the class drops
+      // out and a TA dropped afterwards keeps team access for good.
+      // function-grants: service-role
+      const { error: recordError } = await supabase.rpc("record_forgejo_staff_team", {
+        p_class_id: cls.class_id,
+        p_instance_url: config.url,
+        p_org: cls.org,
+        p_team: cls.team,
+        p_team_id: teamId
+      });
+      if (recordError) throw recordError;
       // Members first: a staff member removed from the class loses every repo at once.
       await ops.syncTeamMembers(config, teamId, cls.logins);
       await ops.grantTeamRepos(config, teamId, cls.org, cls.repositories);
@@ -422,6 +435,8 @@ export async function revokeDroppedTokens(
 
 export type GroupLeaveResult = {
   removed: number;
+  /** Rows whose repository is gone or now answers to another name, dropped without calling Forgejo. */
+  discarded: number;
   failures: { assignmentGroupId: number; profileId: string; error: unknown }[];
 };
 
@@ -430,6 +445,13 @@ export type GroupLeaveResult = {
  * when a membership leaves a group (20261121200000_forgejo_group_repo_revocations.sql), and cancels it if they
  * rejoin first. Each row is removed once now and once more after a 10-minute grace, in case a group pass that
  * read the roster before they left granted them afterwards.
+ *
+ * That grace is why the repository's identity is checked and not just its name. Archiving a repo renames it and
+ * frees the name (#1398), so in those ten minutes a new group can be given a repo called the same thing; removing
+ * the student from THAT one would take away access they currently have, and the repair path cannot undo it, since
+ * finish_forgejo_group_repo_revocation only looks at the group the row was queued for. A row whose repository row
+ * is gone, or now holds a different name, is therefore dropped without calling Forgejo: archiving removes every
+ * collaborator before it renames, so the access this row exists to revoke is already gone.
  */
 export async function revokeGroupLeavers(
   supabase: SupabaseClient<Database>,
@@ -444,7 +466,7 @@ export async function revokeGroupLeavers(
   });
   if (error) throw error;
 
-  const result: GroupLeaveResult = { removed: 0, failures: [] };
+  const result: GroupLeaveResult = { removed: 0, discarded: 0, failures: [] };
   for (const row of due ?? []) {
     try {
       // function-grants: service-role
@@ -454,6 +476,29 @@ export async function revokeGroupLeavers(
       });
       if (claimError) throw claimError;
       if (claimId == null) continue;
+      // Claimed first, so the check below reads the repository while this pass holds the row.
+      if (row.repository_id != null) {
+        const { data: repoRow, error: repoError } = await supabase
+          .from("repositories")
+          .select("id, repository")
+          .eq("id", row.repository_id)
+          .maybeSingle();
+        if (repoError) throw repoError;
+        if (!repoRow || repoRow.repository.toLowerCase() !== row.repository.toLowerCase()) {
+          // Deleted directly rather than through finish_forgejo_group_repo_revocation, which would test
+          // membership of the group this row named and re-grant it — the wrong repo entirely. Claim-matched,
+          // as revokeDroppedTokens deletes a token row, so a pass that took the row after this one read it
+          // keeps its own claim.
+          const { error: dropError } = await supabase
+            .from("forgejo_group_repo_revocations")
+            .delete()
+            .eq("id", row.id)
+            .eq("claim_id", claimId);
+          if (dropError) throw dropError;
+          result.discarded++;
+          continue;
+        }
+      }
       // On failure the claim stays, and the row is retried once it is stale.
       await remove(config, row.repository, row.login);
       // Re-grants instead when the student is back in the group.

@@ -27,6 +27,7 @@ console.log(
     hashes: hashes.set,
     staffTeams: staffTeams.synced,
     groupLeavers: groupLeavers.removed,
+    groupLeaversDiscarded: groupLeavers.discarded,
     revoked: revocation.revoked,
     failures: [
       ...accounts.failures,

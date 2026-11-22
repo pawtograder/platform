@@ -4369,6 +4369,41 @@ export type Database = {
           }
         ];
       };
+      forgejo_class_staff_teams: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          instance_url: string;
+          org: Pii<"handle", string>;
+          team: Pii<"handle", string>;
+          team_id: number | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          instance_url: string;
+          org: string;
+          team: string;
+          team_id?: number | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          instance_url?: string;
+          org?: string;
+          team?: string;
+          team_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "forgejo_class_staff_teams_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       forgejo_group_repo_revocations: {
         Row: {
           assignment_group_id: number;
@@ -4381,6 +4416,7 @@ export type Database = {
           login: Pii<"handle", string>;
           profile_id: string;
           repository: Pii<"handle", string>;
+          repository_id: number | null;
         };
         Insert: {
           assignment_group_id: number;
@@ -4393,6 +4429,7 @@ export type Database = {
           login: string;
           profile_id: string;
           repository: string;
+          repository_id?: number | null;
         };
         Update: {
           assignment_group_id?: number;
@@ -4405,6 +4442,7 @@ export type Database = {
           login?: string;
           profile_id?: string;
           repository?: string;
+          repository_id?: number | null;
         };
         Relationships: [];
       };
@@ -14421,6 +14459,7 @@ export type Database = {
           login: string;
           profile_id: string;
           repository: string;
+          repository_id: number | null;
         }[];
       };
       forgejo_group_repos_needed: {
@@ -15615,6 +15654,16 @@ export type Database = {
           p_instance_url: string;
           p_repository_id: number;
           p_user_id: string;
+        };
+        Returns: undefined;
+      };
+      record_forgejo_staff_team: {
+        Args: {
+          p_class_id: number;
+          p_instance_url: string;
+          p_org: string;
+          p_team: string;
+          p_team_id: number;
         };
         Returns: undefined;
       };
