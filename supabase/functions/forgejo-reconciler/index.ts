@@ -74,12 +74,13 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos, groupRepos, hashes, revocation } = await reconcileForgejo(supabase, config);
+    const { accounts, repos, groupRepos, hashes, orgHooks, revocation } = await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
-        `workflow hashes ${hashes.set} (failed ${hashes.failures.length})`
+        `workflow hashes ${hashes.set} (failed ${hashes.failures.length}), ` +
+        `org hooks ${orgHooks.checked} (failed ${orgHooks.failures.length})`
     );
     console.log(`[forgejo-reconciler] Revoked ${revocation.revoked} tokens, failed ${revocation.failures.length}`);
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
@@ -113,6 +114,15 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(hashes.failures[0].error, hashScope);
     }
+    if (orgHooks.failures.length > 0) {
+      const hookScope = scope.clone();
+      hookScope.setFingerprint(["forgejo-reconciler", "org-hook-failed"]);
+      hookScope.setContext("failures", {
+        count: orgHooks.failures.length,
+        orgs: orgHooks.failures.slice(0, 20).map((f) => f.org)
+      });
+      Sentry.captureException(orgHooks.failures[0].error, hookScope);
+    }
     reportFailures(scope, "revoke-failed", revocation.failures);
     await Sentry.flush(2000);
     return json({
@@ -124,6 +134,8 @@ Deno.serve(async (req) => {
       group_repos_failed: groupRepos.failures.length,
       workflow_hashes_set: hashes.set,
       workflow_hashes_failed: hashes.failures.length,
+      org_hooks_checked: orgHooks.checked,
+      org_hooks_failed: orgHooks.failures.length,
       revoked: revocation.revoked,
       revoke_failed: revocation.failures.length
     });

@@ -8,10 +8,13 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";
 import {
   MAX_ACCOUNTS_PER_PASS,
+  MAX_ORG_HOOKS_PER_PASS,
   MAX_REPOS_PER_PASS,
   MAX_REVOCATIONS_PER_PASS,
   reconcileForgejoAccounts,
+  orgHookWindow,
   reconcileForgejoGroupRepos,
+  reconcileForgejoOrgHooks,
   reconcileForgejoRepos,
   reconcileForgejoWorkflowHashes,
   type RepoOps,
@@ -832,3 +835,86 @@ for (const first of ["student", "group"] as const) {
     }
   );
 }
+
+function fakeOrgSupabase(classes: { slug: string; forgejo_org: string | null }[], error: unknown = null) {
+  const calls: string[] = [];
+  const query = {
+    select: (columns: string) => (calls.push(`select ${columns}`), query),
+    eq: (column: string, value: unknown) => (calls.push(`eq ${column} ${value}`), query),
+    limit: (count: number, options: { referencedTable: string }) => {
+      calls.push(`limit ${count} ${options.referencedTable}`);
+      return Promise.resolve({ data: error ? null : classes.map((c) => ({ ...c, repositories: [{ id: 1 }] })), error });
+    }
+  };
+  const client = {
+    from(table: string) {
+      assertEquals(table, "classes");
+      return query;
+    }
+  } as unknown as Parameters<typeof reconcileForgejoOrgHooks>[0];
+  return { client, calls };
+}
+
+const hookConfig: ForgejoConfig = { ...config, pushHook: { url: "https://fn.example.edu/hook", secret: "s" } };
+
+Deno.test("org hooks: every org holding Forgejo repos gets ensureOrg, named as the repo backlog names it", async () => {
+  const { client, calls } = fakeOrgSupabase([
+    { slug: "CS4535", forgejo_org: null },
+    { slug: "cs4535-sec2", forgejo_org: "CS4535" },
+    { slug: "cs3500", forgejo_org: "" }
+  ]);
+  const ensured: string[] = [];
+  const result = await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) => {
+    ensured.push(org);
+    return Promise.resolve();
+  });
+  // Two sections sharing an org are checked once; an empty forgejo_org falls back to the slug.
+  assertEquals(ensured, ["cs3500", "cs4535"]);
+  assertEquals(result, { checked: 2, failures: [] });
+  assertEquals(calls, [
+    "select slug, forgejo_org, repositories!inner(id)",
+    "eq repositories.git_provider forgejo",
+    "limit 1 repositories"
+  ]);
+});
+
+Deno.test("org hooks: one org's failure is recorded and the others are still checked", async () => {
+  const { client } = fakeOrgSupabase([
+    { slug: "a", forgejo_org: null },
+    { slug: "b", forgejo_org: null }
+  ]);
+  const boom = new Error("org has another owner");
+  const result = await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) =>
+    org === "a" ? Promise.reject(boom) : Promise.resolve()
+  );
+  assertEquals(result, { checked: 1, failures: [{ org: "a", error: boom }] });
+});
+
+Deno.test("org hooks: without a configured hook, nothing is queried or called", async () => {
+  const { client, calls } = fakeOrgSupabase([{ slug: "a", forgejo_org: null }]);
+  const result = await reconcileForgejoOrgHooks(client, config, () => {
+    throw new Error("must not be called");
+  });
+  assertEquals(result, { checked: 0, failures: [] });
+  assertEquals(calls, []);
+});
+
+Deno.test("org hooks: a failed class query fails the step", async () => {
+  const { client } = fakeOrgSupabase([], { message: "boom" });
+  await assertRejects(() => reconcileForgejoOrgHooks(client, hookConfig, () => Promise.resolve()));
+});
+
+Deno.test("org hooks: with many orgs, each pass checks a bounded window and the hours cover every org", () => {
+  const orgs = Array.from({ length: 45 }, (_, i) => `org${String(i).padStart(2, "0")}`);
+  const seen = new Set<string>();
+  for (let hour = 0; hour < 3; hour++) {
+    const window = orgHookWindow(orgs, hour * 3_600_000 + 1234);
+    assertEquals(window.length, MAX_ORG_HOOKS_PER_PASS);
+    // Kicks later in the same hour check the same orgs.
+    assertEquals(orgHookWindow(orgs, hour * 3_600_000 + 3_000_000), window);
+    window.forEach((o) => seen.add(o));
+  }
+  assertEquals(seen.size, orgs.length);
+  // Few orgs: all of them, every pass.
+  assertEquals(orgHookWindow(["b", "a", "b"], 0), ["a", "b"]);
+});
