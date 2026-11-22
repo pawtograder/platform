@@ -92,9 +92,14 @@ test.describe("Repository Status actions gated by manage_student_repositories", 
 
   // useCapability is false while loading, so "hidden" only means something once the answer is in.
   // ClassCapabilitiesProvider adds data-capabilities-loaded in the same render that applies the
-  // answer. The table row showing means the page has loaded too.
+  // answer. It also adds it, with no capabilities, after the lookup fails a few times, so the test
+  // first waits for a successful lookup. The table row showing means the page has loaded too.
   async function openRepositoriesPage(page: Page) {
+    const capabilities = page.waitForResponse(
+      (r) => r.url().includes("/rpc/user_class_capabilities") && r.status() === 200
+    );
     await gotoCourseUrlWhenHeadingVisible(page, repositoriesUrl(), `Assignment: ${assignment.title}`);
+    await capabilities;
     await expect(page.locator('[data-capabilities-loaded="true"]').first()).toBeAttached();
     await expect(page.getByRole("link", { name: repositoryName }).first()).toBeVisible({ timeout: 60_000 });
   }
