@@ -6,6 +6,7 @@ import { toaster } from "@/components/ui/toaster";
 import { uploadExamTemplate } from "@/lib/exam/examClient";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Heading, HStack, Input, Spinner, Text, VStack } from "@chakra-ui/react";
+import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RegionEditor from "../RegionEditor";
@@ -23,6 +24,8 @@ function ExamTemplatePageContent() {
   // signed URLs and region overlays. A later structure save would then persist coordinates
   // drawn against the old template. Remount the editor on every successful upload instead.
   const [templateRevision, setTemplateRevision] = useState(0);
+  // Reported by RegionEditor, for the Next control below (#1271).
+  const [unsavedRegions, setUnsavedRegions] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -62,6 +65,8 @@ function ExamTemplatePageContent() {
 
   if (loading) return <Spinner />;
 
+  const base = `/course/${courseId}/manage/assignments/${assignmentId}/exam`;
+
   return (
     <VStack align="stretch" gap={5} pt={2}>
       <Heading size="md">Exam Template &amp; Regions</Heading>
@@ -83,10 +88,41 @@ function ExamTemplatePageContent() {
           examId={examId}
           assignmentId={assignmentId}
           gradingRubricId={gradingRubricId}
+          onDirtyChange={setUnsavedRegions}
         />
       ) : (
         <Text color="fg.muted">Upload a template PDF to start labeling regions.</Text>
       )}
+
+      {/* The exam overview numbers these pages 1 and 2, which promises a sequence, and step 1
+          had no way to reach step 2: you navigated back out to the overview and clicked through
+          (#1271). Not disabled while there are unsaved regions -- blocking the way out of a page
+          is worse than the mistake it prevents -- but it does say so, because scanning against
+          regions that were never saved is the one way this step quietly produces nothing. */}
+      <HStack justify="space-between" pt={2} wrap="wrap" gap={2}>
+        <Button asChild size="sm" variant="ghost">
+          <NextLink href={base}>&larr; Exam overview</NextLink>
+        </Button>
+        <HStack gap={3} wrap="wrap">
+          {unsavedRegions && (
+            <Text fontSize="xs" color="fg.warning">
+              You have unsaved region changes. Save structure first, or scanning will use the last saved regions.
+            </Text>
+          )}
+          {/* Not `asChild` with `disabled`: asChild renders the Button AS the anchor, and a
+              disabled anchor still navigates. With no template uploaded there is no exam to
+              scan against, so render a real button that cannot be followed. */}
+          {examId ? (
+            <Button asChild size="sm" colorPalette="green">
+              <NextLink href={`${base}/scans`}>2. Scan &amp; Match &rarr;</NextLink>
+            </Button>
+          ) : (
+            <Button size="sm" colorPalette="green" disabled>
+              2. Scan &amp; Match &rarr;
+            </Button>
+          )}
+        </HStack>
+      </HStack>
     </VStack>
   );
 }

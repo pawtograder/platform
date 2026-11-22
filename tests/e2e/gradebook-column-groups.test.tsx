@@ -9,14 +9,15 @@ import { expect, test } from "../global-setup";
 import { createCs4535StyleGradebook } from "./gradebookColumnGroupsFixtures";
 import {
   clickMenuItem,
+  expandAllGroups,
   GRADEBOOK_VIEWPORT,
+  gradebookScreenshot,
   headerUnits,
   openColumnMenu,
   openInstructorGradebook,
   scrollTableHome,
   tableRegion,
-  waitForToastsGone,
-  waitForVirtualizerIdle
+  waitForToastsGone
 } from "./gradebookTableHelpers";
 import { loginAsUser, supabase, type TestingUser } from "./TestingUtils";
 import { visualScreenshot } from "./VisualTestUtils";
@@ -53,7 +54,7 @@ test.describe("Gradebook column groups (existing course)", () => {
       "2 Ais...",
       "2 Averages..."
     ]);
-    await visualScreenshot(page, "gradebook-groups-legacy-collapsed");
+    await gradebookScreenshot(page, "gradebook-groups-legacy-collapsed");
   });
 
   test("turning groups on previews every change, then stores the groups", async ({ page }) => {
@@ -103,18 +104,16 @@ test.describe("Gradebook column groups (existing course)", () => {
       "2 AI Usage Logs...",
       "2 Averages..."
     ]);
-    await visualScreenshot(page, "gradebook-groups-stored-collapsed");
+    await gradebookScreenshot(page, "gradebook-groups-stored-collapsed");
 
-    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
-    await waitForVirtualizerIdle(page);
-    await visualScreenshot(page, "gradebook-groups-stored-expanded");
+    await expandAllGroups(page);
+    await gradebookScreenshot(page, "gradebook-groups-stored-expanded");
   });
 
   test("an instructor creates, renames and deletes groups from the table", async ({ page }) => {
     await loginAsUser(page, fixture.instructor, fixture.course);
     await openInstructorGradebook(page, fixture.course.id);
-    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
-    await waitForVirtualizerIdle(page);
+    await expandAllGroups(page);
 
     // A new group of one, from the column menu.
     await openColumnMenu(page, "Attendance");
@@ -155,20 +154,21 @@ test.describe("Gradebook column groups (existing course)", () => {
 
     await waitForToastsGone(page);
     await scrollTableHome(page);
-    await visualScreenshot(page, "gradebook-groups-after-edits");
+    await gradebookScreenshot(page, "gradebook-groups-after-edits");
   });
 
   test("every instructor surface for columns and groups", async ({ page }) => {
     await loginAsUser(page, fixture.instructor, fixture.course);
     await openInstructorGradebook(page, fixture.course.id);
-    await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
-    await waitForVirtualizerIdle(page);
+    await expandAllGroups(page);
 
     // The column menu: Group…, and Move Left/Right that stay inside the group (Quiz 1 is first).
     await openColumnMenu(page, "Quiz 1");
     await expect(page.getByRole("menuitem", { name: "Move Left", exact: true })).toBeDisabled();
     await expect(page.getByRole("menuitem", { name: "Move Right", exact: true })).toBeEnabled();
-    await visualScreenshot(page, "gradebook-groups-column-menu");
+    await gradebookScreenshot(page, "gradebook-groups-column-menu", {
+      keepMenuOpen: { menuItem: "Group…", open: () => openColumnMenu(page, "Quiz 1") }
+    });
 
     // Group… for a column: existing groups, or a new one by name.
     await clickMenuItem(page, "Group…", () => openColumnMenu(page, "Quiz 1"));
@@ -183,7 +183,12 @@ test.describe("Gradebook column groups (existing course)", () => {
     // The group header menu, and the rename and delete dialogs it opens.
     await tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click();
     await expect(page.getByRole("menuitem", { name: "Move group left" })).toBeEnabled();
-    await visualScreenshot(page, "gradebook-groups-group-menu");
+    await gradebookScreenshot(page, "gradebook-groups-group-menu", {
+      keepMenuOpen: {
+        menuItem: "Rename group",
+        open: () => tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click()
+      }
+    });
     await clickMenuItem(page, "Rename group", () =>
       tableRegion(page).getByRole("button", { name: "Group options for Quizzes" }).click()
     );

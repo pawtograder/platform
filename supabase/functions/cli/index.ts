@@ -18,6 +18,9 @@
  *     - assignments.list
  *     - assignments.show
  *     - discussions.list
+ *     - exams.list
+ *     - exams.questions
+ *     - exams.scans.status
  *     - flashcards.list
  *     - help_requests.list
  *     - repos.list
@@ -37,6 +40,10 @@
  *     - assignments.copy
  *     - assignments.delete
  *     - flashcards.copy
+ *     - exams.scans.create_batch
+ *     - exams.scans.upload_page
+ *     - exams.scans.process
+ *     - exams.scans.finalize
  *     - help_requests.close
  *     - reviews.assign
  *     - rubrics.import
@@ -69,6 +76,7 @@ import "./commands/assessment.ts";
 import "./commands/discussions.ts";
 import "./commands/helpRequests.ts";
 import "./commands/reviews.ts";
+import "./commands/exams.ts";
 import { normalizeEventFingerprint } from "../_shared/SentryFingerprint.ts";
 import { sentryIdentity } from "../_shared/SentryContext.ts";
 import { serveWithSentryFlush, waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";

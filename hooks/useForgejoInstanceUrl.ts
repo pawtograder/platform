@@ -1,0 +1,19 @@
+import { useList } from "@refinedev/core";
+
+// The Forgejo host is the instance of the newest Forgejo account the viewer can see (#1092): their own
+// for a student, their class's for staff, and after a FORGEJO_URL change the newest is on the current
+// instance. Undefined until it loads, or when the viewer can see no Forgejo account.
+export function useForgejoInstanceUrl(enabled = true): string | undefined {
+  const { data } = useList<{ instance_url: string }>({
+    resource: "git_accounts",
+    meta: { select: "instance_url" },
+    filters: [
+      { field: "provider", operator: "eq", value: "forgejo" },
+      { field: "login", operator: "nnull", value: null }
+    ],
+    sorters: [{ field: "created_at", order: "desc" }],
+    pagination: { pageSize: 1 },
+    queryOptions: { enabled }
+  });
+  return data?.data?.[0]?.instance_url;
+}

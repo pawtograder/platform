@@ -920,6 +920,13 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_repo_tokens.id": "none",
+  "forgejo_repo_tokens.instance_url": "none",
+  "forgejo_repo_tokens.recorded_at": "none",
+  "forgejo_repo_tokens.repository_id": "none",
+  "forgejo_repo_tokens.revoke_claim_id": "none",
+  "forgejo_repo_tokens.revoke_claimed_at": "none",
+  "forgejo_repo_tokens.user_id": "none",
   "git_accounts.claimed_at": "none",
   "git_accounts.created_at": "none",
   "git_accounts.id": "none",
@@ -2398,6 +2405,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
   cloud_workspaces_enabled: "none",
@@ -2525,6 +2533,15 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     // The repo name ends in the group's name, which students choose.
     "$[*].name": "free_text",
     "$[*].template_repo": "none"
+  },
+  // void: clears is_github_ready on the groups' Forgejo repos so the reconciler re-grants them.
+  forgejo_groups_need_grants: "none",
+  forgejo_repo_token_revocable: "none",
+  forgejo_repo_tokens_to_revoke: {
+    "$[*].id": "none",
+    "$[*].login": "handle",
+    "$[*].repository_id": "none",
+    "$[*].user_id": "none"
   },
   forgejo_repos_needed: {
     "$[*].assignment_id": "none",
@@ -2917,6 +2934,15 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   merge_class_feature: "none",
   merge_class_feature_as_service_role: "none",
   merge_duplicate_class_enrollments: "none",
+  // Per-class counts and a wait in minutes; no rows identify a person.
+  metrics_office_hours_queue_health: {
+    "$[*].class_id": "none",
+    "$[*].oldest_wait_minutes": "none",
+    "$[*].queues_active": "none",
+    "$[*].queues_red": "none",
+    "$[*].queues_unstaffed": "none",
+    "$[*].requests_waiting": "none"
+  },
   metrics_workflow_errors_by_category: { "$[*].category": "none", "$[*].class_id": "none", "$[*].count": "none" },
   // UNCERTAIN: name: workflow error names may interpolate usernames
   metrics_workflow_errors_by_name: { "$[*].class_id": "none", "$[*].count": "none", "$[*].name": "free_text" },
@@ -2973,6 +2999,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   record_bug_report_retention_purge: "none",
   record_discord_async_error: "none",
   record_discord_membership_status: "none",
+  record_forgejo_repo_token: "none",
   record_github_async_error: "none",
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",

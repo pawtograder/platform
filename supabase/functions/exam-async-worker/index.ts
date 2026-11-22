@@ -8,6 +8,7 @@ import { FINALIZE_ANSWER_REGION_SELECT } from "./finalizeQueries.ts";
 import {
   getExamVisionProvider,
   ProviderRateLimitError,
+  ProviderTransientError,
   wordsInRegion,
   type NormRect,
   type PageImage,
@@ -51,6 +52,21 @@ class ScanGroupChangeRejectedError extends ScanPathRejectedError {
     super(message);
     this.name = "ScanGroupChangeRejectedError";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Logging (#1157)
+// ---------------------------------------------------------------------------
+// This worker had three console statements and all three sat on error paths, so a run that went
+// wrong showed nothing at all. In the CI run for #1088 (run 40775885939) it was invoked 197 times
+// and printed not one line of its own, while discord-async-worker logged every pass beside it. The
+// cause was getExamVisionProvider() throwing because EXAM_VISION_PROVIDER was unset, which one line
+// would have said outright; instead the only symptom was a batch sitting at "ocr".
+//
+// These lines answer one question: did it run, and what did it see. The prefix follows the
+// [scope] convention discord-async-worker uses, so the two read the same way in one log artifact.
+function log(message: string): void {
+  console.log(`[exam-async-worker] ${message}`);
 }
 
 async function archive(admin: Admin, msgId: number): Promise<void> {
@@ -745,7 +761,12 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
       const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
       const ocrText = wordsInRegion(words, rect);
       let structuredValue: unknown = ocrText;
-      const answerType = (r.exam_questions as unknown as { answer_type: string | null } | null)?.answer_type ?? null;
+      const question = r.exam_questions as unknown as { answer_type: string | null; label: string | null } | null;
+      const answerType = question?.answer_type ?? null;
+      // The instructor's name for the question (#1072). Carried into the artifact because the
+      // grader view has nothing else to show: it had only exam_question_id, which is a database
+      // id, so headings read "Question 38" for a question the instructor called Q1.
+      const label = question?.label?.trim() || null;
       if (answerType && answerType !== "free_text" && ocrText) {
         try {
           const bytes = await downloadImageCached(admin, pageBytes, "exam-scans", page.image_path);
@@ -753,18 +774,22 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
           const structured = await provider.structureAnswer(answerType, img, rect, ocrText);
           structuredValue = structured.value;
         } catch (structureErr) {
-          // A bare catch also swallowed ProviderRateLimitError, so a rate limit or timeout was
-          // treated as "this answer cannot be structured": the raw OCR string was substituted,
-          // the artifact written, and finalized_at stamped -- permanently degrading a gradeable
-          // answer that the worker's own backoff would have recovered. Retryable provider
-          // failures now propagate to the dispatcher's rate-limit path; the fallback is reserved
-          // for genuinely unstructurable content (e.g. illegible handwriting).
-          if (structureErr instanceof ProviderRateLimitError) throw structureErr;
+          // A bare catch treated a rate limit, a 5xx, a timeout or a reset connection as "this
+          // answer cannot be structured": the raw OCR string was substituted, the artifact
+          // written, and finalized_at stamped -- permanently degrading a gradeable answer that
+          // the worker's own backoff would have recovered (#1077). Retryable provider failures
+          // propagate to the dispatcher (rate limits to its rate-limit path, the rest to its
+          // transient-error backoff); the fallback is reserved for genuinely unstructurable
+          // content (e.g. illegible handwriting).
+          if (structureErr instanceof ProviderRateLimitError || structureErr instanceof ProviderTransientError) {
+            throw structureErr;
+          }
           // fall back to raw OCR text on structuring failure
         }
       }
       questions.push({
         exam_question_id: r.exam_question_id,
+        label,
         page_number: examPageNo,
         region: rect,
         ocr_text: ocrText,
@@ -807,6 +832,11 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   const env = msg.message;
   scope.setTag("exam_method", env.method);
   scope.setTag("batch_id", String(env.batch_id));
+  // #1293: every captureException below is a give-up. This says whether the budget ran out on the
+  // first failure or the sixth, which is the difference between a hard failure and a provider
+  // having a bad few minutes -- the context the per-retry events used to carry before they stopped
+  // being sent.
+  scope.setTag("attempt", String((env.retry_count ?? 0) + 1));
 
   // poison-pill protection
   if (msg.read_ct >= PGMQ_MAX_READ_CT) {
@@ -851,7 +881,15 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
         await archive(admin, msg.msg_id);
         return;
       }
-      // requeue this message with the provider's backoff; archive the current copy
+      // requeue this message with the provider's backoff; archive the current copy.
+      // This path never captured, so #1293 changes nothing here beyond making the retry visible
+      // in the logs the same way the transient path below now is. Logged separately from that
+      // one because a run full of rate limits means the quota is too small, while a run full of
+      // transient errors means the provider is unwell, and those want different responses.
+      log(
+        `rate-limit retry ${(env.retry_count ?? 0) + 1} for ${env.method} ` +
+          `(batch ${env.batch_id}) in ${error.retryAfterSeconds}s`
+      );
       await requeue(admin, env, error.retryAfterSeconds);
       await archive(admin, msg.msg_id);
       return;
@@ -866,8 +904,22 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       return;
     }
     // transient: requeue with exponential backoff
-    Sentry.captureException(error, scope);
+    //
+    // #1293: deliberately no captureException. Reaching here is the backoff working, not a
+    // failure -- the message is requeued and the next attempt usually succeeds. #1132 made
+    // transient provider failures propagate here instead of being swallowed, so capturing meant a
+    // 200-student finalize (about 1800 provider calls) could raise hundreds of Sentry events for
+    // a condition handled correctly and silently, burying the give-up paths above that actually
+    // need triage.
+    //
+    // The retry stays observable without them: this line makes the rate queryable in the function
+    // logs, and the `attempt` tag set at the top of this function tells any event that IS captured
+    // how many tries the message had already used.
     const delay = Math.min(300, 10 * Math.pow(2, retryCount));
+    log(
+      `retry ${retryCount + 1} for ${env.method} (batch ${env.batch_id}) in ${delay}s: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+    );
     await requeue(admin, env, delay);
     await archive(admin, msg.msg_id);
   }
@@ -876,9 +928,17 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
 async function runBatch(): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
+  const startedAt = Date.now();
+  log("run start");
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let processed = 0;
+  // Counted separately because `processed` is incremented outside the try below, so it is really
+  // an attempt count. Reporting the two as one number would have the completion line claim work
+  // that threw and was left queued for redelivery, which is the opposite of what this ticket is
+  // for. Raised by CodeRabbit in review; the counter placement itself predates this change, so
+  // this reports around it rather than moving it.
+  let failed = 0;
   for (let pass = 0; pass < 50; pass++) {
     const { data, error } = await admin.schema("pgmq_public").rpc("read", {
       queue_name: QUEUE,
@@ -886,10 +946,19 @@ async function runBatch(): Promise<number> {
       n: 5
     });
     if (error) {
+      // Logged as well as captured. A failed read leaves `processed` at 0, so without this line
+      // the run is indistinguishable from an idle one, which is the misreading that cost an
+      // evening on #814.
+      console.error(`[exam-async-worker] queue read failed on pass ${pass}: ${error.message}`);
       Sentry.captureException(error, scope);
       break;
     }
     const messages = (data ?? []) as QueueMessage[];
+    // What this read returned, not the queue's depth. Depth lives in the pgmq schema, which is not
+    // exposed over PostgREST, so reporting it means a new RPC and a migration: more than this
+    // ticket's "log statements only, rollback is a revert". Read counts still separate the two
+    // candidates #1157 names, because an idle worker and a backed-up one look different here.
+    log(`pass ${pass}: read ${messages.length} message(s)`);
     if (messages.length === 0) break;
     for (const msg of messages) {
       // Isolate per-message failures. processMessage handles its own errors, but it can now
@@ -899,14 +968,26 @@ async function runBatch(): Promise<number> {
       // message reappears when its 120s visibility timeout lapses -- but the remaining
       // messages should not have to wait for that.
       try {
+        // Printed before the handler runs, so a message that kills the isolate still leaves its
+        // own name in the log. read_ct is here because a climbing one is the shape of a poison
+        // pill. It sits inside the try rather than above it because a message with a null body
+        // throws on env.method: outside, that throw leaves runBatch mid-loop, so the rest of the
+        // read is skipped and "run done" never prints. Inside, it reaches the handler below.
+        const env = msg.message;
+        log(
+          `handling ${env.method} msg_id=${msg.msg_id} batch=${env.batch_id} read_ct=${msg.read_ct}` +
+            (env.debug_id ? ` debug_id=${env.debug_id}` : "")
+        );
         await processMessage(admin, msg, scope.clone());
       } catch (error) {
         Sentry.captureException(error, scope.clone());
         console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
+        failed++;
       }
       processed++;
     }
   }
+  log(`run done: ${processed} message(s) attempted, ${failed} failed, in ${Date.now() - startedAt}ms`);
   return processed;
 }
 
@@ -930,6 +1011,16 @@ Deno.serve((req) => {
       headers: { "Content-Type": "application/json" }
     });
   }
+  // Printed before the work is handed to the runtime, and deliberately paired with runBatch's own
+  // "run done" line. An invocation that prints this and never prints that one had its isolate
+  // reclaimed mid-flight, which is otherwise invisible: the 200 has already gone out.
+  //
+  // No source label. The obvious one is attractive and does not work: nothing sends
+  // x-invocation-source, and the cron job and all three triggers in exam_grading.sql send
+  // x-supabase-webhook-source: exam-async-worker, the same value for every one of them, so it
+  // cannot separate a cron tick from a trigger either. Telling the callers apart means changing
+  // what they send, which is a migration, and this change's rollback is a revert.
+  log("invocation accepted; work continues in waitUntil");
   EdgeRuntime.waitUntil(runBatch());
   return Promise.resolve(
     new Response(JSON.stringify({ message: "exam-async-worker started" }), {

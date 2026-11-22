@@ -3,7 +3,16 @@
 // Admin Basic auth, not an admin token: a token can't act on other users' behalf (Forgejo answers
 // 401 "auth method not allowed"), which repo provisioning (#1093) needs.
 
-export type ForgejoConfig = { url: string; authorization: string; authSourceId: number };
+import { redactSecret } from "./SentryScrub.ts";
+
+export type ForgejoConfig = {
+  url: string;
+  authorization: string;
+  authSourceId: number;
+  // Where each class org's push hook delivers (forgejo-repo-webhook, #1228), when the deployment has a secret for it.
+  pushHook?: { url: string; secret: string };
+  fetch?: typeof fetch;
+};
 export type ForgejoUser = { id: number; login: string; login_name: string; source_id: number };
 
 /**
@@ -18,11 +27,16 @@ export function forgejoConfig(env: { get(name: string): string | undefined } = D
   if (!url || !username || !password || !Number.isInteger(authSourceId) || authSourceId <= 0) {
     return null;
   }
-  return { url, authorization: "Basic " + btoa(`${username}:${password}`), authSourceId };
+  const config: ForgejoConfig = { url, authorization: "Basic " + btoa(`${username}:${password}`), authSourceId };
+  // The public URL, as for grade.yml's grading_server: Forgejo refuses to deliver to a private address by default.
+  const functionsUrl = (env.get("SUPABASE_PUBLIC_URL") || env.get("SUPABASE_URL"))?.replace(/\/+$/, "");
+  const secret = env.get("FORGEJO_WEBHOOK_SECRET");
+  if (functionsUrl && secret) config.pushHook = { url: `${functionsUrl}/functions/v1/forgejo-repo-webhook`, secret };
+  return config;
 }
 
 async function forgejo(config: ForgejoConfig, method: string, path: string, body?: unknown): Promise<Response> {
-  return await fetch(`${config.url}/api/v1${path}`, {
+  return await (config.fetch ?? fetch)(`${config.url}/api/v1${path}`, {
     method,
     headers: { Authorization: config.authorization, "Content-Type": "application/json", Accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -38,7 +52,10 @@ const KNOWN_REASONS = [
   "user already exists",
   "name is reserved",
   "this is not a template repo",
-  "the repository with the same name already exists"
+  "the repository with the same name already exists",
+  "access token name has been used already",
+  "user does not exist",
+  "repository does not exist"
 ];
 
 function reason(text: string): string {
@@ -107,6 +124,234 @@ export async function ensureAccountForUser(
   throw new Error("No free Forgejo username after 20 attempts");
 }
 
+const CODER_TOKEN_PREFIX = "pawtograder-coder-";
+/** Younger tokens than this may belong to a concurrent open that hasn't stored its token yet. */
+export const REPLACED_TOKEN_GRACE_MS = 10 * 60_000;
+
+function repoTokenPrefix(repositoryId: number): string {
+  return `${CODER_TOKEN_PREFIX}${repositoryId}-`;
+}
+
+/** Forgejo 400s a duplicate token name. */
+export function coderTokenName(repositoryId: number, mintedAt: number): string {
+  return `${repoTokenPrefix(repositoryId)}${mintedAt}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * Forgejo tokens don't expire. A repository whose newest token is this old hasn't been opened in that time, so its
+ * tokens are revoked: by the next open of another repository (revokeIdleTokens), or by the reconciler for a student
+ * who doesn't open one again. Must match the interval in forgejo_repo_tokens_to_revoke.
+ */
+export const IDLE_TOKEN_MS = 14 * 24 * 60 * 60_000;
+
+const CODER_TOKEN_NAME = /^pawtograder-coder-(\d+)-(\d+)-/;
+
+function tokenMintedAt(name: string, repositoryId: number): number | null {
+  const prefix = repoTokenPrefix(repositoryId);
+  if (!name.startsWith(prefix)) return null;
+  const at = Number(name.slice(prefix.length).split("-")[0]);
+  return Number.isSafeInteger(at) ? at : null;
+}
+
+function ownerAndName(repository: string): { owner: string; name: string } {
+  const [owner, name, ...rest] = repository.split("/");
+  if (!owner || !name || rest.length > 0) throw new Error("Forgejo token mint failed: repository is not owner/name");
+  return { owner, name };
+}
+
+export type RepoToken = { name: string; token: string };
+
+export async function mintRepoToken(
+  config: ForgejoConfig,
+  login: string,
+  repository: string,
+  repositoryId: number,
+  now: number = Date.now()
+): Promise<RepoToken> {
+  const { owner, name } = ownerAndName(repository);
+  const tokenName = coderTokenName(repositoryId, now);
+  const res = await forgejo(config, "POST", `/users/${encodeURIComponent(login)}/tokens`, {
+    name: tokenName,
+    scopes: ["write:repository"],
+    repositories: [{ owner, name }]
+  });
+  if (!res.ok) throw await failure(res, "token mint");
+  // Not res.json(): its SyntaxError quotes the body, which holds the token.
+  let sha1: unknown;
+  try {
+    sha1 = (JSON.parse(await res.text()) as { sha1?: unknown })?.sha1;
+  } catch {
+    sha1 = undefined;
+  }
+  if (typeof sha1 !== "string" || !sha1) throw new Error("Forgejo token mint failed: the response has no token");
+  redactSecret(sha1);
+  return { name: tokenName, token: sha1 };
+}
+
+export async function revokeReplacedTokens(
+  config: ForgejoConfig,
+  login: string,
+  repositoryId: number,
+  keep: string,
+  now: number = Date.now()
+): Promise<number> {
+  const stale = (await listCoderTokenNames(config, login)).filter((n) => {
+    const at = tokenMintedAt(n, repositoryId);
+    return n !== keep && at !== null && at <= now - REPLACED_TOKEN_GRACE_MS;
+  });
+  for (const name of stale) await deleteToken(config, login, name);
+  return stale.length;
+}
+
+/**
+ * Deletes this repository's tokens minted at or before `mintedBefore`. A token minted later came from a re-mint
+ * after the caller's revocation claim (the student was re-enabled), so it isn't the one being revoked. Names
+ * without a readable mint time are deleted: they can't be shown to be newer.
+ */
+export async function revokeRepoToken(
+  config: ForgejoConfig,
+  login: string,
+  repositoryId: number,
+  mintedBefore: number = Date.now()
+): Promise<number> {
+  const names = (await listCoderTokenNames(config, login)).filter((n) => {
+    if (!n.startsWith(repoTokenPrefix(repositoryId))) return false;
+    const at = tokenMintedAt(n, repositoryId);
+    return at === null || at <= mintedBefore;
+  });
+  for (const name of names) await deleteToken(config, login, name);
+  return names.length;
+}
+
+/**
+ * Revokes the tokens of every repository other than `keep` whose newest token was minted IDLE_TOKEN_MS or more
+ * before `now`. Returns the ids of the repositories that still have a token. A name without a readable repository
+ * and mint time is left alone.
+ */
+export async function revokeIdleTokens(
+  config: ForgejoConfig,
+  login: string,
+  keep: number,
+  now: number = Date.now()
+): Promise<Set<number>> {
+  const byRepository = new Map<number, { name: string; at: number }[]>();
+  for (const name of await listCoderTokenNames(config, login)) {
+    const m = name.match(CODER_TOKEN_NAME);
+    if (!m || !Number.isSafeInteger(Number(m[1])) || !Number.isSafeInteger(Number(m[2]))) continue;
+    const id = Number(m[1]);
+    const list = byRepository.get(id) ?? [];
+    list.push({ name, at: Number(m[2]) });
+    byRepository.set(id, list);
+  }
+  const live = new Set<number>();
+  for (const [id, tokens] of byRepository) {
+    if (id === keep || Math.max(...tokens.map((t) => t.at)) > now - IDLE_TOKEN_MS) {
+      live.add(id);
+      continue;
+    }
+    for (const t of tokens) await deleteToken(config, login, t.name);
+  }
+  return live;
+}
+
+async function deleteToken(config: ForgejoConfig, login: string, tokenName: string): Promise<void> {
+  const path = `/users/${encodeURIComponent(login)}/tokens/${encodeURIComponent(tokenName)}`;
+  const res = await forgejo(config, "DELETE", path);
+  if (res.ok || res.status === 404) {
+    await res.body?.cancel();
+    return;
+  }
+  throw await failure(res, "token revoke");
+}
+
+/** One page size per attempt: a retry moves the page boundaries, so a tie that split one page from the next doesn't. */
+const TOKEN_PAGE_SIZES = [50, 49, 47];
+
+/**
+ * The list is paged by offset, so a token deleted between two page reads (by another open or a reconciler pass)
+ * moves the unread ones forward and the next page can miss one. Forgejo lists tokens newest first
+ * (ListAccessTokensOptions.ToOrders), so a mint only pushes the unread ones back, and only a deletion can pull
+ * one forward. The order is by created_unix alone, in seconds, so two tokens with the same one can come back in
+ * either order, and each page query picks its own. A scan that may have missed one is read again, and a list
+ * that can't be read whole is an error: callers keep their claim or leave the work to the next open.
+ */
+async function listCoderTokenNames(config: ForgejoConfig, login: string): Promise<string[]> {
+  for (const pageSize of TOKEN_PAGE_SIZES) {
+    const names = await scanCoderTokenNames(config, login, pageSize);
+    if (names) return names;
+  }
+  throw new Error("Forgejo token list failed: it kept changing while it was read");
+}
+
+/** `ids` are Forgejo's token ids, which only grow; NaN when a response has none. */
+type TokenPage = { count: string | null; names: string[]; ids: number[] } | "missing";
+
+async function readTokenPage(config: ForgejoConfig, login: string, page: number, limit: number): Promise<TokenPage> {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  const res = await forgejo(config, "GET", `/users/${encodeURIComponent(login)}/tokens?${query}`);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return "missing";
+  }
+  if (!res.ok) throw await failure(res, "token list");
+  const tokens = (await res.json()) as { id?: number; name: string }[];
+  return {
+    count: res.headers.get("X-Total-Count"),
+    names: tokens.map((t) => t.name),
+    ids: tokens.map((t) => (typeof t.id === "number" ? t.id : NaN))
+  };
+}
+
+const sameNames = (a: string[], b: string[]) =>
+  a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
+
+/**
+ * Null when the list may not have been read whole. A list that fits on one page is one query, so it is whole.
+ * Whether it fits is decided by X-Total-Count, not by the page size asked for: Forgejo caps `limit` at
+ * [api].MAX_RESPONSE_ITEMS, which an operator may set below it. A longer list is checked three ways:
+ * - Each later page's X-Total-Count must match page 1's. That count was read after page 1's rows, so it catches
+ *   a deletion from then on.
+ * - Page 1 is read again at the end and must hold the same names. A mint lands on page 1, newest first, and so
+ *   does any deletion before page 1's count that could move a token past the end of page 1. With no mint, the
+ *   counts see every other deletion, so the list held the same `count` tokens throughout.
+ * - So the scan must have seen `count` different names. Fewer means two pages ordered tied tokens differently,
+ *   repeating one and leaving out another.
+ * The order is by created_unix alone, so a token minted in the same second as the ones at a page boundary could
+ * land past page 1 (#1303 review). Token ids only grow, so a later page's token with an id above all of page 1's
+ * was minted during the scan, or ties more than a page of tokens to one second. Either way the scan is read
+ * again. A mint that hides a token is always on a page read after it, so this sees it.
+ */
+async function scanCoderTokenNames(config: ForgejoConfig, login: string, pageSize: number): Promise<string[] | null> {
+  const first = await readTokenPage(config, login, 1, pageSize);
+  if (first === "missing") return [];
+  const names = new Set<string>(first.names);
+  // A full page may have more after it; so may a short one when the count says so (a capped limit).
+  const longer = first.names.length >= pageSize || (first.count !== null && Number(first.count) > first.names.length);
+  if (longer) {
+    // Pages as long as Forgejo actually made page 1.
+    const served = first.names.length;
+    if (served === 0) return null;
+    const newestOnPage1 = Math.max(...first.ids);
+    for (let page = 2; ; page++) {
+      const next = await readTokenPage(config, login, page, pageSize);
+      if (next === "missing" || next.count !== first.count) return null;
+      if (next.ids.some((id) => id > newestOnPage1)) return null;
+      for (const name of next.names) names.add(name);
+      if (next.names.length < served) break;
+    }
+    const again = await readTokenPage(config, login, 1, pageSize);
+    if (again === "missing" || again.count !== first.count || !sameNames(again.names, first.names)) return null;
+    if (first.count !== null && names.size !== Number(first.count)) return null;
+  }
+  return [...names].filter((name) => name.startsWith(CODER_TOKEN_PREFIX));
+}
+
+export async function revokeAllCoderTokens(config: ForgejoConfig, login: string): Promise<number> {
+  const names = await listCoderTokenNames(config, login);
+  for (const name of names) await deleteToken(config, login, name);
+  return names.length;
+}
+
 /** A submission archive larger than the caller's limit. `bytesRead` is how far the download got. */
 export class ArchiveTooLargeError extends Error {
   constructor(readonly bytesRead: number) {
@@ -169,9 +414,40 @@ export function repoPath(repository: string): string {
 /**
  * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
  * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
- * created there would belong to them.
+ * created there would belong to them. Then gives the org its push hook, so student pushes reach Commit History.
  */
 export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
+  await claimOrg(config, org);
+  if (config.pushHook) await ensurePushHook(config, org, config.pushHook);
+}
+
+/**
+ * An org hook, not a system one: classes can share an instance, and an org's hook covers every repo in it,
+ * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
+ * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
+ * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
+ */
+async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
+  const path = `/orgs/${encodeURIComponent(org)}/hooks`;
+  const hooks = await forgejo(config, "GET", `${path}?limit=50`);
+  if (!hooks.ok) throw await failure(hooks, "org hooks read");
+  const existing = ((await hooks.json()) as { id: number; config?: { url?: string } }[]).find(
+    (h) => h.config?.url === hook.url
+  );
+  const settings = {
+    active: true,
+    events: ["push"],
+    branch_filter: "*",
+    config: { url: hook.url, content_type: "json", secret: hook.secret }
+  };
+  const res = existing
+    ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
+    : await forgejo(config, "POST", path, { type: "forgejo", ...settings });
+  if (!res.ok) throw await failure(res, existing ? "org hook update" : "org hook create");
+  await res.body?.cancel();
+}
+
+async function claimOrg(config: ForgejoConfig, org: string): Promise<void> {
   const path = `/orgs/${encodeURIComponent(org)}`;
   let found = await forgejo(config, "GET", path);
   if (found.status === 404) {
@@ -223,6 +499,81 @@ export async function ensureRepoFromTemplate(
   });
   if (res.ok || res.status === 409) return;
   throw await failure(res, "repo generate from template");
+}
+
+/**
+ * Sets up a handout as a private template repo on main, and returns main's head sha. A file with
+ * `content` is added, and one with null content is removed. A retry, or a handout staff made by hand, is
+ * adopted: an existing repo is made private and a template, and a file already there is kept, since
+ * staff may have edited it. An adopted repo with no commits gets a README, and one whose default branch
+ * isn't main is refused.
+ */
+export async function ensureHandoutRepo(
+  config: ForgejoConfig,
+  repository: string,
+  files: { path: string; content: string | null }[]
+): Promise<string> {
+  const path = repoPath(repository);
+  const [org, name] = repository.split("/");
+  await ensureOrg(config, org);
+  const writes = [...files];
+  const created = await forgejo(config, "POST", `/orgs/${encodeURIComponent(org)}/repos`, {
+    name,
+    private: true,
+    auto_init: true,
+    default_branch: "main",
+    template: true
+  });
+  if (created.status === 409) {
+    await created.body?.cancel();
+    // Student repos are generated from the handout, which Forgejo allows only from a template.
+    const marked = await forgejo(config, "PATCH", `/repos/${path}`, { template: true, private: true });
+    if (!marked.ok) throw await failure(marked, "repo template update");
+    const adopted = (await marked.json()) as { empty: boolean; default_branch: string };
+    // An empty repo has no main until its first file, which Forgejo then commits to main.
+    if (adopted.empty) writes.unshift({ path: "README.md", content: `# ${name}\n` });
+    else if (adopted.default_branch !== "main")
+      throw new Error("The existing handout repo's default branch isn't main");
+  } else if (!created.ok) {
+    throw await failure(created, "repo create");
+  } else {
+    await created.body?.cancel();
+  }
+  for (const file of writes) {
+    const contents = `/repos/${path}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+    if (file.content === null) {
+      const found = await forgejo(config, "GET", `${contents}?ref=main`);
+      if (found.status === 404) {
+        await found.body?.cancel();
+        continue;
+      }
+      if (!found.ok) throw await failure(found, "file read");
+      const { sha } = (await found.json()) as { sha: string };
+      const deleted = await forgejo(config, "DELETE", contents, {
+        sha,
+        message: `Remove ${file.path}`,
+        branch: "main"
+      });
+      if (!deleted.ok) throw await failure(deleted, "file delete");
+      await deleted.body?.cancel();
+      continue;
+    }
+    const bytes = new TextEncoder().encode(file.content);
+    const res = await forgejo(config, "POST", contents, {
+      content: btoa(String.fromCharCode(...bytes)),
+      message: `Add ${file.path}`,
+      branch: "main"
+    });
+    if (res.ok) {
+      await res.body?.cancel();
+      continue;
+    }
+    const message = await res.text();
+    if (res.status !== 422 || !/file already exists/i.test(message)) {
+      throw new Error(`Forgejo file create failed: ${res.status} ${reason(message)}`);
+    }
+  }
+  return (await getCommit(config, repository, "main")).sha;
 }
 
 /** A file's text at `ref` (default branch when omitted), or null when the repo has no such file there. */

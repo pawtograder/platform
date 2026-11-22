@@ -1355,7 +1355,10 @@ export async function validateOIDCToken(
   ) {
     throw new JobTokenRejectedError("audience", `Unexpected OIDC token audience: ${String(verified.aud)}`);
   }
-  return { ...verified, provider: issuer.provider };
+  // Forgejo names are case-insensitive and Pawtograder stores Forgejo repositories lowercased (#1093), so
+  // an org created with capitals still finds its rows. GitHub names keep the case the rows were stored with.
+  const repository = issuer.provider === "forgejo" ? verified.repository.toLowerCase() : verified.repository;
+  return { ...verified, repository, provider: issuer.provider };
 }
 
 // E2E testing constants and helper

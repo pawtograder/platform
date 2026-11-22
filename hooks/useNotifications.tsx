@@ -4,6 +4,8 @@ import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
+import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -48,6 +50,7 @@ export function useNotifications(resource?: string, id?: number) {
   const set_read = useCallback(
     async (notification: Notification, read: boolean) => {
       if (isReadOnly) return;
+      const previousViewedAt = notification.viewed_at;
       notification.viewed_at = read ? new Date().toISOString() : null;
       try {
         await update_notification({
@@ -57,13 +60,25 @@ export function useNotifications(resource?: string, id?: number) {
           }
         });
       } catch (error) {
+        // Put the old value back so the inbox doesn't show a read state the server refused.
+        notification.viewed_at = previousViewedAt;
         // eslint-disable-next-line no-console
         console.error("error setting notification read", error);
+        // Fixed id: mark_all_read and scroll-to-read can fail many at once; show one toast.
+        toaster.error({
+          id: "notification-set-read-error",
+          title: "Failed to update notification",
+          description: getErrorMessage(error)
+        });
       }
     },
     [update_notification, isReadOnly]
   );
 
+  // Removes the notification from the local store right away, then deletes it. Never rejects:
+  // a notification that is already gone (another tab, a double click) resolves in the data
+  // provider, and any other failure puts the notification back and shows a toast here, so
+  // callers (including fire-and-forget onClick handlers) don't need their own catch.
   const dismiss = useCallback(
     async (notification: Notification) => {
       if (isReadOnly) return;
@@ -75,7 +90,20 @@ export function useNotifications(resource?: string, id?: number) {
         channel: "resources/notifications",
         date: new Date()
       });
-      await delete_notification({ id: notification.id, resource: "notifications" });
+      try {
+        await delete_notification({ id: notification.id, resource: "notifications" });
+      } catch (error) {
+        controller.handleGenericDataEvent("notifications", {
+          type: "created",
+          payload: notification,
+          channel: "resources/notifications",
+          date: new Date()
+        });
+        toaster.error({
+          title: "Failed to dismiss notification",
+          description: getErrorMessage(error)
+        });
+      }
     },
     [delete_notification, controller, isReadOnly]
   );

@@ -4369,6 +4369,44 @@ export type Database = {
           }
         ];
       };
+      forgejo_repo_tokens: {
+        Row: {
+          id: number;
+          instance_url: string;
+          recorded_at: string;
+          repository_id: number;
+          revoke_claim_id: number | null;
+          revoke_claimed_at: string | null;
+          user_id: string;
+        };
+        Insert: {
+          id?: never;
+          instance_url: string;
+          recorded_at?: string;
+          repository_id: number;
+          revoke_claim_id?: number | null;
+          revoke_claimed_at?: string | null;
+          user_id: string;
+        };
+        Update: {
+          id?: never;
+          instance_url?: string;
+          recorded_at?: string;
+          repository_id?: number;
+          revoke_claim_id?: number | null;
+          revoke_claimed_at?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "forgejo_repo_tokens_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       git_accounts: {
         Row: {
           claimed_at: string;
@@ -13727,6 +13765,10 @@ export type Database = {
           winning_invite_url: string;
         }[];
       };
+      claim_forgejo_repo_token_revocation: {
+        Args: { p_id: number; p_stale_minutes: number };
+        Returns: number;
+      };
       claim_git_account: {
         Args: {
           p_instance_url: string;
@@ -14318,6 +14360,27 @@ export type Database = {
           name: string;
           owner: string;
           template_repo: string;
+        }[];
+      };
+      forgejo_groups_need_grants: {
+        Args: { p_group_ids: number[] };
+        Returns: undefined;
+      };
+      forgejo_repo_token_revocable: {
+        Args: { p_repository_id: number; p_user_id: string };
+        Returns: boolean;
+      };
+      forgejo_repo_tokens_to_revoke: {
+        Args: {
+          p_instance_url: string;
+          p_limit: number;
+          p_stale_minutes: number;
+        };
+        Returns: {
+          id: number;
+          login: string;
+          repository_id: number;
+          user_id: string;
         }[];
       };
       forgejo_repos_needed: {
@@ -15256,6 +15319,17 @@ export type Database = {
         Args: { p_class_id?: number };
         Returns: number;
       };
+      metrics_office_hours_queue_health: {
+        Args: never;
+        Returns: {
+          class_id: number;
+          oldest_wait_minutes: number;
+          queues_active: number;
+          queues_red: number;
+          queues_unstaffed: number;
+          requests_waiting: number;
+        }[];
+      };
       metrics_workflow_errors_by_category: {
         Args: { window_hours?: number };
         Returns: {
@@ -15448,6 +15522,14 @@ export type Database = {
           p_guild_id: string;
           p_observed_discord_id: string;
           p_state: Database["public"]["Enums"]["discord_membership_state"];
+          p_user_id: string;
+        };
+        Returns: undefined;
+      };
+      record_forgejo_repo_token: {
+        Args: {
+          p_instance_url: string;
+          p_repository_id: number;
           p_user_id: string;
         };
         Returns: undefined;

@@ -1,7 +1,14 @@
 "use client";
 
 import { useWorkspaceStatus } from "@/hooks/useWorkspaceStatus";
-import { WORKSPACE_STEPS, WorkspaceClient, WorkspaceState, workspaceStepLabel } from "@/lib/workspaceStatus";
+import {
+  gitProviderLabel,
+  WORKSPACE_STEPS,
+  WorkspaceClient,
+  WorkspaceGitProvider,
+  WorkspaceState,
+  workspaceStepLabel
+} from "@/lib/workspaceStatus";
 import { Alert, Box, Button, Heading, HStack, Icon, Skeleton, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useRef } from "react";
 import { LuCheck, LuCircle, LuCodeXml, LuLink, LuRotateCcw, LuX } from "react-icons/lu";
@@ -59,7 +66,7 @@ function StepList({ state }: { state: StepState }) {
   );
 }
 
-function statusText(state: WorkspaceState): string {
+function statusText(state: WorkspaceState, providerLabel: string): string {
   switch (state.status) {
     case "not_started":
       return "Your workspace is not running.";
@@ -72,7 +79,7 @@ function statusText(state: WorkspaceState): string {
     case "failed":
       return `Workspace not ready: ${workspaceStepLabel(state.step)} failed.`;
     case "needs_linking":
-      return "Link your Forgejo account to open your workspace.";
+      return `Link your ${providerLabel} account to open your workspace.`;
     case "account_conflict":
       return "Your workspace can't be opened.";
   }
@@ -82,7 +89,17 @@ function statusText(state: WorkspaceState): string {
  * The student's Coder workspace for one assignment: open it, watch it start step by step, and only
  * get the editor link once every step has passed.
  */
-export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number; client: WorkspaceClient }) {
+export function WorkspaceStatus({
+  assignmentId,
+  client,
+  gitProvider = "forgejo"
+}: {
+  assignmentId: number;
+  client: WorkspaceClient;
+  /** The assignment's Git host: names the account Coder asks the student to link. */
+  gitProvider?: WorkspaceGitProvider;
+}) {
+  const providerLabel = gitProviderLabel(gitProvider);
   const { state, error, pending, open, reload } = useWorkspaceStatus(client, assignmentId);
   const cardRef = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
@@ -146,7 +163,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
               aria-live="polite"
               data-testid="workspace-status"
             >
-              {unconfirmed ? "Couldn't check that your workspace is still running." : statusText(state)}
+              {unconfirmed ? "Couldn't check that your workspace is still running." : statusText(state, providerLabel)}
               {"message" in state && (
                 // The reason is in the Alert below, which is not a live region, so it is repeated
                 // here for screen readers. Otherwise they hear what went wrong but not why.
@@ -232,7 +249,7 @@ export function WorkspaceStatus({ assignmentId, client }: { assignmentId: number
                 <Button size="sm" colorPalette="blue" asChild>
                   <a href={state.url} target="_blank" rel="noopener noreferrer">
                     <LuLink />
-                    Link Forgejo account
+                    Link {providerLabel} account
                     <Text as="span" srOnly>
                       {" "}
                       (opens in a new tab)

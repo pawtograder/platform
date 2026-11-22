@@ -4,7 +4,8 @@
 URL='${url}'
 DIR='${dir}'
 LIMIT=${limit}
-AUTH='${auth}'
+CREDS='${creds}'
+AUTH_ID='${auth_id}'
 
 fail() {
   echo "Git Clone failed: $*" >&2
@@ -18,6 +19,17 @@ normalize() {
 
 # repo_url's validation lets "" through for template import, and Coder then accepts it at creation.
 [ -n "$URL" ] || fail "the workspace's repo_url is empty; recreate it with the repository's clone URL."
+
+if [ -n "$CREDS" ]; then
+  [ -s "$CREDS" ] || fail "no Git credentials at $CREDS. Open the workspace from Pawtograder, which restarts it with them."
+  ORIGIN="$(printf '%s\n' "$URL" | awk 'match($0, /^[^:\/]+:\/\/[^\/]*/) { print substr($0, 1, RLENGTH) }')"
+  # One string: unquoted `store --file X` fails with "no action specified".
+  git config --global --replace-all "credential.$ORIGIN.helper" "store --file=$CREDS" || fail "couldn't set git's credential helper"
+elif [ -n "$AUTH_ID" ]; then
+  # The agent's GIT_ASKPASS reads the same token; this only turns an unlinked account into a clear message.
+  coder external-auth access-token "$AUTH_ID" >/dev/null 2>&1 \
+    || fail "your $AUTH_ID account isn't linked in Coder. Open the workspace page, follow the link to sign in, and restart the workspace."
+fi
 
 if [ -e "$DIR" ] || [ -L "$DIR" ]; then
   # mv would put the clone inside a linked directory, and VS Code would open the wrong folder.
@@ -37,23 +49,17 @@ if [ -e "$DIR" ] || [ -L "$DIR" ]; then
   fi
 fi
 
-# Without a link, git's credential helper would wait for one instead of failing.
-if ! out="$(timeout 60 coder external-auth access-token "$AUTH" 2>&1)"; then
-  fail "the workspace owner hasn't linked their $AUTH account: $out"
-fi
-unset out
-
 # The clone lands in a new directory beside DIR, on the same filesystem, and is renamed into place, so DIR never holds
 # a partial clone. Only that directory is ever removed; one a killed run left behind is left alone.
 TMP="$(mktemp -d "$(dirname "$DIR")/.$(basename "$DIR").cloning.XXXXXX")" || fail "couldn't create a staging directory beside $DIR"
 trap 'rm -rf "$TMP"' EXIT
 echo "Cloning $URL into $DIR..."
-timeout -k 10 "$LIMIT" git clone -- "$URL" "$TMP/clone"
+GIT_TERMINAL_PROMPT=0 timeout -k 10 "$LIMIT" git clone -- "$URL" "$TMP/clone"
 code=$?
 case "$code" in
   0) ;;
-  124 | 137) fail "git clone didn't finish within $LIMIT seconds (is the server reachable, and the $AUTH account still linked?)" ;;
-  *) fail "git clone exited with $code" ;;
+  124 | 137) fail "git clone didn't finish within $LIMIT seconds (is the server reachable?)" ;;
+  *) fail "git clone exited with $code. If git said authentication failed, open the workspace from Pawtograder to restart it with a new token." ;;
 esac
 mv "$TMP/clone" "$DIR" || fail "couldn't move the clone into $DIR"
 echo "Cloned $URL into $DIR."

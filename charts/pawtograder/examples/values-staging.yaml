@@ -304,17 +304,6 @@ edgeFunctions:
       value: staging.pawtograder.net
     - name: PAWTOGRADER_WEBAPP_URL
       value: https://staging.pawtograder.net
-    # forgejo-reconciler (#1092, #1093) creates Forgejo accounts and repos with the chart admin, as
-    # Basic auth: an admin token can't act for other users. It does nothing until all three are set.
-    - name: FORGEJO_ADMIN_USERNAME
-      valueFrom: { secretKeyRef: { name: pawtograder-forgejo-admin, key: username } }
-    - name: FORGEJO_ADMIN_PASSWORD
-      valueFrom: { secretKeyRef: { name: pawtograder-forgejo-admin, key: password } }
-    # The `pawtograder` login source (forgejo.gitea.oauth below). Accounts are bound to it, so sign-in
-    # lands on them. Forgejo's API doesn't list login sources; this is from
-    # `kubectl -n pawtograder-staging exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list`.
-    - name: FORGEJO_AUTH_SOURCE_ID
-      value: "1"
   envFromSecrets:
     - pawtograder-github-app
     - pawtograder-discord
@@ -540,7 +529,7 @@ forgejoCoderSecrets:
     coderOIDCPath: apps/pawtograder/coder-oidc-staging
     # dispatcher_token / mirror_token of the forgejo-actions-bot site admin; scripts/setup-forgejo-runner-tokens.sh.
     runnerPath: apps/pawtograder/forgejo-runner-staging
-    # Run scripts/setup-coder-forgejo-auth.sh --env staging before deploying coder.externalAuth.
+    # The Pawtograder GitHub App's client id and secret, for Coder's external auth provider.
     coderExternalAuthPath: apps/pawtograder/coder-external-auth-staging
 
 # Ripley's Cilium ignores plain NetworkPolicies; only its egressDeny is enforced.
@@ -550,6 +539,8 @@ networkPolicy:
 
 forgejo:
   enabled: true
+  # Inferred, not yet confirmed with `forgejo admin auth list` on staging.
+  authSourceId: 1
   # global.nodeSelector/tolerations don't reach subcharts.
   nodeSelector: { tier: prod-staging }
   tolerations:
@@ -604,7 +595,7 @@ coder:
   oidc:
     enabled: true
   externalAuth:
-    forgejo:
+    github:
       enabled: true
   coder:
     nodeSelector: { tier: prod-staging }
