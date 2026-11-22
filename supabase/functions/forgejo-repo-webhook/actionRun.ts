@@ -69,9 +69,14 @@ type RunSubmission = {
 
 const CLOCK_SKEW_MS = 5_000;
 
-export type RunAttribution = { runAttempt: number; submissions: RunSubmission[]; ambiguous: boolean };
+/** `runAttempt` is null when the completion can't be tied to one attempt, so the event row records none. */
+export type RunAttribution = { runAttempt: number | null; submissions: RunSubmission[]; ambiguous: boolean };
 
-/** Forgejo sends no attempt number, and a re-run keeps the run id but resets `started`. */
+/**
+ * Forgejo sends no attempt number, and a re-run keeps the run id but resets `started`. A submission
+ * counts for this attempt only if it was created more than CLOCK_SKEW_MS inside both edges of the
+ * run's window; one within that band of either edge could belong to the neighbouring attempt.
+ */
 export function attributeRunAttempt(
   submissions: RunSubmission[],
   startedAt: string | null,
@@ -83,18 +88,18 @@ export function attributeRunAttempt(
   const started = ms(startedAt);
   const stopped = ms(stoppedAt);
   if (Number.isNaN(started) || Number.isNaN(stopped)) {
-    return { runAttempt: highest(submissions) || 1, submissions: [], ambiguous: true };
+    return { runAttempt: null, submissions: [], ambiguous: true };
   }
   const inside: RunSubmission[] = [];
   const near: RunSubmission[] = [];
   for (const s of submissions) {
     const at = ms(s.created_at);
-    if (at >= started && at <= stopped) inside.push(s);
-    else if (at >= started - CLOCK_SKEW_MS && at <= stopped + CLOCK_SKEW_MS) near.push(s);
+    if (Math.abs(at - started) <= CLOCK_SKEW_MS || Math.abs(at - stopped) <= CLOCK_SKEW_MS) near.push(s);
+    else if (at > started && at < stopped) inside.push(s);
   }
   const attempts = new Set(inside.map((s) => s.run_attempt));
   if (near.length > 0 || attempts.size > 1) {
-    return { runAttempt: highest([...inside, ...near]) || 1, submissions: [], ambiguous: true };
+    return { runAttempt: null, submissions: [], ambiguous: true };
   }
   if (attempts.size === 0) {
     const earlier = submissions.filter((s) => ms(s.created_at) < started);
@@ -153,6 +158,7 @@ export async function handleForgejoActionRun(
     await recordRunOnCheckRun(adminSupabase, studentRepo.id, run, stoppedAt, scope);
   }
   for (const submission of submissions) {
+    if (runAttempt === null) break;
     await reportMissingGraderResult(
       adminSupabase,
       studentRepo.id,
@@ -169,7 +175,7 @@ async function insertWorkflowEvent(
   adminSupabase: SupabaseClient<Database>,
   run: ForgejoActionRun,
   studentRepo: { id: number; class_id: number } | null,
-  runAttempt: number,
+  runAttempt: number | null,
   stoppedAt: string | null,
   scope: Sentry.Scope
 ): Promise<void> {
@@ -259,7 +265,7 @@ async function recordRunOnCheckRun(
       conclusion: run.status,
       workflow_run_id: run.id,
       workflow_run_url: run.html_url,
-      workflow_run_stopped_at: stoppedAt ?? undefined
+      workflow_run_stopped_at: stoppedAt ?? status.workflow_run_stopped_at
     };
     const { data: written, error: updateError } = await adminSupabase
       .from("repository_check_runs")
@@ -298,6 +304,8 @@ export function compareWithRecordedRun(
     if (incomingStop < recordedStop) return "older";
     if (incomingStop > recordedStop) return "newer";
   }
+  // Without its own stop time an incoming attempt can't be shown to be later than one that has one.
+  if (!Number.isNaN(recordedStop) && Number.isNaN(incomingStop)) return "older";
   return status.conclusion === run.status && status.workflow_run_url === run.html_url ? "same" : "newer";
 }
 

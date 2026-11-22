@@ -1,15 +1,13 @@
 import { assert, assertEquals } from "jsr:@std/assert@^1";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { fakeSupabase as baseFakeSupabase, repositoryRow } from "../_shared/RepoPushFakeClient.ts";
-import { attributeRunAttempt, forgejoTime, handleForgejoActionRun } from "./actionRun.ts";
+import { attributeRunAttempt, compareWithRecordedRun, forgejoTime, handleForgejoActionRun } from "./actionRun.ts";
 import { actionRunPayload, RUN_SHA } from "./actionRunFixture.ts";
 
-// Mirrors workflow_events_forgejo_completion_key (20261122120000).
+// Mirrors workflow_events_forgejo_completion_key (20261122120000), which is NULLS NOT DISTINCT.
 const forgejoCompletionKey = (row: Record<string, unknown>) =>
-  row.event_type === "completed" &&
-  (row.payload as { provider?: string } | null)?.provider === "forgejo" &&
-  row.run_updated_at != null
-    ? `${row.workflow_run_id}|${row.run_attempt}|${row.run_updated_at}`
+  row.event_type === "completed" && (row.payload as { provider?: string } | null)?.provider === "forgejo"
+    ? `${row.workflow_run_id}|${row.run_attempt ?? null}|${row.run_updated_at ?? null}`
     : null;
 
 const fakeSupabase = (data: Parameters<typeof baseFakeSupabase>[0]) =>
@@ -300,6 +298,36 @@ Deno.test("without start and stop times no attempt is guessed", async () => {
   );
   await handleForgejoActionRun(client, run, new Sentry.Scope());
   noResultsWritten(inserts, upserts);
+  assertEquals(inserts.find((i) => i.table === "workflow_events")?.row.run_attempt, null);
+});
+
+Deno.test("an ambiguous completion delivered twice is logged once", async () => {
+  const data = tables({
+    submissions: [
+      submission({ id: 900, run_attempt: 1 }),
+      submission({ id: 901, run_attempt: 2, created_at: "2026-11-09T16:55:05.000Z" })
+    ]
+  });
+  const { client, inserts } = fakeSupabase(data);
+  const run = actionRunPayload(FORGEJO_URL).run;
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  const events = inserts.filter((i) => i.table === "workflow_events");
+  assertEquals(
+    events.map((e) => e.row.run_attempt),
+    [null]
+  );
+});
+
+Deno.test("a submission just inside either edge of the window gets no fallback result", async () => {
+  for (const created_at of ["2026-11-09T16:53:42.000Z", "2026-11-09T16:55:00.000Z"]) {
+    const { client, inserts, upserts } = fakeSupabase(
+      tables({ submissions: [submission({ id: 901, run_attempt: 2, created_at })] })
+    );
+    await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+    noResultsWritten(inserts, upserts);
+    assertEquals(inserts.find((i) => i.table === "workflow_events")?.row.run_attempt, null);
+  }
 });
 
 Deno.test("a re-run that made no submission is not credited with the earlier attempt's", async () => {
@@ -328,7 +356,15 @@ Deno.test("attributeRunAttempt: only a submission strictly inside the run's wind
     submissions: [s(1, "2026-11-09T16:54:00.000Z")],
     ambiguous: false
   });
-  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:53:38.000Z")], start, stop).ambiguous, true);
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:53:38.000Z")], start, stop), {
+    runAttempt: null,
+    submissions: [],
+    ambiguous: true
+  });
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:53:44.000Z")], start, stop).ambiguous, true);
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:54:58.000Z")], start, stop).ambiguous, true);
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:53:46.000Z")], start, stop).ambiguous, false);
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:54:00.000Z")], null, stop).runAttempt, null);
   assertEquals(
     attributeRunAttempt([s(1, "2026-11-09T16:54:00.000Z"), s(2, "2026-11-09T16:54:30.000Z")], start, stop).ambiguous,
     true
@@ -372,6 +408,43 @@ Deno.test("an earlier attempt of the same run, delivered late, leaves the later 
     updates.filter((u) => u.table === "repository_check_runs"),
     []
   );
+});
+
+Deno.test("a same-run completion without a stop time leaves a recorded outcome that has one", async () => {
+  const { client, updates } = fakeSupabase(
+    tables({
+      checkRunStatus: {
+        created_at: "2026-11-09T16:53:34.000Z",
+        completed_at: "2026-11-09T17:10:00.000Z",
+        conclusion: "success",
+        workflow_run_id: 42,
+        workflow_run_url: RUN_URL,
+        workflow_run_stopped_at: "2026-11-09T17:10:00.000Z"
+      }
+    })
+  );
+  const run = actionRunPayload(FORGEJO_URL, { action: "failure", status: "failure" }).run;
+  run.stopped = "0001-01-01T00:00:00Z";
+  run.updated = "0001-01-01T00:00:00Z";
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  assertEquals(
+    updates.filter((u) => u.table === "repository_check_runs"),
+    []
+  );
+});
+
+Deno.test("compareWithRecordedRun: an incoming stop time is needed to supersede a recorded one", () => {
+  const recorded = {
+    conclusion: "success",
+    workflow_run_id: 42,
+    workflow_run_url: RUN_URL,
+    workflow_run_stopped_at: "2026-11-09T17:10:00.000Z"
+  } as Parameters<typeof compareWithRecordedRun>[0];
+  const incoming = { id: 42, status: "failure", html_url: RUN_URL };
+  assertEquals(compareWithRecordedRun(recorded, incoming, null), "older");
+  assertEquals(compareWithRecordedRun(recorded, incoming, "2026-11-09T17:20:00.000Z"), "newer");
+  const { workflow_run_stopped_at: _, ...withoutStop } = recorded;
+  assertEquals(compareWithRecordedRun(withoutStop, incoming, null), "newer");
 });
 
 Deno.test("a status that changes between the read and the write is read again, not overwritten", async () => {
