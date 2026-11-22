@@ -1,5 +1,5 @@
 /**
- * CW-20 (#1113): a Forgejo repo that isn't ready yet is plain text saying "waiting for access", not
+ * A Forgejo repo that isn't ready yet is plain text saying "waiting for access", not
  * a link that 404s. The Playwright spec `tests/e2e/forgejo-repo-access.spec.ts` covers the page.
  */
 import { render, screen } from "@testing-library/react";

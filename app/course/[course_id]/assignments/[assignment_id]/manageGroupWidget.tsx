@@ -874,8 +874,8 @@ function GroupDetails({
   );
 }
 
-// CW-20 (#1113): until the reconciler has created the Forgejo repo and given the student access
-// (#1238), `is_github_ready` is false and a link would 404, so the repo is plain text that says so.
+// Until the reconciler has created the Forgejo repo and given the student access, `is_github_ready`
+// is false and a link would 404, so the repo is plain text that says so.
 // The repositories controller is live, so the link appears once the row turns ready.
 function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
   const instanceUrl = useForgejoInstanceUrl();

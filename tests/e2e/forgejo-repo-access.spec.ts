@@ -1,5 +1,5 @@
 /**
- * CW-20 (#1113): a student whose Forgejo repo isn't ready yet sees "waiting for access" as plain
+ * A student whose Forgejo repo isn't ready yet sees "waiting for access" as plain
  * text, not a link that 404s. Once the row turns ready, the repo is a link to the Forgejo instance.
  */
 import { expect, test } from "../global-setup";
