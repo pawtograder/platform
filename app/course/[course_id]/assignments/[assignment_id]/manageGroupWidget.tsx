@@ -874,16 +874,20 @@ function GroupDetails({
   );
 }
 
+// CW-20 (#1113): until the reconciler has created the Forgejo repo and given the student access
+// (#1238), `is_github_ready` is false and a link would 404, so the repo is plain text that says so.
+// The repositories controller is live, so the link appears once the row turns ready.
 function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
   const instanceUrl = useForgejoInstanceUrl();
-  const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
-  if (!instanceUrl) {
+  if (!repository.is_github_ready || !instanceUrl) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
-        {label}
+        {repository.repository}
+        {repository.is_github_ready ? " (ready ✅)" : " (waiting for access)"}
       </Text>
     );
   }
+  const label = `${repository.repository} (ready ✅)`;
   return (
     <Link
       href={`${instanceUrl}/${repository.repository}`}
