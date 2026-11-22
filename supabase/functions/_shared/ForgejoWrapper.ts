@@ -702,3 +702,37 @@ export async function archiveRepo(config: ForgejoConfig, repository: string, now
   await res.body?.cancel();
   return `${owner}/${archivedName}`;
 }
+
+/**
+ * SHAs of the newest commits on the default branch, newest first: one page, at most `limit` (Forgejo may cap it
+ * lower at [api].MAX_RESPONSE_ITEMS). Null when the repo is gone, and empty when it has no commits yet (409).
+ */
+export async function listRecentCommitShas(
+  config: ForgejoConfig,
+  repository: string,
+  limit = 100
+): Promise<string[] | null> {
+  const res = await forgejo(
+    config,
+    "GET",
+    `/repos/${repoPath(repository)}/commits?limit=${limit}&stat=false&verification=false&files=false`
+  );
+  if (res.status === 404 || res.status === 409) {
+    await res.body?.cancel();
+    return res.status === 404 ? null : [];
+  }
+  if (!res.ok) throw await failure(res, "commits read");
+  return ((await res.json()) as { sha: string }[]).map((c) => c.sha);
+}
+
+/** Deletes the repo. False when it was already gone. */
+export async function deleteRepo(config: ForgejoConfig, repository: string): Promise<boolean> {
+  const res = await forgejo(config, "DELETE", `/repos/${repoPath(repository)}`);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return false;
+  }
+  if (!res.ok) throw await failure(res, "repo deletion");
+  await res.body?.cancel();
+  return true;
+}

@@ -167,3 +167,8 @@ describe("assignment-delete repository cleanup helpers", () => {
     });
   });
 });
+
+test("mixed provider repositories share the five-repository deletion budget", () => {
+  expect(selectGitHubCleanupStrategy(4 + 2)).toBe("archive_asynchronously");
+  expect(selectGitHubCleanupStrategy(4 + 1)).toBe("delete_synchronously");
+});

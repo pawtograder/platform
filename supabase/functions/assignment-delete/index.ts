@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import {
   IllegalArgumentError,
   UserVisibleError,
@@ -15,6 +16,10 @@ import {
   selectGitHubCleanupStrategy
 } from "./repositoryCleanup.ts";
 import type { GitHubCleanupStrategy, GitHubRepoTarget } from "./repositoryCleanup.ts";
+import {
+  assertForgejoRepositoriesHaveOnlyTemplateCommits,
+  deleteForgejoRepositoriesSynchronously
+} from "./forgejoCleanup.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
 
 interface AssignmentDeleteRequest {
@@ -37,6 +42,10 @@ type AssignmentDeleteResponse = {
   github_repositories_deleted: number;
   github_repositories_queued_for_archive: number;
   github_repositories_skipped: number;
+  forgejo_repositories_total: number;
+  forgejo_repositories_deleted: number;
+  forgejo_repositories_queued_for_archive: number;
+  forgejo_repositories_skipped: number;
 };
 
 const REPOSITORY_MODIFICATION_CHECK_CONCURRENCY = 5;
@@ -214,12 +223,6 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found or does not belong to this class");
   }
-  if (assignment.git_provider !== "github") {
-    throw new UserVisibleError(
-      "Deleting Forgejo assignments or their course is not supported yet. If no repositories exist, switch the assignment to GitHub before deleting. Otherwise, wait for provider-aware cleanup.",
-      400
-    );
-  }
 
   // ========================
   // PHASE 1: PERFORM ALL CHECKS FIRST
@@ -249,7 +252,16 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   }
 
   await assertNoReleasedSubmissionReviews(adminSupabase, assignment_id);
-  await assertRepositoriesHaveOnlyTemplateCommits(assignmentRepositories, assignment.template_repo);
+  // A Forgejo assignment's student repos and handout are on Forgejo; its grader repo stays on GitHub (D6).
+  const forgejo = assignment.git_provider === "forgejo" ? forgejoConfig() : null;
+  if (assignment.git_provider === "forgejo") {
+    if (!forgejo) {
+      throw new UserVisibleError("Cannot delete a Forgejo assignment: Forgejo is not configured on this server.", 400);
+    }
+    await assertForgejoRepositoriesHaveOnlyTemplateCommits(forgejo, assignmentRepositories, assignment.template_repo);
+  } else {
+    await assertRepositoriesHaveOnlyTemplateCommits(assignmentRepositories, assignment.template_repo);
+  }
 
   const graderRepo =
     assignment.autograder && !Array.isArray(assignment.autograder) ? assignment.autograder.grader_repo : null;
@@ -303,6 +315,7 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
     class_id: number;
     github_repositories?: unknown;
     github_archives_queued?: number;
+    forgejo_repositories?: unknown;
     handout_syncs_cancelled?: number;
   };
 
@@ -328,16 +341,18 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   );
 
   // ========================
-  // PHASE 3: CLEAN UP GITHUB
+  // PHASE 3: CLEAN UP GITHUB AND FORGEJO
   // ========================
   //
   // The RPC reports the repositories it actually deleted, which can include ones created
   // after the Phase 1 read, so the strategy is chosen from that list and not the Phase 1
-  // count. Either way every target is already queued for archival; a small assignment is
-  // also deleted outright here, which only makes those jobs no-ops.
+  // count. Either way every target is already queued for archival (GitHub's archive jobs,
+  // or forgejo_repo_archives for forgejo-reconciler); a small assignment is also deleted
+  // outright here, which only makes those jobs no-ops. The two hosts share one budget.
 
   const deletedTargets = parseDeletedGitHubRepositories(deleteResult.github_repositories);
-  const cleanupStrategy = selectGitHubCleanupStrategy(deletedTargets.length);
+  const forgejoTargets = parseDeletedGitHubRepositories(deleteResult.forgejo_repositories);
+  const cleanupStrategy = selectGitHubCleanupStrategy(deletedTargets.length + forgejoTargets.length);
   scope?.setTag("github_cleanup_strategy", cleanupStrategy);
   scope?.setTag("github_repositories_total", deletedTargets.length.toString());
 
@@ -355,6 +370,11 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
     githubRepositoriesQueuedForArchive = synchronousCleanup.queued;
     githubRepositoriesSkipped += synchronousCleanup.skipped;
   }
+
+  const forgejoCleanup =
+    cleanupStrategy === "delete_synchronously"
+      ? await deleteForgejoRepositoriesSynchronously(adminSupabase, forgejo ?? forgejoConfig(), forgejoTargets)
+      : { deleted: 0, queued: forgejoTargets.length, skipped: 0 };
 
   const baseMessage =
     deleteResult.message ||
@@ -375,13 +395,23 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
         } skipped because they were missing or invalid.`
       : "";
 
+  const forgejoMessage =
+    forgejoTargets.length > 0
+      ? ` Forgejo: ${forgejoCleanup.deleted} deleted immediately, ${forgejoCleanup.queued} queued for archiving` +
+        `${forgejoCleanup.skipped > 0 ? `, ${forgejoCleanup.skipped} already missing` : ""}.`
+      : "";
+
   return {
-    message: `${baseMessage} ${githubMessage}${skippedMessage}`,
+    message: `${baseMessage} ${githubMessage}${skippedMessage}${forgejoMessage}`,
     github_cleanup_strategy: cleanupStrategy,
     github_repositories_total: deletedTargets.length,
     github_repositories_deleted: githubRepositoriesDeleted,
     github_repositories_queued_for_archive: githubRepositoriesQueuedForArchive,
-    github_repositories_skipped: githubRepositoriesSkipped
+    github_repositories_skipped: githubRepositoriesSkipped,
+    forgejo_repositories_total: forgejoTargets.length,
+    forgejo_repositories_deleted: forgejoCleanup.deleted,
+    forgejo_repositories_queued_for_archive: forgejoCleanup.queued,
+    forgejo_repositories_skipped: forgejoCleanup.skipped
   };
 }
 
