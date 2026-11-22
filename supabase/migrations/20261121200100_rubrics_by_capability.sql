@@ -12,8 +12,9 @@
 --      Head TA gets it only when an instructor turns it on.
 --   2. Writing rubrics, rubric_parts, rubric_criteria, rubric_checks and rubric_check_references
 --      (insert, update, delete) needs manage_rubrics in the row's class. A child row must also sit
---      on a rubric of that same class, and a rubric on an assignment of that class, so a role in
---      one class can't attach rows to another class's rubric or assignment.
+--      on a rubric of that same class and carry that rubric's assignment, and a rubric on an
+--      assignment of that class, so a role in one class can't attach rows to another class's rubric
+--      or assignment, or file a row under the wrong assignment.
 --   3. update_rubric_full checks manage_rubrics instead of authorizeforclassinstructor. On every
 --      save it also fills the assignment's empty link to the rubric (grading_rubric_id,
 --      self_review_rubric_id or meta_grading_rubric_id). The editor used to write that link itself,
@@ -99,16 +100,19 @@ CREATE POLICY "Rubric managers can delete rubrics" ON public.rubrics
   FOR DELETE TO authenticated
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')));
 
--- The four child tables: the class, a rubric in that class, and parents that match. A criterion's
--- part and a check's criterion sit on the same rubric; a reference's own check sits on its rubric,
--- its assignment is the rubric's, and the check it points to is in the same class. There are no
--- composite foreign keys, so without these a row could hang off another class's part, criterion
--- or check.
+-- The four child tables: the class, a rubric in that class with the same assignment, and parents
+-- that match. A criterion's part and a check's criterion sit on the same rubric; a reference's own
+-- check sits on its rubric and the check it points to is in the same class. There are no composite
+-- foreign keys, so without these a row could hang off another class's part, criterion or check, or
+-- show up under another assignment (the app loads parts and criteria by assignment_id).
 CREATE POLICY "Rubric managers can add rubric parts" ON public.rubric_parts
   FOR INSERT TO authenticated
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics'))
-    AND EXISTS (SELECT 1 FROM public.rubrics r WHERE r.id = rubric_parts.rubric_id AND r.class_id = rubric_parts.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.rubrics r
+      WHERE r.id = rubric_parts.rubric_id AND r.class_id = rubric_parts.class_id AND r.assignment_id = rubric_parts.assignment_id
+    )
   );
 
 CREATE POLICY "Rubric managers can edit rubric parts" ON public.rubric_parts
@@ -116,7 +120,10 @@ CREATE POLICY "Rubric managers can edit rubric parts" ON public.rubric_parts
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')))
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics'))
-    AND EXISTS (SELECT 1 FROM public.rubrics r WHERE r.id = rubric_parts.rubric_id AND r.class_id = rubric_parts.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.rubrics r
+      WHERE r.id = rubric_parts.rubric_id AND r.class_id = rubric_parts.class_id AND r.assignment_id = rubric_parts.assignment_id
+    )
   );
 
 CREATE POLICY "Rubric managers can delete rubric parts" ON public.rubric_parts
@@ -127,7 +134,10 @@ CREATE POLICY "Rubric managers can add rubric criteria" ON public.rubric_criteri
   FOR INSERT TO authenticated
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics'))
-    AND EXISTS (SELECT 1 FROM public.rubrics r WHERE r.id = rubric_criteria.rubric_id AND r.class_id = rubric_criteria.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.rubrics r
+      WHERE r.id = rubric_criteria.rubric_id AND r.class_id = rubric_criteria.class_id AND r.assignment_id = rubric_criteria.assignment_id
+    )
     AND EXISTS (
       SELECT 1 FROM public.rubric_parts p
       WHERE p.id = rubric_criteria.rubric_part_id AND p.rubric_id = rubric_criteria.rubric_id
@@ -139,7 +149,10 @@ CREATE POLICY "Rubric managers can edit rubric criteria" ON public.rubric_criter
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')))
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics'))
-    AND EXISTS (SELECT 1 FROM public.rubrics r WHERE r.id = rubric_criteria.rubric_id AND r.class_id = rubric_criteria.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.rubrics r
+      WHERE r.id = rubric_criteria.rubric_id AND r.class_id = rubric_criteria.class_id AND r.assignment_id = rubric_criteria.assignment_id
+    )
     AND EXISTS (
       SELECT 1 FROM public.rubric_parts p
       WHERE p.id = rubric_criteria.rubric_part_id AND p.rubric_id = rubric_criteria.rubric_id
@@ -184,7 +197,10 @@ CREATE POLICY "Rubric managers can add rubric checks" ON public.rubric_checks
   FOR INSERT TO authenticated
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics'))
-    AND EXISTS (SELECT 1 FROM public.rubrics r WHERE r.id = rubric_checks.rubric_id AND r.class_id = rubric_checks.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.rubrics r
+      WHERE r.id = rubric_checks.rubric_id AND r.class_id = rubric_checks.class_id AND r.assignment_id = rubric_checks.assignment_id
+    )
     AND EXISTS (
       SELECT 1 FROM public.rubric_criteria c
       WHERE c.id = rubric_checks.rubric_criteria_id AND c.rubric_id = rubric_checks.rubric_id
@@ -196,7 +212,10 @@ CREATE POLICY "Rubric managers can edit rubric checks" ON public.rubric_checks
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')))
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics'))
-    AND EXISTS (SELECT 1 FROM public.rubrics r WHERE r.id = rubric_checks.rubric_id AND r.class_id = rubric_checks.class_id)
+    AND EXISTS (
+      SELECT 1 FROM public.rubrics r
+      WHERE r.id = rubric_checks.rubric_id AND r.class_id = rubric_checks.class_id AND r.assignment_id = rubric_checks.assignment_id
+    )
     AND EXISTS (
       SELECT 1 FROM public.rubric_criteria c
       WHERE c.id = rubric_checks.rubric_criteria_id AND c.rubric_id = rubric_checks.rubric_id

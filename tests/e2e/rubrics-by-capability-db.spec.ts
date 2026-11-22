@@ -7,8 +7,8 @@
  *
  * update_rubric_full also fills the assignment's empty link to the rubric, so a Head TA with
  * manage_rubrics but not manage_assignments can create one, and refuses a create for a round that
- * already has a rubric. A part or criterion can't move to another rubric, and a reference must use
- * its rubric's assignment.
+ * already has a rubric. A part or criterion can't move to another rubric, and a part, criterion,
+ * check or reference must use its rubric's assignment.
  *
  * PostgREST reports a blocked insert as an error, but an update or delete that RLS hides changes 0
  * rows without one, so each blocked write is checked and then confirmed through the service client.
@@ -485,6 +485,24 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .eq("id", rowIds.rubric_check_references)
       .single();
     expect(reference!.assignment_id).toBe(assignment.id);
+  });
+
+  test("a rubric part, criterion or check must use its rubric's assignment", async () => {
+    // The app loads parts and criteria by assignment_id, so a row filed under another assignment
+    // would show up in that assignment's rubric.
+    const other = await newAssignment("child-assignment");
+    const client = await createAuthenticatedClient(headTa);
+    const rows = newRows({ class_id: classR.id, assignment_id: other.id, rubric_id: rowIds.rubrics });
+
+    for (const table of ["rubric_parts", "rubric_criteria", "rubric_checks"] as const) {
+      const inserted = await client.from(table).insert(rows[table]).select("id");
+      expectRlsBlocked(inserted, `a ${table} row with another assignment's id`);
+
+      const updated = await client.from(table).update({ assignment_id: other.id }).eq("id", rowIds[table]).select("id");
+      expectBlocked(updated, `moving a ${table} row to another assignment`);
+      const { data: row } = await supabase.from(table).select("assignment_id").eq("id", rowIds[table]).single();
+      expect(row!.assignment_id, table).toBe(assignment.id);
+    }
   });
 
   test("an instructor still saves rubrics", async () => {
