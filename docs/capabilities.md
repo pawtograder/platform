@@ -132,6 +132,8 @@ everything above. It needs `manage_roles`, so graders see an explanation instead
   role for the foreign key, so the dialog blocks delete and says to re-enable them under Enrollments
   when that is the only membership left.
 - **People:** every active grader with a role drop-down, which updates `user_roles.class_role_id`.
+  This update requires an instructor in the database. Only instructors currently hold `manage_roles`,
+  which gates this page.
 
 A row's label is the capability's name in sentence case, and the line under it is the capability's
 `description`. Write the description as the sentence an instructor reads next to the checkbox.

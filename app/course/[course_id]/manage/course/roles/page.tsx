@@ -218,6 +218,8 @@ export default function StaffRolesPage() {
       if (!target) return;
       setMovingUserRoleIds((prev) => new Set(prev).add(userRoleId));
       setPendingMoves((prev) => new Map(prev).set(userRoleId, classRoleId));
+      // Changing class_role_id still requires an instructor in the database.
+      // Only instructors currently hold manage_roles, which gates this page.
       const { data: written, error } = await createClient()
         .from("user_roles")
         .update({ class_role_id: classRoleId })
