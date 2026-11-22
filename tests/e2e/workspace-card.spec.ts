@@ -136,9 +136,15 @@ test.describe("Workspace card on the assignment page", () => {
     await openAssignment(page);
     const status = page.getByTestId("workspace-status");
 
-    await expect(status).toHaveText("Workspace not ready: Clone your repository failed.");
+    // The status line repeats the message for screen readers, so it's part of the line's text.
+    await expect(status).toHaveText(
+      "Workspace not ready: Clone your repository failed. fatal: could not read from remote repository"
+    );
     await expect(page.getByText("Clone your repository failed", { exact: true })).toBeVisible();
-    await expect(page.getByText("fatal: could not read from remote repository")).toBeVisible();
+    // The visible copy is the alert's, which goes on to say what to do.
+    await expect(
+      page.getByText("fatal: could not read from remote repository Try again, and if it keeps failing")
+    ).toBeVisible();
     await expect(page.locator('[data-step="build"]')).toHaveAttribute("data-mark", "done");
     await expect(page.locator('[data-step="clone"]')).toHaveAttribute("data-mark", "failed");
     await expect(page.getByRole("link", { name: /Open in VS Code/ })).toHaveCount(0);
@@ -166,8 +172,12 @@ test.describe("Workspace card on the assignment page", () => {
     await openAssignment(page);
     const status = page.getByTestId("workspace-status");
 
-    await expect(status).toHaveText("Link your Forgejo account to open your workspace.");
-    await expect(page.getByText("Link your Forgejo account in Coder once.", { exact: false })).toBeVisible();
+    await expect(status).toHaveText(
+      "Link your Forgejo account to open your workspace. Link your Forgejo account in Coder once."
+    );
+    await expect(
+      page.getByText("Link your Forgejo account in Coder once. Coder needs it to clone your repository")
+    ).toBeVisible();
     const link = page.getByRole("link", { name: /Link Forgejo account/ });
     await expect(link).toHaveAttribute("href", LINK_URL);
     await expect(link).toHaveAttribute("target", "_blank");
