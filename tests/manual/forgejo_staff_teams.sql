@@ -12,6 +12,8 @@
 --   2. a class with no Forgejo repo or handout isn't listed
 --   3. promoting a student, demoting or disabling staff, and deleting a staff role each kick the
 --      reconciler; a student's edit doesn't
+--   4. a recorded team keeps its name after the class slug changes, and a forgejo_org change adds a team in
+--      the new org while the old one stays listed (20261122140500)
 \set ON_ERROR_STOP on
 \timing off
 begin;
@@ -107,6 +109,18 @@ select pg_temp.check('3d disabling a student doesn''t kick for staff',
 update k set v = pg_temp.kicks();
 delete from public.user_roles where user_id = (select user_id from fx where name = 'prof');
 select pg_temp.check('3e deleting a staff role kicks', pg_temp.kicks() >= (select v from k) + 1);
+
+-- 4
+select public.record_forgejo_staff_team(pg_temp.cls(), 'https://git.test', l.org, l.team, 12)
+from listed l where l.class_id = pg_temp.cls();
+update public.classes set slug = slug || '-renamed' where id = pg_temp.cls();
+select pg_temp.check('4a after a slug change the recorded team is listed under its recorded name, alone',
+  (select array_agg(team) from public.forgejo_staff_teams('https://git.test', NULL) where class_id = pg_temp.cls())
+    = (select array_agg(team) from listed where class_id = pg_temp.cls()));
+update public.classes set forgejo_org = 'Other-Org' where id = pg_temp.cls();
+select pg_temp.check('4b after a forgejo_org change the old team stays and the new org gets one',
+  (select array_agg(org order by org) from public.forgejo_staff_teams('https://git.test', NULL)
+    where class_id = pg_temp.cls()) = array['other-org', 'stf-org']);
 
 select case when ok then 'PASS' else 'FAIL' end as result, name, coalesce(detail, '') as detail from t_result order by name;
 select count(*) filter (where not ok) as failures, count(*) as checks from t_result;

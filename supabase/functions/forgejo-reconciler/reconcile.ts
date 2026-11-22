@@ -421,10 +421,10 @@ export async function reconcileForgejoStaffTeams(
   for (const cls of classes ?? []) {
     try {
       const teamId = await ops.ensureStaffTeam(config, cls.org, cls.team);
-      // Recorded as soon as the team exists, before the steps that can fail: the backlog lists a class
-      // only while it has live Forgejo repos, and the team outlives them (#1398 archives a deleted
-      // assignment's repos but leaves the team holding its grants). Without this marker the class drops
-      // out and a TA dropped afterwards keeps team access for good.
+      // Recorded as soon as the team exists, before the steps that can fail: the team outlives the repos
+      // that caused it (#1398 archives a deleted assignment's repos but leaves the team holding its
+      // grants), and its name must outlive the class's slug and forgejo_org. From then on the backlog lists
+      // the recorded org and team, so a TA dropped later loses the team that actually holds the grants.
       // function-grants: service-role
       const { error: recordError } = await supabase.rpc("record_forgejo_staff_team", {
         p_class_id: cls.class_id,

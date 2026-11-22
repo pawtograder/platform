@@ -1235,6 +1235,22 @@ Deno.test("staff teams: each class's team gets its staff, then its repos", async
   ]);
 });
 
+Deno.test("staff teams: a class with a team in its old org and its new one syncs each under its own name", async () => {
+  // After a slug and forgejo_org change the backlog lists the recorded team in the old org and a team in
+  // the new one; each is synced, so staff removed from the class leave both.
+  const { client } = fakeStaffSupabase([
+    { ...staffClass(1, "cs4535"), team: "oldslug-staff", logins: ["prof"] },
+    { ...staffClass(1, "cs3500"), team: "newslug-staff", logins: ["prof"] }
+  ]);
+  const { ops, calls } = stubStaffOps();
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result, { synced: 2, failures: [] });
+  assertEquals(
+    calls.filter((c) => !c.startsWith("repos")),
+    ["team cs4535/oldslug-staff", "members 7 prof", "team cs3500/newslug-staff", "members 8 prof"]
+  );
+});
+
 Deno.test("staff teams: the team is recorded as soon as it exists, before the steps that can fail", async () => {
   // The backlog lists a class only while it has live Forgejo repos, but the team outlives them: #1398
   // archives a deleted assignment's repos and leaves the team holding its grants. Without a record of the
