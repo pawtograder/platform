@@ -254,6 +254,8 @@ export default function FlashcardDeckPage() {
             {flashcards.map((card, index) => (
               <Box
                 key={card.id}
+                role="group"
+                aria-label={card.title}
                 p={5}
                 rounded="lg"
                 border="1px"

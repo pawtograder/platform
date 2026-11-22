@@ -2059,7 +2059,23 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
       .single();
     expect(error).toBeNull();
 
+    const otherMembership = await createUserInClass({ email: headTa.email, role: "grader", class_id: otherClass.id });
+    expect(otherMembership.user_id).toBe(headTa.user_id);
     const client = await createAuthenticatedClient(headTa);
+    const { data: matching, error: matchingError } = await client
+      .from("flashcards")
+      .insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Matching class",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(matchingError).toBeNull();
+    expect(matching).not.toBeNull();
     expectRlsBlocked(
       await client.from("flashcards").insert({
         class_id: classH.id,
