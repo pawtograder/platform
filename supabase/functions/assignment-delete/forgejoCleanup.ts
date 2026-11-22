@@ -2,7 +2,7 @@ import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { deleteRepo, type ForgejoConfig, listRecentCommitShas } from "../_shared/ForgejoWrapper.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import type { GitHubRepoTarget } from "./repositoryCleanup.ts";
+import { type GitHubRepoTarget, hasOnlyHandoutCommits, modifiedRepositoryMessage } from "./repositoryCleanup.ts";
 
 /** The claim forgejo-reconciler's archive step uses (STALE_CLAIM_MINUTES there). */
 const ARCHIVE_STALE_CLAIM_MINUTES = 10;
@@ -10,9 +10,8 @@ const ARCHIVE_STALE_CLAIM_MINUTES = 10;
 export type ForgejoRepositoryRow = { repository: string | null; synced_handout_sha: string | null };
 
 /**
- * The Forgejo side of assertRepositoriesHaveOnlyTemplateCommits, with the same rule: a student repo with more
- * than one commit (in its newest page) is modified unless the oldest of them is the handout's oldest or the
- * handout commit last synced into it. A repo generated from the handout starts with one commit of its own.
+ * The Forgejo side of assertRepositoriesHaveOnlyTemplateCommits, with the same rule (hasOnlyHandoutCommits). A
+ * repo generated from the handout starts with one commit of its own.
  *
  * One difference: GitHub lets the delete go ahead when it can't read a repo. Here only a repo that is gone
  * (or still empty) passes; any other failure refuses, because the repos are deleted next and nothing was checked.
@@ -47,14 +46,8 @@ export async function assertForgejoRepositoriesHaveOnlyTemplateCommits(
         503
       );
     }
-    if (!shas || shas.length <= 1) continue;
-    const oldest = shas[shas.length - 1];
-    if (oldest !== templateOldest && oldest !== repo.synced_handout_sha) {
-      throw new UserVisibleError(
-        `Cannot delete assignment: Repository ${repo.repository} has been modified beyond the template. ` +
-          `Please manually delete modified repositories if you want to proceed.`,
-        400
-      );
+    if (shas && !hasOnlyHandoutCommits(shas, templateOldest, repo.synced_handout_sha)) {
+      throw new UserVisibleError(modifiedRepositoryMessage(repo.repository), 400);
     }
   }
 }

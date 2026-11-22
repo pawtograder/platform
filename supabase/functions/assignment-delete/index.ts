@@ -12,6 +12,8 @@ import { getOctoKit, listCommits } from "../_shared/GitHubWrapper.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import {
   collectGitHubRepoTargets,
+  hasOnlyHandoutCommits,
+  modifiedRepositoryMessage,
   parseDeletedGitHubRepositories,
   selectGitHubCleanupStrategy
 } from "./repositoryCleanup.ts";
@@ -103,17 +105,9 @@ async function assertRepositoriesHaveOnlyTemplateCommits(repositories: Repositor
 
     try {
       const repoCommits = await listCommits(repo.repository, 1);
-
-      if (repoCommits.commits.length > 1) {
-        const oldestCommit = repoCommits.commits[repoCommits.commits.length - 1];
-
-        if (oldestCommit.sha !== templateInitialCommitSha && oldestCommit.sha !== repo.synced_handout_sha) {
-          throw new UserVisibleError(
-            `Cannot delete assignment: Repository ${repo.repository} has been modified beyond the template. ` +
-              `Please manually delete modified repositories if you want to proceed.`,
-            400
-          );
-        }
+      const shas = repoCommits.commits.map((commit: { sha: string }) => commit.sha);
+      if (!hasOnlyHandoutCommits(shas, templateInitialCommitSha, repo.synced_handout_sha)) {
+        throw new UserVisibleError(modifiedRepositoryMessage(repo.repository), 400);
       }
     } catch (error) {
       if (error instanceof UserVisibleError) {

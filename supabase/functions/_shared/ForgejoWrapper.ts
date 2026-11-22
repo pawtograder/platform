@@ -725,31 +725,20 @@ export async function archiveRepo(
   const [destinationOwner, archivedName] = destination.split("/");
   // The destination comes back from forgejo_repo_archives, so it can only ever rename the repo in place.
   if (destinationOwner !== owner) throw new Error("The Forgejo archive destination is in another owner");
-  const collaborators = new Map<string, string>();
-  // Paged until X-Total-Count, not until a short page: Forgejo caps `limit` at [api].MAX_RESPONSE_ITEMS, and a
-  // collaborator left off the list would keep write access to a repo that is about to be read-only for everyone else.
-  for (let page = 1; page <= 1000; page++) {
-    const res = await forgejo(config, "GET", `/repos/${path}/collaborators?page=${page}&limit=50`);
-    if (res.status === 404) {
-      await res.body?.cancel();
-      // The rename comes last, once every collaborator is gone, so a repo sitting at the destination has no
-      // collaborators left: an earlier attempt got that far and lost the write of where it went. It may not be
-      // locked yet, which ensureArchivedAt finishes.
-      if (page === 1) return (await ensureArchivedAt(config, destination)) ? destination : null;
-      throw new Error("Forgejo repo disappeared while its collaborators were read");
-    }
-    if (!res.ok) throw await failure(res, "collaborators read");
-    const total = res.headers.get("X-Total-Count");
-    const batch = (await res.json()) as { login: string }[];
-    for (const c of batch) collaborators.set(c.login.toLowerCase(), c.login);
-    if (batch.length === 0 || (total !== null && collaborators.size >= Number(total))) break;
-    if (page === 1000) throw new Error("Forgejo collaborators read failed: the list didn't end");
+  const found = await forgejo(config, "GET", `/repos/${path}`);
+  if (found.status === 404) {
+    await found.body?.cancel();
+    // The rename comes last, once every collaborator is gone, so a repo sitting at the destination has no
+    // collaborators left: an earlier attempt got that far and lost the write of where it went. It may not be
+    // locked yet, which ensureArchivedAt finishes.
+    return (await ensureArchivedAt(config, destination)) ? destination : null;
   }
-  for (const login of collaborators.values()) {
-    const res = await forgejo(config, "DELETE", `/repos/${path}/collaborators/${encodeURIComponent(login)}`);
-    if (!res.ok && res.status !== 404) throw await failure(res, "collaborator remove");
-    await res.body?.cancel();
-  }
+  if (!found.ok) throw await failure(found, "repo read");
+  await found.body?.cancel();
+  // Every page, not just the first: a collaborator left off the list would keep write access to a repo that is
+  // about to be read-only for everyone else.
+  const collaborators = await listAll<{ login: string }>(config, `/repos/${path}/collaborators`, "collaborators read");
+  for (const { login } of collaborators) await removeCollaborator(config, repository, login);
   const res = await forgejo(config, "PATCH", `/repos/${path}`, { name: archivedName, archived: true });
   if (res.status === 404) {
     await res.body?.cancel();
@@ -792,4 +781,42 @@ export async function deleteRepo(config: ForgejoConfig, repository: string): Pro
   if (!res.ok) throw await failure(res, "repo deletion");
   await res.body?.cancel();
   return true;
+}
+
+/**
+ * Every item of a list endpoint. A short page doesn't end the list: Forgejo caps `limit` at
+ * [api].MAX_RESPONSE_ITEMS, which an operator may set below 50. So the list ends at X-Total-Count, or at an
+ * empty page when Forgejo doesn't send the count.
+ */
+async function listAll<T>(config: ForgejoConfig, path: string, what: string): Promise<T[]> {
+  const items: T[] = [];
+  const separator = path.includes("?") ? "&" : "?";
+  for (let page = 1; page <= 1000; page++) {
+    const res = await forgejo(config, "GET", `${path}${separator}page=${page}&limit=50`);
+    if (!res.ok) throw await failure(res, what);
+    const total = res.headers.get("X-Total-Count");
+    const batch = (await res.json()) as T[];
+    items.push(...batch);
+    if (batch.length === 0 || (total !== null && items.length >= Number(total))) return items;
+  }
+  throw new Error(`Forgejo ${what} failed: the list didn't end`);
+}
+
+/**
+ * Takes login off the repo's collaborators. Already gone is success: Forgejo answers 204 when they weren't one,
+ * 404 when the repo is gone and 422 "user does not exist" when the account is.
+ */
+export async function removeCollaborator(config: ForgejoConfig, repository: string, login: string): Promise<void> {
+  const res = await forgejo(
+    config,
+    "DELETE",
+    `/repos/${repoPath(repository)}/collaborators/${encodeURIComponent(login)}`
+  );
+  if (res.ok || res.status === 404) {
+    await res.body?.cancel();
+    return;
+  }
+  const text = await res.text();
+  if (res.status === 422 && reason(text) === "user does not exist") return;
+  throw new Error(`Forgejo collaborator remove failed: ${res.status} ${reason(text)}`);
 }
