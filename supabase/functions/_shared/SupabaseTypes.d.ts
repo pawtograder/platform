@@ -13797,7 +13797,7 @@ export type Database = {
       };
       claim_forgejo_repo_archive: {
         Args: { p_id: number; p_stale_minutes: number };
-        Returns: boolean;
+        Returns: string;
       };
       claim_forgejo_repo_token_revocation: {
         Args: { p_id: number; p_stale_minutes: number };

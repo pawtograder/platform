@@ -98,6 +98,26 @@ export async function existingRepositoryRow(
   repository: string,
   owner: RepoOwner
 ): Promise<number | null> {
+  // The row first, then the pending archive. Deleting a Forgejo row queues its archive in the same
+  // transaction (forgejo_repo_archive_on_delete), so a row this read misses was deleted, with its archive
+  // queued, before the read, and the archive lookup below sees that entry (or it is already archived, and the
+  // old repo renamed away). Reading the archives first would leave a gap: an unlink committing between the two
+  // reads would find neither, and the old repo would be adopted with its old collaborators.
+  const { data, error } = await supabase
+    .from("repositories")
+    .select("id, assignment_id, profile_id, assignment_group_id")
+    .eq("git_provider", "forgejo")
+    .eq("repository", repository)
+    .maybeSingle();
+  if (error) throw error;
+  if (
+    data &&
+    (data.assignment_id !== owner.assignment_id ||
+      data.profile_id !== owner.profile_id ||
+      data.assignment_group_id !== owner.assignment_group_id)
+  ) {
+    throw new Error("The Forgejo repo name already belongs to another assignment, student or group");
+  }
   // The old repo by this name is still on Forgejo with its old collaborators: adopting it would hand them the
   // new student's work, and archiving it later would take the repo from the new owner. archiveUnlinkedRepos
   // runs first in every pass, so this only waits a pass when that archive failed.
@@ -111,22 +131,7 @@ export async function existingRepositoryRow(
   if (pending && pending.length > 0) {
     throw new Error("The Forgejo repo name is waiting for its previous repo to be archived");
   }
-  const { data, error } = await supabase
-    .from("repositories")
-    .select("id, assignment_id, profile_id, assignment_group_id")
-    .eq("git_provider", "forgejo")
-    .eq("repository", repository)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
-  if (
-    data.assignment_id !== owner.assignment_id ||
-    data.profile_id !== owner.profile_id ||
-    data.assignment_group_id !== owner.assignment_group_id
-  ) {
-    throw new Error("The Forgejo repo name already belongs to another assignment, student or group");
-  }
-  return data.id;
+  return data?.id ?? null;
 }
 
 /** Inserts the row not ready and returns its id. */
@@ -339,6 +344,28 @@ export async function reconcileForgejoWorkflowHashes(
 
 export const MAX_ARCHIVES_PER_PASS = 50;
 
+/**
+ * Writes to a pending archive entry only while `claim` (what claim_forgejo_repo_archive returned) is still its
+ * claim. False when it isn't: the entry was claimed again after this claim went stale, or finished, and what
+ * that pass recorded stands.
+ */
+export async function writeClaimedArchive(
+  supabase: SupabaseClient<Database>,
+  id: number,
+  claim: string,
+  values: Database["public"]["Tables"]["forgejo_repo_archives"]["Update"]
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("forgejo_repo_archives")
+    .update(values)
+    .eq("id", id)
+    .eq("claimed_at", claim)
+    .is("archived_at", null)
+    .select("id");
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
 export type ArchiveResult = { archived: number; failures: { classId: number; error: unknown }[] };
 
 /**
@@ -362,12 +389,12 @@ export async function archiveUnlinkedRepos(
   for (const row of due ?? []) {
     try {
       // function-grants: service-role
-      const { data: claimed, error: claimError } = await supabase.rpc("claim_forgejo_repo_archive", {
+      const { data: claim, error: claimError } = await supabase.rpc("claim_forgejo_repo_archive", {
         p_id: row.id,
         p_stale_minutes: STALE_CLAIM_MINUTES
       });
       if (claimError) throw claimError;
-      if (!claimed) continue;
+      if (!claim) continue;
       // Where the repo is going is decided and written down before Forgejo is touched. An attempt that renames
       // the repo and then loses the write below -- the pass dies, or Supabase refuses it -- leaves the old name
       // gone; without a recorded destination the retry would find nothing, mark the entry done with no name,
@@ -382,19 +409,16 @@ export async function archiveUnlinkedRepos(
       let destination = entry.archived_as;
       if (destination === null) {
         destination = archivedRepoName(row.repository);
-        const { error: pinError } = await supabase
-          .from("forgejo_repo_archives")
-          .update({ archived_as: destination })
-          .eq("id", row.id);
-        if (pinError) throw pinError;
+        // A pass that lost its claim (it stalled past STALE_CLAIM_MINUTES and another took over) stops here.
+        if (!(await writeClaimedArchive(supabase, row.id, claim, { archived_as: destination }))) continue;
       }
       // On failure the claim stays; once it's stale the next pass tries again.
       const archivedAs = await archive(config, row.repository, destination);
-      const { error: saveError } = await supabase
-        .from("forgejo_repo_archives")
-        .update({ archived_at: new Date().toISOString(), archived_as: archivedAs })
-        .eq("id", row.id);
-      if (saveError) throw saveError;
+      const done = await writeClaimedArchive(supabase, row.id, claim, {
+        archived_at: new Date().toISOString(),
+        archived_as: archivedAs
+      });
+      if (!done) continue;
       result.archived++;
     } catch (failure) {
       result.failures.push({ classId: row.class_id, error: failure });

@@ -151,12 +151,23 @@ function fakeSupabase(pending: Pending[], opts: { unclaimable?: number[]; saveEr
           return chain;
         },
         update(values: Record<string, unknown>) {
-          return {
-            eq(_column: string, id: number) {
-              log.push(`done ${id} ${Object.keys(values).join(",")}`);
+          const filters: Record<string, unknown> = {};
+          const chain = {
+            eq(column: string, value: unknown) {
+              filters[column] = value;
+              return chain;
+            },
+            is(column: string, value: unknown) {
+              filters[column] = value;
+              log.push(
+                `done ${filters.id} ${Object.keys(values).join(",")} if claim ${filters.claimed_at} pending ${
+                  filters.archived_at === null
+                }`
+              );
               return Promise.resolve({ error: opts.saveError ? new Error("save failed") : null });
             }
           };
+          return chain;
         }
       };
     },
@@ -164,7 +175,8 @@ function fakeSupabase(pending: Pending[], opts: { unclaimable?: number[]; saveEr
       assertEquals(name, "claim_forgejo_repo_archive");
       assertEquals(args.p_stale_minutes, 10);
       log.push(`claim ${args.p_id}`);
-      return Promise.resolve({ data: !(opts.unclaimable ?? []).includes(args.p_id), error: null });
+      const claimed = !(opts.unclaimable ?? []).includes(args.p_id);
+      return Promise.resolve({ data: claimed ? `claim-${args.p_id}` : null, error: null });
     }
   };
   return { client: client as unknown as SupabaseClient<Database>, log };
@@ -197,10 +209,10 @@ Deno.test("small batch: each queued repo is claimed, deleted, then marked done",
   assertEquals(log, [
     "find org/a",
     "claim 1",
-    "done 1 archived_at,archived_as",
+    "done 1 archived_at,archived_as if claim claim-1 pending true",
     "find org/handout",
     "claim 2",
-    "done 2 archived_at"
+    "done 2 archived_at if claim claim-2 pending true"
   ]);
 });
 

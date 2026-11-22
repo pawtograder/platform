@@ -93,12 +93,12 @@ export async function deleteForgejoRepositoriesSynchronously(
         continue;
       }
       // function-grants: service-role
-      const { data: claimed, error: claimError } = await supabase.rpc("claim_forgejo_repo_archive", {
+      const { data: claim, error: claimError } = await supabase.rpc("claim_forgejo_repo_archive", {
         p_id: job.id,
         p_stale_minutes: ARCHIVE_STALE_CLAIM_MINUTES
       });
       if (claimError) throw claimError;
-      if (!claimed) {
+      if (!claim) {
         counts.queued++;
         continue;
       }
@@ -106,13 +106,16 @@ export async function deleteForgejoRepositoriesSynchronously(
       // A deleted repo was not renamed, so the entry records no name -- including a destination a reconciler
       // pass wrote down before it failed. A repo already gone from this name keeps that destination: the pass
       // that wrote it may have renamed the repo and lost the write of where it went. If this update fails the
-      // claim goes stale and the reconciler finds the repo gone, which also completes the entry.
+      // claim goes stale and the reconciler finds the repo gone, which also completes the entry. The write is
+      // guarded by this claim, as forgejo-reconciler's are, so it never overwrites a pass that took over.
       const { error: saveError } = await supabase
         .from("forgejo_repo_archives")
         .update(
           deleted ? { archived_at: now().toISOString(), archived_as: null } : { archived_at: now().toISOString() }
         )
-        .eq("id", job.id);
+        .eq("id", job.id)
+        .eq("claimed_at", claim)
+        .is("archived_at", null);
       if (saveError) console.warn(`Couldn't mark the archive of ${name} done:`, saveError);
       if (deleted) counts.deleted++;
       else counts.skipped++;

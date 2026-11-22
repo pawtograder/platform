@@ -143,23 +143,23 @@ AS $$
   LIMIT p_limit;
 $$;
 
--- True when the caller now owns archiving this entry: it's still pending and not claimed by a live pass.
-CREATE OR REPLACE FUNCTION public.claim_forgejo_repo_archive(p_id bigint, p_stale_minutes integer)
-RETURNS boolean
+-- The caller's claim on this entry, or null when it's archived or a live pass holds it. The claim is the
+-- claimed_at it wrote: every later write to the entry filters on it (and on archived_at IS NULL), so a pass
+-- that stalls past p_stale_minutes and loses the entry to another can't overwrite what that one recorded.
+DROP FUNCTION IF EXISTS public.claim_forgejo_repo_archive(bigint, integer);
+CREATE FUNCTION public.claim_forgejo_repo_archive(p_id bigint, p_stale_minutes integer)
+RETURNS timestamptz
 LANGUAGE sql
 VOLATILE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  WITH claimed AS (
-    UPDATE public.forgejo_repo_archives
-    SET claimed_at = now()
-    WHERE id = p_id
-      AND archived_at IS NULL
-      AND (claimed_at IS NULL OR claimed_at < now() - make_interval(mins => p_stale_minutes))
-    RETURNING 1
-  )
-  SELECT EXISTS (SELECT 1 FROM claimed);
+  UPDATE public.forgejo_repo_archives
+  SET claimed_at = clock_timestamp()
+  WHERE id = p_id
+    AND archived_at IS NULL
+    AND (claimed_at IS NULL OR claimed_at < now() - make_interval(mins => p_stale_minutes))
+  RETURNING claimed_at;
 $$;
 
 REVOKE ALL ON FUNCTION public.forgejo_repo_archives_due(integer, integer) FROM public, anon, authenticated;
