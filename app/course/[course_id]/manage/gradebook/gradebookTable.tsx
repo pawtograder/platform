@@ -8,7 +8,7 @@ import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
 import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
-import { useCapability, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAllStudentRoles,
   useCanShowGradeFor,
@@ -2655,6 +2655,7 @@ export default function GradebookTable() {
   scoreMapsRef.current = scoreMaps;
 
   const isInstructor = useIsInstructor();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   // Adding, importing, arranging, grouping and topic changes need manage_gradebook (#1010).
   const canManageGradebook = useCapability("manage_gradebook");
   const isRefetching = useGradebookRefetchStatus();
@@ -4009,9 +4010,10 @@ export default function GradebookTable() {
                           backgroundColor: "var(--chakra-colors-bg-subtle)"
                         }}
                       >
-                        {/* Drag to reorder needs manage_gradebook. Instructors always hold it; isInstructor keeps
-                            their headers from remounting while the capability loads. */}
-                        {(isInstructor || canManageGradebook) && scrollableLeafColumns.length > 0 ? (
+                        {/* Staff always get the draggable header, chosen by role and not by manage_gradebook, so a
+                            capability that loads or changes doesn't remount it (an open column dialog would close).
+                            Without manage_gradebook the drag handle is hidden and dragging is off. */}
+                        {isGraderOrInstructor && scrollableLeafColumns.length > 0 ? (
                           <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
                             {Array.from({ length: visibleReorderUnits.length + 1 }, (_, gapIndex) => {
                               let boundary = 0;
@@ -4041,7 +4043,7 @@ export default function GradebookTable() {
                                   coreRowModel={coreRowModel}
                                   classSections={classSections?.data}
                                   labSections={labSections}
-                                  showDragHandle
+                                  showDragHandle={canManageGradebook}
                                   reorderDisabled={isReorderingColumns || !canManageGradebook}
                                   isDraggingThis={activeDragColumnId === header.column.id}
                                   anyColumnDragging={Boolean(activeDragColumnId)}

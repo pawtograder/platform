@@ -19,6 +19,7 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
   let instructor: TestingUser;
   let grader: TestingUser;
   let headTa: TestingUser;
+  let headTaRoleId: number;
   const GROUP = "Quizzes";
   const STANDALONE = "Participation";
 
@@ -60,6 +61,7 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
       .select("id")
       .single();
     expect(roleError).toBeNull();
+    headTaRoleId = role!.id;
     expect(
       (await supabase.from("role_capabilities").insert({ role_id: role!.id, capability: "manage_gradebook" })).error
     ).toBeNull();
@@ -84,8 +86,7 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
     await waitForVirtualizerIdle(page);
   }
 
-  // openColumnMenu in gradebookTableHelpers finds headers by data-col-id, which only the draggable
-  // (manage_gradebook) headers carry. A grader gets the plain header, so this finds either by role.
+  // Finds the header by its column name, the same way for every role.
   async function openColumnMenu(page: Page, columnName: string) {
     const header = tableRegion(page)
       .getByRole("columnheader")
@@ -153,5 +154,37 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
     await loginAsUser(page, instructor, course);
     await page.goto(`/course/${course.id}`);
     await expectGradebookLink(page, true);
+  });
+
+  // The header is chosen by role, so losing manage_gradebook only hides the drag handles; it doesn't
+  // remount the headers and close a dialog a Head TA has open.
+  test("a Head TA's open column dialog stays open when manage_gradebook is turned off", async ({ page }) => {
+    await loginAsUser(page, headTa, course);
+    await openGradebook(page);
+    const dragHandles = tableRegion(page).locator('[aria-label="Drag to reorder column"]');
+    await expect(dragHandles.first()).toBeAttached();
+
+    await openColumnMenu(page, STANDALONE);
+    await page.getByRole("menuitem", { name: "Convert Missing to 0" }).click();
+    const dialog = page.getByRole("dialog", { name: "Convert Missing to 0" });
+    await expect(dialog).toBeVisible();
+
+    try {
+      expect(
+        (
+          await supabase
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", headTaRoleId)
+            .eq("capability", "manage_gradebook")
+        ).error
+      ).toBeNull();
+      // The role change reaches the page, and the handles go away...
+      await expect(dragHandles).toHaveCount(0, { timeout: 30_000 });
+      // ...while the dialog stays open.
+      await expect(dialog).toBeVisible();
+    } finally {
+      await supabase.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "manage_gradebook" });
+    }
   });
 });
