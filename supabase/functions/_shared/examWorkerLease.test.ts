@@ -124,6 +124,8 @@ Deno.test("an error, a throw or an odd reply does not end the lease, and is logg
     assertEquals(fake.calls.length, 5);
     assertEquals(log.warnings.length, 1);
     assert(log.warnings[0].includes("msg 41"));
+    // The warning names the cause, so a failure in production can be told apart from a timeout.
+    assert(log.warnings[0].includes("connection reset"), log.warnings[0]);
   } finally {
     await release?.();
     time.restore();

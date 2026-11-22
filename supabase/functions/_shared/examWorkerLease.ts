@@ -40,11 +40,22 @@ export type LeaseClient = {
   };
 };
 
+// What went wrong, for the warning: PostgREST errors carry code and message; a throw is an Error.
+function describe(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object") {
+    const { code, message } = e as { code?: unknown; message?: unknown };
+    return [code, message].filter((x) => x !== undefined && x !== null && x !== "").join(" ") || JSON.stringify(e);
+  }
+  return String(e);
+}
+
 export async function setLease(
   client: LeaseClient,
   queue: string,
   msg: LeasedMessage,
-  seconds: number
+  seconds: number,
+  onFailure?: (reason: string) => void
 ): Promise<LeaseResult> {
   try {
     const { data, error } = await client
@@ -56,9 +67,13 @@ export async function setLease(
         vt: seconds
       })
       .abortSignal(AbortSignal.timeout(LEASE_RPC_TIMEOUT_MS));
-    if (error || typeof data !== "boolean") return "failed";
+    if (error || typeof data !== "boolean") {
+      onFailure?.(error ? describe(error) : `unexpected reply ${JSON.stringify(data)}`);
+      return "failed";
+    }
     return data ? "held" : "released";
-  } catch {
+  } catch (e) {
+    onFailure?.(describe(e));
     return "failed";
   }
 }
@@ -83,12 +98,15 @@ export async function holdLease(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<LeaseResult> | undefined;
   const renew = async () => {
-    inFlight = setLease(client, queue, msg, LEASE_SECONDS);
+    let reason = "";
+    inFlight = setLease(client, queue, msg, LEASE_SECONDS, (r) => (reason = r));
     const result = await inFlight;
     if (stopped || result === "released") return;
     if (result === "failed" && !warned) {
       warned = true;
-      console.warn(`exam-async-worker lease: set_vt_if_claimed failed for msg ${msg.msg_id}; retrying`);
+      // Once per message, with the cause: a timeout, a PostgREST error (PGRST202 means the
+      // migration is not applied yet), or a reply that is not a boolean.
+      console.warn(`exam-async-worker lease: set_vt_if_claimed failed for msg ${msg.msg_id} (${reason}); retrying`);
     }
     timer = setTimeout(renew, renewMs);
   };
