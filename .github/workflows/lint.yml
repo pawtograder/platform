@@ -384,6 +384,8 @@ jobs:
       # that the TS flag reader agrees with the database's strict reader;
       # course-gemini-key-panel pins the settings page's status-read deadline,
       # stale-response guard and failure announcements.
+      # escalation-tour pins the staff "What's new" walkthrough: it opens once per person (read from
+      # user_whats_new_seen), stays closed when that read fails, and keeps its previews inert.
       # The office hours alert suites are pure-logic hook tests with no database. They go here
       # by name because neither lane picked them up otherwise: this list does not glob, and
       # deploy.yml matches `tests/unit/issue` only. useTurnAlert and queue-health-alerts shipped
@@ -409,6 +411,7 @@ jobs:
             tests/unit/useCapability.test.tsx \
             tests/unit/course-gemini-key.test.ts \
             tests/unit/course-gemini-key-panel.test.tsx \
+            tests/unit/escalation-tour.test.tsx \
             tests/unit/useTurnAlert.test.tsx \
             tests/unit/queue-health-alerts.test.ts \
             tests/unit/escalation-alerts.test.tsx \

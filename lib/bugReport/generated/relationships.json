@@ -716,12 +716,6 @@
     "fks": [
       { "name": "exam_question_regions_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
       { "name": "exam_question_regions_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
-      { "name": "exam_question_regions_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" },
-      {
-        "name": "exam_question_regions_exam_question_id_fkey",
-        "columns": ["exam_question_id"],
-        "ref": "exam_questions"
-      },
       {
         "name": "exam_question_regions_question_exam_fkey",
         "columns": ["exam_question_id", "exam_id"],
@@ -734,7 +728,6 @@
     "fks": [
       { "name": "exam_questions_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
       { "name": "exam_questions_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
-      { "name": "exam_questions_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" },
       { "name": "exam_questions_parent_id_fkey", "columns": ["parent_id"], "ref": "exam_questions" }
     ]
   },
@@ -742,15 +735,13 @@
     "kind": "table",
     "fks": [
       { "name": "exam_scan_batches_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
-      { "name": "exam_scan_batches_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
-      { "name": "exam_scan_batches_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" }
+      { "name": "exam_scan_batches_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" }
     ]
   },
   "exam_scan_pages": {
     "kind": "table",
     "fks": [
       { "name": "exam_scan_pages_batch_class_fkey", "columns": ["batch_id", "class_id"], "ref": "exam_scan_batches" },
-      { "name": "exam_scan_pages_batch_id_fkey", "columns": ["batch_id"], "ref": "exam_scan_batches" },
       { "name": "exam_scan_pages_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
       { "name": "exam_scan_pages_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" },
       {
@@ -770,7 +761,6 @@
       },
       { "name": "exam_scanned_submissions_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
       { "name": "exam_scanned_submissions_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
-      { "name": "exam_scanned_submissions_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" },
       {
         "name": "exam_scanned_submissions_matched_profile_id_fkey",
         "columns": ["matched_profile_id"],
@@ -799,8 +789,7 @@
     "kind": "table",
     "fks": [
       { "name": "exam_template_pages_class_id_fkey", "columns": ["class_id"], "ref": "classes" },
-      { "name": "exam_template_pages_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" },
-      { "name": "exam_template_pages_exam_id_fkey", "columns": ["exam_id"], "ref": "exams" }
+      { "name": "exam_template_pages_exam_class_fkey", "columns": ["exam_id", "class_id"], "ref": "exams" }
     ]
   },
   "exams": {
@@ -812,18 +801,6 @@
         "name": "exams_assignment_class_fkey",
         "columns": ["assignment_id", "class_id"],
         "ref": "assignments_with_effective_due_dates"
-      },
-      { "name": "exams_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignment_overview" },
-      { "name": "exams_assignment_id_fkey", "columns": ["assignment_id"], "ref": "assignments" },
-      {
-        "name": "exams_assignment_id_fkey",
-        "columns": ["assignment_id"],
-        "ref": "assignments_with_effective_due_dates"
-      },
-      {
-        "name": "exams_assignment_id_fkey",
-        "columns": ["assignment_id"],
-        "ref": "submissions_with_grades_for_assignment_and_regression_test"
       },
       { "name": "exams_class_id_fkey", "columns": ["class_id"], "ref": "classes" }
     ]
@@ -2868,6 +2845,7 @@
       { "name": "user_roles_user_id_fkey1", "columns": ["user_id"], "ref": "users" }
     ]
   },
+  "user_whats_new_seen": { "kind": "table", "fks": [] },
   "users": { "kind": "table", "fks": [] },
   "video_meeting_session_users": {
     "kind": "table",

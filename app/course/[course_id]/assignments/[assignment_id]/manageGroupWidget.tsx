@@ -6,6 +6,7 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
+import { useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -873,28 +874,22 @@ function GroupDetails({
   );
 }
 
-// The repo's Forgejo host is the instance of the newest Forgejo account the viewer can see (#1092):
-// their own for a student, and after a FORGEJO_URL change the newest is on the current instance.
+const READY_SUFFIX = " (ready ✅)";
+
+// Until the reconciler has created the Forgejo repo and given the student access, `is_github_ready`
+// is false and a link would 404, so the repo is plain text that says so. Repository changes are
+// only broadcast to staff, so a student sees the link after the page reloads.
 function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
-  const { data } = useList<{ instance_url: string }>({
-    resource: "git_accounts",
-    meta: { select: "instance_url" },
-    filters: [
-      { field: "provider", operator: "eq", value: "forgejo" },
-      { field: "login", operator: "nnull", value: null }
-    ],
-    sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { pageSize: 1 }
-  });
-  const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
-  const instanceUrl = data?.data?.[0]?.instance_url;
-  if (!instanceUrl) {
+  const instanceUrl = useForgejoInstanceUrl();
+  if (!repository.is_github_ready || !instanceUrl) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
-        {label}
+        {repository.repository}
+        {repository.is_github_ready ? READY_SUFFIX : " (waiting for access)"}
       </Text>
     );
   }
+  const label = `${repository.repository}${READY_SUFFIX}`;
   return (
     <Link
       href={`${instanceUrl}/${repository.repository}`}
