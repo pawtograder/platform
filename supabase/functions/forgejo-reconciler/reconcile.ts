@@ -145,6 +145,56 @@ export type RepoReconcileResult = {
   failures: { assignmentId: number; profileId: string; error: unknown }[];
 };
 
+/** One student's repo, as forgejo_repos_needed describes it: owner is the org, login the student's Forgejo login. */
+export type StudentRepoSpec = {
+  assignment_id: number;
+  class_id: number;
+  profile_id: string;
+  login: string;
+  owner: string;
+  name: string;
+  template_repo: string;
+};
+
+/**
+ * Creates one student's repo from the handout and makes them a writer, then records the repository row ready.
+ * Shared by the reconciler's backlog and by a staff member's Test Assignment repo, which is made the same way.
+ * `orgsReady` lets a pass check each org once. Returns the repository's owner/name.
+ */
+export async function provisionForgejoStudentRepo(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  repo: StudentRepoSpec,
+  ops: RepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite },
+  orgsReady: Set<string> = new Set()
+): Promise<string> {
+  const repository = `${repo.owner}/${repo.name}`;
+  const owner = {
+    assignment_id: repo.assignment_id,
+    class_id: repo.class_id,
+    profile_id: repo.profile_id,
+    assignment_group_id: null
+  };
+  assertTemplateInOrg(repo.template_repo, repo.owner);
+  // Claim the name before any Forgejo call: a group repo in a 'both' assignment can derive the same
+  // name (group "blue", login "group-blue"), and the unique index on (git_provider, repository) lets
+  // only one of them hold it. The row stays not ready, so the student is still listed, until they can push.
+  const id =
+    (await existingRepositoryRow(supabase, repository, owner)) ??
+    (await reserveRepositoryRow(supabase, owner, repository));
+  if (!orgsReady.has(repo.owner)) {
+    await ops.ensureOrg(config, repo.owner);
+    orgsReady.add(repo.owner);
+  }
+  await ops.ensureRepoFromTemplate(config, repo.template_repo, repo.owner, repo.name);
+  if (!(await ops.grantWrite(config, repository, repo.login))) {
+    throw new Error("Forgejo doesn't report write access for the student");
+  }
+  const { error: readyError } = await supabase.from("repositories").update({ is_github_ready: true }).eq("id", id);
+  if (readyError) throw readyError;
+  return repository;
+}
+
 export async function reconcileForgejoRepos(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
@@ -160,31 +210,8 @@ export async function reconcileForgejoRepos(
   const result: RepoReconcileResult = { created: 0, failures: [] };
   const orgsReady = new Set<string>();
   for (const repo of needed ?? []) {
-    const repository = `${repo.owner}/${repo.name}`;
-    const owner = {
-      assignment_id: repo.assignment_id,
-      class_id: repo.class_id,
-      profile_id: repo.profile_id,
-      assignment_group_id: null
-    };
     try {
-      assertTemplateInOrg(repo.template_repo, repo.owner);
-      // Claim the name before any Forgejo call: a group repo in a 'both' assignment can derive the same
-      // name (group "blue", login "group-blue"), and the unique index on (git_provider, repository) lets
-      // only one of them hold it. The row stays not ready, so the student is still listed, until they can push.
-      const id =
-        (await existingRepositoryRow(supabase, repository, owner)) ??
-        (await reserveRepositoryRow(supabase, owner, repository));
-      if (!orgsReady.has(repo.owner)) {
-        await ops.ensureOrg(config, repo.owner);
-        orgsReady.add(repo.owner);
-      }
-      await ops.ensureRepoFromTemplate(config, repo.template_repo, repo.owner, repo.name);
-      if (!(await ops.grantWrite(config, repository, repo.login))) {
-        throw new Error("Forgejo doesn't report write access for the student");
-      }
-      const { error: readyError } = await supabase.from("repositories").update({ is_github_ready: true }).eq("id", id);
-      if (readyError) throw readyError;
+      await provisionForgejoStudentRepo(supabase, config, repo, ops, orgsReady);
       result.created++;
     } catch (failure) {
       result.failures.push({ assignmentId: repo.assignment_id, profileId: repo.profile_id, error: failure });

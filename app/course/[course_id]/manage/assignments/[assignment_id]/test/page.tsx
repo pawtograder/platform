@@ -6,6 +6,7 @@ import CreateStudentReposButton from "@/app/course/[course_id]/assignments/creat
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
@@ -47,6 +48,8 @@ export default function TestAssignmentPage() {
       { field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }
     ]
   });
+  // github.com, or the Forgejo instance for a Forgejo assignment (undefined until it loads, so links wait).
+  const repoHost = useRepoWebHost(assignment?.data?.git_provider);
   if (!assignment?.data || !submissions?.data) {
     return <Skeleton height="100px" />;
   }
@@ -75,7 +78,11 @@ export default function TestAssignmentPage() {
         <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
           <Heading size="md">Repository</Heading>
           <Text fontSize="sm" color="fg.muted">
-            <Link href={`https://github.com/${repository.data[0].repository}`}>{repository.data[0].repository}</Link>
+            {repoHost ? (
+              <Link href={`${repoHost}/${repository.data[0].repository}`}>{repository.data[0].repository}</Link>
+            ) : (
+              repository.data[0].repository
+            )}
           </Text>
         </Box>
       ) : (
@@ -122,10 +129,12 @@ export default function TestAssignmentPage() {
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
-                        {submission.sha && submission.repository ? (
-                          <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
+                        {submission.sha && submission.repository && repoHost ? (
+                          <Link href={`${repoHost}/${submission.repository}/commit/${submission.sha}`}>
                             {submission.sha.slice(0, 7)}
                           </Link>
+                        ) : submission.sha && submission.repository ? (
+                          <span>{submission.sha.slice(0, 7)}</span>
                         ) : submission.submitted_via === "manual" ? (
                           <span>Manual</span>
                         ) : (
