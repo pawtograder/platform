@@ -6,6 +6,7 @@ import { useEffect, useRef } from "react";
 
 /** Shortest gap between two refreshes, counting the server render of the data on screen as the first. */
 export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
+const REFRESH_TIMEOUT_MS = 15_000;
 
 /**
  * Re-render the page's Server Components when a hidden tab is shown again, so data that changed
@@ -28,7 +29,8 @@ export const REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS = 60_000;
  * its error page and stays there, and WebKit's router stays suspended. A failed refresh here leaves
  * the page as it was and gives the minute back, so the next show tries again. A refresh that failed
  * delivered nothing, and retrying costs one request per show. A response cut off partway is the
- * exception, described on `refreshCurrentPage`.
+ * exception, described on `refreshCurrentPage`. A refresh that has not answered within 15 seconds
+ * also allows a retry on the next show. The timeout cannot cancel the underlying server action.
  *
  * An answer other than true means this tab can't refresh in place. False is another build. Nothing
  * at all is a page that isn't the action's reply: a build that no longer has this action, or a
@@ -44,7 +46,7 @@ export function useRefreshWhenShown(
   minIntervalMs: number = REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS
 ): void {
   const lastRefreshAt = useRef(0);
-  const refreshInFlight = useRef(false);
+  const refreshInFlight = useRef<{ timer?: ReturnType<typeof setTimeout> } | null>(null);
 
   useEffect(() => {
     lastRefreshAt.current = Math.max(lastRefreshAt.current, Math.min(Date.now(), renderedAt));
@@ -54,7 +56,7 @@ export function useRefreshWhenShown(
       if (document.visibilityState !== "visible") return;
       // Before lastRefreshAt is written, so a skipped refresh doesn't use up the minute.
       if (!navigator.onLine) return;
-      // Next runs server actions one at a time, so another would only queue behind a stalled one.
+      // Wait for the current attempt to answer or time out before allowing another.
       if (refreshInFlight.current) return;
       const now = Date.now();
       const previous = lastRefreshAt.current;
@@ -62,25 +64,35 @@ export function useRefreshWhenShown(
       const sinceLast = now - previous;
       if (sinceLast >= 0 && sinceLast < minIntervalMs) return;
       lastRefreshAt.current = now;
-      refreshInFlight.current = true;
-      refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA)
+      const attempt: { timer?: ReturnType<typeof setTimeout> } = {};
+      refreshInFlight.current = attempt;
+      const timeout = new Promise<never>((_, reject) => {
+        attempt.timer = setTimeout(() => reject(new Error("Page refresh timed out")), REFRESH_TIMEOUT_MS);
+      });
+      // The race ignores late answers, including a build mismatch from an expired attempt.
+      Promise.race([refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA), timeout])
         .then(
           (sameBuild) => {
             // Not after a link took the student elsewhere: a reload there could lose what they're typing.
-            if (sameBuild !== true && mounted) recoverFromStaleBundle();
+            if (sameBuild !== true && mounted && refreshInFlight.current === attempt) recoverFromStaleBundle();
           },
           () => {
-            if (lastRefreshAt.current === now) lastRefreshAt.current = previous;
+            if (mounted && refreshInFlight.current === attempt && lastRefreshAt.current === now) {
+              lastRefreshAt.current = previous;
+            }
           }
         )
         .finally(() => {
-          refreshInFlight.current = false;
+          clearTimeout(attempt.timer);
+          if (refreshInFlight.current === attempt) refreshInFlight.current = null;
         });
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       mounted = false;
+      clearTimeout(refreshInFlight.current?.timer);
+      refreshInFlight.current = null;
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [renderedAt, minIntervalMs]);
