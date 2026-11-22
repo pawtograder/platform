@@ -7,7 +7,7 @@ import { actionRunPayload, RUN_SHA } from "./actionRunFixture.ts";
 // Mirrors workflow_events_forgejo_completion_key (20261122120000), which is NULLS NOT DISTINCT.
 const forgejoCompletionKey = (row: Record<string, unknown>) =>
   row.event_type === "completed" && (row.payload as { provider?: string } | null)?.provider === "forgejo"
-    ? `${row.workflow_run_id}|${row.run_attempt ?? null}|${row.run_updated_at ?? null}`
+    ? `${row.workflow_run_id}|${row.run_updated_at ?? null}`
     : null;
 
 const fakeSupabase = (data: Parameters<typeof baseFakeSupabase>[0]) =>
@@ -339,6 +339,24 @@ Deno.test("a re-run that made no submission is not credited with the earlier att
   await handleForgejoActionRun(client, run, new Sentry.Scope());
   noResultsWritten(inserts, upserts);
   assertEquals(inserts.find((i) => i.table === "workflow_events")?.row.run_attempt, 2);
+});
+
+Deno.test("a completion replayed after a later submission appears is still logged once", async () => {
+  const run = actionRunPayload(FORGEJO_URL).run;
+  run.started = "2026-11-09T17:00:00Z";
+  run.stopped = "2026-11-09T17:05:00Z";
+  run.updated = "2026-11-09T17:05:00Z";
+  const data = tables({ submissions: [submission({ id: 900, run_attempt: 1 })] });
+  const { client, inserts } = fakeSupabase(data);
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  // An attempt-3 submission lands within the skew band of the stop, so a replay infers no attempt.
+  data.submissions.push(submission({ id: 901, run_attempt: 3, created_at: "2026-11-09T17:05:03.000Z" }));
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  const events = inserts.filter((i) => i.table === "workflow_events");
+  assertEquals(
+    events.map((e) => e.row.run_attempt),
+    [2]
+  );
 });
 
 Deno.test("attributeRunAttempt: only a submission strictly inside the run's window is credited", () => {
