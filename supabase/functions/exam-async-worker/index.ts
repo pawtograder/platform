@@ -27,10 +27,13 @@ import {
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
 import { holdLease } from "../_shared/examWorkerLease.ts";
 import { nextOcrWait } from "./ocrWait.ts";
+import { claimDeadlineMs, isolateLifetimeMs } from "./claimWindow.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 const QUEUE = "exam_processing";
+// When this isolate evaluated the module: the anchor for when to stop claiming (claimWindow.ts).
+const ISOLATE_STARTED_AT_MS = Date.now();
 const DLQ = "exam_processing_dlq";
 const PGMQ_MAX_READ_CT = 8;
 // Cap rate-limit requeues. requeue() sends a FRESH pgmq message (read_ct resets to 0), so the
@@ -1028,16 +1031,11 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
 // invocations now split even a small batch, so `match` is more often claimed while its pages are
 // still in OCR, and it then waits OCR_WAIT_SECONDS before trying again (see doMatch).
 const READ_VISIBILITY_SECONDS = 120;
-// Stop claiming new messages this long after the invocation starts. runBatch runs under
-// EdgeRuntime.waitUntil, and retiring a worker does not cut that short: the drain runs on until
-// the worker's hard lifetime (EDGE_WORKER_TIMEOUT_MS) and is killed mid-message (see
-// _shared/asyncWorkerTuning.ts). The chart retires a worker at half its lifetime
-// (beforeUnload.wallClockRatio: 50), so with the 400s chart default an invocation starts by ~200s
-// into its worker, makes its last claim by ~260s, and leaves the message it is running ~140s
-// (240s, 300s and 180s at production's 480s). This bounds claims, not runtime: a message that
-// itself outlasts that margin is still killed. Unclaimed messages stay visible, and the cron
-// starts more invocations every minute while the queue is non-empty.
-const CLAIM_WINDOW_MS = 60_000;
+// When to stop claiming new messages is in claimWindow.ts: until the isolate is near its hard
+// lifetime, so a claimed message still has its read window before the kill, and for at least 60s.
+// This bounds claims, not runtime: a message that itself outlasts the reserve is still killed.
+// Unclaimed messages stay visible, and the cron starts more invocations every minute while the
+// queue is non-empty.
 // The same per-invocation cap as the previous 50 reads of 5.
 const MAX_MESSAGES_PER_INVOCATION = 250;
 // The lease on the running message (LEASE_SECONDS, renewed until released) is in
@@ -1047,7 +1045,6 @@ async function runBatch(): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
   const startedAt = Date.now();
-  log("run start");
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let processed = 0;
@@ -1055,7 +1052,15 @@ async function runBatch(): Promise<number> {
   // an attempt count. Reporting the two as one number would have the completion line claim work
   // that threw and was left queued for redelivery, which is the opposite of what #1157 is for.
   let failed = 0;
-  while (processed < MAX_MESSAGES_PER_INVOCATION && Date.now() - startedAt < CLAIM_WINDOW_MS) {
+  const claimUntil = claimDeadlineMs(
+    ISOLATE_STARTED_AT_MS,
+    startedAt,
+    isolateLifetimeMs(Deno.env.get("EDGE_WORKER_TIMEOUT_MS"))
+  );
+  // Printed with the claim budget, so a run that stops claiming early is visibly a short budget
+  // (an old isolate) rather than an empty queue.
+  log(`run start: claiming for up to ${Math.round((claimUntil - startedAt) / 1000)}s`);
+  while (processed < MAX_MESSAGES_PER_INVOCATION && Date.now() < claimUntil) {
     const { data, error } = await admin.schema("pgmq_public").rpc("read", {
       queue_name: QUEUE,
       sleep_seconds: READ_VISIBILITY_SECONDS,

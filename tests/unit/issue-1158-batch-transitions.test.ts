@@ -18,6 +18,7 @@ import {
   type BatchStatus
 } from "../../supabase/functions/exam-async-worker/batchTransitions";
 import { MAX_OCR_WAITS, nextOcrWait, OCR_WAIT_COUNT_MS } from "../../supabase/functions/exam-async-worker/ocrWait";
+import * as cw from "../../supabase/functions/exam-async-worker/claimWindow";
 
 const ALL: BatchStatus[] = ["uploaded", "ocr", "matching", "review", "finalizing", "completed", "error"];
 const WORKER = join(__dirname, "..", "..", "supabase", "functions", "exam-async-worker", "index.ts");
@@ -202,5 +203,57 @@ describe("issue #1158: worker batch status transitions", () => {
     expect(source).toMatch(
       /\.update\(\{ ocr_text: result\.text, ocr_data:[^}]*\}[^)]*\)\s*\.eq\("id", args\.scan_page_id\)\s*\.eq\("batch_id", batchId\)\s*\.is\("ocr_data", null\);/
     );
+  });
+});
+
+describe("claimWindow: when an invocation stops claiming (#1158)", () => {
+  const S = 1000;
+
+  test.each([
+    ["chart default", 400 * S],
+    ["production", 480 * S]
+  ])("%s: a young isolate claims until a claimed message keeps its read window plus margin", (_n, lifetime) => {
+    const deadline = cw.claimDeadlineMs(0, 5 * S, lifetime);
+    expect(lifetime - deadline).toBe(cw.MESSAGE_RESERVE_MS + cw.CLAIM_MARGIN_MS);
+    // Longer than the previous fixed 60s, which is where the backlog throughput comes back from.
+    expect(deadline - 5 * S).toBeGreaterThan(cw.MIN_CLAIM_WINDOW_MS);
+  });
+
+  test.each([
+    ["chart default", 400 * S],
+    ["production", 480 * S]
+  ])(
+    "%s: an invocation that arrives as the isolate retires (half its lifetime) still leaves its last message room",
+    (_n, lifetime) => {
+      const start = lifetime / 2;
+      const deadline = cw.claimDeadlineMs(0, start, lifetime);
+      expect(deadline).toBeGreaterThanOrEqual(start + cw.MIN_CLAIM_WINDOW_MS);
+      // What is left for the last claimed message: the read window plus margin, or the previous
+      // rule's LIFETIME/2 - 60s when that is smaller (140s at 400s; 150s at 480s, 180s before).
+      expect(lifetime - deadline).toBe(
+        Math.min(cw.MESSAGE_RESERVE_MS + cw.CLAIM_MARGIN_MS, lifetime / 2 - cw.MIN_CLAIM_WINDOW_MS)
+      );
+    }
+  );
+
+  test("a lifetime too short for the reserve falls back to the 60s rule instead of claiming nothing", () => {
+    expect(cw.claimDeadlineMs(0, 0, 100 * S)).toBe(cw.MIN_CLAIM_WINDOW_MS);
+  });
+
+  test("never earlier than 60s after the invocation starts, whatever the isolate's age", () => {
+    for (const start of [0, 100 * S, 250 * S, 390 * S, 1000 * S]) {
+      expect(cw.claimDeadlineMs(0, start, 400 * S)).toBeGreaterThanOrEqual(start + cw.MIN_CLAIM_WINDOW_MS);
+    }
+  });
+
+  test.each([
+    [undefined, 400 * S],
+    ["", 400 * S],
+    ["abc", 400 * S],
+    ["0", 400 * S],
+    ["-5", 400 * S],
+    ["480000", 480 * S]
+  ])("EDGE_WORKER_TIMEOUT_MS %p reads as the demuxer reads it", (raw, expected) => {
+    expect(cw.isolateLifetimeMs(raw as string | undefined)).toBe(expected);
   });
 });
