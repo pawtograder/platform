@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as github from "../_shared/GitHubWrapper.ts";
+import { assertForgejoCourseOrg, parseGitProvider, repoFilesFor } from "../_shared/repoFileAccess.ts";
 import { assertUserIsInstructor, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -48,30 +48,38 @@ function checkRateLimit(orgName: string, repoName: string, path: string): void {
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { courseId, orgName, repoName, path, skipRetryOnNotFound } = (await req.json()) as FunctionTypes.GetFileRequest;
+  const { courseId, orgName, repoName, path, skipRetryOnNotFound, gitProvider } =
+    (await req.json()) as FunctionTypes.GetFileRequest;
+  const provider = parseGitProvider(gitProvider);
   scope?.setTag("function", "repository-get-file");
   scope?.setTag("courseId", courseId.toString());
   scope?.setTag("orgName", orgName);
   scope?.setTag("repoName", repoName);
   scope?.setTag("path", path);
+  scope?.setTag("git_provider", provider);
   const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
-  const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
-  // Surface a real (retryable) lookup failure instead of a misleading "...associated with
-  // undefined" error when `data` is null.
-  if (courseOrgName.error) {
-    throw new Error(`Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`);
+  if (provider === "forgejo") {
+    await assertForgejoCourseOrg(supabase, courseId, orgName);
+  } else {
+    const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
+    // Surface a real (retryable) lookup failure instead of a misleading "...associated with
+    // undefined" error when `data` is null.
+    if (courseOrgName.error) {
+      throw new Error(`Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`);
+    }
+    if (courseOrgName.data?.github_org != orgName && orgName != "pawtograder") {
+      throw new Error(
+        `Requested a file from ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`
+      );
+    }
   }
-  if (courseOrgName.data?.github_org != orgName && orgName != "pawtograder") {
-    throw new Error(
-      `Requested a file from ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`
-    );
-  }
+  const files = repoFilesFor(provider);
 
   // Check rate limit before making the GitHub API call
   checkRateLimit(orgName, repoName, path);
 
   try {
-    return await github.getFileFromRepo(orgName + "/" + repoName, path);
+    return await files.getFile(orgName + "/" + repoName, path);
   } catch (error) {
     scope?.setTag("get_file_error", JSON.stringify(error));
     // No GitHub App installation for this org (a course whose org hasn't installed
@@ -97,7 +105,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
       // Retry the request once after the delay
       try {
-        return await github.getFileFromRepo(orgName + "/" + repoName, path);
+        return await files.getFile(orgName + "/" + repoName, path);
       } catch (retryError) {
         if (
           retryError &&
