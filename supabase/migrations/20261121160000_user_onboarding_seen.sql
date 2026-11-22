@@ -1,6 +1,6 @@
 -- Which onboarding guides each user has seen, so a guide that is meant to show once shows once per
--- user, not once per browser. The office hours hints for students (#1347) use it with the key
--- 'office-hours-student-onboarding'. Another guide can use it with a key of its own.
+-- user, not once per browser. The office hours hints for students (#1347) and the escalation
+-- walkthrough for staff (#1261) both use it, each with its own key.
 --
 -- One row per user per key. A row means the user has seen that guide. Rows are never updated or
 -- deleted by users: once seen, always seen. A second insert for the same key does nothing, because
@@ -8,9 +8,10 @@
 
 CREATE TABLE public.user_onboarding_seen (
   user_id uuid NOT NULL DEFAULT auth.uid() REFERENCES public.users (user_id) ON DELETE CASCADE,
-  -- Short, stable names such as 'office-hours-student-onboarding'. The check keeps keys to lowercase
-  -- words and dashes, so a typo can't create a key that looks like another one.
-  key text NOT NULL CHECK (key ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND length(key) <= 64),
+  -- Short, stable names such as 'office-hours-student-onboarding' or 'oh-escalation:v1'. The check
+  -- keeps keys to lowercase words joined by dashes or colons, so a typo can't create a key that
+  -- looks like another one. A colon can mark a version, so a changed guide can get a new key.
+  key text NOT NULL CHECK (key ~ '^[a-z0-9]+([-:][a-z0-9]+)*$' AND length(key) <= 64),
   seen_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, key)
 );
