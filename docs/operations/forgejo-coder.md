@@ -1,6 +1,6 @@
 # Cloud Workspaces operations on staging
 
-The staging configuration checked in at `b53c484a` (chart 0.4.13). Production
+The staging configuration checked in at `1696ad7a` (chart 0.4.13). Production
 leaves both apps off. Run the [live checks](#live-checks) first. Chart
 reference: "Forgejo and Coder (optional)" in
 [`charts/pawtograder/README.md`](../../charts/pawtograder/README.md).
@@ -84,7 +84,10 @@ When an authenticated call finds `FORGEJO_URL`, the admin credentials or a
 positive source ID missing, the reconciler logs `Skipped: FORGEJO_URL, admin
 credentials or auth source id unset` and answers 200. Without
 `FORGEJO_WEBHOOK_SECRET` the webhook answers 500. Without `CODER_API_TOKEN` the
-workspace functions answer 503.
+workspace functions answer 503. For a Forgejo repository, the staff file tools
+(`repository-get-file`, `repository-list-files`, `repository-write-file`) and
+Test Assignment's "Create my test repo" answer 503 `Forgejo is not set up on
+this deployment` without the Forgejo values.
 
 To supply the two edge Secrets, write OpenBao with
 `scripts/setup-openbao-edge-functions.sh --env staging --bundle forgejo-webhook --from-file <file>`
@@ -248,9 +251,15 @@ consent again where auto-approval is off. No repository or home is touched.
 ## Coder
 
 Workspaces at `https://coder.staging.pawtograder.net` don't open or clone, or
-the deploy fails on the bootstrap Job or on coderd exiting.
+the deploy fails on the bootstrap Job or on coderd exiting. The bootstrap Job
+is a post-upgrade hook, and the staging upgrade runs without `--atomic`, so
+when it fails the upgraded workloads are already running. A red deploy doesn't
+mean the new version didn't ship. Check what is serving before you redeploy
+(#1357).
 
 ```bash
+helm -n "$NS" history pawtograder --max 3
+kubectl -n "$NS" get deploy -o wide                     # IMAGES shows the tags serving now
 kubectl -n "$NS" get deploy,pod -l app.kubernetes.io/name=coder
 kubectl -n "$NS" logs deploy/coder -c first-owner
 kubectl -n "$NS" logs deploy/coder --since=1h
@@ -375,8 +384,10 @@ scripts/setup-forgejo-runner-tokens.sh --env staging --forgejo-url https://git.s
 
 ## forgejo-reconciler (accounts and repositories)
 
-The roster's Forgejo Username column shows "Not created yet", or a student or
-group has no repository. Sentry events carry `function=forgejo-reconciler`.
+The roster's Forgejo Username column shows "Not created yet", a student or
+group has no repository, or the assignment page lists a Forgejo repository as
+"(waiting for access)" (`is_github_ready` false). Sentry events carry
+`function=forgejo-reconciler`.
 
 ```sql
 -- Did pg_cron enqueue the pass? Success here says nothing about the function.
@@ -403,7 +414,9 @@ marked as a template in the class's Forgejo organization (`classes.forgejo_org`,
 or the slug). A student repository also needs an active student with a Forgejo
 login, and either an `individual` assignment or a `both` assignment where the
 student is in no group. Group repositories need `group_config` `groups` or
-`both`.
+`both`. No pass makes a staff member's Test Assignment repository.
+`autograder-create-repos-for-student` makes it the same way when they press
+"Create my test repo", with them as the writer.
 
 Failures send one Sentry event per kind per pass, fingerprinted
 `forgejo-reconciler` plus `provision-failed`, `repo-failed` (with
@@ -547,7 +560,7 @@ assignment can't be deleted. To delete one, first switch it to GitHub, which
 requires no repositories, no `template_repo` and no grader repository. Its
 fork source, and every assignment forked from it, must also be on GitHub.
 
-## Flags at `b53c484a`
+## Flags at `1696ad7a`
 
 | Setting                                                       | Staging               | Turning it off                                                                                                                                                                               |
 | ------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -587,20 +600,32 @@ fork source, and every assignment forked from it, must also be on GitHub.
    pods and active write Jobs, including `audit-partitions`, have stopped.
    Check that `pg_cron` stays paused until the recovery fence lifts.
 4. The reconciler revokes workspace tokens after a student leaves but keeps
-   Forgejo accounts and collaborator grants. List disabled enrollments with a Forgejo login, and compare
-   them and each group's current members with the repositories' collaborators
-   in Forgejo:
+   Forgejo accounts and collaborator grants. As the admin, list each Forgejo
+   repository's collaborators (Settings, Collaborators, or
+   `GET /api/v1/repos/<owner>/<repo>/collaborators`) and compare them with the
+   expected writers below. Any other collaborator keeps access it shouldn't,
+   including one with no enrollment row at all:
 
    ```sql
-   SELECT ur.private_profile_id, ga.login FROM public.user_roles ur
-   JOIN public.git_accounts ga ON ga.user_id = ur.user_id AND ga.provider = 'forgejo'
-   WHERE ur.class_id = <class id> AND ur.disabled \g
+   -- Expected writers: the repo's active owner (a student, or staff for a test repo) or its group's active members.
+   SELECT r.repository, string_agg(ga.login, ' ' ORDER BY ga.login) AS expected_writers
+   FROM public.repositories r
+   LEFT JOIN public.assignment_groups_members m ON m.assignment_group_id = r.assignment_group_id
+   LEFT JOIN public.user_roles ur ON ur.class_id = r.class_id AND NOT ur.disabled
+     AND ur.private_profile_id = coalesce(r.profile_id, m.profile_id)
+   LEFT JOIN public.git_accounts ga ON ga.user_id = ur.user_id AND ga.provider = 'forgejo'
+     AND ga.instance_url = 'https://git.staging.pawtograder.net'
+   WHERE r.class_id = <class id> AND r.git_provider = 'forgejo'
+   GROUP BY r.repository ORDER BY r.repository \g
    ```
 
 5. The reconciler can skip every pass and answer 200. See live check 1.
 6. Nothing pages on a Forgejo, Coder or runner outage. Students notice first.
    Deploy failures, `PawtograderExternalSecretNotReady` and the Postgres alerts
-   are indirect.
+   are indirect. A failed deploy means a hook failed, not that the app is down,
+   since the staging upgrade runs without `--atomic`. A release left in `failed`
+   isn't cleared by "Recover stuck helm release", which handles only
+   `pending-*`, so it stays red until someone intervenes (#1357).
 7. A failed webhook delivery can leave commit history missing or incomplete.
    Check the delivery's SHAs and redeliver if available ([Push webhook](#push-webhook-forgejo-repo-webhook)).
 8. Workspace homes have no backup or cleanup (#1223), and stopped workspaces
