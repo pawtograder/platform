@@ -287,8 +287,21 @@ for (const provider of ["github", "forgejo"] as const) {
     expect((await supabase.from("classes").delete().eq("id", course.id)).error?.code).toBe("23503");
     expect(await ok(supabase.from("classes").select("id").eq("id", course.id))).toHaveLength(1);
     // Deleting the assignment row fires the same AFTER DELETE trigger that cascade would, and is the
-    // path an instructor deleting one outside delete_assignment_with_all_data takes. Its autograder row
-    // is the one restrictive child in the way.
+    // path an instructor deleting one outside delete_assignment_with_all_data takes.
+    //
+    // Its autograder row is in the way, and so are the autograder's own children: creating an assignment
+    // seeds a regression-test row, and `autograder_regression_test.autograder_id` references `autograder`
+    // with NO ACTION, so deleting the autograder alone fails with 23503. The restrictive children are
+    // whatever this reports, which is where this order comes from:
+    //
+    //   SELECT conrelid::regclass, confrelid::regclass, confdeltype FROM pg_constraint
+    //   WHERE confrelid IN ('public.autograder'::regclass, 'public.assignments'::regclass)
+    //     AND contype = 'f' AND confdeltype IN ('a', 'r');
+    //
+    // The rest of that list (submissions, groups, repositories, and so on) stays empty in this fixture,
+    // so clearing the autograder subtree is enough to reach the assignment row.
+    await ok(supabase.from("autograder_regression_test").delete().eq("autograder_id", assignment.id));
+    await ok(supabase.from("autograder_commits").delete().eq("autograder_id", assignment.id));
     await ok(supabase.from("autograder").delete().eq("id", assignment.id));
     await ok(supabase.from("assignments").delete().eq("id", assignment.id));
     expect(await ok(supabase.from("assignments").select("id").eq("id", assignment.id))).toHaveLength(0);
