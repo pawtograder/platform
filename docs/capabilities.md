@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261114120000_custom_roles_copy_grader_role.sql`, `20261115220000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122120000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -27,8 +27,8 @@ and nothing else.
 `(class_id, capability)` for the signed-in user.
 
 Every capability is on the default instructor role, so instructors can do everything and nobody
-can be given more than an instructor. A role manager can only add a capability they hold in that
-class to the default grader role or a custom role.
+can be given more than an instructor. A role manager can only add or remove a capability they hold
+in that class, on the default grader role or a custom role.
 
 `manage_roles` lets someone create custom roles and choose their capabilities. It does **not**
 let them put people on a role: changing `user_roles.class_role_id` still goes through the
@@ -146,14 +146,16 @@ role hold it, so instructors and default graders keep the management access grad
 instructor can then turn it off for the default grader role or a custom role. Before this capability,
 the person who created a deck could still update and delete it and manage its cards without the
 staff check; that creator path is gone so the capability is the only rule for those writes. The
-Course Settings "Flashcard Decks" entry and the create / edit / delete controls follow
-`useCapability("manage_flashcards")`. Left as views: class members reading decks and cards, students
+create / edit / delete controls follow `useCapability("manage_flashcards")`. The Course Settings
+"Flashcard Decks" entry and deck pages remain available to all staff for viewing. Left as views: class members reading decks and cards, students
 writing their own progress and interaction logs, and staff reading class-wide progress and logs for
 analytics.
 
-CLI `flashcards.copy` asks `user_class_ids_with_capability('manage_flashcards')` through the
-caller-scoped client (`ctx.supabase`) for both the source and the target class, matching the RLS
-policies rather than joining `role_capabilities` by hand.
+CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
+decks. It requires `manage_flashcards` only in the target class. The target check asks
+`user_class_ids_with_capability('manage_flashcards')` through the caller-scoped client
+(`ctx.supabase`), using the same capability lookup as RLS. Source read policies do not require
+`manage_flashcards`.
 
 ## manage_surveys and run_polls
 

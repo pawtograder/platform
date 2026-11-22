@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
@@ -182,9 +182,7 @@ const LinkItems = (courseID: number) => [
       {
         name: "Flashcard Decks",
         icon: TbCards,
-        target: `/course/${courseID}/manage/course/flashcard-decks`,
-        // Creating and editing decks needs manage_flashcards (#1010).
-        capability: "manage_flashcards"
+        target: `/course/${courseID}/manage/course/flashcard-decks`
       },
       {
         name: "Discussion Topics",
@@ -285,7 +283,6 @@ export default function DynamicCourseNav() {
 
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
-  const canManageFlashcards = useCapability("manage_flashcards");
   /**
    * Which responsive twin carries the landmark ids. Only the ids move with the
    * breakpoint — the accessibility tree is left to the CSS `display` split (see
@@ -340,8 +337,10 @@ export default function DynamicCourseNav() {
           copy the user is actually seeing.) */}
       <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">
-          {/* Top row: Course picker, logo, course name, user menu */}
-          <HStack justifyContent="space-between" alignItems="center">
+          {/* Top row: Course picker, logo, course name, user menu. Wraps so the user menu moves
+              below the course name when both don't fit at 320px (a long title word plus the
+              time zone chip overflowed the page). */}
+          <HStack justifyContent="space-between" alignItems="center" flexWrap="wrap">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
               <NextLink href="/course" aria-label={`${branding.name} home`}>
@@ -403,10 +402,7 @@ export default function DynamicCourseNav() {
                                 .filter(
                                   (submenu) =>
                                     (!submenu.instructors_only || isInstructor) &&
-                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader) &&
-                                    (!("capability" in submenu) ||
-                                      submenu.capability !== "manage_flashcards" ||
-                                      canManageFlashcards)
+                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
                                 .filter((submenu) => {
                                   const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
@@ -537,10 +533,7 @@ export default function DynamicCourseNav() {
                               .filter(
                                 (submenu) =>
                                   (!submenu.instructors_only || isInstructor) &&
-                                  (!submenu.instructors_or_graders_only || isInstructorOrGrader) &&
-                                  (!("capability" in submenu) ||
-                                    submenu.capability !== "manage_flashcards" ||
-                                    canManageFlashcards)
+                                  (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                               )
                               .filter((submenu) => {
                                 const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;

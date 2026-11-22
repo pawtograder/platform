@@ -6,7 +6,7 @@
  *   manage_review_assignments. Without it those two pages send you back to the reviews page.
  * - Manage Groups: every change needs publish_groups; without it the page is read-only.
  * - Flashcard Decks: create / delete need manage_flashcards. The default grader role holds it; a
- *   custom role with it turned off hides the nav entry, list controls, and deck-detail add / edit /
+ *   custom role with it turned off keeps the nav entry and hides list controls and deck-detail add / edit /
  *   delete card controls.
  * - Manage Surveys: create / publish / delete need manage_surveys (instructor-only by default).
  * - Manage Polls: create / open / close / delete need run_polls. The default grader role holds it; a
@@ -14,7 +14,7 @@
  *
  * Default roles only for the review and groups checks: the instructor role holds those capabilities,
  * the grader role holds neither, until the last review test gives the default grader role
- * manage_review_assignments (instructors can edit it since 20261114120000_custom_roles_copy_grader_role.sql).
+ * manage_review_assignments (instructors can edit it since 20261119120000_custom_roles_copy_grader_role.sql).
  * The flashcard, survey and poll checks use their own custom roles so they do not change the default
  * grader role.
  */
@@ -109,9 +109,8 @@ test.describe("controls gated by capabilities", () => {
 
   // useCapability is false while loading, so "hidden" only means something once the answer is in.
   async function gotoWithCapabilities(page: Page, url: string, heading: string) {
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(page, url, heading);
-    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
   }
 
   async function openReviewsTable(page: Page) {
@@ -248,6 +247,7 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
   let instructor: TestingUser;
   let graderWithout: TestingUser;
   let deckId: number;
+  let deckName: string;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -275,12 +275,13 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     expect(rowError).toBeNull();
     expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
 
+    deckName = `E2E Flashcard Deck ${suffix}`;
     const { data: deck, error: deckError } = await supabase
       .from("flashcard_decks")
       .insert({
         class_id: course.id,
         creator_id: instructor.user_id,
-        name: `E2E Flashcard Deck ${suffix}`,
+        name: deckName,
         description: "for gating"
       })
       .select("id")
@@ -301,40 +302,44 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     ).toBeNull();
   });
 
-  test("a grader without manage_flashcards does not see Flashcard Decks or Create New Deck", async ({ page }) => {
+  test("a grader without manage_flashcards can view decks through the nav without management controls", async ({
+    page
+  }) => {
     await loginAsUser(page, graderWithout, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(
       page,
       `/course/${course.id}/manage/course/flashcard-decks`,
       "Flashcard Decks"
     );
-    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
 
+    const deckRow = page.getByRole("row").filter({ hasText: deckName });
+    await expect(deckRow).toBeVisible();
     await expect(page.getByRole("button", { name: "Create New Deck" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Delete deck" })).toHaveCount(0);
+    await expect(deckRow.getByRole("button", { name: "Delete deck" })).toHaveCount(0);
 
-    // Course Settings submenu hides the Flashcard Decks entry without the capability.
+    // Viewing decks stays available to staff without the capability.
     await page.getByRole("button", { name: "Course Settings menu" }).click();
-    await expect(page.getByRole("menuitem", { name: /Flashcard Decks/ })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /Flashcard Decks/ })).toBeVisible();
   });
 
   test("a grader without manage_flashcards does not see add, edit or delete card controls on the deck page", async ({
     page
   }) => {
     await loginAsUser(page, graderWithout, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(
       page,
       `/course/${course.id}/manage/course/flashcard-decks/${deckId}`,
       "Edit Flashcard Deck"
     );
-    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
 
+    const cardRow = page.getByRole("group", { name: "Gating card", exact: true });
+    await expect(cardRow).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Flashcard" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /Delete flashcard/ })).toHaveCount(0);
+    await expect(cardRow.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+    await expect(cardRow.getByRole("button", { name: /Delete flashcard/ })).toHaveCount(0);
   });
 });
 

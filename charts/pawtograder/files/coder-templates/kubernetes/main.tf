@@ -83,7 +83,25 @@ variable "code_server_version" {
 variable "image" {
   type        = string
   description = "Workspace container image."
-  default     = "ghcr.io/pawtograder/mirror/codercom/enterprise-base:ubuntu-20261005"
+  default     = "ghcr.io/pawtograder/coder-workspace:latest"
+}
+
+variable "forgejo_url" {
+  type        = string
+  description = "Forgejo's public URL; repo_url must name a repository on it or on github_url. Empty drops the pin."
+  default     = ""
+}
+
+variable "github_url" {
+  type        = string
+  description = "GitHub's URL; repo_url may name a repository on it. Empty drops it from the pin."
+  default     = "https://github.com"
+}
+
+variable "github_external_auth_id" {
+  type        = string
+  description = "Coder external auth provider id for GitHub; empty declares no provider."
+  default     = ""
 }
 
 data "coder_parameter" "cpu" {
@@ -130,10 +148,61 @@ data "coder_parameter" "home_disk_size" {
   }
 }
 
+data "coder_parameter" "repo_url" {
+  name         = "repo_url"
+  display_name = "Repository"
+  description  = "HTTPS clone URL of the repository to work on."
+  type         = "string"
+  mutable      = false
+  validation {
+    regex = local.repo_url_regex
+    error = "Must be a clone URL like ${length(local.repo_url_origins) == 0 ? "https://<host>" : local.repo_url_origins[0]}/<owner>/<repository>.git, whose repository name doesn't start with a dot."
+  }
+}
+
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
+# Optional: a Forgejo workspace must not be blocked by an unlinked GitHub account.
+data "coder_external_auth" "github" {
+  count    = var.github_external_auth_id == "" ? 0 : 1
+  id       = var.github_external_auth_id
+  optional = true
+}
+
+# Blocks login until it ends, so a failure shows as the agent's start_error rather than a ready workspace.
+resource "coder_script" "git_clone" {
+  agent_id     = coder_agent.main.id
+  display_name = "Git Clone"
+  icon         = "/icon/git.svg"
+  script = templatefile("${path.module}/clone.sh", {
+    url     = data.coder_parameter.repo_url.value
+    dir     = local.repo_dir
+    limit   = local.clone_timeout
+    creds   = local.git_credentials
+    auth_id = local.clone_auth_id
+  })
+  run_on_start       = true
+  start_blocks_login = true
+  # A backstop: clone.sh gives up on its own after clone_timeout.
+  timeout = local.clone_timeout + 120
+}
+
 locals {
+  repo_url_origins = compact([trimsuffix(var.forgejo_url, "/"), trimsuffix(var.github_url, "/")])
+  repo_url_hosts   = join("|", [for origin in local.repo_url_origins : replace(origin, "/[\\\\.^$|?*+()\\[\\]{}]/", "\\$0")])
+  # Owner and repository names are Forgejo's characters; a name can't start with a dot, so the clone can't land on a dotfile.
+  # "" passes because template import checks the parameter without a value; clone.sh fails a workspace created with it.
+  repo_url_regex = "^((${local.repo_url_hosts == "" ? "https://[A-Za-z0-9.-]+(:[0-9]+)?" : local.repo_url_hosts})/[A-Za-z0-9_.-]+/[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+  repo_dir       = "/home/coder/${trimsuffix(basename(data.coder_parameter.repo_url.value), ".git")}"
+  repo_origin    = lower(try(regex("^[^:/]+://[^/]+", data.coder_parameter.repo_url.value), ""))
+  # Only Forgejo repositories get a minted token; GitHub's comes from external auth through the agent's GIT_ASKPASS.
+  on_forgejo = var.forgejo_url != "" && local.repo_origin == lower(try(regex("^[^:/]+://[^/]+", var.forgejo_url), ""))
+  # Must match gitCredentialsFile in supabase/functions/_shared/CoderWorkspace.ts.
+  repo_path       = try(regex("^https?://.+/([^/]+)/([^/]+?)(?:\\.git)?$", data.coder_parameter.repo_url.value), ["", ""])
+  git_credentials = local.on_forgejo ? "/home/coder/.git-credentials-${local.repo_path[0]}--${local.repo_path[1]}" : ""
+  clone_auth_id   = local.on_forgejo ? "" : var.github_external_auth_id
+  clone_timeout   = 300
   # Owner and workspace names can be renamed; object names can't, and a renamed PVC would be replaced.
   name = "coder-${data.coder_workspace.me.id}"
   labels = {
@@ -146,10 +215,21 @@ locals {
 }
 
 resource "coder_agent" "main" {
-  os             = "linux"
-  arch           = var.arch
+  os   = "linux"
+  arch = var.arch
+  # Passed as variables so a quote in a name can't break the script.
+  env = {
+    # The provider reports an empty name as "default", and Pawtograder's ID tokens carry the email as the name. The
+    # owner's email is a placeholder (#1222), so any address in the name means there is no name.
+    OWNER_GIT_NAME  = contains(["", "default"], data.coder_workspace_owner.me.full_name) || strcontains(data.coder_workspace_owner.me.full_name, "@") ? data.coder_workspace_owner.me.name : data.coder_workspace_owner.me.full_name
+    OWNER_GIT_EMAIL = data.coder_workspace_owner.me.email
+  }
   startup_script = <<-EOT
     set -e
+    git config --global user.name "$OWNER_GIT_NAME"
+    # The owner's Coder email is a placeholder (#1222); workspace-open stores the real one as a Coder secret.
+    EMAIL="$(head -n 1 /home/coder/.git-email 2>/dev/null || true)"
+    git config --global user.email "$${EMAIL:-$OWNER_GIT_EMAIL}"
     V="${var.code_server_version}"
     CS="$(command -v code-server || true)"
     if [ -n "$V" ] && { [ -z "$CS" ] || [ "$("$CS" --version 2>/dev/null | awk '/^[0-9]+[.][0-9]+[.][0-9]+ /{print $1; exit}')" != "$V" ]; }; then
@@ -165,6 +245,9 @@ resource "coder_agent" "main" {
       fi
     fi
     [ -n "$CS" ] || { echo "the workspace image has no code-server and code_server_version is empty" >&2; exit 1; }
+    # VS Code's own askpass would replace the agent's GIT_ASKPASS, so Source Control pushes would prompt for a login.
+    S="$HOME/.local/share/code-server/Machine/settings.json"
+    [ -f "$S" ] || { mkdir -p "$(dirname "$S")" && echo '{"git.useIntegratedAskPass": false}' >"$S"; }
     "$CS" --auth none --port 13337 >/tmp/code-server.log 2>&1 &
   EOT
 
@@ -195,7 +278,7 @@ resource "coder_app" "code_server" {
   agent_id     = coder_agent.main.id
   slug         = "code-server"
   display_name = "VS Code"
-  url          = "http://localhost:13337/?folder=/home/coder"
+  url          = "http://localhost:13337/?folder=${local.repo_dir}"
   icon         = "/icon/code.svg"
   subdomain    = true
   share        = "owner"

@@ -34,6 +34,13 @@
 #                                        chart sets it from forgejo.ingress.hosts. Not
 #                                        forgejo-<env>, which holds Forgejo's own admin and
 #                                        database passwords: scripts/setup-openbao-forgejo-coder.sh.)
+#   apps/pawtograder/coder-api-<env>     CODER_API_TOKEN
+#                                        (a Coder owner's API token for workspace-open, which
+#                                        creates students' Coder users and workspaces and reads
+#                                        their OIDC link. CODER_URL is not here: the chart sets
+#                                        it from CODER_ACCESS_URL. Not coder-<env>, which holds
+#                                        Coder's own admin and database passwords:
+#                                        scripts/setup-openbao-forgejo-coder.sh.)
 #   apps/pawtograder/aws-chime-<env>     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #                                        AWS_CHIME_EVENT_AUTH_TOKEN, AWS_CHIME_SQS_QUEUE_ARN
 #   apps/pawtograder/discord-<env>       DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN
@@ -97,6 +104,7 @@ declare -A BUNDLE_KEYS=(
   [llm]="OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY AZURE_OPENAI_KEY"
   [github-app]="GITHUB_APP_ID GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET GITHUB_PRIVATE_KEY_STRING GITHUB_WEBHOOK_SECRET EVENTBRIDGE_SECRET"
   [forgejo-webhook]="FORGEJO_WEBHOOK_SECRET"
+  [coder-api]="CODER_API_TOKEN"
   [aws-chime]="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_CHIME_EVENT_AUTH_TOKEN AWS_CHIME_SQS_QUEUE_ARN"
   [discord]="DISCORD_APPLICATION_ID DISCORD_BOT_TOKEN"
   # Exam OCR / vision. EXAM_VISION_PROVIDER is REQUIRED wherever exam features are enabled:

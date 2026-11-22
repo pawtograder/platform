@@ -184,16 +184,44 @@ describe("CLI command authorization audit", () => {
       const entry = allCommands.find((c) => c.name === commandName);
       expect(entry).toBeDefined();
       const body = entry!.mod.functions.get(entry!.handler)!;
-      const checks =
-        body.match(/assertUserCanAccessClass|assertUserIsClassInstructor|assertUserHasClassCapability/g) ?? [];
-      expect(checks.length).toBeGreaterThanOrEqual(2);
-      expect(body).toMatch(/sourceClass\.id/);
-      expect(body).toMatch(/targetClass\.id/);
+      expect(body).toMatch(/assertUserCanAccessClass\(supabase, ctx\.userId, sourceClass\.id\)/);
+      if (commandName === "flashcards.copy") {
+        expect(body).toMatch(
+          /assertUserHasClassCapability\(ctx\.supabase, ctx\.userId, targetClass\.id, "manage_flashcards"\)/
+        );
+        expect(body).not.toMatch(/assertUserHasClassCapability\([^;]*sourceClass\.id/);
+      } else {
+        const targetHelper =
+          commandName === "assignments.copy" ? "assertUserIsClassInstructor" : "assertUserCanAccessClass";
+        expect(body).toContain(`${targetHelper}(supabase, ctx.userId, targetClass.id)`);
+      }
     }
   });
 
   it("scopes classes.list to the caller's classes instead of asserting", () => {
     const entry = allCommands.find((c) => c.name === "classes.list")!;
     expect(entry.mod.functions.get(entry.handler)).toContain("listAccessibleClassIds");
+  });
+
+  it("loads every exam batch through the class-scoped loader", () => {
+    // The class role check passes for the caller's own class, so a batch id from another class
+    // must be refused by the lookup itself. The enqueue RPCs do not check it under service role.
+    const examsMod = modules.find((m) => m.file === "exams.ts")!;
+    const loader = examsMod.functions.get("loadBatchContext")!;
+    expect(loader).toMatch(/\.eq\("id", batchId\)\s*\.eq\("class_id", classData\.id\)/);
+
+    // No handler parses a batch id itself, so none can look a batch up some other way.
+    const parsesBatchId = [...examsMod.functions.entries()].filter(([, body]) => body.includes("parseBatchId("));
+    expect(parsesBatchId.map(([name]) => name)).toEqual(["loadBatchContext"]);
+
+    const takesBatch = allCommands.filter(
+      ({ mod, handler }) => mod === examsMod && mod.functions.get(handler)!.includes("loadBatchContext(")
+    );
+    expect(takesBatch.map((c) => c.name).sort()).toEqual([
+      "exams.scans.finalize",
+      "exams.scans.process",
+      "exams.scans.status",
+      "exams.scans.upload_page"
+    ]);
   });
 });

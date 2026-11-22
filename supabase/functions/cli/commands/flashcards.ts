@@ -79,10 +79,9 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
-  // Copy creates decks and cards in the target, so both sides need manage_flashcards
-  // (#1010). Ask via ctx.supabase (caller JWT) so the check matches RLS; the admin
-  // client has no auth.uid() for user_class_ids_with_capability.
-  await assertUserHasClassCapability(ctx.supabase, ctx.userId, sourceClass.id, "manage_flashcards");
+  // Reading the source needs staff access; creating the copy needs manage_flashcards in the target.
+  // Use the caller JWT for the capability lookup, as RLS does.
+  await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
   await assertUserHasClassCapability(ctx.supabase, ctx.userId, targetClass.id, "manage_flashcards");
 
   if (sourceClass.id === targetClass.id) {

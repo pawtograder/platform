@@ -10,7 +10,7 @@ import { JobTokenRejectedError, UserVisibleError } from "./HandlerUtils.ts";
 
 // GitHubWrapper builds a GitHub App at import time, which needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { assertJobTokenMatchesRepository, validateOIDCToken } = await import("./GitHubWrapper.ts");
+const { assertJobTokenMatchesRepository, findActorUserId, validateOIDCToken } = await import("./GitHubWrapper.ts");
 // Callers accept only GitHub unless they opt in; the Forgejo cases below opt in.
 const validateEither = (token: string) => validateOIDCToken(token, ["github", "forgejo"]);
 
@@ -133,6 +133,28 @@ Deno.test("validateOIDCToken: Forgejo token verifies when FORGEJO_URL is set -> 
       assertEquals(claims.actor, "pawtograder");
       assertEquals(claims.workflow_ref, forgejoClaims.workflow_ref);
       assertEquals(fetched, [FORGEJO_JWKS_URL]);
+    })
+  );
+});
+
+Deno.test("validateOIDCToken: a Forgejo repository comes back lowercased; a GitHub one keeps its case", async () => {
+  const key = await signingKey("fj-1");
+  const cased = { repository: "Demo-Class/HW1-Student1", repository_owner: "Demo-Class" };
+  await withForgejoUrl(FORGEJO_URL, () =>
+    withJwks({ [FORGEJO_JWKS_URL]: [key] }, async () => {
+      const claims = await validateEither(
+        await sign(key, { ...forgejoClaims, ...cased, aud: `${FORGEJO_URL}/Demo-Class` })
+      );
+      assertEquals(claims.repository, "demo-class/hw1-student1");
+    })
+  );
+  const ghKey = await signingKey("gh-1");
+  await withForgejoUrl(undefined, () =>
+    withJwks({ [GITHUB_JWKS_URL]: [ghKey] }, async () => {
+      const claims = await validateOIDCToken(
+        await sign(ghKey, { ...githubClaims, ...cased, aud: "https://github.com/Demo-Class" })
+      );
+      assertEquals(claims.repository, "Demo-Class/HW1-Student1");
     })
   );
 });
@@ -304,8 +326,8 @@ Deno.test(
   }
 );
 
-/** A client whose repositories lookup returns `row`, recording the repository it was asked for. */
-function repositoriesClient(row: { git_provider: string } | null, error: { message: string } | null = null) {
+/** A client whose repositories lookup returns `rows`, recording the repository it was asked for. */
+function repositoriesClient(rows: { git_provider: string }[], error: { message: string } | null = null) {
   const asked: unknown[] = [];
   const query = {
     select: () => query,
@@ -313,7 +335,8 @@ function repositoriesClient(row: { git_provider: string } | null, error: { messa
       asked.push([column, value]);
       return query;
     },
-    maybeSingle: () => Promise.resolve({ data: row, error })
+    then: (done: (result: { data: { git_provider: string }[] | null; error: unknown }) => void) =>
+      done({ data: error ? null : rows, error })
   };
   const client = { from: (table: string) => (assertEquals(table, "repositories"), query) };
   return { client: client as unknown as Parameters<typeof assertJobTokenMatchesRepository>[0], asked };
@@ -322,16 +345,21 @@ function repositoriesClient(row: { git_provider: string } | null, error: { messa
 Deno.test(
   "assertJobTokenMatchesRepository: a token is accepted only for a repository on its own provider",
   async () => {
-    const cases: [provider: "github" | "forgejo", row: { git_provider: string } | null, accepted: boolean][] = [
-      ["github", { git_provider: "github" }, true],
-      ["github", null, true], // grader, handout and E2E repositories have no row
-      ["github", { git_provider: "forgejo" }, false],
-      ["forgejo", { git_provider: "forgejo" }, true],
-      ["forgejo", { git_provider: "github" }, false],
-      ["forgejo", null, false]
+    const github = { git_provider: "github" };
+    const forgejo = { git_provider: "forgejo" };
+    const cases: [provider: "github" | "forgejo", rows: { git_provider: string }[], accepted: boolean][] = [
+      ["github", [github], true],
+      ["github", [], true], // grader, handout and E2E repositories have no row
+      ["github", [forgejo], false],
+      ["forgejo", [forgejo], true],
+      ["forgejo", [github], false],
+      ["forgejo", [], false],
+      // A name is unique per provider (#1093), so it can be on both hosts.
+      ["github", [github, forgejo], true],
+      ["forgejo", [github, forgejo], true]
     ];
-    for (const [provider, row, accepted] of cases) {
-      const { client, asked } = repositoriesClient(row);
+    for (const [provider, rows, accepted] of cases) {
+      const { client, asked } = repositoriesClient(rows);
       const check = () => assertJobTokenMatchesRepository(client, { repository: "demo-class/hw1-student1", provider });
       if (accepted) {
         await check();
@@ -346,9 +374,72 @@ Deno.test(
 );
 
 Deno.test("assertJobTokenMatchesRepository: a failed lookup is an error, not a rejection", async () => {
-  const { client } = repositoriesClient(null, { message: "502 from PostgREST" });
+  const { client } = repositoriesClient([], { message: "502 from PostgREST" });
   const err = await assertRejects(() =>
     assertJobTokenMatchesRepository(client, { repository: "demo-class/hw1-student1", provider: "github" })
   );
   assertInstanceOf(err, UserVisibleError);
+});
+
+/** A client that answers one lookup on `table` with `row`, recording the filters it was given. */
+function actorClient(table: string, row: { user_id: string } | null) {
+  const asked: unknown[] = [];
+  let queried = false;
+  const query = {
+    select: () => query,
+    eq: (column: string, value: unknown) => (asked.push(["eq", column, value]), query),
+    ilike: (column: string, value: unknown) => (asked.push(["ilike", column, value]), query),
+    maybeSingle: () => Promise.resolve({ data: row, error: null })
+  };
+  const client = {
+    from: (name: string) => {
+      queried = true;
+      assertEquals(name, table);
+      return query;
+    }
+  };
+  return {
+    client: client as unknown as Parameters<typeof findActorUserId>[0],
+    asked,
+    queried: () => queried
+  };
+}
+
+Deno.test("findActorUserId: a Forgejo actor is the account with that login on the configured instance", async () => {
+  const { client, asked } = actorClient("git_accounts", { user_id: "u-1" });
+  assertEquals(
+    await findActorUserId(client, { actor: "pat.lee", provider: "forgejo" }, "https://git.example.edu"),
+    "u-1"
+  );
+  assertEquals(asked, [
+    ["eq", "provider", "forgejo"],
+    ["eq", "instance_url", "https://git.example.edu"],
+    ["eq", "login", "pat.lee"]
+  ]);
+});
+
+Deno.test(
+  "findActorUserId: with FORGEJO_URL unset, a Forgejo actor matches nobody and nothing is queried",
+  async () => {
+    const { client, queried } = actorClient("git_accounts", { user_id: "u-1" });
+    assertEquals(await findActorUserId(client, { actor: "pat.lee", provider: "forgejo" }, undefined), null);
+    assertEquals(queried(), false);
+  }
+);
+
+Deno.test("findActorUserId: an unknown Forgejo login matches nobody", async () => {
+  const { client } = actorClient("git_accounts", null);
+  assertEquals(
+    await findActorUserId(client, { actor: "forgejo-admin", provider: "forgejo" }, "https://git.example.edu"),
+    null
+  );
+});
+
+Deno.test("findActorUserId: a GitHub actor is still looked up by GitHub username", async () => {
+  const { client, asked } = actorClient("users", { user_id: "u-2" });
+  assertEquals(
+    await findActorUserId(client, { actor: "PatLee", provider: "github" }, "https://git.example.edu"),
+    "u-2"
+  );
+  assertEquals(asked, [["ilike", "github_username", "PatLee"]]);
 });

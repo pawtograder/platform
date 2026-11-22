@@ -20,15 +20,17 @@
 --      limits as on custom roles: never manage_roles, and only a capability they hold. The
 --      instructor, student and admin roles stay fixed, and the default grader role still can't be
 --      renamed or deleted (the class_roles policies stay custom-only).
---   4. Existing custom roles get the default grader role's capabilities, so no grader loses what
---      they held through the old rule.
 --
 -- Not changed: instructors, students and admins sit on their own default role, so for them the old
 -- join added nothing and they hold exactly what they held before. Every capability is still on the
--- default instructor role. The #1171 broadcast trigger (20261106120000_role_capabilities_broadcast.sql)
--- already sends a staff note for a change on any role, so pages refresh for the default grader role too.
+-- default instructor role. Graders on a custom role lose nothing either: the default grader role
+-- holds no capabilities until this migration lets instructors edit it (seed_default_class_roles only
+-- gives them to the instructor role), so the old join added nothing for them, and there is nothing
+-- to copy onto existing custom roles. The #1171 broadcast trigger
+-- (20261106120000_role_capabilities_broadcast.sql) already sends a staff note for a change on any
+-- role, so pages refresh for the default grader role too.
 --
--- Safe to run again: every policy and trigger is dropped first, and the inserts skip rows that exist.
+-- Safe to run again: every function is replaced, and every policy and trigger is dropped first.
 
 -- ---------------------------------------------------------------------------
 -- 1. A user holds only their own class role's capabilities
@@ -103,8 +105,8 @@ DROP POLICY IF EXISTS "Role managers can remove capabilities from custom class r
 DROP POLICY IF EXISTS "Role managers can add capabilities to grader roles" ON public.role_capabilities;
 DROP POLICY IF EXISTS "Role managers can remove capabilities from grader roles" ON public.role_capabilities;
 
--- The last check: only a capability the caller holds in the role's class, so a role manager can't
--- give a role more than they have.
+-- The last check, in both policies: only a capability the caller holds in the role's class, so a
+-- role manager can't give a role more than they have, or take away one they couldn't give back.
 CREATE POLICY "Role managers can add capabilities to grader roles" ON public.role_capabilities
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -131,19 +133,10 @@ CREATE POLICY "Role managers can remove capabilities from grader roles" ON publi
       WHERE (cr.default_for IS NULL OR cr.default_for = 'grader')
         AND cr.class_id IN (SELECT public.user_class_ids_with_capability('manage_roles'))
     )
+    AND capability IN (
+      SELECT ucc.capability
+      FROM public.user_class_capabilities() ucc
+      JOIN public.class_roles cr ON cr.class_id = ucc.class_id
+      WHERE cr.id = role_capabilities.role_id
+    )
   );
-
--- ---------------------------------------------------------------------------
--- 4. Existing custom roles keep what their graders held
--- ---------------------------------------------------------------------------
-
--- Under the old rule a grader on a custom role also held the default grader role's capabilities.
--- Put those on the custom role itself, so nobody loses them now that the join is gone.
-INSERT INTO public.role_capabilities (role_id, capability)
-SELECT custom.id, rc.capability
-FROM public.class_roles custom
-JOIN public.class_roles base ON base.class_id = custom.class_id AND base.default_for = 'grader'
-JOIN public.role_capabilities rc ON rc.role_id = base.id
-WHERE custom.default_for IS NULL
-  AND rc.capability <> 'manage_roles'
-ON CONFLICT DO NOTHING;
