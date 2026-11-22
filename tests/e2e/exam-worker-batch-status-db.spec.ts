@@ -1004,8 +1004,7 @@ test.describe("Create refuses a batch that is already creating submissions (#115
         [classId, batchId, other.classId, other.batchId]
       );
       try {
-        // With nothing queued, Create works: on a batch whose finalize failed (error), and on one
-        // left in 'finalizing' with nothing behind it, which it can still restart.
+        // On the errored batch, with no finalize of its own queued, Create works.
         expect(await createHidden()).toBe(1);
       } finally {
         await monitor.query("SELECT pgmq.archive('exam_processing', id::bigint) FROM unnest($1::text[]) AS id", [
@@ -1013,6 +1012,7 @@ test.describe("Create refuses a batch that is already creating submissions (#115
         ]);
       }
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
+      // A batch left in 'finalizing' with nothing behind it can still be restarted.
       await drop();
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
       expect(await createHidden()).toBe(1);
