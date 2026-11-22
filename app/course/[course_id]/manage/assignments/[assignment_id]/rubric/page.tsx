@@ -1329,7 +1329,7 @@ function InnerRubricPage() {
       }
       if (draftBaseRubricId === 0 && (existingRubricForRound || resolvedExistingId)) {
         throw new RubricSaveConflictError(
-          "A rubric for this round was just created by someone else, so your changes weren't saved. Reload the page to edit it."
+          "A rubric for this round was just created by someone else, so your changes weren't saved. Copy your unsaved YAML before reloading the page to edit it."
         );
       }
       const rubricId =

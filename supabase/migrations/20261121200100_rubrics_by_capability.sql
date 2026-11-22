@@ -631,7 +631,7 @@ BEGIN
     -- back instead, so the editor shows an error and keeps the draft. unique_violation (HTTP 409),
     -- not serialization_failure: PostgREST retries a serialization_failure without end.
     IF v_is_new_rubric AND v_link_rows = 0 THEN
-      RAISE EXCEPTION 'A rubric for this round was just created by someone else, so your changes weren''t saved. Reload the page to edit it.'
+      RAISE EXCEPTION 'A rubric for this round was just created by someone else, so your changes weren''t saved. Copy your unsaved YAML before reloading the page to edit it.'
         USING ERRCODE = 'unique_violation';
     END IF;
   END IF;
