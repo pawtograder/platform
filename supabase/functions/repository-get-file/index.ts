@@ -66,7 +66,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (provider === "forgejo") {
     await assertForgejoCourseOrg(supabase, courseId, orgName);
   } else {
-    await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { allowPawtograderOrg: true });
+    await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { write: false });
   }
   const files = repoFilesFor(provider);
 

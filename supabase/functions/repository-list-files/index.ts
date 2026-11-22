@@ -21,7 +21,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     await assertForgejoCourseOrg(supabase, courseId, orgName);
     return await repoFilesFor(provider).listFiles(orgName.toLowerCase(), repoName);
   }
-  await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { allowPawtograderOrg: true });
+  await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { write: false });
   return await repoFilesFor(provider).listFiles(orgName, repoName);
 }
 

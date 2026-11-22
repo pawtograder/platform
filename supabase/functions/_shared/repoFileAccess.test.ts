@@ -119,7 +119,7 @@ function otherCoursesClient() {
 
 Deno.test("assertGitHubCourseRepo: a repo in the course's org passes, case-insensitively", async () => {
   await assertGitHubCourseRepo(githubCourseClient("neu-cs4535"), 1, "NEU-CS4535", "hw1", {
-    allowPawtograderOrg: false
+    write: true
   });
 });
 
@@ -129,9 +129,26 @@ Deno.test("assertGitHubCourseRepo: with no org, the course's own grader repo pas
     1,
     "Pawtograder-Playground",
     "Test-E2E-Java-Solution",
-    { allowPawtograderOrg: false },
+    { write: false },
     otherCoursesClient()
   );
+});
+
+Deno.test("assertGitHubCourseRepo: the course's own grader repo outside its org can't be written", async () => {
+  const refused = await assertRejects(
+    () =>
+      assertGitHubCourseRepo(
+        githubCourseClient(null),
+        1,
+        "pawtograder-playground",
+        "test-e2e-java-solution",
+        { write: true },
+        otherCoursesClient()
+      ),
+    UserVisibleError,
+    "can be written"
+  );
+  assertEquals(refused.status, 403);
 });
 
 Deno.test("assertGitHubCourseRepo: a grader saved in another course's org is a 403", async () => {
@@ -142,7 +159,7 @@ Deno.test("assertGitHubCourseRepo: a grader saved in another course's org is a 4
         1,
         "NEU-CS3500",
         "hw1-private",
-        { allowPawtograderOrg: false },
+        { write: false },
         otherCoursesClient()
       ),
     UserVisibleError,
@@ -155,7 +172,7 @@ Deno.test("assertGitHubCourseRepo: with no org, another course's grader repo is 
   const refused = await assertRejects(
     () =>
       assertGitHubCourseRepo(githubCourseClient(null), 1, "other-org", "cs3500-hw1-solution", {
-        allowPawtograderOrg: true
+        write: false
       }),
     UserVisibleError
   );
@@ -168,7 +185,7 @@ Deno.test("assertGitHubCourseRepo: a random repo is a 403, even next to the cour
     ["pawtograder-playground", "another-solution"]
   ]) {
     const refused = await assertRejects(
-      () => assertGitHubCourseRepo(githubCourseClient("neu-cs4535"), 1, org, repo, { allowPawtograderOrg: true }),
+      () => assertGitHubCourseRepo(githubCourseClient("neu-cs4535"), 1, org, repo, { write: false }),
       UserVisibleError
     );
     assertEquals(refused.status, 403);
@@ -176,12 +193,11 @@ Deno.test("assertGitHubCourseRepo: a random repo is a 403, even next to the cour
 });
 
 Deno.test("assertGitHubCourseRepo: the pawtograder org passes only when the caller allows it", async () => {
-  await assertGitHubCourseRepo(githubCourseClient(null), 1, "pawtograder", "template", { allowPawtograderOrg: true });
+  await assertGitHubCourseRepo(githubCourseClient(null), 1, "pawtograder", "template", { write: false });
   await assertRejects(
-    () =>
-      assertGitHubCourseRepo(githubCourseClient(null), 1, "pawtograder", "template", { allowPawtograderOrg: false }),
+    () => assertGitHubCourseRepo(githubCourseClient(null), 1, "pawtograder", "template", { write: true }),
     UserVisibleError,
-    "not in the course's GitHub org (not set)"
+    "only repos in the course's GitHub org (not set) can be written"
   );
 });
 

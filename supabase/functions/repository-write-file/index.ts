@@ -96,7 +96,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // A shared org means an instructor of one course could target another course's repo. Scoping
     // writes to repos the course actually owns needs a repo->course ownership model — tracked as
     // a follow-up. See PR #831 discussion.
-    await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { allowPawtograderOrg: false });
+    await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { write: true });
   }
 
   if (!message || message.trim() === "") {

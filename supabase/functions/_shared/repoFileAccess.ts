@@ -31,7 +31,8 @@ export function forgejoOrgForClass(cls: { slug: string | null; forgejo_org: stri
 }
 
 /**
- * Refuses a GitHub repo that is neither in the course's github_org nor one of the course's own grader repos.
+ * Refuses a GitHub repo that is neither in the course's github_org nor, for reads, one of the course's own grader
+ * repos.
  * Forgejo assignments keep their grader repo on GitHub (D6), usually outside any course org, and a
  * Forgejo-only course has no github_org at all, so the grader repos are matched by name. Only assignments in
  * this course count, which keeps one course's staff out of another course's graders. Any instructor can save
@@ -43,7 +44,7 @@ export async function assertGitHubCourseRepo(
   courseId: number,
   orgName: string,
   repoName: string,
-  { allowPawtograderOrg }: { allowPawtograderOrg: boolean },
+  { write }: { write: boolean },
   // Other courses' rows aren't visible to the caller.
   adminSupabase: () => SupabaseClient<Database> = () =>
     createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!)
@@ -57,7 +58,15 @@ export async function assertGitHubCourseRepo(
   }
   const org = orgName.toLowerCase();
   if (course.github_org?.toLowerCase() === org) return;
-  if (allowPawtograderOrg && org === "pawtograder") return;
+  if (!write && org === "pawtograder") return;
+  // Reads only: grading already fetches whatever grader_repo names, but nothing ties a saved name to the
+  // course, so writing through it would let any instructor change a repo another course grades with.
+  if (write) {
+    throw new UserVisibleError(
+      `Requested to write to ${orgName}/${repoName} on GitHub, but only repos in the course's GitHub org (${course.github_org ?? "not set"}) can be written`,
+      403
+    );
+  }
 
   const { data: assignments, error: graderError } = await supabase
     .from("assignments")
