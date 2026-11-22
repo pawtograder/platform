@@ -8,9 +8,9 @@
 -- once can't both get through. The row is locked only after the staff check, so a caller who isn't
 -- staff can't hold the lock and make staff wait.
 --
--- Still allowed: uploaded (first run), review (reprocessing is how staff rematch) and error (how they
--- recover). Completed is refused because reprocessing would send a finalized batch back to review;
--- the Scans page doesn't offer Process there and the CLI already refused it.
+-- Still allowed: uploaded (first run), error (how staff retry) and review. Nothing about reprocessing
+-- from review is unsafe, though neither the Scans page nor the CLI offers it. Completed is refused
+-- because reprocessing would send a finalized batch back to review.
 
 create or replace function public.enqueue_exam_process_batch(p_batch_id bigint)
 returns integer
@@ -41,6 +41,8 @@ begin
 
   -- Lock the batch and refuse while a run is in flight or the batch is finished (#1329). A second
   -- call waits here for the first to commit, then reads the 'ocr' it set and stops.
+  -- A batch can't stay stuck in ocr or matching: a killed worker's message is redelivered after its
+  -- visibility timeout, and after PGMQ_MAX_READ_CT reads the worker sets the batch to error.
   select status into v_status from public.exam_scan_batches where id = p_batch_id for update;
   if v_status in ('ocr', 'matching', 'finalizing') then
     raise exception 'Batch % is already being processed (status %)', p_batch_id, v_status;
