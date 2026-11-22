@@ -1046,6 +1046,9 @@ const MAX_MESSAGES_PER_INVOCATION = 250;
 // true: a deployed migration does not go away. Never cached false, so a worker that started before
 // its migration picks up as soon as the migration lands.
 let contractReady = false;
+// A closed gate stops every exam batch, so it is reported to Sentry, once per isolate (the cron
+// starts several invocations a minute), as well as logged on every invocation.
+let contractGapReported = false;
 
 // A message body that is not an envelope object. Such a body made every attempt throw before the
 // poison-pill guard could see it, so it came back every READ_VISIBILITY_SECONDS forever.
@@ -1089,6 +1092,10 @@ async function runBatch(): Promise<number> {
     }
     if (!status.ready) {
       console.warn(`[exam-async-worker] ${status.reason}; not claiming until the migration is applied`);
+      if (!contractGapReported) {
+        contractGapReported = true;
+        Sentry.captureMessage(`exam-async-worker is not claiming: ${status.reason}`, "warning");
+      }
       log(`run done: 0 message(s) attempted, 0 failed, in ${Date.now() - startedAt}ms`);
       return 0;
     }

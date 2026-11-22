@@ -406,8 +406,8 @@ revoke all on function public.exam_worker_set_match_suggestion(bigint, integer, 
 grant execute on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric)
   to service_role;
 
--- Create (enqueue_exam_finalize) refuses a batch that is already creating submissions. The body is
--- 20261107120000_exam_grading.sql's with the lock and the status check added after the staff check.
+-- Create (enqueue_exam_finalize) refuses a batch while finalize messages for it are still queued. The
+-- body is 20261107120000_exam_grading.sql's with the lock and that check added after the staff check.
 create or replace function public.enqueue_exam_finalize(p_batch_id bigint)
 returns integer
 language plpgsql
@@ -417,7 +417,6 @@ as $$
 declare
   v_class_id bigint;
   v_count integer := 0;
-  v_status text;
   rec record;
 begin
   select class_id into v_class_id from public.exam_scan_batches where id = p_batch_id;
@@ -431,13 +430,20 @@ begin
     raise exception 'Access denied: staff only';
   end if;
 
-  -- #1158 review: a second Create while the first one's finalize messages are still queued or running
-  -- queued every unfinalized exam again, and two finalizes of one exam can then run at the same time
-  -- (they duplicate the submission's page-file rows). Lock the batch, after the staff check so no one
-  -- else can hold it, so two Creates run one after the other, and refuse while the batch is already
-  -- creating submissions. A batch whose finalize failed is in 'error', and Create still retries it.
-  select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for update;
-  if v_status = 'finalizing' then
+  -- #1158 review: a second Create while finalize messages for the batch are still queued or running
+  -- (a second click or tab, the CLI, or Create on a batch that errored while other exams' finalizes
+  -- were still in flight) queued those exams again, and two finalizes of one exam can then run at
+  -- the same time (they duplicate the submission's page-file rows). Lock the batch, after the staff
+  -- check so no one else can hold it, so two Creates run one after the other, and refuse while any
+  -- finalize message for this batch is still queued. A message stays queued until its worker
+  -- acknowledges, re-queues or gives it up, so this covers one that is running. With none queued,
+  -- Create works as before, including on a batch left in 'finalizing' with nothing behind it, which
+  -- it can still restart.
+  perform 1 from public.exam_scan_batches b where b.id = p_batch_id for update;
+  if exists (
+    select 1 from pgmq.q_exam_processing q
+    where q.message->>'method' = 'finalize' and q.message->>'batch_id' = p_batch_id::text
+  ) then
     raise exception 'Batch % is already creating submissions; wait for it to finish', p_batch_id;
   end if;
 

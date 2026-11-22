@@ -921,9 +921,9 @@ test.describe("match writes: only the holder, only while matching, never over a 
   });
 });
 
-/** Create cannot queue a batch's finalize messages twice (#1158 review; the N4 duplicate-finalize trigger). */
+/** Create cannot queue a batch's finalize messages while earlier ones are still queued (#1158 review; N4). */
 test.describe("Create refuses a batch that is already creating submissions (#1158)", () => {
-  test("a second Create, or one that waits on the first, queues nothing", async () => {
+  test("Create queues nothing while the batch's finalize messages are queued, and restarts it once they are gone", async () => {
     const { classId, examId, batchId } = await seedBatch("review");
     const student = await createUserInClass({ role: "student", class_id: classId });
     // One confirmed exam with no pages: finalize will fail on it, which is fine here. The batch is
@@ -967,19 +967,39 @@ test.describe("Create refuses a batch that is already creating submissions (#115
       );
       expect(await queuedFor()).toBe(1);
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
-      // A batch whose finalize failed is retried by Create.
-      await monitor.query(
-        "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE (message->>'batch_id')::bigint = $1",
-        [batchId]
+
+      // Create once more inside a transaction, hiding what it queued, then commit; "n" is what it queued.
+      const createHidden = async () => {
+        await second.query("BEGIN");
+        const n = (await second.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId])).rows[0].n;
+        await second.query(
+          "UPDATE pgmq.q_exam_processing SET vt = clock_timestamp() + interval '1 hour' WHERE (message->>'batch_id')::bigint = $1",
+          [batchId]
+        );
+        await second.query("COMMIT");
+        return n;
+      };
+      const drop = () =>
+        monitor.query(
+          "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE (message->>'batch_id')::bigint = $1",
+          [batchId]
+        );
+
+      // A batch that errored while another exam's finalize is still queued is refused too.
+      await supabase.from("exam_scan_batches").update({ status: "error", error: "one exam gave up" }).eq("id", batchId);
+      await expect(second.query("SELECT public.enqueue_exam_finalize($1)", [batchId])).rejects.toThrow(
+        /already creating submissions/
       );
-      await supabase.from("exam_scan_batches").update({ status: "error", error: "earlier failure" }).eq("id", batchId);
-      await second.query("BEGIN");
-      expect((await second.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId])).rows[0].n).toBe(1);
-      await second.query(
-        "UPDATE pgmq.q_exam_processing SET vt = clock_timestamp() + interval '1 hour' WHERE (message->>'batch_id')::bigint = $1",
-        [batchId]
-      );
-      await second.query("COMMIT");
+      expect(await queuedFor()).toBe(1);
+
+      // With nothing queued, Create works: on a batch whose finalize failed (error), and on one left
+      // in 'finalizing' with nothing behind it, which it can still restart.
+      await drop();
+      expect(await createHidden()).toBe(1);
+      expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
+      await drop();
+      expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
+      expect(await createHidden()).toBe(1);
     } finally {
       await first.query("ROLLBACK").catch(() => {});
       await second.query("ROLLBACK").catch(() => {});
