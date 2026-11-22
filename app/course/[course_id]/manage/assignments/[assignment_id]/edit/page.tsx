@@ -1,7 +1,11 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { toastAutograderNotRecorded, toastAutograderSyncFailed } from "@/lib/autograderSyncRetry";
+import {
+  toastAutograderNotRecorded,
+  toastAutograderSyncFailed,
+  toastForgejoRepositoriesUnchanged
+} from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { FORGEJO_DETACH_REASON } from "@/lib/gitProviderOptions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
@@ -677,21 +681,10 @@ export default function EditAssignment() {
           if (forgejoSyncResult?.forgejo_workflow_record_failed) {
             toastAutograderNotRecorded(forgejoSyncResult.forgejo_workflow_record_failed, syncTarget);
           }
-          if ((forgejoSyncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
-            const stale = forgejoSyncResult!.forgejo_existing_repositories_unchanged!;
-            toaster.create({
-              title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
-                stale === 1 ? "has" : "have"
-              } the previous setup`,
-              description: values.has_autograder
-                ? "The handout repository was updated, but Forgejo repositories created before now keep their " +
-                  "own copy of grade.yml, so pushes to them are still not graded. Only repositories created " +
-                  "from now on get the autograder."
-                : "The handout repository was updated, but Forgejo repositories created before now keep their " +
-                  "live grade.yml, so pushes to them still start a grading run.",
-              type: "warning"
-            });
-          }
+          toastForgejoRepositoriesUnchanged(
+            forgejoSyncResult?.forgejo_existing_repositories_unchanged,
+            values.has_autograder
+          );
         }
         toaster.create({
           title: "Assignment Updated",

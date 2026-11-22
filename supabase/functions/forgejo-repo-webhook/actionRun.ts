@@ -272,7 +272,10 @@ async function recordRunOnCheckRun(
       conclusion: run.status,
       workflow_run_id: run.id,
       workflow_run_url: run.html_url,
-      workflow_run_stopped_at: stoppedAt ?? status.workflow_run_stopped_at
+      // A stop time recorded for a different run must not carry over: it would make this run's own
+      // later completion look older than it is.
+      workflow_run_stopped_at:
+        stoppedAt ?? (status.workflow_run_id === run.id ? status.workflow_run_stopped_at : undefined)
     };
     const { data: written, error: updateError } = await adminSupabase
       .from("repository_check_runs")

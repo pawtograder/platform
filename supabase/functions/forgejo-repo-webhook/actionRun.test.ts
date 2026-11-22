@@ -433,6 +433,32 @@ Deno.test("a same-run completion without a stop time leaves a recorded outcome t
   );
 });
 
+Deno.test("a newer run without a stop time does not inherit the previous run's stop time", async () => {
+  const data = tables({
+    checkRunStatus: {
+      created_at: "2026-11-09T16:53:34.000Z",
+      completed_at: "2026-11-09T17:10:00.000Z",
+      conclusion: "success",
+      workflow_run_id: 41,
+      workflow_run_url: `${FORGEJO_URL}/cs101/hw1-alex/actions/runs/2`,
+      workflow_run_stopped_at: "2026-11-09T17:10:00.000Z"
+    }
+  });
+  const { client } = fakeSupabase(data);
+  const run = actionRunPayload(FORGEJO_URL, { action: "failure", status: "failure" }).run;
+  run.stopped = "0001-01-01T00:00:00Z";
+  run.updated = "0001-01-01T00:00:00Z";
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  const status = data.repository_check_runs[0].status as Record<string, unknown>;
+  assertEquals(status.workflow_run_id, run.id);
+  assertEquals(status.workflow_run_stopped_at, undefined);
+  // The same run's own completion, delivered later with a stop time earlier than run 41's, still lands.
+  const completion = actionRunPayload(FORGEJO_URL, { action: "success", status: "success" }).run;
+  completion.stopped = "2026-11-09T17:05:00Z";
+  completion.updated = "2026-11-09T17:05:00Z";
+  assertEquals(compareWithRecordedRun(status, completion, forgejoTime(completion.stopped)), "newer");
+});
+
 Deno.test("compareWithRecordedRun: an incoming stop time is needed to supersede a recorded one", () => {
   const recorded = {
     conclusion: "success",

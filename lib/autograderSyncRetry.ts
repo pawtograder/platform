@@ -25,9 +25,30 @@ export async function retryAutograderSync(target: SyncTarget): Promise<void> {
       description: `The handout's grade.yml matches the saved setting (autograder ${result?.has_autograder ? "on" : "off"}).`,
       type: "success"
     });
+    toastForgejoRepositoriesUnchanged(result?.forgejo_existing_repositories_unchanged, Boolean(result?.has_autograder));
   } catch (error) {
     toastAutograderSyncFailed(error instanceof Error ? error.message : String(error), target);
   }
+}
+
+/**
+ * Existing Forgejo student repositories keep their own grade.yml, so a handout change does not
+ * reach them. Warns when the sync reports any.
+ */
+export function toastForgejoRepositoriesUnchanged(count: number | null | undefined, hasAutograder: boolean): void {
+  if (!count || count <= 0) return;
+  toaster.create({
+    title: `${count} existing student repositor${count === 1 ? "y" : "ies"} still ${
+      count === 1 ? "has" : "have"
+    } the previous setup`,
+    description: hasAutograder
+      ? "The handout repository was updated, but Forgejo repositories created before now keep their " +
+        "own copy of grade.yml, so pushes to them are still not graded. Only repositories created " +
+        "from now on get the autograder."
+      : "The handout repository was updated, but Forgejo repositories created before now keep their " +
+        "live grade.yml, so pushes to them still start a grading run.",
+    type: "warning"
+  });
 }
 
 const retryAction = (target: SyncTarget) => ({

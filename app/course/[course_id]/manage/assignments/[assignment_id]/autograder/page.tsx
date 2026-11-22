@@ -6,7 +6,7 @@ import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
-import { toastAutograderNotRecorded } from "@/lib/autograderSyncRetry";
+import { toastAutograderNotRecorded, toastForgejoRepositoriesUnchanged } from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { FORGEJO_GRADER_SETUP_REASON } from "@/lib/gitProviderOptions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
@@ -241,21 +241,7 @@ export default function AutograderPage() {
             supabase
           });
         }
-        if ((syncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
-          const stale = syncResult!.forgejo_existing_repositories_unchanged!;
-          toaster.create({
-            title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
-              stale === 1 ? "has" : "have"
-            } the previous setup`,
-            description: nextHasAutograder
-              ? "The handout repository was updated, but Forgejo repositories created before now keep their " +
-                "own copy of grade.yml, so pushes to them are still not graded. Only repositories created " +
-                "from now on get the autograder."
-              : "The handout repository was updated, but Forgejo repositories created before now keep their " +
-                "live grade.yml, so pushes to them still start a grading run.",
-            type: "warning"
-          });
-        }
+        toastForgejoRepositoriesUnchanged(syncResult?.forgejo_existing_repositories_unchanged, nextHasAutograder);
         if ((syncResult?.unsynced_other_class_count ?? 0) > 0) {
           // Count only: naming assignments in another class would disclose them to an
           // instructor who is not authorized for it.
