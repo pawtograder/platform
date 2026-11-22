@@ -312,10 +312,13 @@ async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs)
   // And only while the page has no OCR yet: the first result written for a page is the one kept
   // (#1158). A reader whose lease lapsed during the provider call, or a second process_page for the
   // same page, may finish after another result was stored and match or finalize read it; replacing
-  // it would change, under them, the words they grouped, identified and graded on. The same rule the
-  // page guard (20261118150200) applies to staff. This is not claim ownership: an expired holder that
-  // finishes first still writes. Every result is OCR of the same image, so which one is kept does
-  // not matter; that it then stays the same does.
+  // it would change, under them, the words they grouped, identified and graded on. Two readers
+  // racing here are reading the same image_path, so which result is kept does not matter; that it
+  // then stays the same does. This is not claim ownership: an expired holder that finishes first
+  // still writes. It changes nothing outside that race: the early return above already skips any
+  // page that has OCR, as before #1158, so re-running Process never re-reads a page (including an
+  // unlinked page whose image staff replaced, which keeps its old OCR). The page guard
+  // (20261118150200) is narrower: it stops staff, not the worker, changing a linked page's OCR.
   const { error: updErr } = await admin
     .from("exam_scan_pages")
     .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
@@ -462,6 +465,9 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs, fe
   // Only a batch that is still reading or matching. A match that outlived its window, or a copy
   // another reader took over, finds the batch in review/finalizing/completed (or not its message
   // any more) and stops here, before it rewrites any row.
+  // The fence is per message, not per attempt: a match left over from a run that Process restarted
+  // (the batch back in 'ocr') cannot be told from the new run's match. That would need an attempt
+  // id on the message.
   const toMatching = await setBatchStatus(admin, fence, batch.id, "matching", MATCHING_FROM);
   if (toMatching === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
   if (toMatching === "state_changed") return;
