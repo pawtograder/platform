@@ -11,9 +11,12 @@
  * message AND the batch is in one of the states below, in one transaction.
  *
  * The states come from who moves a batch where:
- * - enqueue_exam_process_batch: uploaded / error -> ocr (then queues process_page and match)
+ * - enqueue_exam_process_batch: uploaded / error / review -> ocr (then queues process_page and
+ *   match); it refuses ocr, matching, finalizing and completed (#1355)
  * - worker match: ocr -> matching -> review
- * - enqueue_exam_finalize: review / error -> finalizing (then queues finalize)
+ * - enqueue_exam_finalize: -> finalizing, when the batch has confirmed exams not yet finalized (then
+ *   queues finalize). It checks no status: the page offers Create from review and error, and the RPC
+ *   refuses while finalize messages for the batch are queued
  * - worker finalize: finalizing -> completed
  * - worker, on a message that exhausted its retries: the phase that message belongs to -> error
  */

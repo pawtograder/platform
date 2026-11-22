@@ -8,7 +8,7 @@
  * moved past that message's phase. The source check keeps a new direct write from bypassing it.
  */
 import { readFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import {
   COMPLETED_FROM,
   errorFrom,
@@ -279,6 +279,22 @@ describe("issue #1158: worker batch status transitions", () => {
     expect(source).toMatch(
       /\.update\(\{ ocr_text: result\.text, ocr_data:[^}]*\}[^)]*\)\s*\.eq\("id", args\.scan_page_id\)\s*\.eq\("batch_id", batchId\)\s*\.is\("ocr_data", null\);/
     );
+  });
+
+  // #1292 lines up every page of a batch inside match. That is seconds of CPU for a large batch, and
+  // the lease on the match message is renewed by a timer, so the whole-batch alignment must give
+  // timers a turn. _shared/timerYield.test.ts shows the yielding form does and the synchronous form
+  // doesn't; this keeps match on the yielding form.
+  test("match aligns a batch through the form that lets the lease timer run", () => {
+    const alignment = readFileSync(join(dirname(WORKER), "pageAlignment.ts"), "utf8");
+    const alignBatch = alignment.slice(alignment.indexOf("export async function alignBatch"));
+    expect(alignBatch).toMatch(/return await requireAlignedYielding\(/);
+    expect(alignBatch).not.toMatch(/return requireAligned\(/);
+    const source = readFileSync(WORKER, "utf8");
+    expect(source).toMatch(/const groups = await alignBatch\(/);
+    // requireAligned (one synchronous loop) only for finalize's single exam.
+    expect(source.match(/requireAligned\(/g)).toHaveLength(1);
+    expect(source).toMatch(/requireAligned\(batchId, \[pages\]/);
   });
 });
 
