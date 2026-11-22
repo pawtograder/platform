@@ -81,6 +81,27 @@ Deno.test("forgejoConfig: needs all four settings and a positive integer source 
   }
 });
 
+Deno.test("forgejoConfig: a push hook to the public functions URL only with FORGEJO_WEBHOOK_SECRET", () => {
+  const env = (vars: Record<string, string>) => ({ get: (name: string) => vars[name] });
+  const all = {
+    FORGEJO_URL: "https://git.example.edu",
+    FORGEJO_ADMIN_USERNAME: "admin",
+    FORGEJO_ADMIN_PASSWORD: "pw",
+    FORGEJO_AUTH_SOURCE_ID: "3",
+    SUPABASE_URL: "http://kong:8000",
+    SUPABASE_PUBLIC_URL: "https://api.example.edu/"
+  };
+  assertEquals(forgejoConfig(env(all))?.pushHook, undefined);
+  assertEquals(forgejoConfig(env({ ...all, FORGEJO_WEBHOOK_SECRET: "s3cret" }))?.pushHook, {
+    url: "https://api.example.edu/functions/v1/forgejo-repo-webhook",
+    secret: "s3cret"
+  });
+  assertEquals(
+    forgejoConfig(env({ ...all, SUPABASE_PUBLIC_URL: "", FORGEJO_WEBHOOK_SECRET: "s3cret" }))?.pushHook?.url,
+    "http://kong:8000/functions/v1/forgejo-repo-webhook"
+  );
+});
+
 Deno.test("usernameFromEmail: lowercased local part, Forgejo-safe characters, at most 30", () => {
   assertEquals(usernameFromEmail("Alex.Kim@northeastern.edu"), "alex.kim");
   assertEquals(usernameFromEmail("o'brien+cs4535@husky.neu.edu"), "o-brien-cs4535");
@@ -471,6 +492,67 @@ Deno.test("ensureOrg: after losing a race to create it, still checks who owns th
       await ensureOrg(config, "cs4535");
     }
   );
+});
+
+const hooked: ForgejoConfig = {
+  ...config,
+  pushHook: { url: "https://api.example.edu/functions/v1/forgejo-repo-webhook", secret: "s3cret" }
+};
+
+Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok([]), ok({}, 201)],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(
+        calls.slice(-2).map((c) => `${c.method} ${c.url}`),
+        [
+          "GET https://git.example.edu/api/v1/orgs/cs4535/hooks?limit=50",
+          "POST https://git.example.edu/api/v1/orgs/cs4535/hooks"
+        ]
+      );
+      assertEquals(calls.at(-1)?.body, {
+        type: "forgejo",
+        active: true,
+        events: ["push"],
+        branch_filter: "*",
+        config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
+      });
+    }
+  );
+  // Already there, maybe with an old secret or turned off: it's rewritten in place, not duplicated.
+  await withForgejo(
+    [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      ok([{ id: 9, active: false, config: { url: hooked.pushHook!.url } }]),
+      ok({})
+    ],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(
+        `${calls.at(-1)?.method} ${calls.at(-1)?.url}`,
+        "PATCH https://git.example.edu/api/v1/orgs/cs4535/hooks/9"
+      );
+      assertEquals(calls.at(-1)?.body, {
+        active: true,
+        events: ["push"],
+        branch_filter: "*",
+        config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
+      });
+      assertEquals(calls.filter((c) => c.method === "POST").length, 0);
+    }
+  );
+});
+
+Deno.test("ensureOrg: gives a newly created org its push hook, and fails if it can't", async () => {
+  await withForgejo([status(404), ok({}, 201), ok([]), ok({}, 201)], async (calls) => {
+    await ensureOrg(hooked, "cs4535");
+    assertEquals(calls.at(-1)?.url, "https://git.example.edu/api/v1/orgs/cs4535/hooks");
+  });
+  await withForgejo([status(404), ok({}, 201), ok([]), status(403, "forbidden")], async () => {
+    await assertRejects(() => ensureOrg(hooked, "cs4535"), Error, "org hook create failed: 403");
+  });
 });
 
 Deno.test("ensureOrg: refuses a name that is a user, which /orgs reports as missing", async () => {

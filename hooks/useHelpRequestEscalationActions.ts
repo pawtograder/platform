@@ -2,6 +2,7 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { checkInErrorMessage } from "@/lib/helpRequestEscalation";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
 import { useCallback, useMemo } from "react";
@@ -15,10 +16,15 @@ export function useHelpRequestEscalationActions() {
   const controller = useOfficeHoursController();
 
   const run = useCallback(
-    async (requestId: number, call: () => PromiseLike<{ error: unknown }>, failureTitle: string) => {
+    async (
+      requestId: number,
+      call: () => PromiseLike<{ error: unknown }>,
+      failureTitle: string,
+      describe: (error: unknown) => string = getStudentFacingErrorMessage
+    ) => {
       const { error } = await call();
       if (error) {
-        toaster.error({ title: failureTitle, description: getStudentFacingErrorMessage(error) });
+        toaster.error({ title: failureTitle, description: describe(error) });
         return false;
       }
       await controller.helpRequests.refetchByIds([requestId]);
@@ -54,7 +60,8 @@ export function useHelpRequestEscalationActions() {
               p_fixed: fixed,
               p_note: note
             }),
-          fixed ? "Could not close your request" : "Could not escalate your request"
+          fixed ? "Could not close your request" : "Could not escalate your request",
+          checkInErrorMessage
         )
     };
   }, [run]);

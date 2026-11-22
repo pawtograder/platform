@@ -120,7 +120,17 @@ export class OfficeHoursController {
         realtimeFilter: {
           class_id: this.classId
         },
-        debounceInterval: 0
+        debounceInterval: 0,
+        // Private requests reach every student as { id } on class:<id>:students. Fetch one this
+        // client doesn't hold only for staff, or when the student is on it: anyone else gets an
+        // empty result under RLS, and the course layout mounts this controller for every student,
+        // so each private-ticket edit would cost one GET per online student (#1310).
+        shouldRefetchUncachedIdOnly: (id) =>
+          this._classRealTimeController.isStaff ||
+          (this._helpRequestStudents?.rows.some(
+            (member) => member.help_request_id === id && member.profile_id === this._classRealTimeController.profileId
+          ) ??
+            false)
       });
     }
     return this._helpRequests;

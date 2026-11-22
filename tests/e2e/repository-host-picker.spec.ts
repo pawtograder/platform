@@ -319,15 +319,17 @@ test.describe("Repository host picker and GitHub prompts", () => {
     });
   });
 
-  test("the Autograder page explains that its grader setup is GitHub-only on a Forgejo assignment", async ({
-    page
-  }) => {
+  test("the Autograder page sets up a Forgejo assignment's GitHub grader repo", async ({ page }) => {
     await loginAsUser(page, instructorOn, flagOn);
     await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/autograder`);
-    const reason = /sets up the grader through GitHub, which doesn't work for Forgejo assignments yet/;
+    const reason = /The grader repository for a Forgejo assignment stays on GitHub/;
     await expect(page.getByText(reason).filter({ visible: true })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByLabel("Grader repository").filter({ visible: true })).toBeEditable();
+    // With no grader repo yet, the save reaches github-repo-configure-webhook, which asks for one, rather than
+    // being refused on the page.
     await page.getByRole("button", { name: "Save" }).filter({ visible: true }).click();
     await expect(page.getByText("Changes not saved").first()).toBeAttached({ timeout: 30_000 });
+    await expect(page.getByText(/has no grader repository configured yet/).first()).toBeAttached();
   });
 
   test("the instructor's assignment list badges the Forgejo assignment", async ({ page }) => {
@@ -337,5 +339,17 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(forgejoRow.getByText("Forgejo", { exact: true })).toBeVisible({ timeout: 60_000 });
     const githubRow = page.getByRole("row").filter({ hasText: githubAssignment.title });
     await expect(githubRow.getByText("Forgejo", { exact: true })).toHaveCount(0);
+  });
+
+  test("the assignment page shows a Forgejo assignment's real repos, not GitHub guesses", async ({ page }) => {
+    await loginAsUser(page, instructorOn, flagOn);
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}`);
+    // No grader repo is set, so nothing is guessed from the course's GitHub org.
+    await expect(page.getByText("No grader repository").first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/-solution-/)).toHaveCount(0);
+    // The handout is on Forgejo, and this lane has no Forgejo account to find its host: the name shows, unlinked.
+    const handout = `e2e-ignore/fh-handout-${suffix}`;
+    await expect(page.getByText(handout).first()).toBeVisible();
+    await expect(page.locator(`a[href="https://github.com/${handout}"]`)).toHaveCount(0);
   });
 });
