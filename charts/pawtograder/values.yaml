@@ -268,6 +268,12 @@ secrets:
       # privateJwks, since PostgREST verifies against publicJwks. Optional: leave
       # empty and MCP/CLI are unavailable; everything else works.
       signingJwk: ""
+      # HMAC secret (>= 32 chars) that signs the long-lived `mcp_` API tokens
+      # for MCP and the CLI. A plain random string, independent of every other
+      # key here (`openssl rand -hex 32`). Optional like signingJwk, but MCP/CLI
+      # need BOTH: without this one, creating an API token fails with
+      # "MCP_JWT_SECRET must be set". Rotating it revokes every issued token.
+      mcpJwtSecret: ""
       realtimeEncKey: "" # AES-128 (16 bytes exactly) for tenant secrets
       pgMetaCryptoKey: "" # AES-256 base64; pg-meta + Studio share this
       pgsodiumRootKey: "" # 32-byte hex; postgres mounts as file

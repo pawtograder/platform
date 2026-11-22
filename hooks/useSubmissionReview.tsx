@@ -31,6 +31,9 @@ export type SubmissionReviewContextType = {
   setActiveRubricId: (id: number | undefined) => void;
   scrollToRubricId: number | undefined;
   setScrollToRubricId: (id: number | undefined) => void;
+  /** An exam question whose rubric check the sidebar should scroll to, set from its answer crop (#1268). */
+  scrollToExamQuestionId: number | undefined;
+  setScrollToExamQuestionId: (id: number | undefined) => void;
   ignoreAssignedReview: boolean;
   setIgnoreAssignedReview: (ignore: boolean) => void;
 };
@@ -48,6 +51,15 @@ export function useActiveRubricId() {
   };
 }
 
+export function useScrollToExamQuestion() {
+  const ctx = useContext(SubmissionReviewContext);
+  if (!ctx) throw new Error("useScrollToExamQuestion must be used within a SubmissionReviewProvider");
+  return {
+    scrollToExamQuestionId: ctx.scrollToExamQuestionId,
+    setScrollToExamQuestionId: ctx.setScrollToExamQuestionId
+  };
+}
+
 export function SubmissionReviewProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -57,6 +69,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const writableReviews = useWritableSubmissionReviews();
   const assignmentController = useAssignmentController();
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
+  const [scrollToExamQuestionId, setScrollToExamQuestionId] = useState<number | undefined>(undefined);
   const [clientActiveRubricId, setClientActiveRubricId] = useState<number | undefined>(undefined);
   const { startNavigation } = useNavigationProgress();
 
@@ -315,6 +328,8 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     setActiveRubricId,
     scrollToRubricId,
     setScrollToRubricId,
+    scrollToExamQuestionId,
+    setScrollToExamQuestionId,
     ignoreAssignedReview: ignoreReviewParam,
     setIgnoreAssignedReview
   };
