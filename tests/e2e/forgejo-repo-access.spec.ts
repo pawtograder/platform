@@ -1,6 +1,7 @@
 /**
- * A student whose Forgejo repo isn't ready yet sees "waiting for access" as plain
- * text, not a link that 404s. Once the row turns ready, the repo is a link to the Forgejo instance.
+ * A student whose Forgejo repo isn't ready yet sees "waiting for access" as plain text, not a link
+ * that 404s. Once the row turns ready, a reload shows the link to the Forgejo instance. The test
+ * reloads because repository changes are only broadcast to staff, not to the student.
  */
 import { expect, test } from "../global-setup";
 import { addDays } from "date-fns";
