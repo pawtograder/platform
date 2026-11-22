@@ -11,7 +11,7 @@
  *
  * Default roles only for the review and groups checks: the instructor role holds those capabilities,
  * the grader role holds neither, until the last review test gives the default grader role
- * manage_review_assignments (instructors can edit it since 20261114120000_custom_roles_copy_grader_role.sql).
+ * manage_review_assignments (instructors can edit it since 20261119120000_custom_roles_copy_grader_role.sql).
  * The flashcard check uses its own custom role so it does not change the default grader role.
  */
 import { expect, test, type Page } from "@playwright/test";
