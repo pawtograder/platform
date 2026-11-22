@@ -20,7 +20,8 @@
 --      self_review_rubric_id or meta_grading_rubric_id). The editor used to write that link itself,
 --      which needs manage_assignments, so a Head TA's new rubric would have been saved but not
 --      attached. If someone else created a rubric for the same round first, a create is refused.
---   4. A rubric part or criterion can't be moved to another rubric.
+--   4. A rubric part, criterion or check can't be moved to another rubric, and a rubric can't be
+--      moved to another class, assignment or review round.
 --
 -- Default graders lose the direct writes on rubrics, rubric_parts and rubric_checks. No screen or
 -- edge function used them (the editor saves through update_rubric_full, which was already
@@ -163,11 +164,11 @@ CREATE POLICY "Rubric managers can delete rubric criteria" ON public.rubric_crit
   FOR DELETE TO authenticated
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')));
 
--- A part or criterion stays on the rubric it was made on. A policy can't see the old row, so the
--- policies above would let a rubric manager move a part to another rubric in the class while its
+-- A part, criterion or check stays on the rubric it was made on. A policy can't see the old row,
+-- so the policies would let a rubric manager move a part to another rubric in the class while its
 -- criteria stay behind, and those criteria would drop out of the rubric's totals. Nothing in the
 -- app moves them: update_rubric_full and the CLI insert new rows instead. Moving a criterion to
--- another part of the same rubric still works.
+-- another part, or a check to another criterion, of the same rubric still works.
 CREATE OR REPLACE FUNCTION public.rubric_child_keep_rubric()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -192,6 +193,36 @@ DROP TRIGGER IF EXISTS rubric_criteria_keep_rubric ON public.rubric_criteria;
 CREATE TRIGGER rubric_criteria_keep_rubric
   BEFORE UPDATE OF rubric_id ON public.rubric_criteria
   FOR EACH ROW EXECUTE FUNCTION public.rubric_child_keep_rubric();
+
+DROP TRIGGER IF EXISTS rubric_checks_keep_rubric ON public.rubric_checks;
+CREATE TRIGGER rubric_checks_keep_rubric
+  BEFORE UPDATE OF rubric_id ON public.rubric_checks
+  FOR EACH ROW EXECUTE FUNCTION public.rubric_child_keep_rubric();
+
+-- A rubric stays in its class, on its assignment and in its review round. Its parts, criteria,
+-- checks and references copy the class and assignment, and the assignment's rubric links depend on
+-- the round, so moving a rubric would leave them pointing the wrong way. Nothing in the app does:
+-- update_rubric_full never changes these, and the CLI copies a rubric into one of the same round.
+CREATE OR REPLACE FUNCTION public.rubrics_keep_place()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
+BEGIN
+  IF NEW.class_id IS DISTINCT FROM OLD.class_id
+     OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+     OR NEW.review_round IS DISTINCT FROM OLD.review_round THEN
+    RAISE EXCEPTION 'rubric % can''t move to another class, assignment or review round', OLD.id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS rubrics_keep_place ON public.rubrics;
+CREATE TRIGGER rubrics_keep_place
+  BEFORE UPDATE OF class_id, assignment_id, review_round ON public.rubrics
+  FOR EACH ROW EXECUTE FUNCTION public.rubrics_keep_place();
 
 CREATE POLICY "Rubric managers can add rubric checks" ON public.rubric_checks
   FOR INSERT TO authenticated

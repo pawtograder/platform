@@ -7,8 +7,9 @@
  *
  * update_rubric_full also fills the assignment's empty link to the rubric, so a Head TA with
  * manage_rubrics but not manage_assignments can create one, and refuses a create for a round that
- * already has a rubric. A part or criterion can't move to another rubric, and a part, criterion,
- * check or reference must use its rubric's assignment.
+ * already has a rubric. A part, criterion or check can't move to another rubric, a rubric can't
+ * move to another class, assignment or review round, and a part, criterion, check or reference must
+ * use its rubric's assignment.
  *
  * PostgREST reports a blocked insert as an error, but an update or delete that RLS hides changes 0
  * rows without one, so each blocked write is checked and then confirmed through the service client.
@@ -388,8 +389,9 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
     expect(linked!.self_review_rubric_id).toBe(own.self_review_rubric_id);
   });
 
-  test("a part or criterion can't be moved to another rubric", async () => {
-    // Another rubric in the same class, with a part, so the policies alone would allow the moves.
+  test("a part, criterion or check can't be moved to another rubric", async () => {
+    // Another rubric in the same class, with a part and a criterion, so the policies alone would
+    // allow the moves.
     const other = await newAssignment("move");
     const otherRubricId = other.grading_rubric_id!;
     const { data: otherPart, error: otherPartError } = await supabase
@@ -404,6 +406,20 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .select("id")
       .single();
     expect(otherPartError).toBeNull();
+    const { data: otherCriterion, error: otherCriterionError } = await supabase
+      .from("rubric_criteria")
+      .insert({
+        class_id: classR.id,
+        assignment_id: other.id,
+        rubric_id: otherRubricId,
+        rubric_part_id: otherPart!.id,
+        name: "Other criterion",
+        total_points: 1,
+        is_additive: true
+      })
+      .select("id")
+      .single();
+    expect(otherCriterionError).toBeNull();
 
     const client = await createAuthenticatedClient(headTa);
     const movePart = await client
@@ -418,6 +434,12 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .eq("id", criteriaId)
       .select("id");
     expect((moveCriterion.error as { code?: string } | null)?.code, "moving a criterion").toBe("23514");
+    const moveCheck = await client
+      .from("rubric_checks")
+      .update({ rubric_id: otherRubricId, rubric_criteria_id: otherCriterion!.id, assignment_id: other.id })
+      .eq("id", checkId)
+      .select("id");
+    expect((moveCheck.error as { code?: string } | null)?.code, "moving a check").toBe("23514");
 
     const { data: part } = await supabase.from("rubric_parts").select("rubric_id").eq("id", partId).single();
     expect(part!.rubric_id).toBe(rowIds.rubrics);
@@ -427,6 +449,12 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .eq("id", criteriaId)
       .single();
     expect(criterion).toEqual({ rubric_id: rowIds.rubrics, rubric_part_id: partId });
+    const { data: check } = await supabase
+      .from("rubric_checks")
+      .select("rubric_id, rubric_criteria_id")
+      .eq("id", checkId)
+      .single();
+    expect(check).toEqual({ rubric_id: rowIds.rubrics, rubric_criteria_id: criteriaId });
 
     // Moving a criterion to another part of the same rubric still works.
     const base = { class_id: classR.id, assignment_id: assignment.id, rubric_id: rowIds.rubrics };
@@ -449,6 +477,69 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .select("id");
     expect(moveError).toBeNull();
     expect(moved ?? []).toHaveLength(1);
+
+    // And a check to another criterion of the same rubric.
+    const { data: movableCheck, error: movableCheckError } = await supabase
+      .from("rubric_checks")
+      .insert({
+        ...base,
+        rubric_criteria_id: criteriaId,
+        name: "Movable check",
+        ordinal: 80,
+        is_annotation: false,
+        points: 1
+      })
+      .select("id")
+      .single();
+    expect(movableCheckError).toBeNull();
+    const { data: movedCheck, error: moveCheckError } = await client
+      .from("rubric_checks")
+      .update({ rubric_criteria_id: movable!.id })
+      .eq("id", movableCheck!.id)
+      .select("id");
+    expect(moveCheckError).toBeNull();
+    expect(movedCheck ?? []).toHaveLength(1);
+  });
+
+  test("a rubric can't move to another class, assignment or review round", async () => {
+    const own = await newAssignment("place");
+    const other = await newAssignment("place-other");
+    const rubricId = own.grading_rubric_id!;
+    const client = await createAuthenticatedClient(headTa);
+
+    const toAssignment = await client
+      .from("rubrics")
+      .update({ assignment_id: other.id })
+      .eq("id", rubricId)
+      .select("id");
+    expect((toAssignment.error as { code?: string } | null)?.code, "another assignment").toBe("23514");
+    const toRound = await client
+      .from("rubrics")
+      .update({ review_round: "self-review" })
+      .eq("id", rubricId)
+      .select("id");
+    expect((toRound.error as { code?: string } | null)?.code, "another review round").toBe("23514");
+    // The Head TA isn't in another class, so the service client tries this one: the trigger
+    // refuses it for everyone.
+    const otherClass = await createClass({ name: "E2E Rubrics By Capability place" });
+    const toClass = await supabase.from("rubrics").update({ class_id: otherClass.id }).eq("id", rubricId).select("id");
+    expect((toClass.error as { code?: string } | null)?.code, "another class").toBe("23514");
+
+    const { data: rubric } = await supabase
+      .from("rubrics")
+      .select("class_id, assignment_id, review_round")
+      .eq("id", rubricId)
+      .single();
+    expect(rubric).toEqual({ class_id: classR.id, assignment_id: own.id, review_round: "grading-review" });
+
+    // Other fields still save.
+    const { data: renamed, error: renameError } = await client
+      .from("rubrics")
+      .update({ name: "Renamed rubric" })
+      .eq("id", rubricId)
+      .select("id");
+    expect(renameError).toBeNull();
+    expect(renamed ?? []).toHaveLength(1);
   });
 
   test("a rubric check reference must use its rubric's assignment", async () => {
