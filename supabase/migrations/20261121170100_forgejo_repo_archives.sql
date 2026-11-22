@@ -6,6 +6,9 @@
 -- Forgejo name. The students kept write access, and the name stayed taken, so a new group deriving the
 -- same name would have adopted the old repo with its old collaborators.
 --
+-- Deleting a Forgejo row was refused outright until now (repositories_validate_git_provider), which
+-- this migration lifts at the end.
+--
 -- Now two things queue a Forgejo repo in forgejo_repo_archives, which forgejo-reconciler drains at the
 -- start of each pass:
 --   1. deleting a Forgejo repositories row, by any path (group dissolve, individual repo cleanup,
@@ -85,6 +88,15 @@ CREATE TRIGGER forgejo_repo_archive_on_delete
   AFTER DELETE ON public.repositories
   REFERENCING OLD TABLE AS old_rows
   FOR EACH STATEMENT EXECUTE FUNCTION public.queue_forgejo_repo_archives_on_delete();
+
+-- 20261020150000_assignment_git_provider.sql refused to delete a Forgejo repositories row "until
+-- provider-aware cleanup exists", so every path above (dissolve, cleanup, move) failed for a Forgejo
+-- row and this trigger never saw one. The trigger above is that cleanup, so the guard now checks
+-- inserts and updates only; repositories_validate_git_provider's DELETE branch is no longer reached.
+DROP TRIGGER IF EXISTS repositories_validate_git_provider ON public.repositories;
+CREATE TRIGGER repositories_validate_git_provider
+  BEFORE INSERT OR UPDATE OF git_provider, assignment_id ON public.repositories
+  FOR EACH ROW EXECUTE FUNCTION public.repositories_validate_git_provider();
 
 -- From 20261118140100_repository_names_per_provider.sql. A name held only by a Forgejo row now queues a
 -- Forgejo archive instead of returning without one; the GitHub path is unchanged. Still returns null for it:
