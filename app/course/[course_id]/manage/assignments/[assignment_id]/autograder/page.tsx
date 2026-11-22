@@ -1,11 +1,13 @@
 "use client";
 
 import AutograderConfiguration from "@/components/ui/autograder-configuration";
+import { Alert } from "@/components/ui/alert";
 import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { FORGEJO_GRADER_SETUP_REASON } from "@/lib/gitProviderOptions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -93,6 +95,11 @@ export default function AutograderPage() {
       const supabase = createClient();
       const priorHasAutograder = savedHasAutograder.current;
       const nextHasAutograder = values.assignments.has_autograder;
+      // The grade.yml sync below rejects Forgejo assignments, whose handout is on Forgejo. Returning
+      // before it needs the flag unchanged, which the disabled radio keeps.
+      if (values.assignments?.git_provider === "forgejo" && priorHasAutograder !== nextHasAutograder) {
+        throw new Error(FORGEJO_GRADER_SETUP_REASON);
+      }
 
       // Only validate the grader repo when the autograder will REMAIN enabled.
       // This reads pawtograder.yml from that repo, so doing it unconditionally
@@ -133,7 +140,8 @@ export default function AutograderPage() {
         max_submissions_period_secs: query?.data?.data?.max_submissions_period_secs ?? null
       };
       const nextAutograderRow = {
-        grader_repo: values.grader_repo,
+        // An emptied Forgejo grader field clears the repo rather than storing "".
+        grader_repo: values.grader_repo || null,
         max_submissions_count: values.max_submissions_count || null,
         max_submissions_period_secs: values.max_submissions_period_secs || null
       };
@@ -377,6 +385,11 @@ export default function AutograderPage() {
   return (
     <div>
       <Heading size="md">Autograder Configuration</Heading>
+      {currentAssignment?.git_provider === "forgejo" && (
+        <Alert status="info" title="Forgejo assignment" my={2}>
+          {FORGEJO_GRADER_SETUP_REASON}
+        </Alert>
+      )}
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -414,6 +427,7 @@ export default function AutograderPage() {
                 render={({ field }) => (
                   <RadioGroup.Root
                     name={field.name}
+                    disabled={currentAssignment?.git_provider === "forgejo"}
                     value={field.value ? "true" : "false"}
                     onValueChange={(details) => field.onChange(details.value === "true")}
                   >
@@ -449,9 +463,19 @@ export default function AutograderPage() {
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field label="Solution Repository">
-              <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
-            </Field>
+            {currentAssignment?.git_provider === "forgejo" ? (
+              // Nothing creates a Forgejo assignment's grader repo, so the instructor names an existing one.
+              <Field
+                label="Grader repository"
+                helperText="The GitHub repository (owner/name) with the grader and its pawtograder.yml. A Forgejo assignment's grader stays on GitHub."
+              >
+                <Input placeholder="owner/name" {...register("grader_repo")} />
+              </Field>
+            ) : (
+              <Field label="Solution Repository">
+                <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
+              </Field>
+            )}
           </Fieldset.Content>
         </Fieldset.Root>
         <Button type="submit" loading={loading} colorPalette="green" variant="solid">

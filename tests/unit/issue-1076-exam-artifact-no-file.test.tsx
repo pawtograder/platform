@@ -64,6 +64,18 @@ jest.mock("@/hooks/useSubmission", () => ({
   useSubmissionController: () => ({ submission: null })
 }));
 
+// An exam_v1 artifact also asks which questions have a rubric check, and for the setter that shows
+// one in the grading sidebar (#1268). Neither matters to the download gate, so the rubric is empty.
+jest.mock("@/hooks/useAssignment", () => ({
+  ...jest.requireActual("@/hooks/useAssignment"),
+  useAssignmentController: () => ({ assignment: { grading_rubric_id: null } }),
+  useRubricChecksByRubric: () => []
+}));
+jest.mock("@/hooks/useSubmissionReview", () => ({
+  ...jest.requireActual("@/hooks/useSubmissionReview"),
+  useScrollToExamQuestion: () => ({ scrollToExamQuestionId: undefined, setScrollToExamQuestionId: jest.fn() })
+}));
+
 function artifact(format: string): SubmissionArtifact {
   return {
     id: 7,

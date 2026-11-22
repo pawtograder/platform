@@ -498,6 +498,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
               enableGiphyPicker={true}
               sendButtonText="Edit"
               closeButtonText="Cancel"
+              ariaLabel="Edit post"
               onClose={onClose}
               value={rootThread.body}
             />

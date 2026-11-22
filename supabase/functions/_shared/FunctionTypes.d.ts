@@ -227,6 +227,8 @@ export type ListFilesRequest = {
   courseId: number;
   orgName: string;
   repoName: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type FileListing = {
   name: string;
@@ -246,6 +248,8 @@ export type GetFileRequest = {
    * spinning for 15-30s. Callers racing fresh repo creation should leave it unset.
    */
   skipRetryOnNotFound?: boolean;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileRequest = {
   courseId: number;
@@ -256,6 +260,8 @@ export type WriteFileRequest = {
   message: string;
   /** Blob sha of the file being replaced. Omit to create a new file. */
   sha?: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileResponse = {
   commit_sha?: string;
@@ -365,6 +371,56 @@ export type RepositoryListCommitsRequest = {
   course_id: number;
   repo_name: string;
   page: number;
+};
+/** workspace-open and workspace-status (#1222). Without repository_id, the caller's own or group repository. */
+export type WorkspaceOpenRequest = {
+  assignment_id: number;
+  repository_id?: number;
+};
+/**
+ * Where the student's Coder workspace is. `step` names the startup step, as in #1170's card:
+ * `build` is the workspace build until the agent connects, `clone` the template's "Git Clone"
+ * script, and `editor` its "Startup Script" (git identity and code-server) plus code-server's
+ * health check.
+ */
+export type WorkspaceStep = "build" | "clone" | "editor";
+export type WorkspaceOpenResponse = {
+  /**
+   * `restarting`: workspace-open is stopping the workspace to start it again, or found it already
+   * being stopped; a status read starts it once the stop finishes, and it reads `starting` from then
+   * on. Keep polling workspace-status while it reads `restarting`. `account_conflict`: the student's
+   * Coder account can't be signed in to and staff have to remove it; `message` says so.
+   * `credentials_unavailable`: the workspace couldn't be given a token for the repository or the commit email, so it wasn't started; `message` says whether to wait or retry.
+   * `needs_org_invite`: the student hasn't accepted the course's GitHub organization invitation,
+   * so GitHub wouldn't let them read their own repository; nothing was started.
+   */
+  status:
+    | "not_started"
+    | "starting"
+    | "restarting"
+    | "ready"
+    | "failed"
+    | "needs_linking"
+    | "account_conflict"
+    | "credentials_unavailable"
+    | "needs_org_invite";
+  step?: WorkspaceStep;
+  message?: string;
+  /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */
+  redirect_url?: string;
+  /**
+   * needs_linking: Coder's OIDC sign-in, which goes on to link the student's Forgejo account, so a
+   * student with no Coder session ends up linked too.
+   */
+  authenticate_url?: string;
+  coder_user_id?: string;
+  workspace_id?: string;
+  workspace_name?: string;
+  build?: { status: string; transition: string; error: string | null };
+  agent?: { lifecycle_state: string; status: string } | null;
+  failure?: { step: WorkspaceStep; script: string | null; exit_code: number | null; log_lines: string[] };
+  /** When the cleanup job (#1223) deletes the workspace. */
+  deletion_date?: string | null;
 };
 export type AutograderTriggerGradingWorkflowRequest = {
   repository: string;

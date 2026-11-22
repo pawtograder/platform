@@ -3,6 +3,9 @@
 {{- fail (printf "forgejo/coder: the release must be named pawtograder (got %q); their subchart values reference pawtograder-* Secrets and ConfigMaps." .Release.Name) }}
 {{- end }}
 {{- end }}
+{{- if hasKey (dig "workspaces" dict .Values.coderBootstrap) "externalAuthId" }}
+{{- fail "coderBootstrap.workspaces.externalAuthId was removed: workspaces get their Forgejo token from a Coder secret that workspace-open writes, not from external auth. Remove the setting." }}
+{{- end }}
 
 {{- $es := .Values.forgejoCoderSecrets.externalSecret }}
 {{- if $es.enabled }}
@@ -43,24 +46,17 @@
 {{- if and .Values.coder.enabled .Values.coder.oidc.enabled (not .Values.auth.oauthServer.enabled) }}
 {{- fail "coder.oidc.enabled signs in through Pawtograder's OAuth server; set auth.oauthServer.enabled=true" }}
 {{- end }}
-{{- with .Values.coder.externalAuth.forgejo }}
+{{- if hasKey .Values.coder.externalAuth "forgejo" }}
+{{- fail "coder.externalAuth.forgejo was removed: Coder's one external auth slot now serves GitHub, and Forgejo workspaces get a Coder secret instead. Use coder.externalAuth.github." }}
+{{- end }}
+{{- with .Values.coder.externalAuth.github }}
 {{- if and .enabled $.Values.coder.enabled }}
-{{- if not $.Values.forgejo.enabled }}
-{{- fail "coder.externalAuth.forgejo.enabled needs forgejo.enabled=true: the provider points at this release's Forgejo" }}
-{{- end }}
-{{- if eq (dig "gitea" "config" "oauth2" "ENABLED" true $.Values.forgejo | toString) "false" }}
-{{- fail "coder.externalAuth.forgejo.enabled needs Forgejo's OAuth2 provider; remove forgejo.gitea.config.oauth2.ENABLED=false" }}
-{{- end }}
 {{- if not (regexMatch "^[a-z0-9]+(-[a-z0-9]+)*$" (toString .id)) }}
-{{- fail (printf "coder.externalAuth.forgejo.id must be lowercase letters, digits and single dashes (got %q); it's a path segment of Coder's callback URL" (toString .id)) }}
-{{- end }}
-{{- $tplID := dig "workspaces" "externalAuthId" "" $.Values.coderBootstrap | toString }}
-{{- if and $tplID (ne $tplID (toString .id)) }}
-{{- fail (printf "coderBootstrap.workspaces.externalAuthId=%s but coder.externalAuth.forgejo.id=%s; workspaces would ask Coder for a provider that doesn't exist" $tplID (toString .id)) }}
+{{- fail (printf "coder.externalAuth.github.id must be lowercase letters, digits and single dashes (got %q); it's a path segment of Coder's callback URL" (toString .id)) }}
 {{- end }}
 {{- range $.Values.coder.coder.env }}
 {{- if hasPrefix "CODER_EXTERNAL_AUTH_0_" (toString .name) }}
-{{- fail (printf "coder.coder.env sets %s, but coder.externalAuth.forgejo is provider 0; move other providers to index 1 and up" .name) }}
+{{- fail (printf "coder.coder.env sets %s, but coder.externalAuth.github is provider 0; move other providers to index 1 and up" .name) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -171,7 +167,7 @@
 {{- if .Values.coder.enabled }}{{ $_ := set $tags "coder.coder.image.tag" (toString .Values.coder.coder.image.tag) }}{{ end }}
 {{- if .Values.forgejoRunner.enabled }}{{ $_ := set $tags "forgejoRunner.image.tag" (toString .Values.forgejoRunner.image.tag) }}{{ end }}
 {{- if and .Values.coder.enabled .Values.coderBootstrap.enabled }}
-{{- $ws := .Values.coderBootstrap.workspaces.image }}
+{{- $ws := include "pawtograder.coderWorkspaceImage" . }}
 {{- $_ := set $tags "coderBootstrap.workspaces.image's tag" (ternary (last (splitList ":" $ws)) "" (contains ":" (last (splitList "/" $ws)))) }}
 {{- end }}
 {{- range $key, $tag := $tags }}
@@ -190,7 +186,7 @@
 {{- if (index $.Values "forgejo-db").enabled }}{{ $_ := set $refs "forgejo-db.image.registry" (printf "%s/" (index $.Values "forgejo-db").image.registry) }}{{ end }}
 {{- if (index $.Values "coder-db").enabled }}{{ $_ := set $refs "coder-db.image.registry" (printf "%s/" (index $.Values "coder-db").image.registry) }}{{ end }}
 {{- if $.Values.coder.enabled }}{{ $_ := set $refs "coder.coder.image.repo" $.Values.coder.coder.image.repo }}{{ end }}
-{{- if and $.Values.coder.enabled $.Values.coderBootstrap.enabled }}{{ $_ := set $refs "coderBootstrap.workspaces.image" $.Values.coderBootstrap.workspaces.image }}{{ end }}
+{{- if and $.Values.coder.enabled $.Values.coderBootstrap.enabled }}{{ $_ := set $refs "coderBootstrap.workspaces.image" (include "pawtograder.coderWorkspaceImage" $) }}{{ end }}
 {{- if $.Values.forgejoRunner.enabled }}{{ $_ := set $refs "forgejoRunner.image.repository" $.Values.forgejoRunner.image.repository }}{{ end }}
 {{- range $key, $ref := $refs }}
 {{- if not (hasPrefix (printf "%s/" $reg) $ref) }}
@@ -247,7 +243,7 @@
 {{- range $init.envFrom }}{{ $initRefs = append $initRefs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
 {{- $initWant := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
 {{- if .Values.coder.oidc.enabled }}{{ $initWant = append $initWant (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
-{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.github.enabled }}{{ $initWant = append $initWant (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
 {{- range $w := $initWant }}
 {{- if not (has $w $initRefs) }}
 {{- fail (printf "coder.coder.initContainers first-owner envFrom is missing %s; its coderd reads the same provider settings as coder.coder.envFrom and won't start without them" $w) }}
@@ -290,6 +286,12 @@
 {{- if not (regexMatch "^([0-9]+\\.[0-9]+\\.[0-9]+)?$" $csv) }}
 {{- fail (printf "coderBootstrap.workspaces.codeServerVersion=%q must be a code-server release such as 4.143.1 (no leading v), or empty to use the image's code-server" $csv) }}
 {{- end }}
+{{- $arch := .Values.coderBootstrap.workspaces.arch | default "amd64" | toString }}
+{{- /* The resolved image without its digest and tag, so any tag of ours counts, the default and staging-latest included. */}}
+{{- $wsRepo := regexReplaceAll ":[^/:]*$" (regexReplaceAll "@.*$" (include "pawtograder.coderWorkspaceImage" .) "") "" }}
+{{- if and (ne $arch "amd64") (eq $wsRepo "ghcr.io/pawtograder/coder-workspace") }}
+{{- fail (printf "coderBootstrap.workspaces.arch=%s needs coderBootstrap.workspaces.image set to a build for %s: release-images.yml builds ghcr.io/pawtograder/coder-workspace for linux/amd64 only" $arch $arch) }}
+{{- end }}
 {{- end }}
 
 {{- if .Values.forgejo.enabled }}
@@ -321,6 +323,20 @@
 {{- range $k := list "NAME" "USER" }}
 {{- if ne (toString (index $.Values.forgejo.gitea.config.database $k)) "forgejo" }}
 {{- fail (printf "forgejo.gitea.config.database.%s must stay forgejo: the app-databases Job provisions that role and database" $k) }}
+{{- end }}
+{{- end }}
+{{- $sourceID := include "pawtograder.forgejo.authSourceId" . }}
+{{- if $sourceID }}
+{{- if not (regexMatch "^[1-9][0-9]*$" $sourceID) }}
+{{- fail (printf "forgejo.authSourceId=%q must be a positive integer: the ID of the pawtograder row in `forgejo admin auth list`, run in the Forgejo pod" $sourceID) }}
+{{- end }}
+{{- else if .Values.coder.enabled }}
+{{- fail "forgejo.authSourceId is required with forgejo.enabled and coder.enabled: the edge functions create students' Forgejo accounts on the pawtograder login source, and Forgejo's API can't list sources. Set it to the ID of the pawtograder row in `kubectl exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list`" }}
+{{- end }}
+{{- $chartEnv := list "FORGEJO_URL" "FORGEJO_ADMIN_USERNAME" "FORGEJO_ADMIN_PASSWORD" "FORGEJO_AUTH_SOURCE_ID" }}
+{{- range .Values.edgeFunctions.extraEnv }}
+{{- if has .name $chartEnv }}
+{{- fail (printf "edgeFunctions.extraEnv sets %s, which the chart sets itself with forgejo.enabled; the later entry would win and hide the chart's, so remove it (FORGEJO_AUTH_SOURCE_ID comes from forgejo.authSourceId)" .name) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -387,7 +403,7 @@
 {{- range .Values.coder.coder.envFrom }}{{ $refs = append $refs (.configMapRef | default .secretRef | default dict).name }}{{ end }}
 {{- $wantRefs := list (printf "%s-coder-env" .Release.Name) (printf "%s-coder-db" .Release.Name) }}
 {{- if .Values.coder.oidc.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-oidc" .Release.Name) }}{{ end }}
-{{- if .Values.coder.externalAuth.forgejo.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
+{{- if .Values.coder.externalAuth.github.enabled }}{{ $wantRefs = append $wantRefs (printf "%s-coder-external-auth" .Release.Name) }}{{ end }}
 {{- range $want := $wantRefs }}
 {{- if not (has $want $refs) }}
 {{- fail (printf "coder.coder.envFrom is missing %s; an overlay that sets the list must keep the chart's entries" $want) }}

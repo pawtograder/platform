@@ -63,6 +63,7 @@ const SEEDED_CAPABILITIES = [
   "manage_office_hours",
   "manage_review_assignments",
   "manage_roles",
+  "manage_student_repositories",
   "manage_surveys",
   "publish_groups",
   "run_polls"
@@ -402,7 +403,7 @@ test.describe("custom class roles", () => {
         `adding a capability to the default ${app_role} role`
       );
     }
-    expectBlocked(
+    expectRlsBlocked(
       await instructor
         .from("role_capabilities")
         .insert({ role_id: graderRole.id, capability: "manage_roles" })
@@ -481,64 +482,92 @@ test.describe("custom class roles", () => {
 
   test("graders, students and other classes' instructors can't write class roles or their capabilities", async () => {
     const customId = await createCustomRole("Lab TA", ["publish_groups"]);
+    // The default grader role can be edited now too, so it is checked the same way. It gets one
+    // capability here so that a refused delete has a row to refuse.
+    const graderRoleId = defaultC("grader").id;
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: graderRoleId, capability: "publish_groups" })).error
+    ).toBeNull();
 
-    for (const [user, who] of [
-      [graderC, "a grader"],
-      [studentC, "a student"],
-      [instructorD, "another class's instructor"]
-    ] as const) {
-      const client = await createAuthenticatedClient(user);
-      expectBlocked(
-        await client
-          .from("class_roles")
-          .insert({ class_id: classC.id, name: `by ${who}` })
-          .select("id"),
-        `${who} creating a role`
-      );
-      expectBlocked(
-        await client
-          .from("class_roles")
-          .update({ name: `by ${who}` })
-          .eq("id", customId)
-          .select("id"),
-        `${who} renaming a role`
-      );
-      expectBlocked(
-        await client.from("class_roles").delete().eq("id", customId).select("id"),
-        `${who} deleting a role`
-      );
-      expectBlocked(
-        await client
-          .from("role_capabilities")
-          .insert({ role_id: customId, capability: "manage_assignments" })
-          .select("role_id"),
-        `${who} adding a capability`
-      );
-      expectBlocked(
-        await client
-          .from("role_capabilities")
-          .delete()
-          .eq("role_id", customId)
-          .eq("capability", "publish_groups")
-          .select("role_id"),
-        `${who} removing a capability`
-      );
+    try {
+      for (const [user, who] of [
+        [graderC, "a grader"],
+        [studentC, "a student"],
+        [instructorD, "another class's instructor"]
+      ] as const) {
+        const client = await createAuthenticatedClient(user);
+        expectBlocked(
+          await client
+            .from("class_roles")
+            .insert({ class_id: classC.id, name: `by ${who}` })
+            .select("id"),
+          `${who} creating a role`
+        );
+        expectBlocked(
+          await client
+            .from("class_roles")
+            .update({ name: `by ${who}` })
+            .eq("id", customId)
+            .select("id"),
+          `${who} renaming a role`
+        );
+        expectBlocked(
+          await client.from("class_roles").delete().eq("id", customId).select("id"),
+          `${who} deleting a role`
+        );
+        expectBlocked(
+          await client
+            .from("role_capabilities")
+            .insert({ role_id: customId, capability: "manage_assignments" })
+            .select("role_id"),
+          `${who} adding a capability`
+        );
+        expectBlocked(
+          await client
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", customId)
+            .eq("capability", "publish_groups")
+            .select("role_id"),
+          `${who} removing a capability`
+        );
+        expectRlsBlocked(
+          await client
+            .from("role_capabilities")
+            .insert({ role_id: graderRoleId, capability: "manage_assignments" })
+            .select("role_id"),
+          `${who} adding a capability to the default grader role`
+        );
+        expectBlocked(
+          await client
+            .from("role_capabilities")
+            .delete()
+            .eq("role_id", graderRoleId)
+            .eq("capability", "publish_groups")
+            .select("role_id"),
+          `${who} removing a capability from the default grader role`
+        );
+      }
+
+      expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
+      expect(await roleCapabilities(customId)).toEqual([...GRADER_SEEDED_CAPABILITIES, "publish_groups"].sort());
+      expect(await roleCapabilities(graderRoleId)).toEqual([...GRADER_SEEDED_CAPABILITIES, "publish_groups"].sort());
+      const { data: extra, error: extraError } = await supabase
+        .from("class_roles")
+        .select("id")
+        .eq("class_id", classC.id)
+        .like("name", "by %");
+      expect(extraError).toBeNull();
+      expect(extra).toHaveLength(0);
+    } finally {
+      // Restore the default grader role for the other tests in this class.
+      const { error } = await supabase
+        .from("role_capabilities")
+        .delete()
+        .eq("role_id", graderRoleId)
+        .eq("capability", "publish_groups");
+      expect(error).toBeNull();
     }
-
-    expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
-    expect(await roleCapabilities(customId)).toEqual([
-      "help_students",
-      "manage_flashcards",
-      "publish_groups",
-      "run_polls"
-    ]);
-    const { data: extra, error: extraError } = await supabase
-      .from("class_roles")
-      .select("id")
-      .eq("class_id", classC.id)
-      .like("name", "by %");
-    expect(extraError).toBeNull();
-    expect(extra).toHaveLength(0);
   });
 
   test("nobody can write capabilities", async () => {
@@ -893,7 +922,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     }
   });
 
-  test("a role manager can't grant a capability they don't hold", async () => {
+  test("a role manager can't grant or take away a capability they don't hold", async () => {
     // A class whose instructor role lacks manage_assignments, as after a migration took it away.
     const classX = await createClass({ name: "E2E Grader Copy X" });
     const instructorX = await createUserInClass({ role: "instructor", class_id: classX.id });
@@ -952,6 +981,29 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       "publish_groups",
       "run_polls"
     ]);
+
+    // Nor take it away: removing manage_assignments from the default grader role is refused, since
+    // the instructor couldn't give it back. Removing publish_groups, which they hold, still works.
+    expectBlocked(
+      await instructor
+        .from("role_capabilities")
+        .delete()
+        .eq("role_id", roleX("grader"))
+        .eq("capability", "manage_assignments")
+        .select("role_id"),
+      "removing manage_assignments from the default grader role without holding it"
+    );
+    const { data: removed, error: removeError } = await instructor
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", roleX("grader"))
+      .eq("capability", "publish_groups")
+      .select("capability");
+    expect(removeError).toBeNull();
+    expect(removed, "removing a capability the instructor holds").toHaveLength(1);
+    expect(await roleCapabilities(roleX("grader"))).toEqual(
+      [...GRADER_SEEDED_CAPABILITIES, "manage_assignments"].sort()
+    );
   });
 });
 

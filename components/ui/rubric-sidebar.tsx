@@ -80,7 +80,8 @@ import {
   useActiveReviewAssignmentId,
   useActiveRubricId,
   useActiveSubmissionReviewId,
-  useIgnoreAssignedReview
+  useIgnoreAssignedReview,
+  useScrollToExamQuestion
 } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
@@ -124,6 +125,13 @@ const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 // Whether rubric part/criteria/check descriptions are shown in the sidebar. Defaults to true so
 // any non-sidebar use is unaffected; the sidebar provides `false` (collapsed) with a toggle.
 const RubricDescriptionsContext = createContext<boolean>(true);
+
+/** Scrolls the sidebar so `target` sits `offset` px below its top edge. */
+function scrollSidebarTo(container: HTMLElement, target: HTMLElement, offset = 30) {
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  container.scrollTo({ top: container.scrollTop + (targetRect.top - containerRect.top) - offset, behavior: "smooth" });
+}
 
 /** A rubric description that the sidebar can collapse behind its "Show descriptions" toggle. */
 function RubricDescription({ text }: { text: string | null | undefined }) {
@@ -1302,8 +1310,15 @@ function RubricCheck({
   currentRubricId?: number;
   targetStudentProfileId?: string | null;
 }) {
+  // A check generated from an exam question is tagged with it, which is how an answer crop finds the
+  // check that grades it (#1268). The sidebar sets data-focused while it shows the check.
   return (
-    <Box p={0} w="100%">
+    <Box
+      p={0}
+      w="100%"
+      data-exam-question-id={check.exam_question_id ?? undefined}
+      css={{ "&[data-focused]": { outline: "2px solid", outlineColor: "border.info", outlineOffset: "2px" } }}
+    >
       {check.is_annotation ? (
         <RubricCheckAnnotation
           check={check}
@@ -1341,6 +1356,7 @@ export function RubricCriteria({
   currentRubricId?: number;
   targetStudentProfileId?: string | null;
 }) {
+  const showDescriptions = useContext(RubricDescriptionsContext);
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
   const comments = useRubricCriteriaInstances({
     criteria: criteria,
@@ -1407,9 +1423,13 @@ export function RubricCriteria({
           </HStack>
         </Heading>
 
-        <Fieldset.HelperText>
-          <RubricDescription text={criteria.description} />
-        </Fieldset.HelperText>
+        {/* An empty helper text still takes the fieldset's gap on each side, which left a blank band in
+            every exam question's card, since those have no description (#1268). */}
+        {criteria.description && showDescriptions && (
+          <Fieldset.HelperText>
+            <RubricDescription text={criteria.description} />
+          </Fieldset.HelperText>
+        )}
         {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
           <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">
             {GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE}
@@ -1491,7 +1511,7 @@ function RubricMenu() {
   }
 
   return (
-    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2} data-visual-test="removed">
+    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2} data-visual-test="removed" data-rubric-menu>
       <NativeSelectRoot>
         <NativeSelectField
           aria-label="Select active rubric"
@@ -1563,6 +1583,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   const [descriptionsOverride, setDescriptionsOverride] = useState<boolean | null>(null);
   const showDescriptions = descriptionsOverride ?? isGraderOrInstructorForDescriptions;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
+  const { scrollToExamQuestionId, setScrollToExamQuestionId } = useScrollToExamQuestion();
   const rubrics = useMemo(() => {
     return unsortedRubrics.sort((a, b) => {
       if (a.id === activeReviewAssignment?.rubric_id) {
@@ -1658,11 +1679,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
       // Immediately set the active rubric to the selected one
       setActiveRubricId(scrollToRubricId);
 
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const offset = 30;
-      const scrollTop = container.scrollTop + (targetRect.top - containerRect.top) - offset;
-      container.scrollTo({ top: scrollTop, behavior: "smooth" });
+      scrollSidebarTo(container, target);
 
       // Clear the flag after scroll animation completes
       manualSelectTimeout = setTimeout(() => {
@@ -1679,6 +1696,47 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
       }
     };
   }, [scrollToRubricId, scrollRootRef, setScrollToRubricId, setActiveRubricId]);
+
+  // Scroll to an exam question's check when its answer crop asks for it (#1268), the same way as to a
+  // rubric above, then mark the check briefly so the grader's eye lands on it rather than near it.
+  // The mark and its timer live in a ref, not the effect's cleanup: clearing the request re-runs
+  // this effect, and a cleanup would cancel the timer before the mark could fade.
+  const focused = useRef<{ el: HTMLElement; timeout: NodeJS.Timeout } | null>(null);
+  const clearFocus = useCallback(() => {
+    if (!focused.current) return;
+    clearTimeout(focused.current.timeout);
+    delete focused.current.el.dataset.focused;
+    focused.current = null;
+  }, []);
+  useEffect(() => {
+    if (scrollToExamQuestionId === undefined) return;
+    setScrollToExamQuestionId(undefined);
+    const container = scrollRootRef.current;
+    const target = container?.querySelector<HTMLElement>(`[data-exam-question-id="${scrollToExamQuestionId}"]`);
+    if (!container || !target) return;
+
+    isManuallySelecting.current = true;
+    // The scroll handler is held off during the jump and won't run again once it lands, so make the
+    // check's rubric active here, as the rubric menu does.
+    const rubricId = rubrics.find((r) => rubricRefs.current[r.id]?.contains(target))?.id;
+    if (rubricId !== undefined) setActiveRubricId(rubricId);
+    // Centered in the space below the sticky rubric menu. A check taller than that space starts just
+    // under the menu instead, so its name and first options stay on screen.
+    const menuHeight = container.querySelector<HTMLElement>("[data-rubric-menu]")?.offsetHeight ?? 0;
+    const room = container.clientHeight - menuHeight;
+    const offset = target.offsetHeight > room ? menuHeight + 8 : menuHeight + (room - target.offsetHeight) / 2;
+    scrollSidebarTo(container, target, offset);
+    clearFocus();
+    target.dataset.focused = "true";
+    focused.current = {
+      el: target,
+      timeout: setTimeout(() => {
+        isManuallySelecting.current = false;
+        clearFocus();
+      }, 2000)
+    };
+  }, [scrollToExamQuestionId, scrollRootRef, setScrollToExamQuestionId, clearFocus, rubrics, setActiveRubricId]);
+  useEffect(() => clearFocus, [clearFocus]);
 
   // Callback to set refs
   const setRubricRef = useCallback(

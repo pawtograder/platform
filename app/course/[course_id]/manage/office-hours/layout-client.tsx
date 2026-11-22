@@ -7,6 +7,9 @@ import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, usePathname } from "next/navigation";
 import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useStaffEscalationAlert } from "@/hooks/useEscalationAlert";
+import { useCourseFeature } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 
 export default function HelpManageLayoutClient({ children }: Readonly<{ children: React.ReactNode }>) {
   const { course_id, request_id, queue_id } = useParams();
@@ -31,6 +34,11 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
     if (!requestId) return undefined;
     return allHelpRequests.find((r) => r.id === requestId);
   }, [allHelpRequests, requestId]);
+
+  // Mounted on the layout rather than a page, so a TA hears about an escalation wherever they are
+  // in office hours, not only while the queue list happens to be open.
+  const escalationAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_ESCALATION_ALERT, false);
+  useStaffEscalationAlert({ requests: allHelpRequests, enabled: escalationAlertsOn });
 
   const helpQueue = useHelpQueue(queue_id ? Number(queue_id) : currentRequestData?.help_queue || undefined);
   const currentRequest = useMemo(() => {
