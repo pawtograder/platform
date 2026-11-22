@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210700_announcements_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -141,3 +141,17 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Emailer: send_announcements
+
+`send_announcements` is the Emailer (Course Settings > Emailer). There is no separate announcements
+feature; "Announcements" is only a discussion topic icon. It is on the default instructor role only.
+
+- It covers reading, creating, changing and deleting `email_batches` and `emails` (reading too,
+  because the Emailer reads a new batch back to get its id), the Emailer menu item, and the
+  Emailer page, which sends people without it to the course home page.
+- A new or changed email must go to someone enrolled in its class (a `user_roles` row in the same
+  class), and its batch must belong to the same class. The `email_notifications()` trigger turns
+  each email into a notification for its recipient. This limits the recipient only: Cc and
+  Reply-to can be any address, as the Emailer allows.
+- Discussion topics are not part of it.

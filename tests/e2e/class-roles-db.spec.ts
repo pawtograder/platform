@@ -47,7 +47,8 @@ const SEEDED_CAPABILITIES = [
   "manage_review_assignments",
   "manage_roles",
   "manage_student_repositories",
-  "publish_groups"
+  "publish_groups",
+  "send_announcements"
 ];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
