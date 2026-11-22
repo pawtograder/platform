@@ -393,19 +393,6 @@
 {{- if not .Values.coder.coder.ingress.host }}
 {{- fail "coder.coder.ingress.host must name Coder's host" }}
 {{- end }}
-{{- $lifetime := .Values.coder.maxAdminTokenLifetime | toString }}
-{{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(h|m|s))+$" $lifetime) }}
-{{- fail (printf "coder.maxAdminTokenLifetime=%q must be a Go duration such as 8760h, 168h or 1h30m; it's CODER_MAX_ADMIN_TOKEN_LIFETIME, the cap on the CODER_API_TOKEN the edge functions use" $lifetime) }}
-{{- end }}
-{{- $lifetimeSecs := 0.0 }}
-{{- range $part := regexFindAll "[0-9]+(\\.[0-9]+)?[hms]" $lifetime -1 }}
-{{- $n := trimSuffix "h" (trimSuffix "m" (trimSuffix "s" $part)) | float64 }}
-{{- $lifetimeSecs = addf $lifetimeSecs (mulf $n (get (dict "h" 3600.0 "m" 60.0 "s" 1.0) (substr (sub (len $part) 1 | int) (len $part) $part))) }}
-{{- end }}
-{{- /* Below Coder's own 168h default the knob only shortens the cap, which is the failure it exists to prevent. */}}
-{{- if lt $lifetimeSecs 604800.0 }}
-{{- fail (printf "coder.maxAdminTokenLifetime=%q is under 168h, Coder's default cap; raise it so the CODER_API_TOKEN can be minted to last, don't lower it" $lifetime) }}
-{{- end }}
 {{- $accessURL := "" }}
 {{- range .Values.coder.coder.env }}{{ if eq .name "CODER_ACCESS_URL" }}{{ $accessURL = .value | default "" }}{{ end }}{{ end }}
 {{- $accessHost := $accessURL | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/" }}

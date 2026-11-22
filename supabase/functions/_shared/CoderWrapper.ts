@@ -122,7 +122,7 @@ async function coder<T>(
   if (res.status === 401) {
     const detail = (parsed as CoderResponse | null)?.message ?? text.slice(0, 200);
     throw new UserVisibleError(
-      `Coder rejected CODER_API_TOKEN (${res.status}: ${detail}). Re-mint it with "coder tokens create --lifetime" and update the coder-api secret bundle.`,
+      `Coder rejected Pawtograder's API token (CODER_API_TOKEN: ${detail}). An administrator needs to mint a new one with "coder tokens create --lifetime".`,
       502
     );
   }
