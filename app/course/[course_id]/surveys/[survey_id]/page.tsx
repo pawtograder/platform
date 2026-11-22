@@ -486,12 +486,13 @@ export default function SurveyTakingPage() {
       const autosaveQueue = autosaveQueueRef.current;
       autosaveQueue?.pause();
       let submitted = false;
+      // Offline, the browser doesn't send the request at all.
+      let sentOnline = false;
       // Assigned in the catch below. The cast keeps TypeScript from narrowing it to "failed" in finally.
       let outcome = "failed" as SubmitOutcome;
       try {
         await autosaveQueue?.whenIdle();
-        // Offline, the browser doesn't send the request at all.
-        const sentOnline = navigator.onLine;
+        sentOnline = navigator.onLine;
         try {
           await runWithTimeout((signal) => saveResponseToDb(surveyData, true, signal), SAVE_TIMEOUT_MS);
         } catch (error) {
@@ -550,7 +551,8 @@ export default function SurveyTakingPage() {
         if (!submitted) autosaveQueue?.schedule(surveyData);
         if (outcome === "unknown-until-online") {
           // The queue stays paused until checkSubmitOnReconnect has read the row.
-          submitCheckPendingRef.current = surveyData;
+          // A Complete pressed offline sent nothing, so an earlier sent one stays the one to check.
+          submitCheckPendingRef.current = sentOnline ? surveyData : (submitCheckPendingRef.current ?? surveyData);
           if (navigator.onLine) void checkSubmitOnReconnectRef.current();
         } else {
           autosaveQueue?.resume();

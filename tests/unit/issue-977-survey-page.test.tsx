@@ -41,17 +41,20 @@ jest.mock("@chakra-ui/react", () => {
       </div>
     )
   );
+  Element.displayName = "Element";
   return { Box: Element, Heading: Element, Text: Element, VStack: Element, Button: Element, HStack: Element };
 });
-jest.mock("@/components/ui/alert", () => ({
-  Alert: React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement> & { title: string }>(
+jest.mock("@/components/ui/alert", () => {
+  const Alert = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement> & { title: string }>(
     ({ children, title, role, tabIndex }, ref) => (
       <div ref={ref} role={role} tabIndex={tabIndex}>
         {title} {children}
       </div>
     )
-  )
-}));
+  );
+  Alert.displayName = "Alert";
+  return { Alert };
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
