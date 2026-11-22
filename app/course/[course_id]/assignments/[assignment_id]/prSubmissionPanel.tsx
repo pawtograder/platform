@@ -1,4 +1,5 @@
 "use client";
+import { getGitUrl } from "@/lib/gitUrls";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { confirmPrLink } from "@/lib/edgeFunctions";
@@ -141,7 +142,7 @@ export default function PrSubmissionPanel({
                 <Table.Row key={link.id}>
                   <Table.Cell>
                     <Link
-                      href={`https://github.com/${link.pr_repo}/pull/${link.pr_number}`}
+                      href={getGitUrl("github", link.pr_repo) + `/pull/${link.pr_number}`}
                       target="_blank"
                       rel="noopener noreferrer"
                     >

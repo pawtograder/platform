@@ -8,6 +8,7 @@ import { DueDateDisplay } from "@/components/ui/due-date-display";
 import Link from "@/components/ui/link";
 import { PageContainer } from "@/components/ui/page-container";
 import { ResponsiveTable } from "@/components/ui/responsive-table";
+import { getGitUrl } from "@/lib/gitUrls";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
 import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
@@ -391,7 +392,7 @@ export default function StudentAssignmentsList() {
                   </Table.Cell>
                 </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                  <Link target="_blank" href={getGitUrl("github", work.repo)}>
                     {work.repo}
                   </Link>
                 </Table.Cell>
@@ -463,7 +464,7 @@ export default function StudentAssignmentsList() {
                   </Table.Cell>
                 </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                  <Link target="_blank" href={getGitUrl("github", work.repo)}>
                     {work.repo}
                   </Link>
                 </Table.Cell>

@@ -13,8 +13,9 @@ import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
+import { getGitUrl } from "@/lib/gitUrls";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+// ... other imports
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
@@ -763,7 +764,7 @@ function UserSettingsMenu() {
                       {gitHubUsername && (
                         <Text fontSize="sm">
                           GitHub:{" "}
-                          <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
+                          <Link href={getGitUrl("github", gitHubUsername)} target="_blank">
                             {gitHubUsername}
                           </Link>
                         </Text>
