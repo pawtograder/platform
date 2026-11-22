@@ -497,7 +497,8 @@ export default function RegionEditor({
       });
       setQuestions(importedQuestions);
       // #1371: Gemini boxes what's printed, so widen each region to where the student writes.
-      // Choice answers are circled, not written above a line.
+      // Choice answers are circled, not written above a line. Name and student ID regions have no
+      // question, and grow like a line answer since they're written on a line too.
       const circled = new Set(
         importedQuestions
           .filter((q) => q.answer_type === "true_false" || q.answer_type === "multiple_choice")

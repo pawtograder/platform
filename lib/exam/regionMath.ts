@@ -50,9 +50,14 @@ const REGION_MARGIN = 0.01;
  * Every region gets REGION_MARGIN on each side. A region `writtenOnALine` says is written on, and
  * shorter than MIN_REGION_HEIGHT, also grows upward to it, since handwriting sits on the line. Others,
  * like a circled true/false, don't grow upward: there's often a heading just above them, and printed
- * words inside a region get read as part of the answer. No edge grows past halfway to the nearest
- * region it faces on the same page, so stacked rows meet in the middle instead of overlapping, and
- * none grows off the page. A tall region, like a drawn box, only gets the margin.
+ * words inside a region get read as part of the answer. A tall region, like a drawn box, only gets
+ * the margin.
+ *
+ * Two regions on the same page meet halfway across the gap between them instead of overlapping:
+ * across it when they're side by side or diagonal, since sideways growth is only the margin, and
+ * up or down when one is above the other. An edge doesn't grow toward a region it already overlaps.
+ * Nothing grows off the page, and the page edge wins over MIN_REGION_HEIGHT, so a strip at the very
+ * top of the page comes out shorter.
  */
 export function padRegions<T extends NormRect & { page_number: number }>(
   regions: T[],
@@ -71,12 +76,17 @@ export function padRegions<T extends NormRect & { page_number: number }>(
       if (other === region || other.page_number !== region.page_number) continue;
       const otherBottom = other.y + other.height;
       const otherRight = other.x + other.width;
-      const sideBySide = other.y < bottom && otherBottom > region.y;
-      const stacked = other.x < right && otherRight > region.x;
-      if (stacked && otherBottom <= region.y) top = Math.max(top, (otherBottom + region.y) / 2);
-      if (stacked && other.y >= bottom) newBottom = Math.min(newBottom, (bottom + other.y) / 2);
-      if (sideBySide && otherRight <= region.x) left = Math.max(left, (otherRight + region.x) / 2);
-      if (sideBySide && other.x >= right) newRight = Math.min(newRight, (right + other.x) / 2);
+      if (otherRight <= region.x) left = Math.max(left, (otherRight + region.x) / 2);
+      else if (other.x >= right) newRight = Math.min(newRight, (right + other.x) / 2);
+      else if (otherBottom <= region.y) top = Math.max(top, (otherBottom + region.y) / 2);
+      else if (other.y >= bottom) newBottom = Math.min(newBottom, (bottom + other.y) / 2);
+      else {
+        // Already overlapping: no edge grows toward the other region.
+        if (other.y < region.y) top = Math.max(top, region.y);
+        if (otherBottom > bottom) newBottom = Math.min(newBottom, bottom);
+        if (other.x < region.x) left = Math.max(left, region.x);
+        if (otherRight > right) newRight = Math.min(newRight, right);
+      }
     }
 
     top = Math.max(0, top);

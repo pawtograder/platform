@@ -137,6 +137,36 @@ describe("padRegions", () => {
         { x: 0, y: 0, width: 0.21, height: 0.03 },
         { x: 0.49, y: 0.49, width: 0.32, height: 0.22 }
       ]
+    ],
+    // Catches growing through a region that already overlaps: the halfway stop only applied with a
+    // gap between them, so the lower line grew up to 0.115 and took in most of the prompt above it.
+    [
+      "doesn't grow into a region it already overlaps",
+      [r(0.5, 0.1, 0.3, 0.06), r(0.5, 0.15, 0.3, 0.01)],
+      [
+        { x: 0.49, y: 0.09, width: 0.32, height: 0.08 },
+        { x: 0.49, y: 0.15, width: 0.32, height: 0.02 }
+      ]
+    ],
+    // Catches overlapping corners: regions with a small gap both across and down were neither side
+    // by side nor stacked, so nothing stopped their margins meeting at the corner.
+    [
+      "diagonal neighbors meet halfway across their side gap",
+      [r(0.1, 0.3, 0.2, 0.02, 1, true), r(0.305, 0.335, 0.2, 0.02, 1, true)],
+      [
+        { x: 0.09, y: 0.29, width: 0.2125, height: 0.04 },
+        { x: 0.3025, y: 0.325, width: 0.2125, height: 0.04 }
+      ]
+    ],
+    // Catches a negative height: stopping at the midpoint of a box this region sits inside puts the
+    // top below the bottom.
+    [
+      "a region inside a drawn box stays as drawn",
+      [r(0.4, 0.3, 0.4, 0.3), r(0.5, 0.4, 0.1, 0.01)],
+      [
+        { x: 0.39, y: 0.29, width: 0.42, height: 0.32 },
+        { x: 0.5, y: 0.4, width: 0.1, height: 0.01 }
+      ]
     ]
   ])("%s", (_name, regions, expected) => {
     expect(rects(regions)).toEqual(expected);
