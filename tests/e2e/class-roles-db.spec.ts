@@ -27,7 +27,7 @@
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
- * 20261122120000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * 20261122200000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
  * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
  * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
  * the capability (or a demoted former grader) cannot manage decks they made.
@@ -49,6 +49,7 @@ import {
 const SEEDED_CAPABILITIES = [
   "manage_assignments",
   "manage_flashcards",
+  "manage_gradebook",
   "manage_review_assignments",
   "manage_roles",
   "manage_student_repositories",
