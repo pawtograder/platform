@@ -1,5 +1,6 @@
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { recordForgejoHandoutPush } from "../_shared/forgejoHandoutCommits.ts";
 import {
   acceptStudentRepoPush,
   findStudentRepository,
@@ -126,7 +127,7 @@ export function isOnForgejoInstance(payload: ForgejoPushPayload, forgejoUrl: str
 }
 
 /**
- * Records a student's push in their commit history. Grading and push-direct submissions for Forgejo
+ * Records a push to a student repository in its commit history, or a push to a handout in the handout's. Grading and push-direct submissions for Forgejo
  * repositories come with #1110, so nothing here clones the repository or starts a workflow.
  */
 export async function handleForgejoPush(
@@ -136,8 +137,9 @@ export async function handleForgejoPush(
 ): Promise<void> {
   const studentRepo = await findStudentRepository(adminSupabase, push.provider, push.repository, scope);
   if (!studentRepo) {
+    if (await recordForgejoHandoutPush(adminSupabase, push, scope)) return;
     scope.setTag("skipped_reason", "not_a_student_repo");
-    console.log(`[forgejo-repo-webhook] ${push.repository} is not a Forgejo student repository`);
+    console.log(`[forgejo-repo-webhook] ${push.repository} is not a Forgejo student repository or handout`);
     return;
   }
   scope.setTag("student_repo", studentRepo.id.toString());

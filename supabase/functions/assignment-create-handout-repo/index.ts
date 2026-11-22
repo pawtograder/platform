@@ -19,6 +19,7 @@ import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shar
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { recordInitialHandoutCommit } from "../_shared/forgejoHandoutCommits.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -145,6 +146,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (error) throw error;
     if (!saved.length)
       throw new UserVisibleError("This assignment's repository host or configuration changed. Try again.", 409);
+    await recordInitialHandoutCommit(adminSupabase, config, assignment, `${org}/${name}`, sha, scope);
     return { repo_name: name, org_name: org, repo_mode: assignment.repo_mode };
   }
 
