@@ -117,6 +117,10 @@ Write one migration that:
 
    For an instructor-only capability, use `WHERE cr.default_for = 'instructor'`.
 
+   Use the query above only if every grader could do the action before. If the old rule was
+   conditional (only in some classes, or only for some roles), add the capability only to the roles
+   that met it, so no one gains access the old rule denied.
+
 3. Updates `public.seed_default_class_roles()` if a default role other than instructor should get
    it in new classes too. It sets up the default roles when a class is created.
 
