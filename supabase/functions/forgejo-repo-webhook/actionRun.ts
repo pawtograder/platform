@@ -81,7 +81,45 @@ type RunSubmission = {
   run_attempt: number;
   profile_id: string | null;
   assignment_group_id: number | null;
+  created_at: string;
 };
+
+/**
+ * Allowance for the Forgejo host's clock running ahead of the database's when a submission's created_at
+ * is compared with the run's stop time. A re-run cannot start until the attempt before it has stopped,
+ * and its submission is created only after a runner has picked the job up and checked the commit out, so
+ * the next attempt's submission is always far more than this past the previous attempt's stop time.
+ */
+const CLOCK_SKEW_MS = 5_000;
+
+/**
+ * The submissions the completion describes. Forgejo's payload has no attempt number and a re-run keeps
+ * the run's id, so it is inferred from timing: a submission is created while its attempt runs, so the
+ * attempt that stopped at `stoppedAt` is the latest one whose submission already existed by then. Taking
+ * the highest attempt visible on arrival instead pinned a late delivery for attempt 1 on attempt 2, and
+ * gave attempt 2 a zero-score result before its grader had reported.
+ */
+export function attributeRunAttempt(
+  submissions: RunSubmission[],
+  stoppedAt: string | null
+): { runAttempt: number; submissions: RunSubmission[] } {
+  if (submissions.length === 0) return { runAttempt: 1, submissions: [] };
+  const highest = (rows: RunSubmission[]) => rows.reduce((max, s) => Math.max(max, s.run_attempt), 0);
+  const stopped = stoppedAt ? new Date(stoppedAt).getTime() : NaN;
+  if (Number.isNaN(stopped)) {
+    const runAttempt = highest(submissions) || 1;
+    return { runAttempt, submissions: submissions.filter((s) => s.run_attempt === runAttempt) };
+  }
+  const before = submissions.filter((s) => new Date(s.created_at).getTime() <= stopped + CLOCK_SKEW_MS);
+  if (before.length === 0) {
+    // The attempt that stopped made no submission (it failed before reaching the grader), and every
+    // submission seen belongs to a later attempt. Nothing here is this completion's to report on.
+    const earliest = submissions.reduce((min, s) => Math.min(min, s.run_attempt), Infinity);
+    return { runAttempt: Math.max(1, earliest - 1), submissions: [] };
+  }
+  const runAttempt = highest(before) || 1;
+  return { runAttempt, submissions: before.filter((s) => s.run_attempt === runAttempt) };
+}
 
 /**
  * Records a finished Forgejo Actions run, as github-repo-webhook does for GitHub's `workflow_run`:
@@ -107,12 +145,13 @@ export async function handleForgejoActionRun(
   }
 
   // Forgejo's payload has no attempt number: a re-run keeps the run's id, and each job counts its own
-  // attempts. The job's OIDC token carries that count, so the latest submission for this run has it.
-  let submissions: RunSubmission[] = [];
+  // attempts. The job's OIDC token carries that count onto the submission, and attributeRunAttempt picks
+  // the attempt this completion describes.
+  let runSubmissions: RunSubmission[] = [];
   if (studentRepo) {
     const { data, error } = await adminSupabase
       .from("submissions")
-      .select("id, run_attempt, profile_id, assignment_group_id")
+      .select("id, run_attempt, profile_id, assignment_group_id, created_at")
       .eq("repository_id", studentRepo.id)
       .eq("sha", run.commit_sha)
       .eq("run_number", run.id);
@@ -121,11 +160,65 @@ export async function handleForgejoActionRun(
       Sentry.captureException(error, scope);
       throw error;
     }
-    submissions = (data ?? []) as RunSubmission[];
+    runSubmissions = (data ?? []) as RunSubmission[];
   }
-  const runAttempt = submissions.reduce((max, s) => Math.max(max, s.run_attempt), 0) || 1;
-
   const stoppedAt = forgejoTime(run.stopped) ?? forgejoTime(run.updated);
+  const { runAttempt, submissions } = attributeRunAttempt(runSubmissions, stoppedAt);
+
+  // The table has no unique key for a run's completion, so a redelivered hook would add a second row and
+  // the Checks tab would list the run twice. A re-run of the same run id stops at a different time, so it
+  // is not mistaken for a redelivery.
+  let existingEvent = adminSupabase
+    .from("workflow_events")
+    .select("id")
+    .eq("head_sha", run.commit_sha)
+    .eq("workflow_run_id", run.id)
+    .eq("event_type", "completed")
+    .eq("run_attempt", runAttempt);
+  if (stoppedAt) existingEvent = existingEvent.eq("run_updated_at", stoppedAt);
+  const { data: existingRows, error: existingError } = await existingEvent.limit(1);
+  if (existingError) {
+    scope.setTag("error_source", "workflow_events_lookup_failed");
+    Sentry.captureException(existingError, scope);
+    throw existingError;
+  }
+  if ((existingRows ?? []).length > 0) {
+    scope.setTag("duplicate_action_run", "true");
+    console.log(`[forgejo-repo-webhook] run=${run.id} attempt=${runAttempt} already logged; not logging it again`);
+  } else {
+    await insertWorkflowEvent(adminSupabase, run, studentRepo, runAttempt, stoppedAt, scope);
+  }
+
+  if (!studentRepo) {
+    return;
+  }
+  // A student can add workflows of their own; only the grading run says anything about the commit.
+  if (run.workflow_id === GRADE_WORKFLOW_FILE) {
+    await recordRunOnCheckRun(adminSupabase, studentRepo.id, run, stoppedAt, scope);
+  }
+  // Both steps below are safe to repeat: the check run keeps the newest run it has seen, and a submission
+  // that already has a grader result is left alone.
+  for (const submission of submissions) {
+    await reportMissingGraderResult(
+      adminSupabase,
+      studentRepo.id,
+      studentRepo.class_id,
+      run,
+      runAttempt,
+      submission,
+      scope
+    );
+  }
+}
+
+async function insertWorkflowEvent(
+  adminSupabase: SupabaseClient<Database>,
+  run: ForgejoActionRun,
+  studentRepo: { id: number; class_id: number } | null,
+  runAttempt: number,
+  stoppedAt: string | null,
+  scope: Sentry.Scope
+): Promise<void> {
   const { error: insertError } = await adminSupabase.from("workflow_events").insert({
     workflow_run_id: run.id,
     repository_name: run.repository.full_name,
@@ -159,26 +252,6 @@ export async function handleForgejoActionRun(
     throw insertError;
   }
   console.log(`[forgejo-repo-webhook] Logged ${run.status} for run=${run.id} attempt=${runAttempt}`);
-
-  if (!studentRepo) {
-    return;
-  }
-  // A student can add workflows of their own; only the grading run says anything about the commit.
-  if (run.workflow_id === GRADE_WORKFLOW_FILE) {
-    await recordRunOnCheckRun(adminSupabase, studentRepo.id, run, stoppedAt, scope);
-  }
-  const latest = submissions.filter((s) => s.run_attempt === runAttempt);
-  for (const submission of latest) {
-    await reportMissingGraderResult(
-      adminSupabase,
-      studentRepo.id,
-      studentRepo.class_id,
-      run,
-      runAttempt,
-      submission,
-      scope
-    );
-  }
 }
 
 /**
@@ -190,8 +263,14 @@ export async function handleForgejoActionRun(
  * to answer, so a failure from the superseded run could otherwise land on top of the re-run's success
  * and show the student a failing check for a run that is no longer the current one. The row therefore
  * keeps whichever run id is highest: Forgejo's run ids increase, so that is the most recent run for
- * this commit. A delivery of the run already recorded changes nothing, which makes the duplicate that
+ * this commit. A re-run of the same run keeps its id, so between deliveries of one run the later stop
+ * time wins. A delivery of what is already recorded changes nothing, which makes the duplicate that
  * `action_run_recover` (and any hook retry) produces a no-op rather than a rewrite.
+ *
+ * The write is a compare-and-swap on the status it was decided from. Two deliveries can both read the
+ * row before either writes, and the autograder's feedback also rewrites this status; a plain update
+ * could then land an older run over a newer one, or put back fields the other writer had just set. When
+ * the status changed in between, the row is read again and the ordering decided afresh.
  */
 async function recordRunOnCheckRun(
   adminSupabase: SupabaseClient<Database>,
@@ -200,56 +279,92 @@ async function recordRunOnCheckRun(
   stoppedAt: string | null,
   scope: Sentry.Scope
 ): Promise<void> {
-  const { data: checkRun, error: lookupError } = await adminSupabase
-    .from("repository_check_runs")
-    .select("id, status")
-    .eq("repository_id", repositoryId)
-    .eq("sha", run.commit_sha)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (lookupError) {
-    scope.setTag("error_source", "repository_check_run_lookup_failed");
-    Sentry.captureException(lookupError, scope);
-    throw lookupError;
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const { data: checkRun, error: lookupError } = await adminSupabase
+      .from("repository_check_runs")
+      .select("id, status")
+      .eq("repository_id", repositoryId)
+      .eq("sha", run.commit_sha)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lookupError) {
+      scope.setTag("error_source", "repository_check_run_lookup_failed");
+      Sentry.captureException(lookupError, scope);
+      throw lookupError;
+    }
+    if (!checkRun) {
+      // The push that would have created it hasn't arrived, or wasn't to the default branch.
+      scope.setTag("check_run_missing", "true");
+      return;
+    }
+    // The exact value the write below is conditional on, taken before anything else runs.
+    const readStatus = JSON.stringify(checkRun.status);
+    const status = (checkRun.status ?? {}) as CheckRunStatus;
+    const verdict = compareWithRecordedRun(status, run, stoppedAt);
+    if (verdict === "older") {
+      // A superseded run's completion, delivered late. The row already holds a newer run for this commit.
+      scope.setTag("stale_action_run", "true");
+      console.log(
+        `[forgejo-repo-webhook] run ${run.id} for ${run.commit_sha} is older than the recorded run ` +
+          `${status.workflow_run_id}; leaving the check run as it is`
+      );
+      return;
+    }
+    if (verdict === "same") {
+      // The same run delivered twice (a hook retry, or action_run_recover's copy of the success).
+      scope.setTag("duplicate_action_run", "true");
+      return;
+    }
+    const newStatus: CheckRunStatus = {
+      ...status,
+      completed_at: status.completed_at ?? stoppedAt ?? new Date().toISOString(),
+      conclusion: run.status,
+      workflow_run_id: run.id,
+      workflow_run_url: run.html_url,
+      workflow_run_stopped_at: stoppedAt ?? undefined
+    };
+    const { data: written, error: updateError } = await adminSupabase
+      .from("repository_check_runs")
+      .update({ status: newStatus as unknown as Json })
+      .eq("id", checkRun.id)
+      // jsonb equality, so this matches only while the row still holds the status read above.
+      .eq("status", readStatus)
+      .select("id");
+    if (updateError) {
+      scope.setTag("error_source", "repository_check_run_status_update_failed");
+      Sentry.captureException(updateError, scope);
+      throw updateError;
+    }
+    if ((written ?? []).length > 0) return;
+    scope.setTag("check_run_status_write_conflicts", attempt.toString());
   }
-  if (!checkRun) {
-    // The push that would have created it hasn't arrived, or wasn't to the default branch.
-    scope.setTag("check_run_missing", "true");
-    return;
-  }
-  const status = (checkRun.status ?? {}) as CheckRunStatus;
+  const conflict = new Error(
+    `repository_check_runs status for ${run.commit_sha} kept changing; run ${run.id} was not recorded`
+  );
+  scope.setTag("error_source", "repository_check_run_status_update_conflict");
+  Sentry.captureException(conflict, scope);
+  throw conflict;
+}
+
+/** Where `run` falls against the run the check-run status already records. */
+export function compareWithRecordedRun(
+  status: CheckRunStatus,
+  run: Pick<ForgejoActionRun, "id" | "status" | "html_url">,
+  stoppedAt: string | null
+): "older" | "same" | "newer" {
   const recordedRunId = typeof status.workflow_run_id === "number" ? status.workflow_run_id : null;
-  if (recordedRunId !== null && run.id < recordedRunId) {
-    // A superseded run's completion, delivered late. The row already holds a newer run for this commit.
-    scope.setTag("stale_action_run", "true");
-    console.log(
-      `[forgejo-repo-webhook] run ${run.id} for ${run.commit_sha} is older than the recorded run ` +
-        `${recordedRunId}; leaving the check run as it is`
-    );
-    return;
+  if (recordedRunId === null || run.id > recordedRunId) return "newer";
+  if (run.id < recordedRunId) return "older";
+  // The same run id: a redelivery, or another attempt of a re-run, which stops later.
+  const recordedStop = status.workflow_run_stopped_at ? new Date(status.workflow_run_stopped_at).getTime() : NaN;
+  const incomingStop = stoppedAt ? new Date(stoppedAt).getTime() : NaN;
+  if (!Number.isNaN(recordedStop) && !Number.isNaN(incomingStop)) {
+    if (incomingStop < recordedStop) return "older";
+    if (incomingStop > recordedStop) return "newer";
   }
-  if (recordedRunId === run.id && status.conclusion === run.status && status.workflow_run_url === run.html_url) {
-    // The same run delivered twice (a hook retry, or action_run_recover's copy of the success).
-    scope.setTag("duplicate_action_run", "true");
-    return;
-  }
-  const newStatus: CheckRunStatus = {
-    ...status,
-    completed_at: status.completed_at ?? stoppedAt ?? new Date().toISOString(),
-    conclusion: run.status,
-    workflow_run_id: run.id,
-    workflow_run_url: run.html_url
-  };
-  const { error: updateError } = await adminSupabase
-    .from("repository_check_runs")
-    .update({ status: newStatus as unknown as Json })
-    .eq("id", checkRun.id);
-  if (updateError) {
-    scope.setTag("error_source", "repository_check_run_status_update_failed");
-    Sentry.captureException(updateError, scope);
-    throw updateError;
-  }
+  return status.conclusion === run.status && status.workflow_run_url === run.html_url ? "same" : "newer";
 }
 
 /** handleWorkflowCompletionErrors in github-repo-webhook, for one submission of a Forgejo run. */

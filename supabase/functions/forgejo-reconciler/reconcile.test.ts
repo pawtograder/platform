@@ -7,6 +7,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";
 import {
+  CLASS_PAGE_SIZE,
   MAX_ACCOUNTS_PER_PASS,
   MAX_ORG_HOOKS_PER_PASS,
   MAX_REPOS_PER_PASS,
@@ -841,9 +842,15 @@ function fakeOrgSupabase(classes: { slug: string; forgejo_org: string | null }[]
   const query = {
     select: (columns: string) => (calls.push(`select ${columns}`), query),
     eq: (column: string, value: unknown) => (calls.push(`eq ${column} ${value}`), query),
-    limit: (count: number, options: { referencedTable: string }) => {
-      calls.push(`limit ${count} ${options.referencedTable}`);
-      return Promise.resolve({ data: error ? null : classes.map((c) => ({ ...c, repositories: [{ id: 1 }] })), error });
+    limit: (count: number, options: { referencedTable: string }) => (
+      calls.push(`limit ${count} ${options.referencedTable}`), query
+    ),
+    order: (column: string) => (calls.push(`order ${column}`), query),
+    // Pages the classes as the API does, so a query that never pages sees only the first one.
+    range: (from: number, to: number) => {
+      calls.push(`range ${from} ${to}`);
+      const page = classes.slice(from, to + 1).map((c) => ({ ...c, repositories: [{ id: 1 }] }));
+      return Promise.resolve({ data: error ? null : page, error });
     }
   };
   const client = {
@@ -874,8 +881,23 @@ Deno.test("org hooks: every org holding Forgejo repos gets ensureOrg, named as t
   assertEquals(calls, [
     "select slug, forgejo_org, repositories!inner(id)",
     "eq repositories.git_provider forgejo",
-    "limit 1 repositories"
+    "limit 1 repositories",
+    "order id",
+    `range 0 ${CLASS_PAGE_SIZE - 1}`
   ]);
+});
+
+Deno.test("org hooks: classes past the API's row cap are read too, so their orgs are not skipped", async () => {
+  const classes = Array.from({ length: CLASS_PAGE_SIZE }, () => ({ slug: "shared", forgejo_org: null }));
+  classes.push({ slug: "past-the-cap", forgejo_org: null });
+  const { client, calls } = fakeOrgSupabase(classes);
+  const ensured: string[] = [];
+  await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) => (ensured.push(org), Promise.resolve()));
+  assertEquals(ensured, ["past-the-cap", "shared"]);
+  assertEquals(
+    calls.filter((c) => c.startsWith("range")),
+    [`range 0 ${CLASS_PAGE_SIZE - 1}`, `range ${CLASS_PAGE_SIZE} ${2 * CLASS_PAGE_SIZE - 1}`]
+  );
 });
 
 Deno.test("org hooks: one org's failure is recorded and the others are still checked", async () => {

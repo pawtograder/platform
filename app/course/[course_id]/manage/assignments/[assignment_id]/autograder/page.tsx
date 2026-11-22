@@ -430,7 +430,11 @@ export default function AutograderPage() {
           <Fieldset.Content>
             <Field
               label="Autograder configuration for this assignment"
-              helperText="Disabling the autograder removes the grading workflow from the handout repository, so no grading runs start and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
+              helperText={
+                currentAssignment?.git_provider === "forgejo"
+                  ? "Disabling the autograder parks the grading workflow in the handout repository, so no grading runs start. On Forgejo a push without a grading run does not create a submission yet. Student repositories that already exist keep their own copy of the workflow: Forgejo cannot sync handout changes into them yet."
+                  : "Disabling the autograder removes the grading workflow from the handout repository, so no grading runs start and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
+              }
               errorText={errors.enabled?.message?.toString()}
               invalid={errors.enabled ? true : false}
             >

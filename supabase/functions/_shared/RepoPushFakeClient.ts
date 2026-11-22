@@ -28,9 +28,37 @@ function ilikeMatches(pattern: string, value: string): boolean {
   return new RegExp(`^${source}$`, "is").test(value);
 }
 
+/** JSON with object keys sorted, so two values compare equal as jsonb does, whatever their key order. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Row)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function matches(row: Row, [column, value]: [string, unknown]): boolean {
   const ilike = (value as IlikeFilter | null)?.ilike;
-  return typeof ilike === "string" ? ilikeMatches(ilike, String(row[column])) : row[column] === value;
+  if (typeof ilike === "string") return ilikeMatches(ilike, String(row[column]));
+  // `data->>type`: the text of one field of a JSON column, as PostgREST reads it.
+  const path = column.split("->>");
+  if (path.length === 2) {
+    const field = (row[path[0]] as Row | null | undefined)?.[path[1]];
+    return field !== undefined && field !== null && String(field) === value;
+  }
+  // A JSON column compared with a JSON string, as supabase-js sends one: equal as jsonb.
+  const cell = row[column];
+  if (cell && typeof cell === "object" && typeof value === "string") {
+    try {
+      return canonicalJson(cell) === canonicalJson(JSON.parse(value));
+    } catch {
+      return false;
+    }
+  }
+  return cell === value;
 }
 
 export function fakeSupabase(
@@ -63,13 +91,15 @@ export function fakeSupabase(
           return Promise.resolve({ data: rows()[0] ?? null, error: null });
         },
         // Awaiting the chain without maybeSingle() resolves to every matching row, or, after
-        // update(), applies the update to them.
+        // update(), applies the update to them and resolves to the rows it changed (what
+        // `.update(...).select()` returns).
         then(resolve: (result: { data: Row[] | null; error: null }) => unknown) {
           if (updateValues) {
             const values = updateValues;
-            for (const row of rows()) Object.assign(row, values);
+            const matched = rows();
+            for (const row of matched) Object.assign(row, values);
             updates.push({ table, values, filters: query.filters });
-            return Promise.resolve({ data: null, error: null }).then(resolve);
+            return Promise.resolve({ data: matched, error: null }).then(resolve);
           }
           queries.push(query);
           return Promise.resolve({ data: rows(), error: null }).then(resolve);

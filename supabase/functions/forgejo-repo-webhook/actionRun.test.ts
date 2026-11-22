@@ -45,6 +45,8 @@ const submission = (overrides: Record<string, unknown> = {}) => ({
   run_attempt: 1,
   profile_id: "student-profile",
   assignment_group_id: null,
+  // While the fixture's run was going (it started 16:53:40 and stopped 16:55:02).
+  created_at: "2026-11-09T16:54:00.000Z",
   ...overrides
 });
 
@@ -102,14 +104,19 @@ Deno.test("a failed grading run is logged, and the commit's check run is finishe
 
   assertEquals(updates.length, 1);
   assertEquals(updates[0].table, "repository_check_runs");
-  assertEquals(updates[0].filters, [["id", 55]]);
+  // Conditional on the status it was decided from, so a concurrent write is never overwritten.
+  assertEquals(updates[0].filters, [
+    ["id", 55],
+    ["status", JSON.stringify({ created_at: "2026-11-09T16:53:34.000Z", created_by: "forgejo push by alex" })]
+  ]);
   assertEquals(updates[0].values.status, {
     created_at: "2026-11-09T16:53:34.000Z",
     created_by: "forgejo push by alex",
     completed_at: "2026-11-09T16:55:02.000Z",
     conclusion: "failure",
     workflow_run_id: 42,
-    workflow_run_url: RUN_URL
+    workflow_run_url: RUN_URL,
+    workflow_run_stopped_at: "2026-11-09T16:55:02.000Z"
   });
   // No submission came from the run, so there is nothing to give an error result.
   assertEquals(
@@ -129,7 +136,8 @@ Deno.test("a successful run keeps the completed_at feedback wrote, and adds its 
     completed_at: "2026-11-09T16:54:59.000Z",
     conclusion: "success",
     workflow_run_id: 42,
-    workflow_run_url: RUN_URL
+    workflow_run_url: RUN_URL,
+    workflow_run_stopped_at: "2026-11-09T16:55:02.000Z"
   });
 });
 
@@ -173,7 +181,10 @@ Deno.test("a submission that already has a grader result is left alone", async (
 Deno.test("a re-run is matched to its latest attempt's submission, not the earlier one", async () => {
   const { client, inserts, upserts } = fakeSupabase(
     tables({
-      submissions: [submission({ id: 900, run_attempt: 1 }), submission({ id: 901, run_attempt: 2 })],
+      submissions: [
+        submission({ id: 900, run_attempt: 1, created_at: "2026-11-09T16:40:00.000Z" }),
+        submission({ id: 901, run_attempt: 2 })
+      ],
       graderResults: [{ id: 1, submission_id: 900 }]
     })
   );
@@ -183,6 +194,128 @@ Deno.test("a re-run is matched to its latest attempt's submission, not the earli
     upserts.map((u) => (u.row as { submission_id: number }).submission_id),
     [901]
   );
+});
+
+Deno.test("attempt 1's completion delivered after attempt 2 started is not taken for attempt 2's", async () => {
+  // A re-run keeps the run id and the payload has no attempt number. Attempt 2's submission was made
+  // after attempt 1 stopped (16:55:02), so this completion is attempt 1's: attempt 2 must not get a
+  // zero-score result before its own grader reports.
+  const { client, inserts, upserts } = fakeSupabase(
+    tables({
+      submissions: [
+        submission({ id: 900, run_attempt: 1 }),
+        submission({ id: 901, run_attempt: 2, created_at: "2026-11-09T16:57:30.000Z" })
+      ]
+    })
+  );
+  await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+  assertEquals(inserts.find((i) => i.table === "workflow_events")?.row.run_attempt, 1);
+  assertEquals(
+    upserts.map((u) => (u.row as { submission_id: number }).submission_id),
+    [900]
+  );
+  assertEquals(
+    inserts.filter((i) => i.table === "grader_results").map((i) => i.row.submission_id),
+    [900]
+  );
+});
+
+Deno.test("a completion from an attempt that made no submission reports on none of the later ones", async () => {
+  const { client, inserts, upserts } = fakeSupabase(
+    tables({ submissions: [submission({ id: 901, run_attempt: 2, created_at: "2026-11-09T16:57:30.000Z" })] })
+  );
+  await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+  assertEquals(inserts.find((i) => i.table === "workflow_events")?.row.run_attempt, 1);
+  assertEquals(upserts, []);
+  assertEquals(
+    inserts.filter((i) => i.table === "grader_results"),
+    []
+  );
+});
+
+Deno.test("a redelivered completion is logged once, so the Checks tab doesn't list it twice", async () => {
+  const data = tables({ submissions: [submission()], graderResults: [{ id: 1, submission_id: 900 }] });
+  const { client, inserts } = fakeSupabase(data);
+  const run = actionRunPayload(FORGEJO_URL).run;
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  assertEquals(inserts.filter((i) => i.table === "workflow_events").length, 1);
+  // A re-run of the same run id stops at another time, so it is logged as its own row.
+  const rerun = actionRunPayload(FORGEJO_URL).run;
+  rerun.stopped = "2026-11-09T17:10:00Z";
+  rerun.updated = "2026-11-09T17:10:00Z";
+  await handleForgejoActionRun(client, rerun, new Sentry.Scope());
+  assertEquals(inserts.filter((i) => i.table === "workflow_events").length, 2);
+});
+
+Deno.test("a run the grader already explained with a user-visible error gets no second, vaguer one", async () => {
+  const data = tables({ submissions: [submission()] });
+  data.workflow_run_error.push({
+    id: 3,
+    repository_id: 7,
+    run_number: 42,
+    run_attempt: 1,
+    data: { type: "user_visible_error" }
+  });
+  const { client, inserts, upserts } = fakeSupabase(data);
+  await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+  assertEquals(upserts, []);
+  assertEquals(
+    inserts.filter((i) => i.table === "grader_results"),
+    []
+  );
+});
+
+Deno.test("an earlier attempt of the same run, delivered late, leaves the later attempt's outcome", async () => {
+  const { client, updates } = fakeSupabase(
+    tables({
+      checkRunStatus: {
+        created_at: "2026-11-09T16:53:34.000Z",
+        completed_at: "2026-11-09T17:10:00.000Z",
+        conclusion: "success",
+        workflow_run_id: 42,
+        workflow_run_url: RUN_URL,
+        workflow_run_stopped_at: "2026-11-09T17:10:00.000Z"
+      }
+    })
+  );
+  // Attempt 1 stopped at 16:55:02 with a failure; attempt 2's success is already recorded.
+  const run = actionRunPayload(FORGEJO_URL, { action: "failure", status: "failure" }).run;
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  assertEquals(
+    updates.filter((u) => u.table === "repository_check_runs"),
+    []
+  );
+});
+
+Deno.test("a status that changes between the read and the write is read again, not overwritten", async () => {
+  // Another delivery records run 99 after this one read the row but before it wrote. The write is
+  // conditional on the status it read, so it matches nothing; the reread sees run 99 and stops.
+  const data = tables();
+  const { client: base, updates } = fakeSupabase(data);
+  let raced = false;
+  const client = {
+    from(table: string) {
+      const chain = base.from(table as never) as unknown as Record<string, (...args: unknown[]) => unknown>;
+      if (table !== "repository_check_runs" || raced) return chain;
+      const update = chain.update.bind(chain);
+      chain.update = (values: unknown) => {
+        raced = true;
+        data.repository_check_runs[0].status = {
+          created_at: "2026-11-09T16:53:34.000Z",
+          completed_at: "2026-11-09T16:58:00.000Z",
+          conclusion: "success",
+          workflow_run_id: 99,
+          workflow_run_url: `${FORGEJO_URL}/cs101/hw1-alex/actions/runs/9`
+        };
+        return update(values);
+      };
+      return chain;
+    }
+  } as unknown as typeof base;
+  await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+  assertEquals(updates.filter((u) => u.table === "repository_check_runs").length, 1);
+  assertEquals((data.repository_check_runs[0].status as { workflow_run_id: number }).workflow_run_id, 99);
 });
 
 Deno.test("a workflow the student added is logged but doesn't touch the commit's check run", async () => {

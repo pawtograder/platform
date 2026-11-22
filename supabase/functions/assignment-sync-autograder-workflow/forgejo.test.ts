@@ -21,16 +21,20 @@ const config: ForgejoConfig = { url: "https://git.example.edu", authorization: "
 const repo = "cs4535/cs4535-handout-hw1";
 const server = "https://api.example.edu";
 
-function stubRepo(files: Record<string, string>, head = "head1") {
+const ENABLE_MESSAGE = "Enable autograder workflow: this assignment has an autograder";
+
+function stubRepo(files: Record<string, string>, head = "head1", headMessage = "an instructor's commit") {
   const changes: { changes: ForgejoFileChange[]; message: string }[] = [];
+  const readRefs: (string | undefined)[] = [];
   const ops: ForgejoWorkflowOps = {
     head: (_cfg, repository, ref) => {
       assertEquals(repository, repo);
       assertEquals(ref, "main");
-      return Promise.resolve({ sha: head, commit: { message: "head" } });
+      return Promise.resolve({ sha: head, commit: { message: headMessage } });
     },
-    read: (_cfg, repository, path) => {
+    read: (_cfg, repository, path, ref) => {
       assertEquals(repository, repo);
+      readRefs.push(ref);
       return Promise.resolve(path in files ? { content: files[path], sha: `sha-of-${path}` } : null);
     },
     change: (_cfg, repository, list, message) => {
@@ -39,7 +43,7 @@ function stubRepo(files: Record<string, string>, head = "head1") {
       return Promise.resolve("c0ffee");
     }
   };
-  return { ops, changes };
+  return { ops, changes, readRefs };
 }
 
 Deno.test("enable: a live grade.yml is kept and nothing is committed", async () => {
@@ -47,9 +51,28 @@ Deno.test("enable: a live grade.yml is kept and nothing is committed", async () 
   assertEquals(await syncForgejoGradeWorkflow(config, repo, true, server, ops), {
     commitSha: null,
     liveWorkflow: "custom",
-    headSha: "head1"
+    headSha: "head1",
+    headIsToggleCommit: false
   });
   assertEquals(changes, []);
+});
+
+Deno.test("the files are read at the head that is returned", async () => {
+  // Read at the branch instead, a push between the two reads paired the older grade.yml with the newer head.
+  const { ops, readRefs } = stubRepo({ [PARKED]: "custom" }, "head7");
+  await syncForgejoGradeWorkflow(config, repo, true, server, ops);
+  assertEquals(readRefs, ["head7", "head7"]);
+  const off = stubRepo({ [LIVE]: "custom" }, "head8");
+  await syncForgejoGradeWorkflow(config, repo, false, server, off.ops);
+  assertEquals(off.readRefs, ["head8", "head8"]);
+});
+
+Deno.test("a head this function committed is recognised as its own, for the direction asked", async () => {
+  const { ops } = stubRepo({ [LIVE]: "custom" }, "head1", `${ENABLE_MESSAGE}\n`);
+  assertEquals((await syncForgejoGradeWorkflow(config, repo, true, server, ops)).headIsToggleCommit, true);
+  // The enable commit is not the disable direction's own.
+  const off = stubRepo({}, "head1", ENABLE_MESSAGE);
+  assertEquals((await syncForgejoGradeWorkflow(config, repo, false, server, off.ops)).headIsToggleCommit, false);
 });
 
 Deno.test("enable: the parked copy is renamed back, keeping the instructor's edits", async () => {
@@ -57,7 +80,8 @@ Deno.test("enable: the parked copy is renamed back, keeping the instructor's edi
   assertEquals(await syncForgejoGradeWorkflow(config, repo, true, server, ops), {
     commitSha: "c0ffee",
     liveWorkflow: "custom",
-    headSha: "c0ffee"
+    headSha: "c0ffee",
+    headIsToggleCommit: true
   });
   assertEquals(changes[0].changes, [
     { operation: "update", path: LIVE, fromPath: PARKED, sha: `sha-of-${PARKED}`, content: "custom" }
@@ -67,7 +91,12 @@ Deno.test("enable: the parked copy is renamed back, keeping the instructor's edi
 Deno.test("enable: with no workflow at all, the stock Forgejo workflow is added", async () => {
   const { ops, changes } = stubRepo({});
   const result = await syncForgejoGradeWorkflow(config, repo, true, server, ops);
-  assertEquals(result, { commitSha: "c0ffee", liveWorkflow: forgejoGradeWorkflow(server), headSha: "c0ffee" });
+  assertEquals(result, {
+    commitSha: "c0ffee",
+    liveWorkflow: forgejoGradeWorkflow(server),
+    headSha: "c0ffee",
+    headIsToggleCommit: true
+  });
   assertEquals(changes[0].changes, [{ operation: "create", path: LIVE, content: forgejoGradeWorkflow(server) }]);
 });
 
@@ -76,7 +105,8 @@ Deno.test("disable: grade.yml is renamed to grade.yml.disabled in one commit", a
   assertEquals(await syncForgejoGradeWorkflow(config, repo, false, server, ops), {
     commitSha: "c0ffee",
     liveWorkflow: null,
-    headSha: "c0ffee"
+    headSha: "c0ffee",
+    headIsToggleCommit: true
   });
   assertEquals(changes.length, 1);
   assertEquals(changes[0].changes, [
@@ -98,7 +128,8 @@ Deno.test("disable: a handout without grade.yml is left alone", async () => {
   assertEquals(await syncForgejoGradeWorkflow(config, repo, false, server, ops), {
     commitSha: null,
     liveWorkflow: null,
-    headSha: "head1"
+    headSha: "head1",
+    headIsToggleCommit: false
   });
   assertEquals(changes, []);
 });
@@ -112,7 +143,7 @@ type Sharer = {
 };
 
 /** Records each write as table, values and the filters applied to it, and each read's filters. */
-function fakeSupabase(sharers: Sharer[], repoCount = 0) {
+function fakeSupabase(sharers: Sharer[], repoCount = 0, repoCountError: { message: string } | null = null) {
   const writes: { table: string; values: Record<string, unknown>; filters: string[] }[] = [];
   const reads: string[] = [];
   const client = {
@@ -122,7 +153,7 @@ function fakeSupabase(sharers: Sharer[], repoCount = 0) {
           reads.push(`${table}: ${columns}`);
           const result =
             table === "repositories"
-              ? { data: null, count: repoCount, error: null }
+              ? { data: null, count: repoCountError ? null : repoCount, error: repoCountError }
               : { data: sharers, count: null, error: null };
           // Every filter is chainable and the chain is awaitable, so the call sites can apply them in
           // any order and await wherever they stop.
@@ -239,8 +270,8 @@ Deno.test("sync: a retry after a failed pin repairs the hash and the revision", 
   // agrees with the flag and no commit is made here. The stored revision still names the old head,
   // which is what makes the repair detectable: both writes run, and the hash is no longer conditional
   // on being unset, because what is stored is the value that attempt should have replaced.
-  const { client, writes } = fakeSupabase([]);
-  const { ops, changes } = stubRepo({ [LIVE]: "custom" }, "committed-head");
+  const { client, writes } = fakeSupabase([], 4);
+  const { ops, changes } = stubRepo({ [LIVE]: "custom" }, "committed-head", ENABLE_MESSAGE);
   const stale = { ...assignment, latest_template_sha: "old-head" };
   const result = await syncForgejoAssignmentWorkflow(client, config, stale, true, server, ops);
   assertEquals(changes, []);
@@ -253,6 +284,33 @@ Deno.test("sync: a retry after a failed pin repairs the hash and the revision", 
       filters: ["in id 7", "eq git_provider forgejo"]
     }
   ]);
+  // The earlier attempt's commit moved the handout, so the repositories it did not reach are still reported.
+  assertEquals(result.existing_repositories_unchanged, 4);
+});
+
+Deno.test("sync: an instructor's push past the stored revision is not taken for an unfinished toggle", async () => {
+  // Nothing advances the stored revision when an instructor pushes to a Forgejo handout. Repairing on a
+  // stale revision alone replaced the hash existing student repositories still match with the new file's.
+  const { client, writes } = fakeSupabase([], 4);
+  const { ops } = stubRepo({ [LIVE]: "edited by hand" }, "pushed-head", "Tweak grade.yml");
+  const stale = { ...assignment, latest_template_sha: "old-head" };
+  const result = await syncForgejoAssignmentWorkflow(client, config, stale, true, server, ops);
+  assertEquals(writes, [
+    {
+      table: "autograder",
+      values: { workflow_sha: await sha256Hex("edited by hand") },
+      filters: ["in id 7", "is workflow_sha null"]
+    }
+  ]);
+  assertEquals(result.existing_repositories_unchanged, 0);
+});
+
+Deno.test("sync: a failed repository count fails before the handout or any row is written", async () => {
+  // Counted after the writes, a retry found the handout already changed and dropped the warning.
+  const { client, writes } = fakeSupabase([], 0, { message: "count failed" });
+  const { ops, changes } = stubRepo({});
+  await assertRejects(() => syncForgejoAssignmentWorkflow(client, config, assignment, true, server, ops));
+  assertEquals([writes, changes], [[], []]);
 });
 
 Deno.test("sync: a handout whose head cannot be read is left pinned where it is", async () => {

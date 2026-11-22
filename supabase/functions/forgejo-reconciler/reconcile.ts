@@ -332,6 +332,9 @@ export type OrgHookResult = { checked: number; failures: { org: string; error: u
  * moves on each hour, so the hourly passes reach every org in turn and the kicks within an hour repeat
  * the same window. Sorted first, so the window doesn't depend on the order the query returned rows in.
  */
+/** The API's max_rows (supabase/config.toml), so a short page means the last one. */
+export const CLASS_PAGE_SIZE = 1000;
+
 export function orgHookWindow(orgs: string[], now: number): string[] {
   const sorted = [...new Set(orgs)].sort();
   if (sorted.length <= MAX_ORG_HOOKS_PER_PASS) return sorted;
@@ -356,17 +359,25 @@ export async function reconcileForgejoOrgHooks(
   const result: OrgHookResult = { checked: 0, failures: [] };
   // Without a hook to install there is nothing to check.
   if (!config.pushHook) return result;
-  const { data: classes, error } = await supabase
-    .from("classes")
-    .select("slug, forgejo_org, repositories!inner(id)")
-    .eq("repositories.git_provider", "forgejo")
-    .limit(1, { referencedTable: "repositories" });
-  if (error) throw error;
-
-  const orgs = (classes ?? []).flatMap((c) => {
-    const org = (c.forgejo_org || c.slug || "").toLowerCase();
-    return org ? [org] : [];
-  });
+  // Paged in a stable order: the API returns at most max_rows (1,000) classes per request, and the
+  // embedded limit below only caps each class's repositories. One unpaged query would leave every class
+  // past the first page out of every window, so their orgs would never be checked.
+  const orgs: string[] = [];
+  for (let from = 0; ; from += CLASS_PAGE_SIZE) {
+    const { data: classes, error } = await supabase
+      .from("classes")
+      .select("slug, forgejo_org, repositories!inner(id)")
+      .eq("repositories.git_provider", "forgejo")
+      .limit(1, { referencedTable: "repositories" })
+      .order("id")
+      .range(from, from + CLASS_PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const c of classes ?? []) {
+      const org = (c.forgejo_org || c.slug || "").toLowerCase();
+      if (org) orgs.push(org);
+    }
+    if ((classes ?? []).length < CLASS_PAGE_SIZE) break;
+  }
   for (const org of orgHookWindow(orgs, now)) {
     try {
       await ensure(config, org);
@@ -428,8 +439,13 @@ export async function revokeDroppedTokens(
 
 /**
  * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos, workflow hashes and org hooks; then revoking dropped students' and idle workspace tokens
- * (forgejo_repo_tokens_to_revoke).
+ * repos and workflow hashes; then revoking dropped students' and idle workspace tokens
+ * (forgejo_repo_tokens_to_revoke); then org hooks last.
+ *
+ * Org hooks come after revocation because they are the one step whose cost grows with the number of orgs
+ * rather than with a backlog: up to MAX_ORG_HOOKS_PER_PASS orgs, each several Forgejo requests. Run before
+ * it, a slow Forgejo could hold the pass until the platform stopped it, and revocation, which has no other
+ * trigger, would not run at all, leaving dropped students' tokens valid.
  */
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
   // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
@@ -438,24 +454,23 @@ export async function reconcileForgejo(supabase: SupabaseClient<Database>, confi
   let repos: RepoReconcileResult | undefined;
   let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
-  let orgHooks: OrgHookResult | undefined;
   try {
     accounts = await reconcileForgejoAccounts(supabase, config);
     repos = await reconcileForgejoRepos(supabase, config);
     groupRepos = await reconcileForgejoGroupRepos(supabase, config);
     hashes = await reconcileForgejoWorkflowHashes(supabase, config);
-    orgHooks = await reconcileForgejoOrgHooks(supabase, config);
   } catch (e) {
     stepError = e;
   }
   const revocation = await revokeDroppedTokens(supabase, config);
   if (stepError !== undefined) throw stepError;
+  const orgHooks = await reconcileForgejoOrgHooks(supabase, config);
   return {
     accounts: accounts!,
     repos: repos!,
     groupRepos: groupRepos!,
     hashes: hashes!,
-    orgHooks: orgHooks!,
+    orgHooks,
     revocation
   };
 }

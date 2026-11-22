@@ -27,7 +27,16 @@ export type ForgejoWorkflowChange = {
    * nothing to pin and leaves the stored revision alone.
    */
   headSha: string | null;
+  /**
+   * Whether `headSha` is a commit this function makes for the requested direction: the commit just made,
+   * or one an earlier attempt made. An instructor's own push to the handout is not, which is how the
+   * caller tells an unfinished toggle from an ordinary handout change.
+   */
+  headIsToggleCommit: boolean;
 };
+
+const ENABLE_COMMIT_MESSAGE = "Enable autograder workflow: this assignment has an autograder";
+const DISABLE_COMMIT_MESSAGE = "Disable autograder workflow: this assignment has no autograder";
 
 /**
  * Brings the Forgejo handout's grade.yml in line with the flag, in one commit, as the GitHub path does.
@@ -36,6 +45,9 @@ export type ForgejoWorkflowChange = {
  * Restoring first keeps an instructor's edits (runner labels, extra steps) across an off/on cycle.
  * Disabling renames grade.yml to grade.yml.disabled, replacing an older parked copy. Each change names
  * the blob it read, so a file someone pushed in between fails the commit instead of being overwritten.
+ *
+ * The head is resolved first and both files are read at it, so the content and the revision returned
+ * describe the same commit even when someone pushes to the handout during the call.
  */
 export async function syncForgejoGradeWorkflow(
   config: ForgejoConfig,
@@ -44,20 +56,28 @@ export async function syncForgejoGradeWorkflow(
   gradingServer: string,
   ops: ForgejoWorkflowOps = { read: readFileEntry, change: changeFiles, head: getCommit }
 ): Promise<ForgejoWorkflowChange> {
+  const message = hasAutograder ? ENABLE_COMMIT_MESSAGE : DISABLE_COMMIT_MESSAGE;
   // The branch changeFiles commits to, so the head read here is the head those commits move.
-  const readHead = async (): Promise<string | null> => {
-    try {
-      return (await ops.head(config, templateRepo, "main")).sha;
-    } catch {
-      // An empty handout has no head, and a lookup that fails leaves the caller with nothing to pin.
-      // Neither is a reason to fail a workflow change that has already been made.
-      return null;
-    }
-  };
-  const live = await ops.read(config, templateRepo, FORGEJO_GRADE_WORKFLOW_PATH);
+  let head: { sha: string; message: string } | null = null;
+  try {
+    const commit = await ops.head(config, templateRepo, "main");
+    head = { sha: commit.sha, message: commit.commit?.message ?? "" };
+  } catch {
+    // An empty handout has no head, and a lookup that fails leaves the caller with nothing to pin.
+    // Neither is a reason to fail a workflow change; the files are then read at the default branch.
+  }
+  const unchanged = (liveWorkflow: string | null): ForgejoWorkflowChange => ({
+    commitSha: null,
+    liveWorkflow,
+    headSha: head?.sha ?? null,
+    headIsToggleCommit: head !== null && head.message.trim() === message
+  });
+  const read = (path: string) => ops.read(config, templateRepo, path, head?.sha);
+
+  const live = await read(FORGEJO_GRADE_WORKFLOW_PATH);
   if (hasAutograder) {
-    if (live) return { commitSha: null, liveWorkflow: live.content, headSha: await readHead() };
-    const parked = await ops.read(config, templateRepo, FORGEJO_DISABLED_GRADE_WORKFLOW_PATH);
+    if (live) return unchanged(live.content);
+    const parked = await read(FORGEJO_DISABLED_GRADE_WORKFLOW_PATH);
     const content = parked?.content ?? forgejoGradeWorkflow(gradingServer);
     const change: ForgejoFileChange = parked
       ? {
@@ -68,17 +88,12 @@ export async function syncForgejoGradeWorkflow(
           content
         }
       : { operation: "create", path: FORGEJO_GRADE_WORKFLOW_PATH, content };
-    const commitSha = await ops.change(
-      config,
-      templateRepo,
-      [change],
-      "Enable autograder workflow: this assignment has an autograder"
-    );
-    return { commitSha, liveWorkflow: content, headSha: commitSha };
+    const commitSha = await ops.change(config, templateRepo, [change], message);
+    return { commitSha, liveWorkflow: content, headSha: commitSha, headIsToggleCommit: true };
   }
 
-  if (!live) return { commitSha: null, liveWorkflow: null, headSha: await readHead() };
-  const parked = await ops.read(config, templateRepo, FORGEJO_DISABLED_GRADE_WORKFLOW_PATH);
+  if (!live) return unchanged(null);
+  const parked = await read(FORGEJO_DISABLED_GRADE_WORKFLOW_PATH);
   const changes: ForgejoFileChange[] = parked
     ? [
         { operation: "update", path: FORGEJO_DISABLED_GRADE_WORKFLOW_PATH, sha: parked.sha, content: live.content },
@@ -93,13 +108,8 @@ export async function syncForgejoGradeWorkflow(
           content: live.content
         }
       ];
-  const commitSha = await ops.change(
-    config,
-    templateRepo,
-    changes,
-    "Disable autograder workflow: this assignment has no autograder"
-  );
-  return { commitSha, liveWorkflow: null, headSha: commitSha };
+  const commitSha = await ops.change(config, templateRepo, changes, message);
+  return { commitSha, liveWorkflow: null, headSha: commitSha, headIsToggleCommit: true };
 }
 
 export async function sha256Hex(text: string): Promise<string> {
@@ -188,6 +198,17 @@ export async function syncForgejoAssignmentWorkflow(
     );
   }
 
+  const ids = [assignment.id, ...sharers.map((a) => a.id)];
+  // What this change cannot reach, counted before anything is written. A failed count then fails the
+  // request while a retry is still clean. Counted afterwards, a retry found the handout already changed
+  // and reported nothing, though those repositories still had the old setup.
+  const { count: existingRepos, error: repoCountError } = await supabase
+    .from("repositories")
+    .select("id", { count: "exact", head: true })
+    .in("assignment_id", ids)
+    .eq("git_provider", "forgejo");
+  if (repoCountError) throw repoCountError;
+
   let change: ForgejoWorkflowChange;
   try {
     change = await syncForgejoGradeWorkflow(config, assignment.template_repo, hasAutograder, gradingServer, ops);
@@ -200,28 +221,31 @@ export async function syncForgejoAssignmentWorkflow(
     );
   }
 
-  const ids = [assignment.id, ...sharers.map((a) => a.id)];
   // The handout is written before these two rows, and the two rows cannot be written together: the
   // revision is on `assignments` and the hash on `autograder`. A previous attempt that committed and
   // then failed here leaves the handout ahead of the revision this row advertises, and that gap is what
   // the retry recognises — so the revision is pinned LAST, after the hash, and stays stale until both
   // have been written. Without it, the retry saw a handout that already agreed with the flag, made no
   // commit, and skipped both writes, leaving the pin and the hash wrong for good.
+  //
+  // Only a head this function committed counts as that gap. Nothing advances the pin when an instructor
+  // pushes to a Forgejo handout, so a stale pin alone does not mean an attempt failed. Treating it that
+  // way would replace a hash that existing student repositories still match.
   const headSha = change.headSha;
   const wrote = change.commitSha !== null;
-  const pinStale = headSha !== null && assignment.latest_template_sha !== headSha;
+  const unfinished =
+    !wrote && change.headIsToggleCommit && headSha !== null && assignment.latest_template_sha !== headSha;
   if (hasAutograder && change.liveWorkflow !== null) {
     // Grading rejects a grade.yml whose hash differs from workflow_sha. Set it when this call wrote the file,
-    // or when an earlier attempt did and did not get this far. A grade.yml that was already live, on a row
-    // whose revision is current, keeps its stored hash, which may be what students' repos were made with,
-    // as the forgejo-reconciler does.
+    // or when an earlier attempt did and did not get this far. Any other grade.yml that was already live
+    // keeps its stored hash, which may be what students' repos were made with, as the forgejo-reconciler does.
     const workflowSha = await sha256Hex(change.liveWorkflow);
     let update = supabase.from("autograder").update({ workflow_sha: workflowSha }).in("id", ids);
-    if (!wrote && !pinStale) update = update.is("workflow_sha", null);
+    if (!wrote && !unfinished) update = update.is("workflow_sha", null);
     const { error } = await update;
     if (error) throw error;
   }
-  if (headSha !== null && (wrote || pinStale)) {
+  if (headSha !== null && (wrote || unfinished)) {
     // Like the handout's creation: the advertised head is the commit just made, or the head an earlier
     // attempt made and never recorded.
     const { error } = await supabase
@@ -232,20 +256,12 @@ export async function syncForgejoAssignmentWorkflow(
     if (error) throw error;
   }
 
-  // What this change cannot reach. Counted after the writes, so a failure above is reported as a failure
-  // rather than as a warning about repositories the instructor might not even have.
-  const { count: existingRepos, error: repoCountError } = await supabase
-    .from("repositories")
-    .select("id", { count: "exact", head: true })
-    .in("assignment_id", ids)
-    .eq("git_provider", "forgejo");
-  if (repoCountError) throw repoCountError;
-
   return {
     action: change.commitSha ? (hasAutograder ? "added" : "removed") : "unchanged",
     has_autograder: hasAutograder,
     template_repo: assignment.template_repo,
-    // Only worth reporting when the handout actually moved; an unchanged handout leaves nothing behind.
-    existing_repositories_unchanged: change.commitSha ? (existingRepos ?? 0) : 0
+    // Reported when this call moved the handout, or finished an earlier attempt that did: either way the
+    // repositories made before that commit still have the old setup.
+    existing_repositories_unchanged: wrote || unfinished ? (existingRepos ?? 0) : 0
   };
 }

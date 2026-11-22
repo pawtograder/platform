@@ -453,6 +453,11 @@ export type CheckRunStatus = {
   workflow_run_id?: number;
   workflow_run_url?: string;
   /**
+   * When the recorded run stopped. A re-run keeps its run id, so this orders two completions of the same
+   * run: the one that stopped later is the current attempt.
+   */
+  workflow_run_stopped_at?: string;
+  /**
    * Records which workflow run was allowed through the "dispatched before the autograder
    * was disabled" exception in autograder-create-submission. The exception is a property of
    * one in-flight run, not of the commit, so it is claimed once and then only honored for

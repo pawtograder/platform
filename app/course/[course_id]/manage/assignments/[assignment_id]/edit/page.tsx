@@ -469,20 +469,6 @@ export default function EditAssignment() {
                   type: "warning"
                 });
               }
-              if ((syncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
-                // Forgejo has no handout sync, so unlike repo_sync_queue_failed above nothing repairs
-                // these repositories later: they keep the grade.yml they were generated with.
-                const stale = syncResult!.forgejo_existing_repositories_unchanged!;
-                toaster.create({
-                  title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
-                    stale === 1 ? "has" : "have"
-                  } the previous setup`,
-                  description:
-                    "The handout repository was updated, but Forgejo repositories created before now keep " +
-                    "their own copy of grade.yml. Only repositories created from now on follow this setting.",
-                  type: "warning"
-                });
-              }
               const reconcileBlockedBy = syncResult?.reconcile_blocked_by ?? [];
               if (reconcileBlockedBy.length > 0) {
                 // The reconcile declined to park the workflow because another in-class assignment
@@ -655,8 +641,9 @@ export default function EditAssignment() {
           queryData?.has_autograder !== undefined &&
           queryData.has_autograder !== values.has_autograder
         ) {
+          let forgejoSyncResult: Awaited<ReturnType<typeof assignmentSyncAutograderWorkflow>>;
           try {
-            await assignmentSyncAutograderWorkflow(
+            forgejoSyncResult = await assignmentSyncAutograderWorkflow(
               {
                 assignment_id: Number.parseInt(assignment_id as string),
                 class_id: Number.parseInt(course_id as string)
@@ -672,7 +659,37 @@ export default function EditAssignment() {
               .eq("id", Number.parseInt(assignment_id as string))
               .eq("has_autograder", values.has_autograder);
             if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
-            throw syncError;
+            // Only the flag goes back. The row write above already saved every other field, so "Failed to
+            // update the assignment" would describe a save whose other edits are in fact kept.
+            const detail = syncError instanceof Error ? syncError.message : String(syncError);
+            toaster.create({
+              title: "Autograder setting not changed",
+              description: rollbackError
+                ? `Your other changes were saved, but the handout's grade.yml could not be updated (${detail}), ` +
+                  `and the autograder setting could not be put back. Save this assignment again to retry.`
+                : `Your other changes were saved, but the autograder was not turned ${
+                    values.has_autograder ? "on" : "off"
+                  }: ${detail}`,
+              type: "error"
+            });
+            return;
+          }
+          if ((forgejoSyncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
+            // Forgejo has no handout sync, so nothing repairs these repositories later: they keep the grade.yml
+            // they were generated with, and on Forgejo a push without a grading run records no submission.
+            const stale = forgejoSyncResult!.forgejo_existing_repositories_unchanged!;
+            toaster.create({
+              title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
+                stale === 1 ? "has" : "have"
+              } the previous setup`,
+              description: values.has_autograder
+                ? "The handout repository was updated, but Forgejo repositories created before now keep their " +
+                  "own copy of grade.yml, so pushes to them are still not graded. Only repositories created " +
+                  "from now on get the autograder."
+                : "The handout repository was updated, but Forgejo repositories created before now keep their " +
+                  "live grade.yml, so pushes to them still start a grading run.",
+              type: "warning"
+            });
           }
         }
         toaster.create({
