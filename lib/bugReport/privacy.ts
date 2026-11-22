@@ -829,6 +829,7 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "exam_template_pages.id": "none",
   // DRAFT: new entry, review and remove this comment
   "exam_template_pages.image_path": "none",
+  "exam_template_pages.ocr_data": "none",
   // DRAFT: new entry, review and remove this comment
   "exam_template_pages.page_number": "none",
   // DRAFT: new entry, review and remove this comment

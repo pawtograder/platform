@@ -23,14 +23,40 @@ export function boxCenterInRegion(box: NormRect, region: NormRect): boolean {
 /** Text of the words whose center falls inside `region` (reading order: top-to-bottom, left-to-right). */
 export function wordsInRegion(words: WordBox[], region: NormRect): string {
   const inside = words.filter((w) => boxCenterInRegion(w, region));
-  // Banded total order: group into ~0.02-tall rows (top-to-bottom), then left-to-right.
-  // The pairwise `Math.abs(a.y-b.y) > 0.02 ? ... : ...` form is non-transitive, so it yields
-  // engine-defined ordering for words clustered within a row.
-  inside.sort((a, b) => {
-    const band = Math.round(a.y / 0.02) - Math.round(b.y / 0.02);
-    return band !== 0 ? band : a.x - b.x;
-  });
-  return inside
+  const centerY = (w: WordBox) => w.y + w.height / 2;
+  // Marks (punctuation, quote marks) sit at the baseline or the top of a line rather than on its
+  // center line, so they join the row nearest them instead of starting one. A mark is a word under
+  // half the height of a word it sits within, give or take half its own height, judged word by word
+  // rather than against the region's median, which punctuation can outnumber the words in. Smaller
+  // words near no taller word (a line of smaller text) are not marks and keep rows of their own.
+  const gap = (span: { top: number; bottom: number }, y: number) => Math.max(span.top - y, y - span.bottom, 0);
+  const isMark = (w: WordBox) =>
+    inside.some(
+      (t) => t.height > 2 * w.height && gap({ top: t.y, bottom: t.y + t.height }, centerY(w)) <= w.height / 2
+    );
+  // Rows are words whose center lines sit within half a word height of the row's average center
+  // line, using the smaller of the two heights so a tall box cannot pull in the line below. Grouping
+  // by distance rather than by fixed 0.02 bands keeps a line whole wherever it sits on the page, and
+  // centers rather than top edges keep a tilted word's taller box on the line it belongs to (#1292).
+  const rows: { words: WordBox[]; centerSum: number; minHeight: number; top: number; bottom: number }[] = [];
+  for (const w of inside.filter((w) => !isMark(w)).sort((a, b) => centerY(a) - centerY(b))) {
+    const row = rows[rows.length - 1];
+    if (row && centerY(w) - row.centerSum / row.words.length <= Math.min(w.height, row.minHeight) / 2) {
+      row.words.push(w);
+      row.centerSum += centerY(w);
+      row.minHeight = Math.min(row.minHeight, w.height);
+      row.top = Math.min(row.top, w.y);
+      row.bottom = Math.max(row.bottom, w.y + w.height);
+    } else {
+      rows.push({ words: [w], centerSum: centerY(w), minHeight: w.height, top: w.y, bottom: w.y + w.height });
+    }
+  }
+  // A mark sits by a taller word, and the tallest of any such chain is not a mark, so rows is not empty.
+  for (const mark of inside.filter(isMark)) {
+    rows.reduce((best, row) => (gap(row, centerY(mark)) < gap(best, centerY(mark)) ? row : best)).words.push(mark);
+  }
+  return rows
+    .flatMap((row) => row.words.sort((a, b) => a.x - b.x))
     .map((w) => w.text)
     .join(" ")
     .trim();

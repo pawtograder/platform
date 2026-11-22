@@ -4012,6 +4012,7 @@ export type Database = {
           height: number;
           id: number;
           image_path: string;
+          ocr_data: Json | null;
           page_number: number;
           width: number;
         };
@@ -4022,6 +4023,7 @@ export type Database = {
           height: number;
           id?: number;
           image_path: string;
+          ocr_data?: Json | null;
           page_number: number;
           width: number;
         };
@@ -4032,6 +4034,7 @@ export type Database = {
           height?: number;
           id?: number;
           image_path?: string;
+          ocr_data?: Json | null;
           page_number?: number;
           width?: number;
         };
