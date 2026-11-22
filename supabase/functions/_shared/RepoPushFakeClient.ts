@@ -59,7 +59,11 @@ function matches(row: Row, [column, value]: [string, unknown]): boolean {
 
 export function fakeSupabase(
   tables: Record<string, Row[]>,
-  opts: { insertError?: { code: string; message: string } } = {}
+  opts: {
+    insertError?: { code: string; message: string };
+    /** A unique index per table: rows with the same non-null key collide with 23505. */
+    uniqueKeys?: Record<string, (row: Row) => string | null>;
+  } = {}
 ) {
   const queries: FakeQuery[] = [];
   const inserts: { table: string; row: Row }[] = [];
@@ -107,6 +111,11 @@ export function fakeSupabase(
         },
         insert(row: Row) {
           if (opts.insertError) return Promise.resolve({ error: opts.insertError });
+          const key = opts.uniqueKeys?.[table];
+          const k = key?.(row);
+          if (key && k !== null && k !== undefined && (tables[table] ?? []).some((r) => key(r) === k)) {
+            return Promise.resolve({ error: { code: "23505", message: "duplicate key value" } });
+          }
           inserts.push({ table, row });
           (tables[table] ??= []).push({ id: inserts.length, ...row });
           return Promise.resolve({ error: null });

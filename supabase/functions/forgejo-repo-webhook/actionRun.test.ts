@@ -1,8 +1,19 @@
 import { assert, assertEquals } from "jsr:@std/assert@^1";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
-import { fakeSupabase, repositoryRow } from "../_shared/RepoPushFakeClient.ts";
-import { forgejoTime, handleForgejoActionRun } from "./actionRun.ts";
+import { fakeSupabase as baseFakeSupabase, repositoryRow } from "../_shared/RepoPushFakeClient.ts";
+import { attributeRunAttempt, forgejoTime, handleForgejoActionRun } from "./actionRun.ts";
 import { actionRunPayload, RUN_SHA } from "./actionRunFixture.ts";
+
+// Mirrors workflow_events_forgejo_completion_key (20261122120000).
+const forgejoCompletionKey = (row: Record<string, unknown>) =>
+  row.event_type === "completed" &&
+  (row.payload as { provider?: string } | null)?.provider === "forgejo" &&
+  row.run_updated_at != null
+    ? `${row.workflow_run_id}|${row.run_attempt}|${row.run_updated_at}`
+    : null;
+
+const fakeSupabase = (data: Parameters<typeof baseFakeSupabase>[0]) =>
+  baseFakeSupabase(data, { uniqueKeys: { workflow_events: forgejoCompletionKey } });
 
 const FORGEJO_URL = "http://127.0.0.1:3100";
 const RUN_URL = `${FORGEJO_URL}/cs101/hw1-alex/actions/runs/3`;
@@ -234,6 +245,98 @@ Deno.test("a redelivered completion is logged once, so the Checks tab doesn't li
   rerun.updated = "2026-11-09T17:10:00Z";
   await handleForgejoActionRun(client, rerun, new Sentry.Scope());
   assertEquals(inserts.filter((i) => i.table === "workflow_events").length, 2);
+});
+
+Deno.test("two deliveries of one completion arriving together log one row, and both finish", async () => {
+  const data = tables({ submissions: [submission()], graderResults: [{ id: 1, submission_id: 900 }] });
+  const { client, inserts } = fakeSupabase(data);
+  const run = actionRunPayload(FORGEJO_URL).run;
+  await Promise.all([
+    handleForgejoActionRun(client, run, new Sentry.Scope()),
+    handleForgejoActionRun(client, run, new Sentry.Scope())
+  ]);
+  assertEquals(inserts.filter((i) => i.table === "workflow_events").length, 1);
+});
+
+const noResultsWritten = (inserts: { table: string }[], upserts: unknown[]) => {
+  assertEquals(upserts, []);
+  assertEquals(
+    inserts.filter((i) => i.table === "grader_results"),
+    []
+  );
+};
+
+Deno.test(
+  "a later attempt's submission within the skew allowance of the stop makes the attempt ambiguous",
+  async () => {
+    // Attempt 1 stopped at 16:55:02; attempt 2's submission 3s later could be either side of it.
+    const { client, inserts, upserts } = fakeSupabase(
+      tables({
+        submissions: [
+          submission({ id: 900, run_attempt: 1 }),
+          submission({ id: 901, run_attempt: 2, created_at: "2026-11-09T16:55:05.000Z" })
+        ]
+      })
+    );
+    await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+    noResultsWritten(inserts, upserts);
+  }
+);
+
+Deno.test("a lone submission just past the stop is not credited to the run that stopped", async () => {
+  const { client, inserts, upserts } = fakeSupabase(
+    tables({ submissions: [submission({ id: 901, run_attempt: 2, created_at: "2026-11-09T16:55:05.000Z" })] })
+  );
+  await handleForgejoActionRun(client, actionRunPayload(FORGEJO_URL).run, new Sentry.Scope());
+  noResultsWritten(inserts, upserts);
+});
+
+Deno.test("without start and stop times no attempt is guessed", async () => {
+  const run = actionRunPayload(FORGEJO_URL).run;
+  run.started = "0001-01-01T00:00:00Z";
+  run.stopped = "0001-01-01T00:00:00Z";
+  run.updated = "0001-01-01T00:00:00Z";
+  const { client, inserts, upserts } = fakeSupabase(
+    tables({ submissions: [submission({ id: 900, run_attempt: 1 }), submission({ id: 901, run_attempt: 2 })] })
+  );
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  noResultsWritten(inserts, upserts);
+});
+
+Deno.test("a re-run that made no submission is not credited with the earlier attempt's", async () => {
+  // Attempt 2 started at 17:00 (a re-run resets `started`); attempt 1's submission predates it.
+  const run = actionRunPayload(FORGEJO_URL).run;
+  run.started = "2026-11-09T17:00:00Z";
+  run.stopped = "2026-11-09T17:05:00Z";
+  run.updated = "2026-11-09T17:05:00Z";
+  const { client, inserts, upserts } = fakeSupabase(tables({ submissions: [submission({ id: 900, run_attempt: 1 })] }));
+  await handleForgejoActionRun(client, run, new Sentry.Scope());
+  noResultsWritten(inserts, upserts);
+  assertEquals(inserts.find((i) => i.table === "workflow_events")?.row.run_attempt, 2);
+});
+
+Deno.test("attributeRunAttempt: only a submission strictly inside the run's window is credited", () => {
+  const s = (run_attempt: number, created_at: string) => ({
+    id: run_attempt,
+    run_attempt,
+    profile_id: null,
+    assignment_group_id: null,
+    created_at
+  });
+  const start = "2026-11-09T16:53:40.000Z";
+  const stop = "2026-11-09T16:55:02.000Z";
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:54:00.000Z")], start, stop), {
+    runAttempt: 1,
+    submissions: [s(1, "2026-11-09T16:54:00.000Z")],
+    ambiguous: false
+  });
+  // Just before the start is within the skew allowance: ambiguous.
+  assertEquals(attributeRunAttempt([s(1, "2026-11-09T16:53:38.000Z")], start, stop).ambiguous, true);
+  // Two attempts inside one window: ambiguous.
+  assertEquals(
+    attributeRunAttempt([s(1, "2026-11-09T16:54:00.000Z"), s(2, "2026-11-09T16:54:30.000Z")], start, stop).ambiguous,
+    true
+  );
 });
 
 Deno.test("a run the grader already explained with a user-visible error gets no second, vaguer one", async () => {

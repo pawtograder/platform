@@ -67,28 +67,45 @@ type RunSubmission = {
   created_at: string;
 };
 
-/** Forgejo-to-DB clock skew allowance; a re-run's submission is created far later than the prior stop. */
+/** Forgejo-to-DB clock skew: a submission this close outside a run's window can't be placed with confidence. */
 const CLOCK_SKEW_MS = 5_000;
 
-/** Forgejo sends no attempt number and re-runs keep the id, so the attempt is inferred from stop time. */
+export type RunAttribution = { runAttempt: number; submissions: RunSubmission[]; ambiguous: boolean };
+
+/**
+ * Forgejo sends no attempt number, re-runs keep the run id, and a re-run resets `started`, so the attempt is
+ * the one whose submissions were created inside [started, stopped]. Results are written only when that is
+ * certain: missing times, or a submission within the skew allowance of either edge, leave them unwritten.
+ */
 export function attributeRunAttempt(
   submissions: RunSubmission[],
+  startedAt: string | null,
   stoppedAt: string | null
-): { runAttempt: number; submissions: RunSubmission[] } {
-  if (submissions.length === 0) return { runAttempt: 1, submissions: [] };
+): RunAttribution {
   const highest = (rows: RunSubmission[]) => rows.reduce((max, s) => Math.max(max, s.run_attempt), 0);
-  const stopped = stoppedAt ? new Date(stoppedAt).getTime() : NaN;
-  if (Number.isNaN(stopped)) {
-    const runAttempt = highest(submissions) || 1;
-    return { runAttempt, submissions: submissions.filter((s) => s.run_attempt === runAttempt) };
+  if (submissions.length === 0) return { runAttempt: 1, submissions: [], ambiguous: false };
+  const ms = (t: string | null) => (t ? new Date(t).getTime() : NaN);
+  const started = ms(startedAt);
+  const stopped = ms(stoppedAt);
+  if (Number.isNaN(started) || Number.isNaN(stopped)) {
+    return { runAttempt: highest(submissions) || 1, submissions: [], ambiguous: true };
   }
-  const before = submissions.filter((s) => new Date(s.created_at).getTime() <= stopped + CLOCK_SKEW_MS);
-  if (before.length === 0) {
-    const earliest = submissions.reduce((min, s) => Math.min(min, s.run_attempt), Infinity);
-    return { runAttempt: Math.max(1, earliest - 1), submissions: [] };
+  const inside: RunSubmission[] = [];
+  const near: RunSubmission[] = [];
+  for (const s of submissions) {
+    const at = ms(s.created_at);
+    if (at >= started && at <= stopped) inside.push(s);
+    else if (at >= started - CLOCK_SKEW_MS && at <= stopped + CLOCK_SKEW_MS) near.push(s);
   }
-  const runAttempt = highest(before) || 1;
-  return { runAttempt, submissions: before.filter((s) => s.run_attempt === runAttempt) };
+  const attempts = new Set(inside.map((s) => s.run_attempt));
+  if (near.length > 0 || attempts.size > 1) {
+    return { runAttempt: highest([...inside, ...near]) || 1, submissions: [], ambiguous: true };
+  }
+  if (attempts.size === 0) {
+    const earlier = submissions.filter((s) => ms(s.created_at) < started);
+    return { runAttempt: highest(earlier) + 1, submissions: [], ambiguous: false };
+  }
+  return { runAttempt: inside[0].run_attempt, submissions: inside, ambiguous: false };
 }
 
 export async function handleForgejoActionRun(
@@ -122,29 +139,17 @@ export async function handleForgejoActionRun(
     runSubmissions = (data ?? []) as RunSubmission[];
   }
   const stoppedAt = forgejoTime(run.stopped) ?? forgejoTime(run.updated);
-  const { runAttempt, submissions } = attributeRunAttempt(runSubmissions, stoppedAt);
+  const { runAttempt, submissions, ambiguous } = attributeRunAttempt(
+    runSubmissions,
+    forgejoTime(run.started),
+    stoppedAt
+  );
+  if (ambiguous) {
+    scope.setTag("action_run_attempt_ambiguous", "true");
+    Sentry.captureMessage("Forgejo run completion matches no single attempt; no fallback result written", scope);
+  }
 
-  // workflow_events has no unique key per completion, so redeliveries are deduped here; stop time separates re-runs.
-  let existingEvent = adminSupabase
-    .from("workflow_events")
-    .select("id")
-    .eq("head_sha", run.commit_sha)
-    .eq("workflow_run_id", run.id)
-    .eq("event_type", "completed")
-    .eq("run_attempt", runAttempt);
-  if (stoppedAt) existingEvent = existingEvent.eq("run_updated_at", stoppedAt);
-  const { data: existingRows, error: existingError } = await existingEvent.limit(1);
-  if (existingError) {
-    scope.setTag("error_source", "workflow_events_lookup_failed");
-    Sentry.captureException(existingError, scope);
-    throw existingError;
-  }
-  if ((existingRows ?? []).length > 0) {
-    scope.setTag("duplicate_action_run", "true");
-    console.log(`[forgejo-repo-webhook] run=${run.id} attempt=${runAttempt} already logged; not logging it again`);
-  } else {
-    await insertWorkflowEvent(adminSupabase, run, studentRepo, runAttempt, stoppedAt, scope);
-  }
+  await insertWorkflowEvent(adminSupabase, run, studentRepo, runAttempt, stoppedAt, scope);
 
   if (!studentRepo) {
     return;
@@ -198,6 +203,11 @@ async function insertWorkflowEvent(
     pull_requests: null,
     payload: { provider: "forgejo", run } as unknown as Json
   });
+  // workflow_events_forgejo_completion_key: this completion is already logged; the rest of the handler is idempotent.
+  if (insertError?.code === "23505") {
+    scope.setTag("duplicate_action_run", "true");
+    return;
+  }
   if (insertError) {
     scope.setTag("error_source", "workflow_events_insert_failed");
     scope.setTag("error_context", "Failed to store Forgejo workflow event");

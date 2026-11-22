@@ -421,35 +421,55 @@ export async function revokeDroppedTokens(
   return result;
 }
 
+export const PASS_STEPS = {
+  revoke: revokeDroppedTokens,
+  accounts: reconcileForgejoAccounts,
+  repos: reconcileForgejoRepos,
+  groupRepos: reconcileForgejoGroupRepos,
+  hashes: reconcileForgejoWorkflowHashes,
+  orgHooks: reconcileForgejoOrgHooks
+};
+
 /**
- * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos and workflow hashes; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke);
- * then org hooks, last, so a slow Forgejo can't keep revocation from running.
+ * One pass: revocation first, since it has no other trigger and nothing later may time the pass out before
+ * it; then accounts, so new students get repos in the same pass; then repos, group repos, hashes, org hooks.
  */
-export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
-  // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
+export async function reconcileForgejo(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  steps: typeof PASS_STEPS = PASS_STEPS
+) {
+  let revocation: RevokeResult | undefined;
+  let revocationError: unknown;
+  try {
+    revocation = await steps.revoke(supabase, config);
+  } catch (e) {
+    // A failed revocation list must not hold up account and repo creation; the pass still fails below.
+    revocationError = e;
+  }
   let stepError: unknown;
   let accounts: ReconcileResult | undefined;
   let repos: RepoReconcileResult | undefined;
   let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
+  let orgHooks: OrgHookResult | undefined;
   try {
-    accounts = await reconcileForgejoAccounts(supabase, config);
-    repos = await reconcileForgejoRepos(supabase, config);
-    groupRepos = await reconcileForgejoGroupRepos(supabase, config);
-    hashes = await reconcileForgejoWorkflowHashes(supabase, config);
+    accounts = await steps.accounts(supabase, config);
+    repos = await steps.repos(supabase, config);
+    groupRepos = await steps.groupRepos(supabase, config);
+    hashes = await steps.hashes(supabase, config);
+    orgHooks = await steps.orgHooks(supabase, config);
   } catch (e) {
     stepError = e;
   }
-  const revocation = await revokeDroppedTokens(supabase, config);
+  if (revocationError !== undefined) throw revocationError;
   if (stepError !== undefined) throw stepError;
-  const orgHooks = await reconcileForgejoOrgHooks(supabase, config);
   return {
     accounts: accounts!,
     repos: repos!,
     groupRepos: groupRepos!,
     hashes: hashes!,
-    orgHooks,
-    revocation
+    orgHooks: orgHooks!,
+    revocation: revocation!
   };
 }

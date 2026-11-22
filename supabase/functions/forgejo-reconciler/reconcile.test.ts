@@ -12,6 +12,8 @@ import {
   MAX_ORG_HOOKS_PER_PASS,
   MAX_REPOS_PER_PASS,
   MAX_REVOCATIONS_PER_PASS,
+  PASS_STEPS,
+  reconcileForgejo,
   reconcileForgejoAccounts,
   orgHookWindow,
   reconcileForgejoGroupRepos,
@@ -935,4 +937,36 @@ Deno.test("org hooks: with many orgs, each pass checks a bounded window and the 
   }
   assertEquals(seen.size, orgs.length);
   assertEquals(orgHookWindow(["b", "a", "b"], 0), ["a", "b"]);
+});
+
+function recordingSteps(fail: Partial<Record<keyof typeof PASS_STEPS, Error>> = {}) {
+  const ran: string[] = [];
+  const step = (name: keyof typeof PASS_STEPS) => () => {
+    ran.push(name);
+    return fail[name] ? Promise.reject(fail[name]) : Promise.resolve({} as never);
+  };
+  const steps = Object.fromEntries(
+    (Object.keys(PASS_STEPS) as (keyof typeof PASS_STEPS)[]).map((name) => [name, step(name)])
+  ) as unknown as typeof PASS_STEPS;
+  return { ran, steps };
+}
+
+const passClient = {} as Parameters<typeof reconcileForgejo>[0];
+
+Deno.test("pass: revocation runs first, so a slow later step can't time the pass out before it", async () => {
+  const { ran, steps } = recordingSteps();
+  await reconcileForgejo(passClient, config, steps);
+  assertEquals(ran, ["revoke", "accounts", "repos", "groupRepos", "hashes", "orgHooks"]);
+});
+
+Deno.test("pass: a failed revocation list still lets the backlogs run, then fails the pass", async () => {
+  const { ran, steps } = recordingSteps({ revoke: new Error("rpc down") });
+  await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "rpc down");
+  assertEquals(ran, ["revoke", "accounts", "repos", "groupRepos", "hashes", "orgHooks"]);
+});
+
+Deno.test("pass: a failed backlog step fails the pass after revocation has run", async () => {
+  const { ran, steps } = recordingSteps({ repos: new Error("PostgREST 502") });
+  await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "PostgREST 502");
+  assertEquals(ran, ["revoke", "accounts", "repos"]);
 });
