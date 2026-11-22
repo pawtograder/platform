@@ -103,11 +103,15 @@ export async function deleteForgejoRepositoriesSynchronously(
         continue;
       }
       const deleted = await remove(config, name);
-      // archived_as stays null: the repo was deleted, not renamed. If this update fails the claim goes stale and
-      // the reconciler finds the repo gone, which also completes the entry.
+      // A deleted repo was not renamed, so the entry records no name -- including a destination a reconciler
+      // pass wrote down before it failed. A repo already gone from this name keeps that destination: the pass
+      // that wrote it may have renamed the repo and lost the write of where it went. If this update fails the
+      // claim goes stale and the reconciler finds the repo gone, which also completes the entry.
       const { error: saveError } = await supabase
         .from("forgejo_repo_archives")
-        .update({ archived_at: now().toISOString() })
+        .update(
+          deleted ? { archived_at: now().toISOString(), archived_as: null } : { archived_at: now().toISOString() }
+        )
         .eq("id", job.id);
       if (saveError) console.warn(`Couldn't mark the archive of ${name} done:`, saveError);
       if (deleted) counts.deleted++;

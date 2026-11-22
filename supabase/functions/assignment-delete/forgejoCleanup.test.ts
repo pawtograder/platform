@@ -192,10 +192,12 @@ Deno.test("small batch: each queued repo is claimed, deleted, then marked done",
   );
   assertEquals(counts, { deleted: 1, queued: 0, skipped: 1 });
   assertEquals(deleted, ["org/a", "org/handout"]);
+  // The repo that was deleted records no name, clearing any destination a reconciler pass wrote down for it.
+  // The one already gone from that name keeps it: that pass may have renamed the repo and lost the write.
   assertEquals(log, [
     "find org/a",
     "claim 1",
-    "done 1 archived_at",
+    "done 1 archived_at,archived_as",
     "find org/handout",
     "claim 2",
     "done 2 archived_at"

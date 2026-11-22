@@ -865,9 +865,15 @@ Deno.test("repos: a name still waiting for its old repo to be archived gets no F
 
 type DueArchive = { id: number; class_id: number; repository: string };
 
-function fakeArchiveSupabase(due: DueArchive[], opts: { unclaimable?: number[]; dueError?: unknown } = {}) {
+function fakeArchiveSupabase(
+  due: DueArchive[],
+  opts: { unclaimable?: number[]; dueError?: unknown; pinned?: Record<number, string> } = {}
+) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const saved: { values: Record<string, unknown>; id: unknown }[] = [];
+  // Every write and every archive call, in the order they happened: the destination has to be written down
+  // before the repo is touched.
+  const order: string[] = [];
   const client = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcCalls.push({ name, args });
@@ -880,27 +886,40 @@ function fakeArchiveSupabase(due: DueArchive[], opts: { unclaimable?: number[]; 
     from(table: string) {
       assertEquals(table, "forgejo_repo_archives");
       return {
+        select: (columns: string) => ({
+          eq: (_column: string, id: unknown) => ({
+            single: () => {
+              assertEquals(columns, "archived_as");
+              return Promise.resolve({
+                data: { archived_as: opts.pinned?.[id as number] ?? null },
+                error: null
+              });
+            }
+          })
+        }),
         update: (values: Record<string, unknown>) => ({
           eq: (_column: string, id: unknown) => {
             saved.push({ values, id });
+            order.push(`write ${id} ${JSON.stringify(values.archived_as ?? null)}`);
             return Promise.resolve({ error: null });
           }
         })
       };
     }
   } as unknown as Parameters<typeof archiveUnlinkedRepos>[0];
-  return { client, rpcCalls, saved };
+  return { client, rpcCalls, saved, order };
 }
 
 Deno.test("archives: each claimed repo is archived and recorded with its new name", async () => {
-  const { client, rpcCalls, saved } = fakeArchiveSupabase([
+  const { client, rpcCalls, saved, order } = fakeArchiveSupabase([
     { id: 1, class_id: 3, repository: "cs4535/hw1-group-a" },
     { id: 2, class_id: 3, repository: "cs4535/hw1-gone" }
   ]);
   const archived: string[] = [];
-  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository) => {
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository, destination) => {
     archived.push(repository);
-    return Promise.resolve(repository.endsWith("gone") ? null : "cs4535/archived-x-hw1-group-a");
+    order.push(`archive ${repository} -> ${destination}`);
+    return Promise.resolve(repository.endsWith("gone") ? null : destination!);
   });
   assertEquals(result, { archived: 2, failures: [] });
   assertEquals(archived, ["cs4535/hw1-group-a", "cs4535/hw1-gone"]);
@@ -908,14 +927,41 @@ Deno.test("archives: each claimed repo is archived and recorded with its new nam
     name: "forgejo_repo_archives_due",
     args: { p_stale_minutes: STALE_CLAIM_MINUTES, p_limit: MAX_ARCHIVES_PER_PASS }
   });
+  const done = saved.filter((s) => typeof s.values.archived_at === "string");
   assertEquals(
-    saved.map((s) => [s.id, s.values.archived_as]),
-    [
-      [1, "cs4535/archived-x-hw1-group-a"],
-      [2, null]
-    ]
+    done.map((s) => s.id),
+    [1, 2]
   );
-  assert(saved.every((s) => typeof s.values.archived_at === "string"));
+  const destination = done[0].values.archived_as as string;
+  assert(destination.startsWith("cs4535/archived-"), destination);
+  // The repo that was gone records no name, including the one written down for it.
+  assertEquals(done[1].values.archived_as, null);
+  // Where each repo is going is written down before Forgejo is asked to rename it.
+  assertEquals(order.slice(0, 2), [
+    `write 1 ${JSON.stringify(destination)}`,
+    `archive cs4535/hw1-group-a -> ${destination}`
+  ]);
+  assertEquals(order[3].startsWith('write 2 "cs4535/archived-'), true, order[3]);
+  assertEquals(order[4].startsWith("archive cs4535/hw1-gone -> cs4535/archived-"), true, order[4]);
+});
+
+// The crash the destination is written down for: a pass renames the repo, then dies before recording where it
+// went. The entry keeps that name, so the retry hands Forgejo the same one and finds the repo under it, instead
+// of picking a new name, finding the old one gone, and finishing the entry with no path at all.
+Deno.test("archives: a retry reuses the destination the lost attempt wrote down", async () => {
+  const pinned = "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-a";
+  const { client, saved, order } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-a" }], {
+    pinned: { 1: pinned }
+  });
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository, destination) => {
+    order.push(`archive ${repository} -> ${destination}`);
+    // What archiveRepo returns when the old name is gone but the destination is there.
+    return Promise.resolve(destination!);
+  });
+  assertEquals(result, { archived: 1, failures: [] });
+  assertEquals(order, [`archive cs4535/hw1-a -> ${pinned}`, `write 1 ${JSON.stringify(pinned)}`]);
+  assertEquals(saved.length, 1, "a destination already written down is not replaced");
+  assertEquals(saved[0].values.archived_as, pinned);
 });
 
 Deno.test("archives: one another pass has claimed is left alone", async () => {
@@ -944,9 +990,14 @@ Deno.test("archives: a failure stays pending for the next pass, and the others c
     result.failures.map((f) => [f.classId, (f.error as Error).message]),
     [[3, "Forgejo collaborator remove failed: 500"]]
   );
+  // The one that failed keeps the destination written down for it, and stays pending.
+  assertEquals(
+    saved.filter((s) => typeof s.values.archived_at === "string").map((s) => s.id),
+    [2]
+  );
   assertEquals(
     saved.map((s) => s.id),
-    [2]
+    [1, 2, 2]
   );
 });
 

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
+  archivedRepoName,
   archiveRepo,
   ensureAccountForUser,
   ensureOrg,
@@ -367,8 +368,28 @@ export async function archiveUnlinkedRepos(
       });
       if (claimError) throw claimError;
       if (!claimed) continue;
+      // Where the repo is going is decided and written down before Forgejo is touched. An attempt that renames
+      // the repo and then loses the write below -- the pass dies, or Supabase refuses it -- leaves the old name
+      // gone; without a recorded destination the retry would find nothing, mark the entry done with no name,
+      // and the archive staff need would be unfindable. A destination already here is one such attempt's, so
+      // it is reused rather than replaced: that is the name the repo may already be under.
+      const { data: entry, error: entryError } = await supabase
+        .from("forgejo_repo_archives")
+        .select("archived_as")
+        .eq("id", row.id)
+        .single();
+      if (entryError) throw entryError;
+      let destination = entry.archived_as;
+      if (destination === null) {
+        destination = archivedRepoName(row.repository);
+        const { error: pinError } = await supabase
+          .from("forgejo_repo_archives")
+          .update({ archived_as: destination })
+          .eq("id", row.id);
+        if (pinError) throw pinError;
+      }
       // On failure the claim stays; once it's stale the next pass tries again.
-      const archivedAs = await archive(config, row.repository);
+      const archivedAs = await archive(config, row.repository, destination);
       const { error: saveError } = await supabase
         .from("forgejo_repo_archives")
         .update({ archived_at: new Date().toISOString(), archived_as: archivedAs })
