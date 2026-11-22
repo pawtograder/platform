@@ -8,6 +8,7 @@ import {
   NonRetryableRepoError,
   reinviteToOrgTeam
 } from "../_shared/GitHubWrapper.ts";
+import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
 import { isServiceRoleRequest, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
@@ -21,6 +22,7 @@ import {
 } from "../_shared/repoCreationStrategy.ts";
 import type { BranchProtectionConfig } from "../_shared/branchProtection.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { createForgejoTestRepo } from "../forgejo-reconciler/testRepo.ts";
 
 function branchProtectionFromAssignment(a: {
   protect_block_force_push?: boolean | null;
@@ -198,9 +200,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("class_id", classId?.toString() || "(null)");
   scope?.setTag("user_id", userId);
   scope?.setTag("github_username", githubUsername);
-  if (!githubUsername) {
-    throw new UserVisibleError(`User ${userId} has no Github username linked`, 400);
-  }
   if (templateRepoOverride !== undefined) {
     if (!usedEdgeSecretAuth) {
       throw new UserVisibleError("template_repo_override requires edge-function-secret or service-role auth", 403);
@@ -244,6 +243,23 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         throw new UserVisibleError("Only instructors and graders can create test assignment repositories", 403);
       }
     }
+  }
+
+  // A Forgejo assignment's test repo is made on Forgejo, which needs no GitHub username.
+  if (forTestAssignment && assignmentId !== undefined) {
+    const { data: testAssignment, error: testAssignmentError } = await adminSupabase
+      .from("assignments")
+      .select("id, class_id, slug, template_repo, repo_mode, git_provider, classes(slug, forgejo_org)")
+      .eq("id", assignmentId)
+      .maybeSingle();
+    if (testAssignmentError) throw testAssignmentError;
+    if (testAssignment?.git_provider === "forgejo") {
+      scope?.setTag("git_provider", "forgejo");
+      return await createForgejoTestRepo(adminSupabase, forgejoConfig(), testAssignment, userId);
+    }
+  }
+  if (!githubUsername) {
+    throw new UserVisibleError(`User ${userId} has no Github username linked`, 400);
   }
 
   //Must use adminSupabase because students can't see each others' github usernames
