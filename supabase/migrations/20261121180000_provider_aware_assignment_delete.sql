@@ -1,4 +1,4 @@
--- CW-P6: delete Forgejo assignments and courses, cleaning up their repos the way GitHub's are.
+-- CW-P6: delete Forgejo assignments, cleaning up their repos the way GitHub's are.
 --
 -- Depends on 20261121170100_forgejo_repo_archives.sql (forgejo_repo_archives, the repositories
 -- AFTER DELETE trigger that queues a deleted Forgejo row, and the lifted repositories DELETE guard).
@@ -6,8 +6,7 @@
 -- On GitHub, delete_assignment_with_all_data queues archive_repo_and_lock for every student repo,
 -- the template and the solution repo in its own transaction, and assignment-delete then deletes a
 -- small batch (five or fewer) outright. Until now the assignments_guard_forgejo_delete trigger
--- refused to delete a Forgejo assignment (and so its course) at all, because this function sent
--- every name to GitHub.
+-- refused to delete a Forgejo assignment at all, because this function sent every name to GitHub.
 --
 -- Now:
 --   1. delete_assignment_with_all_data splits the deleted repositories by host. GitHub names take
@@ -15,9 +14,12 @@
 --      in forgejo_repo_archives in the same transaction, and returned as `forgejo_repositories`
 --      ({kind, full_name}) so assignment-delete can delete a small batch outright, as it does on
 --      GitHub. Its solution repo stays on GitHub (D6) and is still a GitHub target.
---   2. Deleting a Forgejo assignment any other way (directly, or with its course) queues its
---      template too, through an AFTER DELETE trigger. Its student repos are queued by the
---      repositories trigger when the rows go.
+--   2. Deleting a Forgejo assignment row any other way queues its template too, through an AFTER
+--      DELETE trigger. Its student repos are queued by the repositories trigger when the rows go.
+--   Deleting a course with assignments still fails on either host, with or without this migration:
+--   assignment_self_review_settings.class_id references classes with NO ACTION while
+--   assignments.self_review_setting_id is NOT NULL, so the class delete raises 23503. The trigger
+--   in 2 would also cover that cascade if a later schema change made it possible.
 --   3. The guard trigger is dropped.
 --
 -- Body is otherwise verbatim from 20261016120000_assignment_delete_atomic_archive.sql, the live
@@ -538,9 +540,9 @@ $function$;
 COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint, boolean, bigint[]) IS
   'Deletes an assignment and all its associated data in one transaction. With p_enqueue_github_archives, also queues archive_repo_and_lock for every deleted GitHub repository plus a GitHub template and the grader repo, so GitHub cleanup commits or rolls back with the delete. A Forgejo assignment''s repos and template are queued in forgejo_repo_archives in the same transaction. Locks the repositories and cancels their queued sync_repo_to_handout jobs, refusing (55006) while one is running (claimed, or an in_progress marker whose message is still queued). Returns the GitHub and Forgejo targets it removed. false = legacy caller that queued its own archives. service_role/postgres only.';
 
--- A Forgejo assignment deleted without delete_assignment_with_all_data (directly, or by its course's
--- cascade) still has its handout archived. Its student repos are queued by forgejo_repo_archive_on_delete
--- when their rows go.
+-- A Forgejo assignment row deleted without delete_assignment_with_all_data still has its handout archived.
+-- (A course's cascade would fire this too, but that cascade can't complete today; see the header.) Its
+-- student repos are queued by forgejo_repo_archive_on_delete when their rows go.
 CREATE OR REPLACE FUNCTION public.queue_forgejo_template_archive_on_delete()
 RETURNS trigger
 LANGUAGE plpgsql
