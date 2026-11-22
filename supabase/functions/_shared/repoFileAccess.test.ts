@@ -66,6 +66,8 @@ function githubCourseClient(githubOrg: string | null) {
   const assignments = [
     { class_id: 1, autograder: { grader_repo: "pawtograder-playground/test-e2e-java-solution" } },
     { class_id: 1, autograder: null },
+    // Saved by course 1's instructor, but neu-cs3500 is course 2's org.
+    { class_id: 1, autograder: { grader_repo: "neu-cs3500/hw1-private" } },
     { class_id: 2, autograder: { grader_repo: "other-org/cs3500-hw1-solution" } }
   ];
   return {
@@ -88,6 +90,33 @@ function githubCourseClient(githubOrg: string | null) {
   } as unknown as Parameters<typeof assertGitHubCourseRepo>[0];
 }
 
+/** The service-role view of classes: course 2 owns neu-cs3500. */
+function otherCoursesClient() {
+  const classes = [
+    { id: 1, github_org: null },
+    { id: 2, github_org: "neu-cs3500" }
+  ];
+  return () =>
+    ({
+      from: () => {
+        let rows = classes;
+        const query = {
+          select: () => query,
+          ilike: (_column: string, pattern: string) => {
+            rows = rows.filter((c) => c.github_org?.toLowerCase() === pattern.toLowerCase());
+            return query;
+          },
+          neq: (_column: string, id: number) => {
+            rows = rows.filter((c) => c.id !== id);
+            return query;
+          },
+          limit: () => Promise.resolve({ data: rows, error: null })
+        };
+        return query;
+      }
+    }) as unknown as ReturnType<NonNullable<Parameters<typeof assertGitHubCourseRepo>[5]>>;
+}
+
 Deno.test("assertGitHubCourseRepo: a repo in the course's org passes, case-insensitively", async () => {
   await assertGitHubCourseRepo(githubCourseClient("neu-cs4535"), 1, "NEU-CS4535", "hw1", {
     allowPawtograderOrg: false
@@ -95,9 +124,31 @@ Deno.test("assertGitHubCourseRepo: a repo in the course's org passes, case-insen
 });
 
 Deno.test("assertGitHubCourseRepo: with no org, the course's own grader repo passes, case-insensitively", async () => {
-  await assertGitHubCourseRepo(githubCourseClient(null), 1, "Pawtograder-Playground", "Test-E2E-Java-Solution", {
-    allowPawtograderOrg: false
-  });
+  await assertGitHubCourseRepo(
+    githubCourseClient(null),
+    1,
+    "Pawtograder-Playground",
+    "Test-E2E-Java-Solution",
+    { allowPawtograderOrg: false },
+    otherCoursesClient()
+  );
+});
+
+Deno.test("assertGitHubCourseRepo: a grader saved in another course's org is a 403", async () => {
+  const refused = await assertRejects(
+    () =>
+      assertGitHubCourseRepo(
+        githubCourseClient(null),
+        1,
+        "NEU-CS3500",
+        "hw1-private",
+        { allowPawtograderOrg: false },
+        otherCoursesClient()
+      ),
+    UserVisibleError,
+    "another course's GitHub org"
+  );
+  assertEquals(refused.status, 403);
 });
 
 Deno.test("assertGitHubCourseRepo: with no org, another course's grader repo is a 403", async () => {

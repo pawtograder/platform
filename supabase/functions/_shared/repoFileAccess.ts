@@ -1,4 +1,5 @@
-import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { ilikeLiteral } from "./RepoPush.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { ForgejoNotConfiguredError, type RepoFiles, repoFilesOn } from "./GitProvider.ts";
@@ -33,15 +34,19 @@ export function forgejoOrgForClass(cls: { slug: string | null; forgejo_org: stri
  * Refuses a GitHub repo that is neither in the course's github_org nor one of the course's own grader repos.
  * Forgejo assignments keep their grader repo on GitHub (D6), usually outside any course org, and a
  * Forgejo-only course has no github_org at all, so the grader repos are matched by name. Only assignments in
- * this course count, which keeps one course's staff out of another course's graders. GitHub matches names
- * case-insensitively, so this does too.
+ * this course count, which keeps one course's staff out of another course's graders. Any instructor can save
+ * any name as grader_repo, so a grader in another course's github_org is refused too: otherwise saving one
+ * would reach that course's private repos. GitHub matches names case-insensitively, so this does too.
  */
 export async function assertGitHubCourseRepo(
   supabase: SupabaseClient<Database>,
   courseId: number,
   orgName: string,
   repoName: string,
-  { allowPawtograderOrg }: { allowPawtograderOrg: boolean }
+  { allowPawtograderOrg }: { allowPawtograderOrg: boolean },
+  // Other courses' rows aren't visible to the caller.
+  adminSupabase: () => SupabaseClient<Database> = () =>
+    createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!)
 ): Promise<void> {
   const { data: course, error } = await supabase.from("classes").select("github_org").eq("id", courseId).single();
   if (error) {
@@ -65,7 +70,22 @@ export async function assertGitHubCourseRepo(
     );
   }
   const repo = `${org}/${repoName.toLowerCase()}`;
-  if (assignments.some((a) => a.autograder?.grader_repo?.trim().toLowerCase() === repo)) return;
+  if (assignments.some((a) => a.autograder?.grader_repo?.trim().toLowerCase() === repo)) {
+    const { data: owners, error: ownerError } = await adminSupabase()
+      .from("classes")
+      .select("id")
+      .ilike("github_org", ilikeLiteral(org))
+      .neq("id", courseId)
+      .limit(1);
+    if (ownerError) {
+      throw new UserVisibleError(`Could not check who owns the GitHub org ${orgName}: ${ownerError.message}`, 500);
+    }
+    if (owners.length === 0) return;
+    throw new UserVisibleError(
+      `Requested ${orgName}/${repoName} on GitHub, but ${orgName} is another course's GitHub org, so it can't be this course's grader repo`,
+      403
+    );
+  }
   throw new UserVisibleError(
     `Requested ${orgName}/${repoName} on GitHub but it is not in the course's GitHub org (${course.github_org ?? "not set"}) or one of its grader repos`,
     403
