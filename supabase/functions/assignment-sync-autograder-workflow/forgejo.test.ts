@@ -134,7 +134,12 @@ type Sharer = {
   template_repo: string;
 };
 
-function fakeSupabase(sharers: Sharer[], repoCount = 0, repoCountError: { message: string } | null = null) {
+function fakeSupabase(
+  sharers: Sharer[],
+  repoCount = 0,
+  repoCountError: { message: string } | null = null,
+  failingWrite: string | null = null
+) {
   const writes: { table: string; values: Record<string, unknown>; filters: string[] }[] = [];
   const reads: string[] = [];
   const client = {
@@ -164,7 +169,8 @@ function fakeSupabase(sharers: Sharer[], repoCount = 0, repoCountError: { messag
             in: (column: string, ids: unknown[]) => (entry.filters.push(`in ${column} ${ids.join(",")}`), chain),
             eq: (column: string, value: unknown) => (entry.filters.push(`eq ${column} ${value}`), chain),
             is: (column: string, value: unknown) => (entry.filters.push(`is ${column} ${value}`), chain),
-            then: (done: (r: { error: null }) => void) => done({ error: null })
+            then: (done: (r: { error: { message: string } | null }) => void) =>
+              done({ error: table === failingWrite ? { message: `${table} write failed` } : null })
           };
           return chain;
         }
@@ -365,3 +371,15 @@ Deno.test("sync: a failed Forgejo commit is reported to the instructor and write
   );
   assertEquals(writes, []);
 });
+
+for (const table of ["autograder", "assignments"]) {
+  Deno.test(`sync: a failed ${table} write after the commit is returned, not thrown`, async () => {
+    const { client } = fakeSupabase([], 2, null, table);
+    const { ops, changes } = stubRepo({});
+    const result = await syncForgejoAssignmentWorkflow(client, config, assignment, true, server, ops);
+    assertEquals(changes.length, 1);
+    assertEquals(result.action, "added");
+    assertEquals(result.record_error, `${table} write failed`);
+    assertEquals(result.existing_repositories_unchanged, 2);
+  });
+}

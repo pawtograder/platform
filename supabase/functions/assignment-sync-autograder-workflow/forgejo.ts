@@ -107,6 +107,8 @@ export type ForgejoSyncResult = {
   has_autograder: boolean;
   template_repo: string;
   existing_repositories_unchanged: number;
+  /** The handout already holds the requested state, but recording its hash or revision failed; a re-sync repairs it. */
+  record_error?: string;
 };
 
 /** The handout must be in the class's org: the admin credential can write any repo on the instance. */
@@ -175,27 +177,35 @@ export async function syncForgejoAssignmentWorkflow(
   const wrote = change.commitSha !== null;
   const unfinished =
     !wrote && change.headIsToggleCommit && headSha !== null && assignment.latest_template_sha !== headSha;
-  if (hasAutograder && change.liveWorkflow !== null) {
-    // Grading checks grade.yml against workflow_sha; a file that was already live keeps its stored hash.
-    const workflowSha = await sha256Hex(change.liveWorkflow);
-    let update = supabase.from("autograder").update({ workflow_sha: workflowSha }).in("id", ids);
-    if (!wrote && !unfinished) update = update.is("workflow_sha", null);
-    const { error } = await update;
-    if (error) throw error;
-  }
-  if (headSha !== null && (wrote || unfinished)) {
-    const { error } = await supabase
-      .from("assignments")
-      .update({ latest_template_sha: headSha })
-      .in("id", ids)
-      .eq("git_provider", "forgejo");
-    if (error) throw error;
+  // Past this point the handout already holds the requested state, so a failed write is
+  // returned rather than thrown: a thrown error would make the caller restore the old flag.
+  let recordError: string | undefined;
+  try {
+    if (hasAutograder && change.liveWorkflow !== null) {
+      // Grading checks grade.yml against workflow_sha; a file that was already live keeps its stored hash.
+      const workflowSha = await sha256Hex(change.liveWorkflow);
+      let update = supabase.from("autograder").update({ workflow_sha: workflowSha }).in("id", ids);
+      if (!wrote && !unfinished) update = update.is("workflow_sha", null);
+      const { error } = await update;
+      if (error) throw error;
+    }
+    if (headSha !== null && (wrote || unfinished)) {
+      const { error } = await supabase
+        .from("assignments")
+        .update({ latest_template_sha: headSha })
+        .in("id", ids)
+        .eq("git_provider", "forgejo");
+      if (error) throw error;
+    }
+  } catch (e) {
+    recordError = e instanceof Error ? e.message : ((e as { message?: string })?.message ?? String(e));
   }
 
   return {
     action: change.commitSha ? (hasAutograder ? "added" : "removed") : "unchanged",
     has_autograder: hasAutograder,
     template_repo: assignment.template_repo,
-    existing_repositories_unchanged: wrote || unfinished ? (existingRepos ?? 0) : 0
+    existing_repositories_unchanged: wrote || unfinished ? (existingRepos ?? 0) : 0,
+    ...(recordError !== undefined ? { record_error: recordError } : {})
   };
 }

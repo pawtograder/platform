@@ -6,6 +6,7 @@ import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
+import { toastAutograderNotRecorded } from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { FORGEJO_GRADER_SETUP_REASON } from "@/lib/gitProviderOptions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
@@ -231,6 +232,13 @@ export default function AutograderPage() {
               "repositories could not be queued. Sync them from the assignment's repositories " +
               "page — until then they still have the previous autograder setup.",
             type: "warning"
+          });
+        }
+        if (syncResult?.forgejo_workflow_record_failed) {
+          toastAutograderNotRecorded(syncResult.forgejo_workflow_record_failed, {
+            assignmentId: Number.parseInt(assignment_id as string),
+            classId: Number.parseInt(course_id as string),
+            supabase
           });
         }
         if ((syncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {

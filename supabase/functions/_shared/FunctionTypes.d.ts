@@ -564,6 +564,12 @@ export type AssignmentSyncAutograderWorkflowResponse = {
   reconcile_blocked_by?: { id: number; title: string }[];
   /** Forgejo only: existing student repos that keep their old grade.yml; callers must warn the instructor. */
   forgejo_existing_repositories_unchanged?: number;
+  /**
+   * Forgejo only: the handout holds the requested workflow state, so `has_autograder` must stay as
+   * saved, but its workflow hash or revision was not recorded. Callers must offer a re-sync, which
+   * repairs both.
+   */
+  forgejo_workflow_record_failed?: string;
 };
 
 export type AutograderCreateReposForStudentRequest = {

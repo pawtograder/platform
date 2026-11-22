@@ -240,11 +240,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       hasAutograder,
       publicSupabaseUrl()
     );
-    const { existing_repositories_unchanged: unchanged, ...rest } = forgejoResult;
+    const { existing_repositories_unchanged: unchanged, record_error: recordError, ...rest } = forgejoResult;
     if (unchanged > 0) {
       scope.setTag("forgejo_existing_repositories_unchanged", String(unchanged));
     }
-    return { ...rest, ...(unchanged > 0 ? { forgejo_existing_repositories_unchanged: unchanged } : {}) };
+    if (recordError !== undefined) {
+      scope.setTag("error_source", "forgejo_workflow_record_failed");
+      Sentry.captureMessage(`Forgejo handout updated but not recorded: ${recordError}`, scope);
+    }
+    return {
+      ...rest,
+      ...(unchanged > 0 ? { forgejo_existing_repositories_unchanged: unchanged } : {}),
+      ...(recordError !== undefined ? { forgejo_workflow_record_failed: recordError } : {})
+    };
   }
   if (assignment.git_provider !== "github") {
     throw new UserVisibleError("This assignment's repository host is not supported.", 400);

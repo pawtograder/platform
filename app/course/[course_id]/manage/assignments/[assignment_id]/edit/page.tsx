@@ -1,6 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
+import { toastAutograderNotRecorded, toastAutograderSyncFailed } from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { FORGEJO_DETACH_REASON } from "@/lib/gitProviderOptions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
@@ -639,35 +640,42 @@ export default function EditAssignment() {
           queryData?.has_autograder !== undefined &&
           queryData.has_autograder !== values.has_autograder
         ) {
+          const syncTarget = {
+            assignmentId: Number.parseInt(assignment_id as string),
+            classId: Number.parseInt(course_id as string),
+            supabase
+          };
           let forgejoSyncResult: Awaited<ReturnType<typeof assignmentSyncAutograderWorkflow>>;
           try {
             forgejoSyncResult = await assignmentSyncAutograderWorkflow(
-              {
-                assignment_id: Number.parseInt(assignment_id as string),
-                class_id: Number.parseInt(course_id as string)
-              },
+              { assignment_id: syncTarget.assignmentId, class_id: syncTarget.classId },
               supabase
             );
           } catch (syncError) {
-            // The sync reads has_autograder from the row, so a failed sync rolls the saved flag back.
+            // A thrown sync left the handout unchanged (failures after its commit are returned as
+            // forgejo_workflow_record_failed), so the saved flag is rolled back to match it.
             const { error: rollbackError } = await supabase
               .from("assignments")
               .update({ has_autograder: queryData.has_autograder })
-              .eq("id", Number.parseInt(assignment_id as string))
+              .eq("id", syncTarget.assignmentId)
               .eq("has_autograder", values.has_autograder);
             if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
             const detail = syncError instanceof Error ? syncError.message : String(syncError);
-            toaster.create({
-              title: "Autograder setting not changed",
-              description: rollbackError
-                ? `Your other changes were saved, but the handout's grade.yml could not be updated (${detail}), ` +
-                  `and the autograder setting could not be put back. Save this assignment again to retry.`
-                : `Your other changes were saved, but the autograder was not turned ${
-                    values.has_autograder ? "on" : "off"
-                  }: ${detail}`,
-              type: "error"
-            });
+            if (rollbackError) {
+              toastAutograderSyncFailed(detail, syncTarget);
+            } else {
+              toaster.create({
+                title: "Autograder setting not changed",
+                description: `Your other changes were saved, but the autograder was not turned ${
+                  values.has_autograder ? "on" : "off"
+                }: ${detail}`,
+                type: "error"
+              });
+            }
             return;
+          }
+          if (forgejoSyncResult?.forgejo_workflow_record_failed) {
+            toastAutograderNotRecorded(forgejoSyncResult.forgejo_workflow_record_failed, syncTarget);
           }
           if ((forgejoSyncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
             const stale = forgejoSyncResult!.forgejo_existing_repositories_unchanged!;
