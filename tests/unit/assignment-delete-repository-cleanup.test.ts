@@ -9,6 +9,7 @@ import {
   hasOnlyHandoutCommits,
   parseDeletedGitHubRepositories,
   parseGitHubRepoFullName,
+  selectCleanupStrategyForDeleted,
   selectGitHubCleanupStrategy
 } from "../../supabase/functions/assignment-delete/repositoryCleanup";
 
@@ -172,6 +173,22 @@ describe("assignment-delete repository cleanup helpers", () => {
 test("mixed provider repositories share the five-repository deletion budget", () => {
   expect(selectGitHubCleanupStrategy(4 + 2)).toBe("archive_asynchronously");
   expect(selectGitHubCleanupStrategy(4 + 1)).toBe("delete_synchronously");
+});
+
+test("the delete RPC's GitHub and Forgejo repositories are counted together when choosing the strategy", () => {
+  const repos = (org: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ kind: "student", full_name: `${org}/hw1-s${i}` }));
+  const mixed = selectCleanupStrategyForDeleted({
+    github_repositories: repos("GhOrg", 4),
+    forgejo_repositories: repos("cs101", 2)
+  });
+  expect(mixed.strategy).toBe("archive_asynchronously");
+  expect(mixed.github).toHaveLength(4);
+  expect(mixed.forgejo).toHaveLength(2);
+  expect(
+    selectCleanupStrategyForDeleted({ github_repositories: repos("GhOrg", 4), forgejo_repositories: repos("cs101", 1) })
+      .strategy
+  ).toBe("delete_synchronously");
 });
 
 test("hasOnlyHandoutCommits: the rule both hosts' delete preflights share", () => {

@@ -102,6 +102,19 @@ export function selectGitHubCleanupStrategy(targetCount: number): GitHubCleanupS
   return targetCount > ASYNC_ARCHIVE_REPO_THRESHOLD ? "archive_asynchronously" : "delete_synchronously";
 }
 
+/**
+ * The strategy for what the delete RPC reported: GitHub and Forgejo repositories share one budget, so a
+ * mixed assignment is counted across both hosts.
+ */
+export function selectCleanupStrategyForDeleted(deleteResult: {
+  github_repositories?: unknown;
+  forgejo_repositories?: unknown;
+}): { strategy: GitHubCleanupStrategy; github: GitHubRepoTarget[]; forgejo: GitHubRepoTarget[] } {
+  const github = parseDeletedGitHubRepositories(deleteResult.github_repositories);
+  const forgejo = parseDeletedGitHubRepositories(deleteResult.forgejo_repositories);
+  return { strategy: selectGitHubCleanupStrategy(github.length + forgejo.length), github, forgejo };
+}
+
 function targetKey(org: string, repo: string) {
   return `${org.toLowerCase()}/${repo.toLowerCase()}`;
 }

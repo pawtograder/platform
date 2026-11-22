@@ -14,8 +14,7 @@ import {
   collectGitHubRepoTargets,
   hasOnlyHandoutCommits,
   modifiedRepositoryMessage,
-  parseDeletedGitHubRepositories,
-  selectGitHubCleanupStrategy
+  selectCleanupStrategyForDeleted
 } from "./repositoryCleanup.ts";
 import type { GitHubCleanupStrategy, GitHubRepoTarget } from "./repositoryCleanup.ts";
 import {
@@ -344,9 +343,11 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   // or forgejo_repo_archives for forgejo-reconciler); a small assignment is also deleted
   // outright here, which only makes those jobs no-ops. The two hosts share one budget.
 
-  const deletedTargets = parseDeletedGitHubRepositories(deleteResult.github_repositories);
-  const forgejoTargets = parseDeletedGitHubRepositories(deleteResult.forgejo_repositories);
-  const cleanupStrategy = selectGitHubCleanupStrategy(deletedTargets.length + forgejoTargets.length);
+  const {
+    strategy: cleanupStrategy,
+    github: deletedTargets,
+    forgejo: forgejoTargets
+  } = selectCleanupStrategyForDeleted(deleteResult);
   scope?.setTag("github_cleanup_strategy", cleanupStrategy);
   scope?.setTag("github_repositories_total", deletedTargets.length.toString());
 
