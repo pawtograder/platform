@@ -3403,13 +3403,27 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const restore = () => this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+    const restore = () => this._restoreRemovedRow(id as IDType, existingRow);
     const { error, count } = await this._client.from(this._table).delete({ count: "exact" }).eq("id", id);
     if (error) {
       restore();
       throw error;
     }
     await this._throwIfDeleteRefused(id, count, restore);
+  }
+
+  /**
+   * Puts back a row that `delete` or `hardDelete` removed from the cache before a write that
+   * failed or was refused.
+   *
+   * A realtime broadcast can put the row back first, while the write or the follow-up select in
+   * {@link _throwIfDeleteRefused} is in flight. That copy is newer than `snapshot`, so when the id
+   * is already in the cache, keep it. Passing the snapshot to `_addRow` would overwrite it, because
+   * `_addRow` turns a known id into an update.
+   */
+  private _restoreRemovedRow(id: IDType, snapshot: PossiblyTentativeResult<ResultOne>): void {
+    if (this._rowsById.has(id)) return;
+    this._addRow({ ...snapshot, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
   }
 
   /**
@@ -3472,7 +3486,7 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const restore = () => this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+    const restore = () => this._restoreRemovedRow(id as IDType, existingRow);
     const { error, count } = await this._client
       .from(this._table)
       .update({ deleted_at: new Date().toISOString() }, { count: "exact" })

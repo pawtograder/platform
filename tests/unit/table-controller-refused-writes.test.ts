@@ -144,6 +144,34 @@ describe.each([
     controller.close();
   });
 
+  it("keeps a newer row that a realtime UPDATE put back during the follow-up select", async () => {
+    // The UPDATE broadcast lands while the visibility select is in flight, so the cache already
+    // holds the newer row when the refusal is detected. Restoring the pre-delete snapshot would
+    // overwrite it (#1296 review).
+    const ref: { controller?: unknown } = {};
+    const { controller, cached } = makeController({
+      [httpMethod]: () => changed(0),
+      GET: () => {
+        (ref.controller as { _handleUpdate(message: unknown): void })._handleUpdate({
+          type: "table_change",
+          operation: "UPDATE",
+          table: "submission_comments",
+          row_id: 7,
+          data: { id: 7, comment: "newer", deleted_at: null }
+        });
+        return json([{ id: 7 }]);
+      }
+    });
+    ref.controller = controller;
+
+    const error = await controller[method](7).catch((e: unknown) => e);
+
+    expect(isRefusedWriteError(error)).toBe(true);
+    expect(cached()).toMatchObject({ id: 7, comment: "newer" });
+    expect((controller.rows as unknown as Row[]).filter((r) => r.id === 7)).toHaveLength(1);
+    controller.close();
+  });
+
   it("resolves when 0 rows changed because the row is already gone", async () => {
     const { controller, cached } = makeController({
       [httpMethod]: () => changed(0),

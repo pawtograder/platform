@@ -43,10 +43,10 @@ async function controllerFor<T extends Table>(client: SupabaseClient<Database>, 
   expect(error).toBeNull();
   expect(data).toHaveLength(1);
   return new TableController({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     query: client
       .from(table)
       .select("*")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .eq("id", id as never) as any,
     client,
     table,
@@ -189,7 +189,12 @@ test.describe("TableController reports writes RLS refused", () => {
     } finally {
       controller.close();
     }
-    const { data } = await supabase.from("submission_comments").select("deleted_at").eq("id", graderCommentId).single();
-    expect(data?.deleted_at).not.toBeNull();
+    const { data, error } = await supabase
+      .from("submission_comments")
+      .select("deleted_at")
+      .eq("id", graderCommentId)
+      .single();
+    expect(error).toBeNull();
+    expect(data?.deleted_at).toEqual(expect.any(String));
   });
 });
