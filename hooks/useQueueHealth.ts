@@ -77,5 +77,5 @@ export function useQueueHealth(
     };
   }, [classId, enabled]);
 
-  return useMemo(() => ({ byQueue, thresholds }), [byQueue, thresholds]);
+  return useMemo(() => ({ byQueue: enabled ? byQueue : {}, thresholds }), [byQueue, thresholds, enabled]);
 }

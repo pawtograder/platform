@@ -1329,7 +1329,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             {canHelpStudents && !readOnly && request && request.assignee && <HelpRequestAssignment request={request} />}
 
             {/* Escalate: only the staff member currently helping */}
-            {isInstructorOrGrader &&
+            {canHelpStudents &&
               !readOnly &&
               request &&
               request.status === "in_progress" &&
@@ -1348,7 +1348,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
               request &&
               request.status !== "resolved" &&
               request.status !== "closed" &&
-              (isInstructorOrGrader && request.is_video_live ? (
+              (canHelpStudents && request.is_video_live ? (
                 <Tooltip content="End the video call first: a resolved ticket can't end its call" showArrow>
                   <Button size="xs" colorPalette="blue" variant="outline" disabled>
                     <Icon as={BsCheck} />
@@ -1366,7 +1366,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                   }
                   confirmHeader="Resolve Request"
                   confirmText={
-                    !isInstructorOrGrader
+                    !canHelpStudents
                       ? "Are you sure you want to resolve this request?"
                       : request.status === "in_progress"
                         ? "The student will be asked whether their problem got fixed, and can escalate if it wasn't."
@@ -1378,7 +1378,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
             {/* End ticket: final, no check-in and no further escalation. Not gated on readOnly,
                 which is true once resolved: ending a resolved ticket withdraws a pending check-in. */}
-            {isInstructorOrGrader &&
+            {canHelpStudents &&
               !isViewingAsStudent &&
               request &&
               (request.status === "open" || request.status === "in_progress" || isCheckInPending(request)) &&

@@ -12,6 +12,8 @@
 --     so new classes put help_students on the default grader role too (and keep
 --     manage_flashcards and run_polls there). Instructors still get every capability
 --     via the CROSS JOIN.
+--   * Escalate and finish use help_students or class admin, preserving the escalation guards.
+--   * Queue health uses help_students. Class health thresholds need manage_office_hours.
 --   * help_requests staff UPDATE / DELETE: role IN (instructor, grader) -> help_students.
 --     The student half of "Students can update their own help requests" stays.
 --   * help_request_students staff UPDATE: authorizeforhelprequeststaff -> help_students.
@@ -249,15 +251,35 @@ BEGIN
   END IF;
 
   -- Callers without a user JWT (service role, cron, admin edge functions) are trusted.
-  -- Class admins keep the old authorizeforhelprequeststaff exemption (admin holds no
-  -- capabilities by design).
-  IF auth.uid() IS NULL
-     OR OLD.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF OLD.status = 'closed' AND NEW.status IS DISTINCT FROM OLD.status THEN
+    RAISE EXCEPTION 'help request % was ended and cannot be reopened', OLD.id
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- The escalation RPCs validate the caller themselves and then update on their behalf.
+  IF current_setting('pawtograder.help_request_escalation_rpc', true) = 'on' THEN
+    RETURN NEW;
+  END IF;
+
+  -- Checked before the staff return: otherwise any instructor or grader could PATCH a ticket to
+  -- the top of the queue, or open a check-in on a ticket nobody helped.
+  IF NEW.escalation_count IS DISTINCT FROM OLD.escalation_count
+     OR NEW.last_escalated_at IS DISTINCT FROM OLD.last_escalated_at
+     OR NEW.check_in_expires_at IS DISTINCT FROM OLD.check_in_expires_at THEN
+    RAISE EXCEPTION 'escalation fields of a help request change only through the escalation functions'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF (OLD.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
      OR EXISTS (
           SELECT 1 FROM public.user_privileges up
            WHERE up.user_id = auth.uid()
              AND up.class_id = OLD.class_id
-             AND up.role = 'admin') THEN
+             AND up.role = 'admin')) THEN
     RETURN NEW;
   END IF;
 
@@ -267,6 +289,12 @@ BEGIN
      OR (NEW.followup_to IS DISTINCT FROM OLD.followup_to AND NEW.followup_to IS NOT NULL)
      OR (NEW.template_id IS DISTINCT FROM OLD.template_id AND NEW.template_id IS NOT NULL) THEN
     RAISE EXCEPTION 'only course staff may change the creator, queue, assignee, follow-up or template of a help request'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NOT (NEW.status = 'resolved' AND OLD.status IN ('open', 'in_progress')) THEN
+    RAISE EXCEPTION 'students may only resolve an open or in-progress help request'
       USING ERRCODE = '42501';
   END IF;
 
@@ -295,11 +323,28 @@ SECURITY DEFINER
 SET search_path TO ''
 AS $$
 BEGIN
+    -- Attached to `BEFORE UPDATE OF is_private, class_id`, which fires on the statement's
+    -- column list rather than on an actual value change, so the OLD/NEW comparisons here
+    -- are what do the work: a no-op write of the same value is allowed through.
+
+    -- A help request never changes class. Nothing in the product moves one -- the class
+    -- is derived from the queue at creation and no code path writes this column -- and
+    -- allowing it defeats the privacy check below. The UPDATE policy admits a participant
+    -- through user_is_in_help_request(id), which is class-independent and passes for both
+    -- the old and the new row, so a participant who happens to be staff in some OTHER
+    -- class could re-home the request into that class and authorize their own downgrade:
+    -- in a single statement if we authorized against NEW, or in two statements (move,
+    -- then downgrade) even if we authorize against OLD. Blocking the move is what closes
+    -- both. It is also the only thing keeping the row consistent with its help_queue,
+    -- which belongs to the original class.
     IF NEW.class_id IS DISTINCT FROM OLD.class_id THEN
         RAISE EXCEPTION 'help request % cannot be moved between classes', OLD.id
             USING ERRCODE = '42501';
     END IF;
 
+    -- Authorize against OLD.class_id. NEW.class_id is caller-controlled in the same
+    -- statement, so authorizing against it would let the caller pick the class that
+    -- grants them staff privileges.
     IF OLD.is_private = true AND NEW.is_private = false
        AND OLD.class_id NOT IN (SELECT public.user_class_ids_with_capability('help_students')) THEN
         RAISE EXCEPTION 'only course staff may make a private help request public'
@@ -709,3 +754,293 @@ CREATE POLICY "Office hours managers can delete activity records"
 ON public.student_help_activity
 FOR DELETE TO authenticated
 USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')));
+
+-- Authorization from escalate_help_request in 20261116150100_help_request_escalation.sql.
+CREATE OR REPLACE FUNCTION public.escalate_help_request(p_help_request_id bigint, p_note text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+DECLARE
+  v_request public.help_requests%ROWTYPE;
+  v_caller uuid;
+  v_note text := regexp_replace(coalesce(p_note, ''), '^\s+|\s+$', '', 'g');
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'not authenticated' USING ERRCODE = '28000';
+  END IF;
+  IF char_length(v_note) NOT BETWEEN 1 AND 500 THEN
+    RAISE EXCEPTION 'an escalation note of 1 to 500 characters is required' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO v_request FROM public.help_requests WHERE id = p_help_request_id FOR UPDATE;
+  IF NOT FOUND OR NOT (v_request.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+     OR EXISTS (
+          SELECT 1 FROM public.user_privileges up
+           WHERE up.user_id = auth.uid()
+             AND up.class_id = v_request.class_id
+             AND up.role = 'admin')) THEN
+    RAISE EXCEPTION 'help request % not found', p_help_request_id USING ERRCODE = '42501';
+  END IF;
+
+  v_caller := public.help_request_caller_profile(v_request.class_id);
+  IF v_request.status <> 'in_progress' OR v_request.assignee IS DISTINCT FROM v_caller THEN
+    RAISE EXCEPTION 'only the staff member currently helping can escalate this request' USING ERRCODE = '42501';
+  END IF;
+
+  PERFORM set_config('pawtograder.help_request_escalation_rpc', 'on', true);
+
+  INSERT INTO public.help_request_escalations (class_id, help_request_id, escalated_by, source, previous_assignee, note)
+  VALUES (v_request.class_id, v_request.id, v_caller, 'staff', v_request.assignee, v_note);
+
+  -- Clearing the assignee ends the work session (trigger_help_request_work_sessions).
+  UPDATE public.help_requests
+     SET status = 'open',
+         assignee = NULL,
+         escalation_count = escalation_count + 1,
+         last_escalated_at = now(),
+         check_in_expires_at = NULL
+   WHERE id = v_request.id;
+
+  PERFORM public.log_help_request_activity(v_request.id, v_request.class_id, 'request_escalated', 'Request escalated by staff');
+
+  PERFORM set_config('pawtograder.help_request_escalation_rpc', 'off', true);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.escalate_help_request(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.escalate_help_request(bigint, text) TO authenticated, service_role;
+
+-- Authorization from finish_help_request in 20261116150100_help_request_escalation.sql.
+CREATE OR REPLACE FUNCTION public.finish_help_request(p_help_request_id bigint, p_end_ticket boolean DEFAULT false)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+DECLARE
+  v_request public.help_requests%ROWTYPE;
+  v_caller uuid;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'not authenticated' USING ERRCODE = '28000';
+  END IF;
+
+  SELECT * INTO v_request FROM public.help_requests WHERE id = p_help_request_id FOR UPDATE;
+  IF NOT FOUND OR NOT (v_request.class_id IN (SELECT public.user_class_ids_with_capability('help_students'))
+     OR EXISTS (
+          SELECT 1 FROM public.user_privileges up
+           WHERE up.user_id = auth.uid()
+             AND up.class_id = v_request.class_id
+             AND up.role = 'admin')) THEN
+    RAISE EXCEPTION 'help request % not found', p_help_request_id USING ERRCODE = '42501';
+  END IF;
+
+  -- Resolve applies to active tickets. End ticket also applies to a resolved ticket whose
+  -- check-in is still pending, so staff can withdraw the student's option to escalate.
+  IF NOT (v_request.status IN ('open', 'in_progress')
+          OR (p_end_ticket AND v_request.status = 'resolved'
+              AND v_request.check_in_expires_at > now())) THEN
+    RAISE EXCEPTION 'help request % is already finished', p_help_request_id USING ERRCODE = '22023';
+  END IF;
+
+  -- Same refusal as the CLI close: once a ticket is resolved or closed, video-call-controls
+  -- disables both Join and End Call, so finishing it mid-call would strand the meeting with no way
+  -- to tear it down.
+  IF v_request.is_video_live THEN
+    RAISE EXCEPTION 'end the video call before finishing help request %', p_help_request_id USING ERRCODE = '22023';
+  END IF;
+
+  v_caller := public.help_request_caller_profile(v_request.class_id);
+
+  PERFORM set_config('pawtograder.help_request_escalation_rpc', 'on', true);
+
+  UPDATE public.help_requests
+     SET status = CASE WHEN p_end_ticket THEN 'closed'::public.help_request_status ELSE 'resolved'::public.help_request_status END,
+         resolved_by = coalesce(CASE WHEN v_request.status = 'resolved' THEN resolved_by END, v_caller),
+         resolved_at = coalesce(CASE WHEN v_request.status = 'resolved' THEN resolved_at END, now()),
+         -- Only a ticket someone was helping gets a check-in. Resolving an unclaimed ticket
+         -- must not hand the student an escalation they never earned by being helped.
+         check_in_expires_at = CASE
+           WHEN p_end_ticket OR v_request.status <> 'in_progress' THEN NULL
+           ELSE now() + interval '10 minutes'
+         END
+   WHERE id = v_request.id;
+
+  -- Ending a ticket that is already resolved only withdraws the check-in; the resolution was
+  -- logged when staff pressed Resolve, and student_help_activity has no uniqueness constraint.
+  IF v_request.status <> 'resolved' THEN
+    PERFORM public.log_help_request_activity(
+      v_request.id, v_request.class_id, 'request_resolved',
+      CASE WHEN p_end_ticket THEN 'Request ended by staff' ELSE 'Request resolved by staff' END);
+  END IF;
+
+  PERFORM set_config('pawtograder.help_request_escalation_rpc', 'off', true);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.finish_help_request(bigint, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.finish_help_request(bigint, boolean) TO authenticated, service_role;
+
+-- Dashboard RPC from 20261117174200_office_hours_queue_health.sql; only authorization changes.
+CREATE OR REPLACE FUNCTION public.office_hours_queue_health(p_class_id bigint)
+RETURNS TABLE (
+  queue_id bigint,
+  queue_name text,
+  waiting integer,
+  oldest_wait_seconds integer,
+  helping integer,
+  staffed_tas integer,
+  unstaffed_seconds integer,
+  resolved_today integer,
+  median_wait_seconds_today integer
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_zone text;
+  v_start timestamptz;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.user_class_ids_with_capability('help_students') AS allowed(class_id)
+    WHERE allowed.class_id = p_class_id
+  ) THEN
+    RAISE EXCEPTION 'Only course staff can view queue health' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT COALESCE(c.time_zone, 'UTC') INTO v_zone FROM public.classes c WHERE c.id = p_class_id;
+  v_start := date_trunc('day', now() AT TIME ZONE v_zone) AT TIME ZONE v_zone;
+
+  RETURN QUERY
+  WITH queues AS (
+    SELECT q.id, q.name FROM public.help_queues q WHERE q.class_id = p_class_id AND q.is_active
+  ),
+  open_now AS (
+    SELECT r.help_queue AS qid, COUNT(*)::int AS n, MIN(r.created_at) AS oldest
+    FROM public.help_requests r
+    WHERE r.class_id = p_class_id AND r.status = 'open'
+    GROUP BY r.help_queue
+  ),
+  helping_now AS (
+    SELECT r.help_queue AS qid, COUNT(*)::int AS n
+    FROM public.help_requests r
+    WHERE r.class_id = p_class_id AND r.status = 'in_progress'
+    GROUP BY r.help_queue
+  ),
+  staffed AS (
+    SELECT a.help_queue_id AS qid, COUNT(*)::int AS n
+    FROM public.help_queue_assignments a
+    WHERE a.class_id = p_class_id AND a.ended_at IS NULL
+    GROUP BY a.help_queue_id
+  ),
+  last_shift_end AS (
+    SELECT a.help_queue_id AS qid, MAX(a.ended_at) AS ended
+    FROM public.help_queue_assignments a
+    WHERE a.class_id = p_class_id AND a.ended_at IS NOT NULL
+    GROUP BY a.help_queue_id
+  ),
+  resolved_today AS (
+    SELECT r.help_queue AS qid, COUNT(*)::int AS n
+    FROM public.help_requests r
+    WHERE r.class_id = p_class_id AND r.status = 'resolved' AND r.resolved_at >= v_start
+    GROUP BY r.help_queue
+  ),
+  first_pickup AS (
+    SELECT s.help_request_id, MIN(s.started_at) AS picked_at
+    FROM public.help_request_work_sessions s
+    WHERE s.class_id = p_class_id
+    GROUP BY s.help_request_id
+  ),
+  median_wait AS (
+    SELECT r.help_queue AS qid,
+           percentile_cont(0.5) WITHIN GROUP (
+             ORDER BY EXTRACT(EPOCH FROM (fp.picked_at - r.created_at))
+           ) AS med
+    FROM public.help_requests r
+    JOIN first_pickup fp ON fp.help_request_id = r.id
+    WHERE r.class_id = p_class_id AND fp.picked_at >= v_start
+    GROUP BY r.help_queue
+  )
+  SELECT
+    q.id,
+    q.name,
+    COALESCE(o.n, 0),
+    COALESCE(EXTRACT(EPOCH FROM (now() - o.oldest)), 0)::int,
+    COALESCE(h.n, 0),
+    COALESCE(s.n, 0),
+    CASE WHEN COALESCE(s.n, 0) = 0 AND le.ended IS NOT NULL
+         THEN EXTRACT(EPOCH FROM (now() - le.ended))::int
+         ELSE NULL END,
+    COALESCE(rt.n, 0),
+    COALESCE(m.med, 0)::int
+  FROM queues q
+  LEFT JOIN open_now o ON o.qid = q.id
+  LEFT JOIN helping_now h ON h.qid = q.id
+  LEFT JOIN staffed s ON s.qid = q.id
+  LEFT JOIN last_shift_end le ON le.qid = q.id
+  LEFT JOIN resolved_today rt ON rt.qid = q.id
+  LEFT JOIN median_wait m ON m.qid = q.id
+  ORDER BY q.name;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.office_hours_queue_health(bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.office_hours_queue_health(bigint) TO authenticated;
+
+-- Column allowlist from 20261117174100_classes_office_hours_health_thresholds.sql.
+-- Other settings still need an instructor. Thresholds need manage_office_hours for every caller.
+CREATE OR REPLACE FUNCTION public.only_calendar_or_discord_ids_changed(new_row classes)
+RETURNS boolean
+LANGUAGE sql
+STABLE SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+  SELECT COALESCE(
+    (
+      SELECT COALESCE(
+        (
+          SELECT bool_and(
+            (changed.key = ANY(ARRAY[
+              -- discord_server_id is absent on purpose: claim_discord_guild() is its only writer.
+              -- A category id inside a guild the class already controls, so it stays editable.
+              'discord_channel_group_id',
+              'office_hours_ics_url',
+              'events_ics_url',
+              'office_hours_description'
+            ]) AND public.authorizeforclassinstructor(new_row.id))
+            OR (changed.key = 'office_hours_health_thresholds'
+                AND new_row.id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')))
+            OR changed.key = 'updated_at'
+          )
+          FROM (
+            SELECT t.key
+            FROM jsonb_each(to_jsonb(new_row)) AS t(key, value)
+            WHERE (to_jsonb(old_row)->t.key) IS DISTINCT FROM t.value
+          ) AS changed
+        ),
+        true  -- no differences -> allow
+      )
+      FROM public.classes old_row
+      WHERE old_row.id = new_row.id
+    ),
+    false -- no matching row found
+  );
+$function$;
+
+DROP POLICY IF EXISTS "classes_instructor_update_calendar_or_discord_ids" ON public.classes;
+CREATE POLICY "classes_instructor_update_calendar_or_discord_ids" ON public.classes
+FOR UPDATE TO authenticated
+USING (
+  public.authorizeforclassinstructor(id)
+  OR id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
+)
+WITH CHECK (
+  (public.authorizeforclassinstructor(id)
+   OR id IN (SELECT public.user_class_ids_with_capability('manage_office_hours')))
+  AND public.only_calendar_or_discord_ids_changed(classes.*)
+);

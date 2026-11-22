@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261115220000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`, `20261117120000_office_hours_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122120000_flashcards_manage_by_capability.sql`, `20261122120100_surveys_polls_by_capability.sql`, `20261122120200_office_hours_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -190,22 +190,35 @@ should require `manage_surveys` on both classes, which would take it away from d
 ## help_students and manage_office_hours
 
 `help_students` covers what staff do to help in office hours (area 10): updating and deleting help
-requests (status, assignee, resolve/close/reopen), staff chat messages (`instructors_only`), staff
+requests (status and assignee), resolving or ending tickets through `finish_help_request`,
+escalating through `escalate_help_request`, and reading queue health through `office_hours_queue_health`.
+It also covers staff chat messages (`instructors_only`), staff
 membership updates, creating moderation records, karma note writes, work-session inserts, joining
 and leaving queues (`help_queue_assignments` writes), and creating/editing/deleting help queues.
 Day one, the default instructor role, the default grader role and every existing custom role hold
-it. Assign / resolve / moderate / karma / start-call controls and queue create/edit/delete follow
+it. Assign / resolve / end / escalate / moderate / karma controls and queue create/edit/delete follow
 `useCapability("help_students")`. Helpers and policies that used to call
 `authorizeforhelprequeststaff` also keep class admins (the admin role holds no capabilities by
 design, so those checks OR the same `user_privileges.role = 'admin'` test the old helper used).
 
 `manage_office_hours` covers instructor-only office hours configuration: help request templates
 (insert/update/delete), instructor CRUD on `student_help_activity`, instructor update/delete of
-moderation records, and deleting (or updating another TA's) work sessions. Day one, only the
+moderation records, deleting (or updating another TA's) work sessions, and updating
+`classes.office_hours_health_thresholds`. Day one, only the
 default instructor role holds it. Template create/edit/delete and the templates settings page
 follow `useCapability` / `useCapabilityOnceLoaded("manage_office_hours")`. Creating a moderation
 action is allowed with either capability (matching the INSERT policies), and delete/update of
-moderation and work sessions follow `manage_office_hours`.
+moderation and work sessions follow `manage_office_hours`. Queue Health Colors inputs and Save Colors
+also require it. The classes column allowlist checks each changed column: a custom role with
+`manage_office_hours` can update thresholds, but cannot change other class settings. Instructors
+also need the capability to update thresholds.
+
+The escalation rules still apply to capability holders and students. An ended (`closed`) ticket
+cannot reopen. Direct updates cannot change `escalation_count`, `last_escalated_at`, or
+`check_in_expires_at`; only the escalation RPCs update those fields on the caller's behalf.
+Students can only change status from `open` or `in_progress` to `resolved`. The student check-in
+RPC keeps staging's solo-request rule and locking. The staff dashboard fetches health cards and
+red-queue alerts only when the feature is enabled and the caller holds `help_students`.
 
 Left as views or student actions: all office-hours SELECT policies; student create/update of their
 own requests; student chat, watchers, receipts and feedback; `authorizeforhelprequeststaff` and

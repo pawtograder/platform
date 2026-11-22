@@ -1,5 +1,6 @@
 "use client";
 
+import { useCapability } from "@/hooks/useClassProfiles";
 import HelpQueueManagement from "../../helpQueueManagement";
 import { Box, Button, Field, Heading, HStack, Input, Stack, Text, Textarea } from "@chakra-ui/react";
 import { getErrorMessage } from "@/lib/errorMessage";
@@ -24,9 +25,10 @@ type QueueHealthFormData = {
 };
 
 /**
- * Instructor-set thresholds for the red numbers on the staff queue cards. Each class has its own.
+ * Thresholds set by manage_office_hours holders for the red numbers on the staff queue cards. Each class has its own.
  */
 function QueueHealthColorsSection({ classId }: { classId: number | undefined }) {
+  const canManageOfficeHours = useCapability("manage_office_hours");
   const {
     register,
     handleSubmit,
@@ -45,7 +47,7 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
   }, [course, reset]);
 
   const onSubmit = async (data: QueueHealthFormData) => {
-    if (classId === undefined) return;
+    if (classId === undefined || !canManageOfficeHours) return;
     try {
       await updateCourse({
         resource: "classes",
@@ -89,7 +91,7 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
                 type="number"
                 min={1}
                 width="120px"
-                disabled={!loaded}
+                disabled={!loaded || !canManageOfficeHours}
                 {...register("waiting_red", { ...rule, valueAsNumber: true })}
               />
               <Field.HelperText>Turns red at this many or more.</Field.HelperText>
@@ -101,7 +103,7 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
                 type="number"
                 min={1}
                 width="120px"
-                disabled={!loaded}
+                disabled={!loaded || !canManageOfficeHours}
                 {...register("oldest_wait_red_minutes", { ...rule, valueAsNumber: true })}
               />
               <Field.HelperText>Turns red at this long or more.</Field.HelperText>
@@ -109,7 +111,12 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
             </Field.Root>
           </HStack>
           <Box>
-            <Button type="submit" colorPalette="green" loading={isSubmitting} disabled={!isDirty || !loaded}>
+            <Button
+              type="submit"
+              colorPalette="green"
+              loading={isSubmitting}
+              disabled={!isDirty || !loaded || !canManageOfficeHours}
+            >
               Save Colors
             </Button>
           </Box>
