@@ -91,11 +91,11 @@ test.describe("Repository Status actions gated by manage_student_repositories", 
   const repositoriesUrl = () => `/course/${course.id}/manage/assignments/${assignment.id}/repositories`;
 
   // useCapability is false while loading, so "hidden" only means something once the answer is in.
-  // The table row showing means the page has loaded too.
+  // ClassCapabilitiesProvider adds data-capabilities-loaded in the same render that applies the
+  // answer. The table row showing means the page has loaded too.
   async function openRepositoriesPage(page: Page) {
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(page, repositoriesUrl(), `Assignment: ${assignment.title}`);
-    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]').first()).toBeAttached();
     await expect(page.getByRole("link", { name: repositoryName }).first()).toBeVisible({ timeout: 60_000 });
   }
 
