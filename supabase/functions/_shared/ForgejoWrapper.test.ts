@@ -1228,6 +1228,28 @@ Deno.test("ensureStaffTeam: a team edited by hand is set back to write on its ow
   );
 });
 
+Deno.test("ensureStaffTeam: a team allowed to create org repos is set back", async () => {
+  await withForgejo(
+    [
+      list([
+        {
+          id: 12,
+          name: "cs4535-staff",
+          permission: "write",
+          includes_all_repositories: false,
+          can_create_org_repo: true
+        }
+      ]),
+      ok({ id: 12 })
+    ],
+    async (calls) => {
+      assertEquals(await ensureStaffTeam(config, "cs4535", "cs4535-staff"), 12);
+      assertEquals(calls[1].method, "PATCH");
+      assertEquals(calls[1].body?.can_create_org_repo, false);
+    }
+  );
+});
+
 Deno.test("ensureStaffTeam: never repurposes the org's owner team", async () => {
   await withForgejo(
     [list([{ id: 1, name: "cs4535-staff", permission: "owner", includes_all_repositories: true }])],
@@ -1263,11 +1285,27 @@ Deno.test("syncTeamMembers: adds the missing staff and removes everyone else, by
       calls.map((c) => `${c.method} ${c.url}`),
       [
         "GET https://git.example.edu/api/v1/teams/12/members?page=1&limit=50",
-        "PUT https://git.example.edu/api/v1/teams/12/members/new-ta",
-        "DELETE https://git.example.edu/api/v1/teams/12/members/old-ta"
+        "DELETE https://git.example.edu/api/v1/teams/12/members/old-ta",
+        "PUT https://git.example.edu/api/v1/teams/12/members/new-ta"
       ]
     );
   });
+});
+
+Deno.test("syncTeamMembers: a failed addition still removes the departed member first", async () => {
+  await withForgejo(
+    [list([{ login: "prof" }, { login: "old-ta" }]), noContent(), new Response("boom", { status: 500 })],
+    async (calls) => {
+      await assertRejects(() => syncTeamMembers(config, 12, ["prof", "new-ta"]), Error, "team member add failed: 500");
+      assertEquals(
+        calls.slice(1).map((c) => `${c.method} ${c.url}`),
+        [
+          "DELETE https://git.example.edu/api/v1/teams/12/members/old-ta",
+          "PUT https://git.example.edu/api/v1/teams/12/members/new-ta"
+        ]
+      );
+    }
+  );
 });
 
 Deno.test("syncTeamMembers: an account Forgejo no longer has is skipped; other failures stop", async () => {

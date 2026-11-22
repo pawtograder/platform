@@ -787,7 +787,13 @@ const STAFF_TEAM_UNITS: Record<string, "read" | "write"> = {
   "repo.ext_wiki": "read"
 };
 
-type ForgejoTeam = { id: number; name: string; permission: string; includes_all_repositories: boolean };
+type ForgejoTeam = {
+  id: number;
+  name: string;
+  permission: string;
+  includes_all_repositories: boolean;
+  can_create_org_repo?: boolean;
+};
 
 /**
  * Every item of a list endpoint. A short page doesn't end the list: Forgejo caps `limit` at
@@ -833,7 +839,7 @@ export async function ensureStaffTeam(config: ForgejoConfig, org: string, name: 
   }
   // An owner team is the org's Owners, whose members own every repo in it; never repurpose it.
   if (existing.permission === "owner") throw new Error("The Forgejo staff team name belongs to the org's owners");
-  if (existing.permission !== "write" || existing.includes_all_repositories) {
+  if (existing.permission !== "write" || existing.includes_all_repositories || existing.can_create_org_repo) {
     const res = await forgejo(config, "PATCH", `/teams/${existing.id}`, settings);
     if (!res.ok) throw await failure(res, "staff team update");
     await res.body?.cancel();
@@ -842,9 +848,10 @@ export async function ensureStaffTeam(config: ForgejoConfig, org: string, name: 
 }
 
 /**
- * Makes the team's members exactly `logins`: adds the missing ones, then removes the rest. Names are compared
- * case-insensitively, as Forgejo does. A login Forgejo no longer knows is skipped, not fatal, so one deleted
- * account can't keep the rest of the staff out.
+ * Makes the team's members exactly `logins`: removes the departed ones, then adds the missing ones. Removals
+ * go first so a failing addition can't keep a departed member on the team; the addition is retried on the
+ * next pass. Names are compared case-insensitively, as Forgejo does. A login Forgejo no longer knows is
+ * skipped, not fatal, so one deleted account can't keep the rest of the staff out.
  */
 export async function syncTeamMembers(
   config: ForgejoConfig,
@@ -858,6 +865,13 @@ export async function syncTeamMembers(
   const wanted = new Set(logins.map((l) => l.toLowerCase()));
   let added = 0;
   let removed = 0;
+  for (const [lower, login] of current) {
+    if (wanted.has(lower)) continue;
+    const res = await forgejo(config, "DELETE", `${path}/${encodeURIComponent(login)}`);
+    if (!res.ok && res.status !== 404) throw await failure(res, "team member remove");
+    await res.body?.cancel();
+    removed++;
+  }
   for (const login of wanted) {
     if (current.has(login)) continue;
     const res = await forgejo(config, "PUT", `${path}/${encodeURIComponent(login)}`);
@@ -868,13 +882,6 @@ export async function syncTeamMembers(
     if (!res.ok) throw await failure(res, "team member add");
     await res.body?.cancel();
     added++;
-  }
-  for (const [lower, login] of current) {
-    if (wanted.has(lower)) continue;
-    const res = await forgejo(config, "DELETE", `${path}/${encodeURIComponent(login)}`);
-    if (!res.ok && res.status !== 404) throw await failure(res, "team member remove");
-    await res.body?.cancel();
-    removed++;
   }
   return { added, removed };
 }

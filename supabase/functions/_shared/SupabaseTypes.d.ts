@@ -14380,6 +14380,12 @@ export type Database = {
           user_id: string;
         }[];
       };
+      forgejo_group_member_logins: {
+        Args: { p_assignment_group_id: number; p_instance_url: string };
+        Returns: {
+          login: string;
+        }[];
+      };
       forgejo_group_members_left: {
         Args: { p_group_ids: number[]; p_profile_ids: string[] };
         Returns: undefined;

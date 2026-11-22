@@ -2548,6 +2548,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  forgejo_group_member_logins: { "$[*].login": "handle" },
   // void: queue and cancel collaborator removals for students who left or rejoined a group.
   forgejo_group_members_left: "none",
   forgejo_group_members_rejoined: "none",

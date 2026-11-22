@@ -11,11 +11,14 @@ import {
   MAX_REPOS_PER_PASS,
   MAX_REVOCATIONS_PER_PASS,
   MAX_STAFF_TEAMS_PER_PASS,
+  RECONCILE_STEPS,
+  reconcileForgejo,
   reconcileForgejoAccounts,
   reconcileForgejoGroupRepos,
   reconcileForgejoRepos,
   reconcileForgejoStaffTeams,
   reconcileForgejoWorkflowHashes,
+  type GroupRepoOps,
   type RepoOps,
   revokeDroppedTokens,
   type StaffTeamOps,
@@ -622,9 +625,9 @@ function fakeRepoSupabase(
   return { client: client as unknown as Parameters<typeof reconcileForgejoRepos>[0], rpcCalls, writes };
 }
 
-function stubOps(overrides: Partial<RepoOps> = {}) {
+function stubOps(overrides: Partial<GroupRepoOps> = {}) {
   const calls: string[] = [];
-  const ops: RepoOps = {
+  const ops: GroupRepoOps = {
     ensureOrg: (_cfg, org) => {
       calls.push(`org ${org}`);
       return Promise.resolve();
@@ -636,6 +639,10 @@ function stubOps(overrides: Partial<RepoOps> = {}) {
     grantWrite: (_cfg, repository, login) => {
       calls.push(`write ${login} on ${repository}`);
       return Promise.resolve(true);
+    },
+    removeCollaborator: (_cfg, repository, login) => {
+      calls.push(`remove ${login} from ${repository}`);
+      return Promise.resolve();
     },
     ...overrides
   };
@@ -892,12 +899,26 @@ const neededGroup = (id: number, logins: string[], complete = true): NeededGroup
  * The backlog and save RPCs. A save with no grants is the pass claiming the name; it fails for a group
  * in `taken`. A later save reports ready unless the test says the roster changed.
  */
-function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = [], taken: number[] = []) {
+function fakeGroupSupabase(
+  needed: NeededGroup[],
+  notReady: number[] = [],
+  taken: number[] = [],
+  // The roster each forgejo_group_member_logins read returns, in order; the backlog's logins by default.
+  rosters: Record<number, string[][]> = {}
+) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const saves: Record<string, unknown>[] = [];
+  const rosterReads: Record<number, number> = {};
   const client = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcCalls.push({ name, args });
+      if (name === "forgejo_group_member_logins") {
+        const id = args.p_assignment_group_id as number;
+        const read = (rosterReads[id] = (rosterReads[id] ?? 0) + 1);
+        const group = needed.find((g) => g.assignment_group_id === id)!;
+        const roster = rosters[id]?.[Math.min(read, rosters[id].length) - 1] ?? group.logins;
+        return Promise.resolve({ data: roster.map((login) => ({ login })), error: null });
+      }
       if (name === "save_forgejo_group_repo") {
         saves.push(args);
         const group = needed.find((g) => g.assignment_group_id === args.p_assignment_group_id)!;
@@ -995,6 +1016,54 @@ Deno.test("group repos: a member Forgejo won't make a writer fails that group on
   );
 });
 
+Deno.test("group repos: a member who left before the row was reserved is not granted", async () => {
+  // The backlog read a, b; b left before the reserve, so no revocation was queued for them.
+  const { client, saves } = fakeGroupSupabase([neededGroup(5, ["a", "b"])], [], [], { 5: [["a"]] });
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result, { created: 1, failures: [] });
+  assertEquals(
+    calls.filter((c) => !c.startsWith("org") && !c.startsWith("repo")),
+    ["write a on cs4535/hw1-group-team-5"]
+  );
+  assertEquals(saves.at(-1)?.p_granted, ["a"]);
+});
+
+Deno.test("group repos: a member who left while the grants ran is removed again before the save", async () => {
+  const { client, saves } = fakeGroupSupabase([neededGroup(5, ["a", "b"])], [], [], { 5: [["a", "b"], ["a"]] });
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result, { created: 1, failures: [] });
+  assertEquals(
+    calls.filter((c) => !c.startsWith("org") && !c.startsWith("repo")),
+    [
+      "write a on cs4535/hw1-group-team-5",
+      "write b on cs4535/hw1-group-team-5",
+      "remove b from cs4535/hw1-group-team-5"
+    ]
+  );
+  assertEquals(saves.at(-1)?.p_granted, ["a"]);
+});
+
+Deno.test("group repos: a failed roster read grants nobody", async () => {
+  const { client: base } = fakeGroupSupabase([neededGroup(5, ["a", "b"])]);
+  const client = {
+    ...base,
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name === "forgejo_group_member_logins") return Promise.resolve({ data: null, error: new Error("boom") });
+      return (base as unknown as { rpc: (n: string, a: Record<string, unknown>) => unknown }).rpc(name, args);
+    }
+  } as unknown as Parameters<typeof reconcileForgejoGroupRepos>[0];
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result.created, 0);
+  assertEquals(result.failures.length, 1);
+  assertEquals(
+    calls.filter((c) => c.startsWith("write")),
+    []
+  );
+});
+
 /**
  * One repositories table for an individual and a group pass, unique on the name. Both ownership lookups
  * finish before either pass claims, as when two passes overlap; `first` decides which claim lands first.
@@ -1017,6 +1086,9 @@ function overlappingPasses(first: "student" | "group") {
   const client = (by: "student" | "group", needed: unknown[]) =>
     ({
       async rpc(name: string, args: Record<string, unknown>) {
+        if (name === "forgejo_group_member_logins") {
+          return { data: (needed as NeededGroup[])[0].logins.map((login) => ({ login })), error: null };
+        }
         if (name !== "save_forgejo_group_repo") return { data: needed, error: null };
         if ((args.p_granted as string[]).length === 0) {
           return { data: false, error: await claim(by, args.p_repository as string) };
@@ -1258,4 +1330,50 @@ Deno.test("staff teams: a class that fails doesn't stop the others, and its repo
 Deno.test("staff teams: a failed backlog query is an error", async () => {
   const { client } = fakeStaffSupabase([], new Error("permission denied"));
   await assertRejects(() => reconcileForgejoStaffTeams(client, config, stubStaffOps().ops), Error, "permission denied");
+});
+
+Deno.test("reconcileForgejo: a failed earlier step still runs staff-team sync and both revocations", async () => {
+  const ran: string[] = [];
+  const boom = new Error("repository backlog query failed");
+  const step =
+    (name: string, fail = false) =>
+    () => {
+      ran.push(name);
+      return fail ? Promise.reject(boom) : Promise.resolve({} as never);
+    };
+  const steps = {
+    reconcileForgejoAccounts: step("accounts"),
+    reconcileForgejoRepos: step("repos", true),
+    reconcileForgejoGroupRepos: step("groupRepos"),
+    reconcileForgejoWorkflowHashes: step("hashes"),
+    reconcileForgejoStaffTeams: step("staffTeams"),
+    revokeGroupLeavers: step("groupLeavers"),
+    revokeDroppedTokens: step("tokens")
+  } as unknown as typeof RECONCILE_STEPS;
+  const error = await assertRejects(() => reconcileForgejo({} as never, config, steps));
+  assertEquals(error, boom);
+  assertEquals(ran, ["accounts", "repos", "staffTeams", "groupLeavers", "tokens"]);
+});
+
+Deno.test("reconcileForgejo: a failed staff-team sync still runs both revocations, and is reported", async () => {
+  const ran: string[] = [];
+  const boom = new Error("staff backlog query failed");
+  const step =
+    (name: string, fail = false) =>
+    () => {
+      ran.push(name);
+      return fail ? Promise.reject(boom) : Promise.resolve({} as never);
+    };
+  const steps = {
+    reconcileForgejoAccounts: step("accounts"),
+    reconcileForgejoRepos: step("repos"),
+    reconcileForgejoGroupRepos: step("groupRepos"),
+    reconcileForgejoWorkflowHashes: step("hashes"),
+    reconcileForgejoStaffTeams: step("staffTeams", true),
+    revokeGroupLeavers: step("groupLeavers"),
+    revokeDroppedTokens: step("tokens")
+  } as unknown as typeof RECONCILE_STEPS;
+  const error = await assertRejects(() => reconcileForgejo({} as never, config, steps));
+  assertEquals(error, boom);
+  assertEquals(ran, ["accounts", "repos", "groupRepos", "hashes", "staffTeams", "groupLeavers", "tokens"]);
 });

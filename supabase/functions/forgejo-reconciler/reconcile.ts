@@ -224,6 +224,23 @@ export async function reconcileForgejoRepos(
   return result;
 }
 
+export type GroupRepoOps = RepoOps & { removeCollaborator: typeof removeCollaborator };
+
+/** The group's members' Forgejo logins on this instance, as the database has them now. */
+async function currentGroupLogins(
+  supabase: SupabaseClient<Database>,
+  assignmentGroupId: number,
+  instanceUrl: string
+): Promise<string[]> {
+  // function-grants: service-role
+  const { data, error } = await supabase.rpc("forgejo_group_member_logins", {
+    p_assignment_group_id: assignmentGroupId,
+    p_instance_url: instanceUrl
+  });
+  if (error) throw error;
+  return (data ?? []).map((r) => r.login);
+}
+
 /** Accounts first, so students who just got one get their repos in the same pass. */
 export type GroupRepoReconcileResult = {
   created: number;
@@ -233,12 +250,14 @@ export type GroupRepoReconcileResult = {
 /**
  * One repo per group for released Forgejo group assignments (#1236), with every member a writer. The
  * repo is recorded as ready only once every member has a Forgejo login and Forgejo reports write
- * access for each, so a member still waiting for an account keeps the group in the next pass.
+ * access for each, so a member still waiting for an account keeps the group in the next pass. Grants
+ * go to the roster as read after the repo row is reserved, and a member who left during the grants is
+ * removed again before the save.
  */
 export async function reconcileForgejoGroupRepos(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
-  ops: RepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite }
+  ops: GroupRepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite, removeCollaborator }
 ): Promise<GroupRepoReconcileResult> {
   // function-grants: service-role
   const { data: needed, error } = await supabase.rpc("forgejo_group_repos_needed", {
@@ -277,9 +296,23 @@ export async function reconcileForgejoGroupRepos(
         orgsReady.add(group.owner);
       }
       await ops.ensureRepoFromTemplate(config, group.template_repo, group.owner, group.name);
+      // The backlog's roster may be stale. Read it again now the row exists, so a member who left before
+      // the reserve (and so queued no revocation) is not granted.
+      const granting = await currentGroupLogins(supabase, group.assignment_group_id, config.url);
       let allWrite = true;
-      for (const login of group.logins) {
+      for (const login of granting) {
         if (!(await ops.grantWrite(config, repository, login))) allWrite = false;
+      }
+      // And once more after the grants: anyone granted who has left since is removed here, rather than left
+      // to a revocation whose second removal could run before a slow grant. A leave after this read finds
+      // the row and queues a revocation that runs after these grants.
+      const members = new Set(
+        (await currentGroupLogins(supabase, group.assignment_group_id, config.url)).map((l) => l.toLowerCase())
+      );
+      const granted: string[] = [];
+      for (const login of granting) {
+        if (members.has(login.toLowerCase())) granted.push(login);
+        else await ops.removeCollaborator(config, repository, login);
       }
       if (!allWrite) throw new Error("Forgejo doesn't report write access for every group member");
       // The database decides readiness against the current roster, so a member who joined during this
@@ -289,7 +322,7 @@ export async function reconcileForgejoGroupRepos(
         p_assignment_group_id: group.assignment_group_id,
         p_repository: repository,
         p_instance_url: config.url,
-        p_granted: group.logins
+        p_granted: granted
       });
       if (saveError) throw saveError;
       if (ready) result.created++;
@@ -545,12 +578,27 @@ export async function revokeGroupLeavers(
   return result;
 }
 
+/** The steps of one pass, injectable so the orchestration can be tested without Forgejo. */
+export const RECONCILE_STEPS = {
+  reconcileForgejoAccounts,
+  reconcileForgejoRepos,
+  reconcileForgejoGroupRepos,
+  reconcileForgejoWorkflowHashes,
+  reconcileForgejoStaffTeams,
+  revokeGroupLeavers,
+  revokeDroppedTokens
+};
+
 /**
  * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos, workflow hashes and staff teams; then the revocations: students who left a group lose its repo, and
+ * repos and workflow hashes; then staff teams; then the revocations: students who left a group lose its repo, and
  * dropped students' and idle workspace tokens are revoked (forgejo_repo_tokens_to_revoke).
  */
-export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
+export async function reconcileForgejo(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  steps: typeof RECONCILE_STEPS = RECONCILE_STEPS
+) {
   // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
   let stepError: unknown;
   let accounts: ReconcileResult | undefined;
@@ -559,22 +607,27 @@ export async function reconcileForgejo(supabase: SupabaseClient<Database>, confi
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
   let staffTeams: StaffTeamResult | undefined;
   try {
-    accounts = await reconcileForgejoAccounts(supabase, config);
-    repos = await reconcileForgejoRepos(supabase, config);
-    groupRepos = await reconcileForgejoGroupRepos(supabase, config);
-    hashes = await reconcileForgejoWorkflowHashes(supabase, config);
-    staffTeams = await reconcileForgejoStaffTeams(supabase, config);
+    accounts = await steps.reconcileForgejoAccounts(supabase, config);
+    repos = await steps.reconcileForgejoRepos(supabase, config);
+    groupRepos = await steps.reconcileForgejoGroupRepos(supabase, config);
+    hashes = await steps.reconcileForgejoWorkflowHashes(supabase, config);
   } catch (e) {
     stepError = e;
+  }
+  // Staff-team sync removes departed staff, so like the revocations below it runs whatever failed above.
+  try {
+    staffTeams = await steps.reconcileForgejoStaffTeams(supabase, config);
+  } catch (e) {
+    stepError ??= e;
   }
   // The revocations run whatever failed above, and one failing doesn't skip the other.
   let groupLeavers: GroupLeaveResult | undefined;
   try {
-    groupLeavers = await revokeGroupLeavers(supabase, config);
+    groupLeavers = await steps.revokeGroupLeavers(supabase, config);
   } catch (e) {
     stepError ??= e;
   }
-  const revocation = await revokeDroppedTokens(supabase, config);
+  const revocation = await steps.revokeDroppedTokens(supabase, config);
   if (stepError !== undefined) throw stepError;
   return {
     accounts: accounts!,

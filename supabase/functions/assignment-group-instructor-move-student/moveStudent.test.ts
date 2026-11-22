@@ -67,6 +67,11 @@ class FakeDb {
   failOn = new Set<FailOn>();
   /** Every call the move made to delete_repository_rows. */
   repoDeleteCalls: number[][] = [];
+  /**
+   * repositories_validate_git_provider refuses to delete a Forgejo row (feature_not_supported) until
+   * provider-aware cleanup (#1398) lands, so the fake refuses too unless a test opts out.
+   */
+  refuseForgejoDeletes = true;
   private nextId = 1000;
 
   addGroup(
@@ -301,6 +306,18 @@ function makeClient(db: FakeDb) {
       db.repoDeleteCalls.push(args.p_repository_ids);
       if (db.failOn.has("delete_repository_rows")) {
         return { data: null, error: db.injected("delete_repository_rows") };
+      }
+      if (
+        db.refuseForgejoDeletes &&
+        db.repos.some((r) => args.p_repository_ids.includes(r.id) && r.git_provider === "forgejo")
+      ) {
+        return {
+          data: null,
+          error: {
+            code: "0A000",
+            message: "Deleting Forgejo repositories is not supported until provider-aware cleanup exists"
+          }
+        };
       }
       // Never deletes submissions: one that still references the repo blocks the delete.
       if (db.submissions.some((s) => s.repository_id !== null && args.p_repository_ids.includes(s.repository_id))) {
@@ -721,9 +738,30 @@ Deno.test("Forgejo: a move between groups changes membership and enqueues no Git
 });
 
 Deno.test(
-  "Forgejo: the last member leaving dissolves the group and deletes its repo row, without a GitHub archive",
+  "Forgejo: while the database refuses Forgejo repo deletes, the last member still moves and the group is kept",
   async () => {
     const db = twoForgejoGroups();
+    const { deps, archives, syncs, reported } = harness(db);
+
+    await moveStudentBetweenGroups(move(1, 2), deps);
+
+    assertEquals(db.repoDeleteCalls, [[10]]);
+    assertEquals(db.repoOf(1)?.repository, FORGEJO_OLD);
+    assert(db.groups.some((g) => g.id === 1));
+    assertEquals(db.membersOf(1), []);
+    assertEquals(db.membersOf(2).sort(), ["alice", "bob"]);
+    assertEquals(reported.length, 1);
+    assertEquals((reported[0] as { code?: string }).code, "0A000");
+    assertEquals(archives, []);
+    assertEquals(syncs, []);
+  }
+);
+
+Deno.test(
+  "Forgejo: once Forgejo repo deletes are allowed, the last member leaving dissolves the group and its repo row, without a GitHub archive",
+  async () => {
+    const db = twoForgejoGroups();
+    db.refuseForgejoDeletes = false;
     const { deps, archives, syncs, reported } = harness(db);
 
     await moveStudentBetweenGroups(move(1, 2), deps);
