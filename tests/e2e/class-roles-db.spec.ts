@@ -23,20 +23,20 @@
  * Step 5 (20261108120000_review_assignments_by_capability.sql): seeing and deleting review
  * assignments follow manage_review_assignments, while creating and editing them stay instructor-only.
  *
- * 20261114120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
+ * 20261119120000_custom_roles_copy_grader_role.sql: a user holds only their own class role's
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
- * 20261115220000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * 20261122120000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
  * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
  * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
  * the capability (or a demoted former grader) cannot manage decks they made.
  *
- * 20261116120000_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
+ * 20261122120100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *
- * 20261117120000_office_hours_by_capability.sql: staff help-request actions follow help_students
+ * 20261122120200_office_hours_by_capability.sql: staff help-request actions follow help_students
  * (on the default grader role and every custom role); instructor-only office-hours configuration
  * follows manage_office_hours.
  *
@@ -3241,6 +3241,198 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
       active_staff_profile_id: instructorH.private_profile_id
     });
   }
+
+  test("custom roles need help_students to escalate or finish a request", async () => {
+    for (const [user, allowed] of [
+      [withHelp, true],
+      [withoutHelp, false]
+    ] as const) {
+      const client = await createAuthenticatedClient(user);
+      const req = await seedRequest(`Capability RPC ${allowed}`);
+      expect(
+        (
+          await supabase
+            .from("help_requests")
+            .update({ status: "in_progress", assignee: user.private_profile_id })
+            .eq("id", req.id)
+        ).error
+      ).toBeNull();
+
+      const escalation = await client.rpc("escalate_help_request", {
+        p_help_request_id: req.id,
+        p_note: "Needs another TA"
+      });
+      if (allowed) {
+        expect(escalation.error).toBeNull();
+      } else {
+        expect(escalation.error?.code).toBe("42501");
+      }
+      const { data: afterEscalation, error: readError } = await supabase
+        .from("help_requests")
+        .select("status, assignee, escalation_count")
+        .eq("id", req.id)
+        .single();
+      expect(readError).toBeNull();
+      expect(afterEscalation).toEqual(
+        allowed
+          ? { status: "open", assignee: null, escalation_count: 1 }
+          : { status: "in_progress", assignee: user.private_profile_id, escalation_count: 0 }
+      );
+
+      if (allowed) {
+        const { data, error } = await client
+          .from("help_requests")
+          .update({ status: "in_progress", assignee: user.private_profile_id })
+          .eq("id", req.id)
+          .select("id")
+          .single();
+        expect(error).toBeNull();
+        expect(data?.id).toBe(req.id);
+      }
+      for (const endTicket of [false, true]) {
+        const finish = await client.rpc("finish_help_request", { p_help_request_id: req.id, p_end_ticket: endTicket });
+        if (allowed) {
+          expect(finish.error).toBeNull();
+          const { data, error } = await supabase
+            .from("help_requests")
+            .select("status, check_in_expires_at")
+            .eq("id", req.id)
+            .single();
+          expect(error).toBeNull();
+          expect(data?.status).toBe(endTicket ? "closed" : "resolved");
+          if (endTicket) {
+            expect(data?.check_in_expires_at).toBeNull();
+          } else {
+            expect(new Date(data!.check_in_expires_at!).getTime()).toBeGreaterThan(Date.now());
+          }
+        } else {
+          expect(finish.error?.code).toBe("42501");
+          const { data, error } = await supabase
+            .from("help_requests")
+            .select("status, escalation_count")
+            .eq("id", req.id)
+            .single();
+          expect(error).toBeNull();
+          expect(data).toEqual({ status: "in_progress", escalation_count: 0 });
+        }
+      }
+    }
+  });
+
+  test("queue health needs help_students on the caller's role in that class", async () => {
+    for (const [user, allowed] of [
+      [withHelp, true],
+      [withoutHelp, false],
+      [withManage, false],
+      [studentH, false]
+    ] as const) {
+      const client = await createAuthenticatedClient(user);
+      // The staging RPC is not in the generated database types yet.
+      const rpc = client as unknown as {
+        rpc: (
+          name: string,
+          args: object
+        ) => Promise<{ data: { queue_id: number }[] | null; error: { code?: string } | null }>;
+      };
+      const { data, error } = await rpc.rpc("office_hours_queue_health", { p_class_id: classH.id });
+      if (allowed) {
+        expect(error).toBeNull();
+        expect(data?.map((r) => r.queue_id)).toContain(queueId);
+        const otherClass = await createClass({ name: "Queue health other class" });
+        expect((await rpc.rpc("office_hours_queue_health", { p_class_id: otherClass.id })).error?.code).toBe("42501");
+      } else {
+        expect(error?.code).toBe("42501");
+        expect(data).toBeNull();
+      }
+    }
+  });
+
+  test("only manage_office_hours can update health thresholds, without changing other class settings", async () => {
+    const thresholds = { waiting_red: 8, oldest_wait_red_minutes: 45 };
+    const manager = await createAuthenticatedClient(withManage);
+    const { data, error } = await manager
+      .from("classes")
+      .update({ office_hours_health_thresholds: thresholds })
+      .eq("id", classH.id)
+      .select("office_hours_health_thresholds")
+      .single();
+    expect(error).toBeNull();
+    expect(data?.office_hours_health_thresholds).toEqual(thresholds);
+
+    const helper = await createAuthenticatedClient(withHelp);
+    expectBlocked(
+      await helper
+        .from("classes")
+        .update({ office_hours_health_thresholds: { waiting_red: 9 } })
+        .eq("id", classH.id)
+        .select("id"),
+      "thresholds without manage_office_hours"
+    );
+    expectBlocked(
+      await manager
+        .from("classes")
+        .update({
+          office_hours_health_thresholds: { waiting_red: 9 },
+          office_hours_description: "Forbidden description"
+        })
+        .eq("id", classH.id)
+        .select("id"),
+      "combining thresholds with an instructor-only column"
+    );
+    expectBlocked(
+      await manager.from("classes").update({ name: "Forbidden rename" }).eq("id", classH.id).select("id"),
+      "an unrelated class setting"
+    );
+    const otherClass = await createClass({ name: "Thresholds other class" });
+    expectBlocked(
+      await manager
+        .from("classes")
+        .update({ office_hours_health_thresholds: thresholds })
+        .eq("id", otherClass.id)
+        .select("id"),
+      "thresholds in another class"
+    );
+
+    // An instructor also needs the capability; the old instructor allowlist must not bypass it.
+    const instructorRoleId = (await userRole(instructorH)).class_role_id!;
+    expect(
+      (
+        await supabase
+          .from("role_capabilities")
+          .delete()
+          .eq("role_id", instructorRoleId)
+          .eq("capability", "manage_office_hours")
+      ).error
+    ).toBeNull();
+    try {
+      const instructor = await createAuthenticatedClient(instructorH);
+      expectBlocked(
+        await instructor
+          .from("classes")
+          .update({ office_hours_health_thresholds: { waiting_red: 9 } })
+          .eq("id", classH.id)
+          .select("id"),
+        "instructor thresholds without manage_office_hours"
+      );
+    } finally {
+      expect(
+        (
+          await supabase
+            .from("role_capabilities")
+            .insert({ role_id: instructorRoleId, capability: "manage_office_hours" })
+        ).error
+      ).toBeNull();
+    }
+    const { data: unchanged, error: readError } = await supabase
+      .from("classes")
+      .select("office_hours_health_thresholds, office_hours_description, name")
+      .eq("id", classH.id)
+      .single();
+    expect(readError).toBeNull();
+    expect(unchanged?.office_hours_health_thresholds).toEqual(thresholds);
+    expect(unchanged?.office_hours_description).toBe(classH.office_hours_description);
+    expect(unchanged?.name).toBe(classH.name);
+  });
 
   test("an instructor updates help request status and assignment", async () => {
     const req = await seedRequest("Instructor status");
