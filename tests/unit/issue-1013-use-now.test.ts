@@ -355,7 +355,7 @@ describe("useRefreshWhenShown", () => {
       setVisibility("visible");
     };
 
-    function startStalledRefresh() {
+    function startStalledRefresh(minIntervalMs = REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS) {
       let resolve: (sameBuild: boolean | undefined) => void = () => {};
       let reject: (error: Error) => void = () => {};
       mockRefresh.mockImplementationOnce(
@@ -365,7 +365,7 @@ describe("useRefreshWhenShown", () => {
             reject = rej;
           })
       );
-      renderHook(() => useRefreshWhenShown(PAGE_LOAD));
+      renderHook(() => useRefreshWhenShown(PAGE_LOAD, minIntervalMs));
       showAgainAfterAMinute();
       expect(mockRefresh).toHaveBeenCalledTimes(1);
       return {
@@ -375,7 +375,7 @@ describe("useRefreshWhenShown", () => {
     }
 
     it("holds off another show until the refresh answers or reaches 15 seconds", async () => {
-      startStalledRefresh();
+      startStalledRefresh(1_000);
       await act(async () => jest.advanceTimersByTime(14_999));
       setVisibility("hidden");
       setVisibility("visible");
@@ -383,6 +383,61 @@ describe("useRefreshWhenShown", () => {
 
       await act(async () => jest.advanceTimersByTime(1));
       expect(mockRefresh).toHaveBeenCalledTimes(1);
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("queues at most one retry while the original refresh never settles", async () => {
+      startStalledRefresh();
+      mockRefresh.mockImplementation(() => new Promise(() => {}));
+      await act(async () => jest.advanceTimersByTime(15_000));
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+
+      await act(async () => jest.advanceTimersByTime(15_000));
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+      await act(async () => showAgainAfterAMinute());
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("allows another eligible show after the original timed-out action settles", async () => {
+      const { resolve } = startStalledRefresh();
+      mockRefresh.mockImplementation(() => new Promise(() => {}));
+      await act(async () => jest.advanceTimersByTime(15_000));
+      setVisibility("hidden");
+      setVisibility("visible");
+      await act(async () => jest.advanceTimersByTime(15_000));
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+
+      await act(async () => resolve(true));
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps the newer attempt in flight when an old payload's attempt settles", async () => {
+      let answerOldRefresh: (sameBuild: boolean) => void = () => {};
+      mockRefresh.mockImplementationOnce(() => new Promise((resolve) => (answerOldRefresh = resolve)));
+      const { rerender } = renderHook(({ renderedAt }) => useRefreshWhenShown(renderedAt, 1_000), {
+        initialProps: { renderedAt: PAGE_LOAD }
+      });
+      showAgainAfterAMinute();
+      rerender({ renderedAt: Date.now() });
+      mockRefresh.mockImplementationOnce(() => new Promise(() => {}));
+      await act(async () => jest.advanceTimersByTime(1_000));
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+
+      await act(async () => answerOldRefresh(false));
+      expect(mockRecover).not.toHaveBeenCalled();
+      await act(async () => jest.advanceTimersByTime(1_000));
       setVisibility("hidden");
       setVisibility("visible");
       expect(mockRefresh).toHaveBeenCalledTimes(2);
