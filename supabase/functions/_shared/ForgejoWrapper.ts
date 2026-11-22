@@ -662,26 +662,48 @@ export async function grantWrite(config: ForgejoConfig, repository: string, logi
 
 /**
  * Where archiveRepo moves a repo: `archived-<timestamp>-<name>` under the same owner, the shape
- * archiveRepoAndLock produces on GitHub. Forgejo caps repo names at 100 characters; the timestamp keeps a cut
- * name unique. The caller picks this before the rename and records it, so an attempt that renames the repo and
- * then loses the write of where it went leaves the path behind instead of a repo nobody can find (#1378).
+ * archiveRepoAndLock produces on GitHub. Forgejo caps repo names at 100 characters. A name that has to be cut
+ * ends in a hash of the whole original name instead, so two long names that share their first 60-odd
+ * characters still get different destinations when they are archived in the same millisecond. The caller picks
+ * this before the rename and records it, so an attempt that renames the repo and then loses the write of where
+ * it went leaves the path behind instead of a repo nobody can find (#1378).
  */
 export function archivedRepoName(repository: string, now = new Date()): string {
   // Refuse anything that isn't a plain owner/name here too, where the name is chosen.
   repoPath(repository);
   const [owner, name] = repository.split("/");
-  return `${owner}/${`archived-${now.toISOString().replace(/[:.]/g, "-")}-${name}`.slice(0, 100)}`;
+  const archived = `archived-${now.toISOString().replace(/[:.]/g, "-")}-${name}`;
+  if (archived.length <= 100) return `${owner}/${archived}`;
+  return `${owner}/${archived.slice(0, 91)}-${fnv1a(name.toLowerCase())}`;
 }
 
-/** True when the repo is there. */
-async function repoExists(config: ForgejoConfig, repository: string): Promise<boolean> {
+/** 32-bit FNV-1a as 8 hex digits: a short, stable tag that tells cut names apart. Not for security. */
+function fnv1a(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * True when the repo is at `repository`, which is then archived. Used for a destination an earlier attempt
+ * renamed the repo to: Forgejo applies the rename and the archive flag of one PATCH as separate steps, so that
+ * attempt may have moved the repo and failed before locking it.
+ */
+async function ensureArchivedAt(config: ForgejoConfig, repository: string): Promise<boolean> {
   const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}`);
   if (res.status === 404) {
     await res.body?.cancel();
     return false;
   }
   if (!res.ok) throw await failure(res, "repo read");
-  await res.body?.cancel();
+  const { archived } = (await res.json()) as { archived?: boolean };
+  if (archived === true) return true;
+  const patch = await forgejo(config, "PATCH", `/repos/${repoPath(repository)}`, { archived: true });
+  if (!patch.ok) throw await failure(patch, "repo archive");
+  await patch.body?.cancel();
   return true;
 }
 
@@ -710,9 +732,10 @@ export async function archiveRepo(
     const res = await forgejo(config, "GET", `/repos/${path}/collaborators?page=${page}&limit=50`);
     if (res.status === 404) {
       await res.body?.cancel();
-      // The rename comes last, once every collaborator is gone, so a repo sitting at the destination is
-      // already archived: an earlier attempt got that far and lost the write of where it went.
-      if (page === 1) return (await repoExists(config, destination)) ? destination : null;
+      // The rename comes last, once every collaborator is gone, so a repo sitting at the destination has no
+      // collaborators left: an earlier attempt got that far and lost the write of where it went. It may not be
+      // locked yet, which ensureArchivedAt finishes.
+      if (page === 1) return (await ensureArchivedAt(config, destination)) ? destination : null;
       throw new Error("Forgejo repo disappeared while its collaborators were read");
     }
     if (!res.ok) throw await failure(res, "collaborators read");
@@ -730,7 +753,7 @@ export async function archiveRepo(
   const res = await forgejo(config, "PATCH", `/repos/${path}`, { name: archivedName, archived: true });
   if (res.status === 404) {
     await res.body?.cancel();
-    return (await repoExists(config, destination)) ? destination : null;
+    return (await ensureArchivedAt(config, destination)) ? destination : null;
   }
   if (!res.ok) throw await failure(res, "repo archive");
   await res.body?.cancel();

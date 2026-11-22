@@ -1195,14 +1195,43 @@ Deno.test("archiveRepo: a repo that's gone from both names is done, with no new 
 
 // The case the destination exists for: a pass renamed the repo and died before writing down where it went.
 Deno.test("archiveRepo: a repo an earlier attempt already renamed is reported at its destination", async () => {
-  await withForgejo([missing(), ok({ name: "archived-x-hw1-a" })], async (calls) => {
+  await withForgejo([missing(), ok({ name: "archived-x-hw1-a", archived: true })], async (calls) => {
     assertEquals(await archiveRepo(config, "cs4535/hw1-a", "cs4535/archived-x-hw1-a"), "cs4535/archived-x-hw1-a");
     assertEquals(calls.length, 2);
   });
 });
 
+// Forgejo renames before it sets the archive flag, so the earlier attempt may have stopped in between.
+Deno.test("archiveRepo: a repo renamed but never locked is archived at its destination", async () => {
+  await withForgejo([missing(), ok({ name: "archived-x-hw1-a", archived: false }), ok({})], async (calls) => {
+    assertEquals(await archiveRepo(config, "cs4535/hw1-a", "cs4535/archived-x-hw1-a"), "cs4535/archived-x-hw1-a");
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      [
+        "GET https://git.example.edu/api/v1/repos/cs4535/hw1-a/collaborators?page=1&limit=50",
+        "GET https://git.example.edu/api/v1/repos/cs4535/archived-x-hw1-a",
+        "PATCH https://git.example.edu/api/v1/repos/cs4535/archived-x-hw1-a"
+      ]
+    );
+    assertEquals(calls[2].body, { archived: true });
+  });
+});
+
+Deno.test("archiveRepo: a destination Forgejo won't lock is an error, not a finished archive", async () => {
+  await withForgejo(
+    [missing(), ok({ name: "archived-x-hw1-a", archived: false }), new Response("boom", { status: 500 })],
+    async () => {
+      await assertRejects(
+        () => archiveRepo(config, "cs4535/hw1-a", "cs4535/archived-x-hw1-a"),
+        Error,
+        "repo archive failed: 500"
+      );
+    }
+  );
+});
+
 Deno.test("archiveRepo: a repo that disappears before the rename is looked for at its destination", async () => {
-  await withForgejo([page([]), missing(), ok({ name: "archived-x-hw1-a" })], async (calls) => {
+  await withForgejo([page([]), missing(), ok({ name: "archived-x-hw1-a", archived: true })], async (calls) => {
     assertEquals(await archiveRepo(config, "cs4535/hw1-a", "cs4535/archived-x-hw1-a"), "cs4535/archived-x-hw1-a");
     assertEquals(calls[2].url, "https://git.example.edu/api/v1/repos/cs4535/archived-x-hw1-a");
   });
@@ -1238,6 +1267,17 @@ Deno.test("archivedRepoName: the new name stays within Forgejo's 100 characters"
     assertEquals(archived, `cs4535/${calls[1].body!.name}`);
     assertEquals(archived, destination);
   });
+});
+
+Deno.test("archivedRepoName: long names that differ only past the cut get different destinations", () => {
+  const shared = "x".repeat(90);
+  const a = archivedRepoName(`cs4535/${shared}-alex`, archivedAt);
+  const b = archivedRepoName(`cs4535/${shared}-sam`, archivedAt);
+  assert(a !== b, a);
+  assertEquals(a.length, "cs4535/".length + 100);
+  assertEquals(archivedRepoName(`cs4535/${shared}-alex`, archivedAt), a, "the same name always maps to the same place");
+  // A name that fits is left as GitHub's archiveRepoAndLock would write it.
+  assertEquals(archivedRepoName("cs4535/hw1-a", archivedAt), "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-a");
 });
 
 Deno.test("archivedRepoName: a name that isn't owner/name is refused where the name is chosen", () => {
