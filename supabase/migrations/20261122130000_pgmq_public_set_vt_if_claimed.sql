@@ -406,3 +406,122 @@ revoke all on function public.exam_worker_set_match_suggestion(bigint, integer, 
 grant execute on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric)
   to service_role;
 
+-- Create (enqueue_exam_finalize) refuses a batch that is already creating submissions. The body is
+-- 20261107120000_exam_grading.sql's with the lock and the status check added after the staff check.
+create or replace function public.enqueue_exam_finalize(p_batch_id bigint)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_class_id bigint;
+  v_count integer := 0;
+  v_status text;
+  rec record;
+begin
+  select class_id into v_class_id from public.exam_scan_batches where id = p_batch_id;
+  if v_class_id is null then
+    raise exception 'Batch % not found', p_batch_id;
+  end if;
+  if auth.uid() is not null and not exists (
+    select 1 from public.user_privileges up
+    where up.user_id = auth.uid() and up.class_id = v_class_id and up.role in ('instructor','grader')
+  ) then
+    raise exception 'Access denied: staff only';
+  end if;
+
+  -- #1158 review: a second Create while the first one's finalize messages are still queued or running
+  -- queued every unfinalized exam again, and two finalizes of one exam can then run at the same time
+  -- (they duplicate the submission's page-file rows). Lock the batch, after the staff check so no one
+  -- else can hold it, so two Creates run one after the other, and refuse while the batch is already
+  -- creating submissions. A batch whose finalize failed is in 'error', and Create still retries it.
+  select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for update;
+  if v_status = 'finalizing' then
+    raise exception 'Batch % is already creating submissions; wait for it to finish', p_batch_id;
+  end if;
+
+  -- Refuse to start when two scanned exams are confirmed for the SAME student. The match-review
+  -- selector permits it (two papers can be read as the same person), and each finalize inserts
+  -- an ACTIVE individual submission -- so the first succeeds and the second violates
+  -- submissions_one_active_individual_per_student, which retries and finally errors a batch
+  -- that is already half finalized. Caught up front, while the batch is still wholly
+  -- unfinalized and staff can fix the duplicate in review, since what SHOULD happen to a
+  -- genuine duplicate scan (replace? keep both? merge?) is a product decision, not something
+  -- to guess at inside a retry loop.
+  if exists (
+    select 1
+    from public.exam_scanned_submissions ss
+    where ss.batch_id = p_batch_id
+      and ss.match_status = 'confirmed'
+      and ss.matched_profile_id is not null
+    group by ss.matched_profile_id
+    having count(*) > 1
+  ) then
+    raise exception
+      'Batch % has more than one confirmed exam for the same student; resolve the duplicate matches in review before creating submissions',
+      p_batch_id;
+  end if;
+
+  -- Also reject when a confirmed student ALREADY has an active submission from an earlier
+  -- batch. The in-batch duplicate check above groups only within p_batch_id, so a re-scan batch
+  -- containing a student who was already finalized would partially finalize everyone else and
+  -- then fail on that one insert against
+  -- submissions_one_active_individual_per_student, DLQ the message and error the batch. Caught
+  -- here for the same reason as the in-batch case: whether a re-scan should REPLACE the earlier
+  -- submission or be refused is a product decision, and guessing it inside a retry loop is how
+  -- you silently overwrite a student's graded exam.
+  if exists (
+    select 1
+    from public.exam_scanned_submissions ss
+    join public.exams e on e.id = ss.exam_id
+    join public.submissions sub
+      on sub.assignment_id = e.assignment_id
+     and sub.profile_id = ss.matched_profile_id
+     and sub.is_active
+     and sub.assignment_group_id is null
+    where ss.batch_id = p_batch_id
+      and ss.match_status = 'confirmed'
+      and ss.matched_profile_id is not null
+      and ss.finalized_at is null
+      and sub.id is distinct from ss.submission_id
+  ) then
+    raise exception
+      'Batch % contains a confirmed exam for a student who already has an active submission for this assignment; resolve the duplicate (or remove the earlier submission) before creating submissions',
+      p_batch_id;
+  end if;
+
+  -- Re-enqueue every confirmed submission that is not yet finalized. finalized_at is the
+  -- crash-safety signal: a submission whose finalize crashed before completing (finalized_at
+  -- still NULL, whether or not a partial submission/artifact exists) is picked back up here,
+  -- as is one that never started.
+  for rec in select ss.id from public.exam_scanned_submissions ss
+             where ss.batch_id = p_batch_id and ss.match_status = 'confirmed'
+               and ss.finalized_at is null loop
+    perform pgmq_public.send('exam_processing', jsonb_build_object(
+      'method', 'finalize', 'class_id', v_class_id, 'batch_id', p_batch_id,
+      'args', jsonb_build_object('scanned_submission_id', rec.id)));
+    v_count := v_count + 1;
+  end loop;
+
+  -- Only flip into 'finalizing' when there is actually work; otherwise leave the batch's
+  -- status untouched (e.g. an already-'completed' batch stays completed) so a redundant
+  -- finalize click can't strand it.
+  if v_count > 0 then
+    update public.exam_scan_batches set status = 'finalizing', error = null where id = p_batch_id;
+
+    -- best-effort immediate kick; the cron invoker drains the queue regardless
+    begin
+      perform public.call_edge_function_internal(
+        '/functions/v1/exam-async-worker', 'POST',
+        '{"Content-type":"application/json","x-supabase-webhook-source":"exam-async-worker"}'::jsonb,
+        '{}'::jsonb, 3000, null, null, null, null, null);
+    exception when others then null;
+    end;
+  end if;
+
+  return v_count;
+end;
+$$;
+revoke all on function public.enqueue_exam_finalize(bigint) from public;
+grant execute on function public.enqueue_exam_finalize(bigint) to authenticated, service_role;

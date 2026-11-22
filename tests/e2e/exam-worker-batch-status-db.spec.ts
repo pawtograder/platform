@@ -921,6 +921,79 @@ test.describe("match writes: only the holder, only while matching, never over a 
   });
 });
 
+/** Create cannot queue a batch's finalize messages twice (#1158 review; the N4 duplicate-finalize trigger). */
+test.describe("Create refuses a batch that is already creating submissions (#1158)", () => {
+  test("a second Create, or one that waits on the first, queues nothing", async () => {
+    const { classId, examId, batchId } = await seedBatch("review");
+    const student = await createUserInClass({ role: "student", class_id: classId });
+    // One confirmed exam with no pages: finalize will fail on it, which is fine here. The batch is
+    // all this test looks at.
+    const { error: insErr } = await supabase.from("exam_scanned_submissions").insert({
+      class_id: classId,
+      exam_id: examId,
+      batch_id: batchId,
+      exam_index: 0,
+      match_status: "confirmed",
+      matched_profile_id: student.private_profile_id
+    });
+    expect(insErr).toBeNull();
+    const first = await privilegedClient();
+    const second = await privilegedClient();
+    const monitor = await privilegedClient();
+    const queuedFor = async () =>
+      (
+        await monitor.query(
+          "SELECT count(*)::int AS n FROM pgmq.q_exam_processing WHERE (message->>'batch_id')::bigint = $1",
+          [batchId]
+        )
+      ).rows[0].n;
+    try {
+      const firstPid = await backendPid(first);
+      const secondPid = await backendPid(second);
+      await first.query("BEGIN");
+      expect((await first.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId])).rows[0].n).toBe(1);
+      const waiting = second.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId]);
+      expect((await waitUntilBlocked(monitor, secondPid, firstPid, 5000)).observed).toBe(true);
+      // Keep the first Create's message hidden from running workers, then commit it.
+      await first.query(
+        "UPDATE pgmq.q_exam_processing SET vt = clock_timestamp() + interval '1 hour' WHERE (message->>'batch_id')::bigint = $1",
+        [batchId]
+      );
+      await first.query("COMMIT");
+      await expect(waiting).rejects.toThrow(/already creating submissions/);
+      expect(await queuedFor()).toBe(1);
+      await expect(second.query("SELECT public.enqueue_exam_finalize($1)", [batchId])).rejects.toThrow(
+        /already creating submissions/
+      );
+      expect(await queuedFor()).toBe(1);
+      expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
+      // A batch whose finalize failed is retried by Create.
+      await monitor.query(
+        "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE (message->>'batch_id')::bigint = $1",
+        [batchId]
+      );
+      await supabase.from("exam_scan_batches").update({ status: "error", error: "earlier failure" }).eq("id", batchId);
+      await second.query("BEGIN");
+      expect((await second.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId])).rows[0].n).toBe(1);
+      await second.query(
+        "UPDATE pgmq.q_exam_processing SET vt = clock_timestamp() + interval '1 hour' WHERE (message->>'batch_id')::bigint = $1",
+        [batchId]
+      );
+      await second.query("COMMIT");
+    } finally {
+      await first.query("ROLLBACK").catch(() => {});
+      await second.query("ROLLBACK").catch(() => {});
+      await monitor.query(
+        "SELECT pgmq.archive('exam_processing', msg_id) FROM pgmq.q_exam_processing WHERE (message->>'batch_id')::bigint = $1",
+        [batchId]
+      );
+      await first.end();
+      await second.end();
+      await monitor.end();
+    }
+  });
+});
+
 /**
  * A reader whose lease lapsed keeps running. Before #1158's review it could archive, re-queue or
  * dead-letter the message by msg_id while a newer reader held it. Now each of those is refused
