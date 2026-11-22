@@ -11,7 +11,6 @@ import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
 import { useSuggestedDueDateEmphasisEnabled } from "@/hooks/useCourseFeatures";
-import { useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 import { useIdentity } from "@/hooks/useIdentities";
 import { createClient } from "@/utils/supabase/client";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
@@ -42,8 +41,6 @@ type AssignmentUnit = {
   primary_date: TZDate | undefined;
   due_date_component: JSX.Element;
   repo: string;
-  /** Undefined when there is no repo, or its Forgejo host hasn't loaded. */
-  repo_url: string | undefined;
   is_repo_ready: boolean;
   name_link: string;
   submission_text: string;
@@ -150,12 +147,6 @@ export default function StudentAssignmentsList() {
     [courseAssignments]
   );
   const showSuggestedDueDate = useSuggestedDueDateEmphasisEnabled();
-  // The dashboard RPC doesn't carry git_provider either.
-  const gitProviderById = useMemo(
-    () => new Map(courseAssignments.map((a) => [a.id, a.git_provider])),
-    [courseAssignments]
-  );
-  const forgejoHost = useForgejoInstanceUrl(courseAssignments.some((a) => a.git_provider === "forgejo"));
 
   const { workInFuture, workInPast } = useMemo(() => {
     const result: AssignmentUnit[] = [];
@@ -171,8 +162,6 @@ export default function StudentAssignmentsList() {
           repo = "-";
         }
       }
-      const repoHost = gitProviderById.get(assignment.id) === "forgejo" ? forgejoHost : "https://github.com";
-      const repoUrl = repo !== "-" && repoHost ? `${repoHost}/${repo}` : undefined;
 
       // `due_date` off get_assignments_for_student_dashboard is the FINAL per-student deadline:
       // the RPC selects calculate_final_due_date, so lab-section offsets AND due-date exceptions
@@ -212,7 +201,6 @@ export default function StudentAssignmentsList() {
           <>-</>
         ),
         repo: repo,
-        repo_url: repoUrl,
         is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
         submission_text: formatLatestSubmissionLabel(assignment),
@@ -237,7 +225,6 @@ export default function StudentAssignmentsList() {
           primary_date: evalDueTZDate,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
-          repo_url: repoUrl,
           is_repo_ready: assignment.is_github_ready ?? false,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_submission_id}/files?review_assignment_id=${assignment.review_assignment_id}`,
           submission_text: assignment.submission_review_completed_at ? "Submitted" : "Not Submitted",
@@ -274,16 +261,7 @@ export default function StudentAssignmentsList() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [
-    assignments,
-    groups,
-    course,
-    course_id,
-    suggestedDueDateById,
-    showSuggestedDueDate,
-    gitProviderById,
-    forgejoHost
-  ]);
+  }, [assignments, groups, course, course_id, suggestedDueDateById, showSuggestedDueDate]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();
@@ -413,13 +391,9 @@ export default function StudentAssignmentsList() {
                   </Table.Cell>
                 </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  {work.repo_url ? (
-                    <Link target="_blank" href={work.repo_url}>
-                      {work.repo}
-                    </Link>
-                  ) : (
-                    <Text>{work.repo}</Text>
-                  )}
+                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                    {work.repo}
+                  </Link>
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>{work.group}</Table.Cell>
               </Table.Row>
@@ -489,13 +463,9 @@ export default function StudentAssignmentsList() {
                   </Table.Cell>
                 </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  {work.repo_url ? (
-                    <Link target="_blank" href={work.repo_url}>
-                      {work.repo}
-                    </Link>
-                  ) : (
-                    <Text>{work.repo}</Text>
-                  )}
+                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                    {work.repo}
+                  </Link>
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>{work.group}</Table.Cell>
               </Table.Row>

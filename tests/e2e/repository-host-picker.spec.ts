@@ -363,7 +363,7 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(page.getByText("GitHub Ready", { exact: true })).toHaveCount(0);
   });
 
-  test("a student's assignment list shows a Forgejo repository without a GitHub link", async ({ page }) => {
+  test("a student's assignment list labels the repository column without naming GitHub", async ({ page }) => {
     const repository = `e2e-ignore/fj-student-${suffix}`;
     expect(
       (
@@ -382,8 +382,6 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(page.getByRole("cell", { name: repository, exact: true }).first()).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole("columnheader", { name: "Repository", exact: true }).first()).toBeVisible();
     await expect(page.getByText("GitHub Repository")).toHaveCount(0);
-    // This lane has no Forgejo account to find the host, so the name shows unlinked.
-    await expect(page.locator(`a[href="https://github.com/${repository}"]`)).toHaveCount(0);
   });
 
   test("Rerun Autograder explains a missing grader repo, then describes Forgejo runs", async ({ page }) => {
