@@ -3,7 +3,7 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
+import { useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { useOne } from "@refinedev/core";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -74,9 +74,7 @@ export default function AssignmentHome() {
   const { assignment_id } = useParams();
   const isInstructor = useIsInstructor();
   const supabase = useMemo(() => createClient(), []);
-  const isForgejo = assignment?.git_provider === "forgejo";
-  const forgejoHost = useForgejoInstanceUrl(isForgejo);
-  const handoutHost = isForgejo ? forgejoHost : "https://github.com";
+  const handoutHost = useRepoWebHost(assignment?.git_provider);
   // RLS lets only instructors read autograder.
   const { data: autograder } = useOne<{ grader_repo: string | null }>({
     resource: "autograder",
