@@ -1,9 +1,10 @@
 /**
- * #1010: arranging the gradebook needs manage_gradebook (20261121160100_gradebook_by_capability.sql).
- * Without it the gradebook hides Add Column, Import Columns, Auto-layout, the group menus and the
- * column actions that change a column (Edit, Move, Release, Delete). Convert Missing to 0 writes
- * cells, so graders keep it. A Head TA on a custom role with manage_gradebook sees the controls.
- * Instructors see no change.
+ * #1010: the staff gradebook needs manage_gradebook (20261121160100_gradebook_by_capability.sql and
+ * 20261121200200_gradebook_view_by_capability.sql). Without it, the gradebook page sends a staff
+ * member back to the course page, and the Gradebook link, the "Manage gradebook" search entry and
+ * the Grades card on a student's page are hidden. A Head TA on a custom role with manage_gradebook
+ * gets all of them and the gradebook's controls (Add Column, Import Columns, Auto-layout, the group
+ * menus, Edit, Move, Release, Delete and Convert Missing to 0). Instructors see no change.
  *
  * The default instructor role holds manage_gradebook, the default grader role doesn't.
  */
@@ -19,6 +20,7 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
   let instructor: TestingUser;
   let grader: TestingUser;
   let headTa: TestingUser;
+  let student: TestingUser;
   let headTaRoleId: number;
   const GROUP = "Quizzes";
   const STANDALONE = "Participation";
@@ -29,7 +31,7 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
     instructor = await createUserInClass({ role: "instructor", class_id: course.id });
     grader = await createUserInClass({ role: "grader", class_id: course.id });
     headTa = await createUserInClass({ role: "grader", class_id: course.id });
-    await createUserInClass({ role: "student", class_id: course.id });
+    student = await createUserInClass({ role: "student", class_id: course.id });
 
     const { data: classRow } = await supabase.from("classes").select("gradebook_id").eq("id", course.id).single();
     const gradebook_id = classRow!.gradebook_id!;
@@ -86,6 +88,35 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
     await waitForVirtualizerIdle(page);
   }
 
+  // Opens a course page and waits until the capabilities are in, so a hidden entry means "not held".
+  async function gotoWithCapabilities(page: Page, url: string) {
+    const capabilities = page.waitForResponse(
+      (r) => r.url().includes("/rpc/user_class_capabilities") && r.status() === 200
+    );
+    await page.goto(url);
+    await capabilities;
+    await expect(page.locator("[data-capabilities-loaded]")).toBeAttached({ timeout: 30_000 });
+  }
+
+  async function expectSearchEntry(page: Page, visible: boolean) {
+    await page.keyboard.press("ControlOrMeta+k");
+    const box = page.getByRole("combobox", { name: "Search Pawtograder" });
+    await expect(box).toBeVisible();
+    // "manage" also finds the other staff pages (Manage assignments, ...), so once results show, a
+    // missing "Manage gradebook" means it was left out.
+    await box.fill("manage");
+    const results = page.getByRole("listbox", { name: "Search results" });
+    await expect(results.getByRole("option", { name: /Manage assignments/ })).toBeVisible();
+    await expect(results.getByRole("option", { name: /Manage gradebook/ })).toHaveCount(visible ? 1 : 0);
+    await page.keyboard.press("Escape");
+  }
+
+  async function expectGradesCard(page: Page, visible: boolean) {
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/student/${student.private_profile_id}`);
+    await expect(page.getByRole("heading", { name: "Discussion Replies" })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("heading", { name: "Grades", exact: true })).toHaveCount(visible ? 1 : 0);
+  }
+
   // Finds the header by its column name, the same way for every role.
   async function openColumnMenu(page: Page, columnName: string) {
     const header = tableRegion(page)
@@ -122,29 +153,33 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
     );
   }
 
-  test("a grader doesn't see the gradebook's column controls", async ({ page }) => {
+  test("a grader is sent away from the gradebook and doesn't find it anywhere", async ({ page }) => {
     await loginAsUser(page, grader, course);
-    await openGradebook(page);
-    await expectControls(page, false);
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/gradebook`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}$`));
     await expectGradebookLink(page, false);
-    // Downloading stays instructor-only, as before.
-    await expect(page.getByRole("button", { name: "Download Gradebook" })).toHaveCount(0);
+    await expectSearchEntry(page, false);
+    await expectGradesCard(page, false);
   });
 
-  test("a Head TA with manage_gradebook sees them", async ({ page }) => {
+  test("a Head TA with manage_gradebook sees the gradebook, its controls and the Grades card", async ({ page }) => {
     await loginAsUser(page, headTa, course);
     await openGradebook(page);
     await expectControls(page, true);
     await expectGradebookLink(page, true);
     await expect(page.getByRole("button", { name: "Download Gradebook" })).toHaveCount(0);
+    await expectSearchEntry(page, true);
+    await expectGradesCard(page, true);
   });
 
-  test("an instructor still sees them", async ({ page }) => {
+  test("an instructor still sees all of it", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await openGradebook(page);
     await expectControls(page, true);
     await expectGradebookLink(page, true);
     await expect(page.getByRole("button", { name: "Download Gradebook" })).toBeVisible();
+    await expectSearchEntry(page, true);
+    await expectGradesCard(page, true);
   });
 
   // The capability provider stops retrying after a few failed lookups. Instructors hold every

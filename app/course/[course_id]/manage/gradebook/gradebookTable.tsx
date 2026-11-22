@@ -1797,8 +1797,9 @@ function GradebookColumnHeader({
   const [isUnreleasing, setIsUnreleasing] = useState(false);
   // Editing, moving, releasing and deleting a column need manage_gradebook (#1010).
   const canManageGradebook = useCapability("manage_gradebook");
-  // Convert Missing to 0 writes cells, not the column, so graders keep it.
-  const showConvertMissing = !column.score_expression || column.score_expression.startsWith("assignments(");
+  // Convert Missing to 0 writes cells, which also needs manage_gradebook (hidden if it's turned off mid-session).
+  const showConvertMissing =
+    canManageGradebook && (!column.score_expression || column.score_expression.startsWith("assignments("));
   const supabase = useMemo(() => createClient(), []);
   const headerRef = useRef<HTMLDivElement>(null);
   const isMovingRef = useRef(false);
@@ -2185,7 +2186,7 @@ function GradebookColumnHeader({
                   </MenuItem>
                 </>
               )}
-              {(showConvertMissing || canManageGradebook) && <MenuSeparator />}
+              {canManageGradebook && <MenuSeparator />}
               {showConvertMissing && (
                 <MenuItem
                   value="convertMissing"
