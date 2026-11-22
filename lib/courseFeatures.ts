@@ -21,7 +21,8 @@ export const COURSE_FEATURES = {
   OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
   OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert",
   OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health",
-  OFFICE_HOURS_ESCALATION_ALERT: "office-hours-escalation-alert"
+  OFFICE_HOURS_ESCALATION_ALERT: "office-hours-escalation-alert",
+  OFFICE_HOURS_STUDENT_ONBOARDING: "office-hours-student-onboarding"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -239,6 +240,15 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     defaultWhenMissing: false,
     switchLabel: "Alert staff and students about office hours escalations",
     ariaLabel: "Alert staff and students about office hours escalations"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING,
+    title: "Office hours: hints for new students",
+    description:
+      "Students see hints on the office hours page, one at a time, until they first click an enabled New Request button. One asks them to read each queue's description when the course has two or more text queues. The other says whether staff are on duty, and if nobody is, when the next office hours on the calendar start. The new request form also gets longer helper text on the Help Queue, Template, and Description fields. When off, nothing changes.",
+    defaultWhenMissing: false,
+    switchLabel: "Show office hours hints to new students",
+    ariaLabel: "Show office hours hints to new students"
   }
 ];
 

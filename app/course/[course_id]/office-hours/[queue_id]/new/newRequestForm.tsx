@@ -20,6 +20,9 @@ import {
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { newRequestFormHelperText } from "@/lib/officeHoursOnboarding";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import * as Sentry from "@sentry/nextjs";
 import {
@@ -153,6 +156,11 @@ export default function HelpRequestForm({
   const templates = allTemplates.filter(
     (template) => template.class_id === Number.parseInt(course_id as string) && template.is_active
   );
+
+  // Helper text under the fields. The longer onboarding text is behind a course feature, see
+  // lib/officeHoursOnboarding.ts.
+  const onboardingOn = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING);
+  const helperText = newRequestFormHelperText({ featureEnabled: onboardingOn, hasTemplates: templates.length > 0 });
 
   // Get single template ID for stable dependency
   const singleTemplateId = templates.length === 1 ? templates[0].id : null;
@@ -775,7 +783,7 @@ export default function HelpRequestForm({
               required={true}
               errorText={errors.help_queue?.message?.toString()}
               invalid={!!errors.help_queue}
-              helperText="Select which help queue to submit your request to"
+              helperText={helperText.helpQueue}
             >
               <Controller
                 name="help_queue"
@@ -877,6 +885,7 @@ export default function HelpRequestForm({
                   required={true}
                   errorText={errors.template_id?.message?.toString()}
                   invalid={!!errors.template_id}
+                  helperText={helperText.template}
                 >
                   <Controller
                     name="template_id"
@@ -926,6 +935,7 @@ export default function HelpRequestForm({
               required={true}
               errorText={errors.request?.message?.toString()}
               invalid={errors.request ? true : false}
+              helperText={helperText.description}
             >
               <Controller
                 name="request"
