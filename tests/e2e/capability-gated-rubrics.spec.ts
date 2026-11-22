@@ -63,12 +63,20 @@ test.describe("rubric editing gated by manage_rubrics", () => {
 
   const assignmentUrl = () => `/course/${course.id}/manage/assignments/${assignment.id}`;
 
+  // The page's capability lookup. Registered before navigating, so it can't miss the response.
+  const capabilityLookup = (page: Page) =>
+    page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.status() === 200);
+
   // useCapability is false while loading, so "hidden" only means something once the answer is in.
   // ClassCapabilitiesProvider adds data-capabilities-loaded in the same render that applies the
-  // answer.
+  // answer. It also adds it, with no capabilities, after the lookup fails a few times, so this first
+  // waits for a successful lookup. "Manage Groups" showing means the nav has rendered.
   async function openGroupsPage(page: Page) {
+    const capabilities = capabilityLookup(page);
     await gotoCourseUrlWhenHeadingVisible(page, `${assignmentUrl()}/groups`, "Configure Groups");
+    await capabilities;
     await expect(page.locator('[data-capabilities-loaded="true"]').first()).toBeAttached();
+    await expect(page.getByRole("link", { name: "Manage Groups" }).first()).toBeVisible();
   }
 
   // The manage layout renders the page twice (mobile and desktop); the region picks the visible copy.
@@ -82,7 +90,9 @@ test.describe("rubric editing gated by manage_rubrics", () => {
 
   test("a grader who opens the rubric page by URL is sent back to the assignment page", async ({ page }) => {
     await loginAsUser(page, grader, course);
+    const capabilities = capabilityLookup(page);
     await page.goto(`${assignmentUrl()}/rubric`);
+    await capabilities;
     await expect(page).toHaveURL(new RegExp(`${assignmentUrl()}$`));
     await expect(rubricEditor(page)).toHaveCount(0);
   });
