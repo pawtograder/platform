@@ -62,23 +62,21 @@ export class ScanAlignmentRejectedError extends ScanPathRejectedError {
 }
 
 /**
- * The printed words of each page of this exam's template, by page number. A page not read yet means
- * the template was replaced after this batch was matched (match reads every page first), so it is
- * refused rather than having its scans read as drawn.
+ * The printed words of each page of this exam's template, by page number, reading any page that has
+ * not been read yet. Finalize needs this as well as match: a batch matched before #1292 deployed, or
+ * one whose template was replaced since, has template pages nobody has read.
  */
-export async function loadTemplates(
-  admin: Admin,
-  scope: { batchId: number; examId: number }
-): Promise<Map<number, PageWords>> {
+export async function loadTemplates(admin: Admin, scope: ScanScope): Promise<Map<number, PageWords>> {
+  await ocrMissingTemplatePages(admin, scope);
   const { data, error } = await admin
     .from("exam_template_pages")
     .select("page_number, width, height, ocr_data")
     .eq("exam_id", scope.examId);
   if (error) throw new Error(`load template pages for exam ${scope.examId} failed: ${error.message}`);
+  // Only a template re-uploaded between the read above and this load. A plain error, so the worker
+  // retries and the retry reads the new pages, rather than reading these scans as drawn.
   if ((data ?? []).some((t) => t.ocr_data === null)) {
-    throw new ScanAlignmentRejectedError(
-      `batch ${scope.batchId}: the template changed after this batch was matched. Run Process again.`
-    );
+    throw new Error(`batch ${scope.batchId}: the template was replaced while it was being read`);
   }
   return new Map(
     (data ?? []).map((t) => [t.page_number, { words: ocrWords(t.ocr_data), width: t.width, height: t.height }])
@@ -87,9 +85,13 @@ export async function loadTemplates(
 
 type SizedPage = { page_index: number; width: number | null; height: number | null };
 
+/** Stands in for every page of an exam with no template uploaded: nothing to place a scan by. */
+const NO_TEMPLATE: PageWords = { words: [], width: 0, height: 0 };
+
 /**
  * Each exam's pages with their registrations, where the i-th page of an exam goes with template
- * page i+1: AS_DRAWN when that template page has nothing printed to place it by. Throws
+ * page i+1: AS_DRAWN when that template page has nothing printed to place it by, or the exam has no
+ * template at all. A page past the template's last page is refused like one that doesn't line up. Throws
  * ScanAlignmentRejectedError naming every page that should have lined up and did not, so no region
  * is ever read from a page that is out of place.
  */
@@ -104,7 +106,7 @@ export function requireAligned<P extends SizedPage>(
   for (const examPages of exams) {
     const exam: (P & { reg: Registration })[] = [];
     examPages.forEach((p, i) => {
-      const reg = alignPage(templates.get(i + 1), {
+      const reg = alignPage(templates.size === 0 ? NO_TEMPLATE : templates.get(i + 1), {
         words: ocrWords(ocrOf(p)),
         width: p.width ?? 0,
         height: p.height ?? 0
@@ -126,8 +128,7 @@ export function requireAligned<P extends SizedPage>(
 }
 
 /**
- * Every exam of a batch with its registrations (see requireAligned), reading the template first
- * if it has not been. The pages' OCR words are loaded here and dropped on return, so match does
+ * Every exam of a batch with its registrations (see requireAligned). The pages' OCR words are loaded here and dropped on return, so match does
  * not hold a large batch's words through the identity reads that follow.
  */
 export async function alignBatch<P extends SizedPage & { id: number }>(
@@ -135,7 +136,6 @@ export async function alignBatch<P extends SizedPage & { id: number }>(
   scope: ScanScope,
   exams: P[][]
 ): Promise<(P & { reg: Registration })[][]> {
-  await ocrMissingTemplatePages(admin, scope);
   const [templates, ocr] = await Promise.all([loadTemplates(admin, scope), loadBatchOcr(admin, scope.batchId)]);
   return requireAligned(scope.batchId, exams, templates, (p) => ocr.get(p.id) ?? null);
 }

@@ -5,9 +5,11 @@
 // worker uses it in both directions: template regions onto the scan for the identity read, and
 // scan words back into template space before wordsInRegion reads an answer.
 //
-// Only word centers are used. The provider stores a straight box around each (possibly rotated)
-// word, and the center of that box is still the word's true center, so OCR stored before this
-// change registers just as well.
+// The fit uses only word centers. The provider stores a straight box around each (possibly
+// rotated) word, and the center of that box is still the word's true center, so OCR stored before
+// this change registers just as well. Words moved back into template space keep their box's size,
+// which is only right for a page close to upright or upside down, so a page turned further is
+// refused (MAX_TILT_DEGREES).
 //
 // Everything is fitted in pixels. A rotation in normalized 0..1 units is not a rotation on a
 // non-square page, and the scan is usually a different DPI from the template.
@@ -26,6 +28,8 @@ const MIN_AGREEING_SHARE = 0.6;
 const MIN_COVERAGE = 0.5;
 /** Hypotheses come from pairs among at most this many words, spread through the list. */
 const MAX_SEED_WORDS = 40;
+/** Furthest a page may be turned from upright or upside down; a sideways page is refused. */
+const MAX_TILT_DEGREES = 10;
 
 export type PageWords = { words: WordBox[]; width: number; height: number };
 type Size = { width: number; height: number };
@@ -118,6 +122,14 @@ function explainsPage(agreeing: Point[], all: Point[]): boolean {
   );
 }
 
+// Degrees the fit is turned from the nearest of upright and upside down. Word boxes keep their scan
+// shape when moved back (wordsToTemplate), so on a page turned a quarter a tall box stays tall and
+// wordsInRegion reads the right words in the wrong order.
+function tiltOf(f: Fit): number {
+  const deg = Math.abs((Math.atan2(f.b, f.a) * 180) / Math.PI);
+  return Math.min(deg, 180 - deg);
+}
+
 function inliersOf(f: Fit, from: Point[], to: Point[], tolerance: number): number[] {
   const kept: number[] = [];
   for (let i = 0; i < from.length; i++) {
@@ -130,7 +142,8 @@ function inliersOf(f: Fit, from: Point[], to: Point[], tolerance: number): numbe
 /**
  * Fit the template-to-scan transform for one page from its printed words, or null when no single
  * fit explains the page: fewer than MIN_PAIRS words agree on one (a blank page, only handwriting, a
- * different page), or the words that agree are too few or bunched in one part of the page.
+ * different page), the words that agree are too few or bunched in one part of the page, or the page
+ * is turned more than MAX_TILT_DEGREES from upright or upside down.
  *
  * A plain least-squares fit lets one misplaced OCR word drag every region, so the fit starts from
  * the two-word hypothesis most other pairs agree with, then refits on the pairs that agree.
@@ -171,7 +184,7 @@ export function registerPage(template: PageWords, scan: PageWords): Registration
   const fit = refit(kept);
   if (!fit) return null;
   const agreeing = inliersOf(fit, from, to, tolerance).map((i) => from[i]);
-  if (!explainsPage(agreeing, from)) return null;
+  if (!explainsPage(agreeing, from) || tiltOf(fit) > MAX_TILT_DEGREES) return null;
   return {
     ...fit,
     template: { width: template.width, height: template.height },
@@ -191,11 +204,12 @@ export const AS_DRAWN: Registration = {
 
 /**
  * How to read one scan page against its template page. AS_DRAWN when the template page has too
- * little printed text to place a scan by (an answer sheet of empty boxes) or does not exist; null
- * when it does have printed text and the scan does not line up with it, which is a page to refuse.
+ * little printed text to place a scan by (an answer sheet of empty boxes); null, a page to refuse,
+ * when the template has no such page or the scan does not line up with it.
  */
 export function alignPage(template: PageWords | undefined, scan: PageWords): Registration | null {
-  if (!template || uniqueWords(template.words).size < MIN_PAIRS) return AS_DRAWN;
+  if (!template) return null;
+  if (uniqueWords(template.words).size < MIN_PAIRS) return AS_DRAWN;
   return registerPage(template, scan);
 }
 

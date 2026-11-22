@@ -181,7 +181,6 @@ Deno.test("a scan is read as drawn only when its template has nothing printed to
   });
   const unrelated = { words: [word("banana", 0.2, 0.4)], ...TEMPLATE };
   assertEquals(alignPage({ words: fake.words, ...TEMPLATE }, unrelated), AS_DRAWN);
-  assertEquals(alignPage(undefined, unrelated), AS_DRAWN);
   assertEquals(alignPage({ words: PRINTED, ...TEMPLATE }, unrelated), null);
 
   // AS_DRAWN leaves regions and words exactly where they were, so the artifact stores the region
@@ -193,3 +192,41 @@ Deno.test("a scan is read as drawn only when its template has nothing printed to
   const words = [word("Total", 0.1, 0.9)];
   assertEquals(wordsToTemplate(words, AS_DRAWN), words);
 });
+
+Deno.test("a page past the template's last page is refused, not read as drawn", () => {
+  // An exam with more pages than its template, as after a template is re-uploaded with fewer
+  // pages. Catches reading the extra page as drawn, which skips lining it up.
+  assertEquals(alignPage(undefined, { words: PRINTED, ...TEMPLATE }), null);
+});
+
+// Pages turned past MAX_TILT_DEGREES, each with a scan sized so the turned page stays on it.
+for (const [deg, scan, dx, dy] of [
+  [90, { width: 1100, height: 850 }, 1100, 0],
+  [270, { width: 1100, height: 850 }, 0, 850],
+  [12, { width: 1100, height: 1400 }, 250, 0],
+  [-12, { width: 1100, height: 1400 }, 0, 200]
+] as [number, { width: number; height: number }, number, number][]) {
+  Deno.test(`a page turned ${deg} degrees is refused`, () => {
+    // Catches accepting a sideways page. Its word boxes keep their scan shape in template space, so
+    // a tall box stays tall and wordsInRegion reads the right words in the wrong order (#1292).
+    const t: Tilt = { deg, scale: 1, dx, dy };
+    const words = PRINTED.map((w) => onScan(w, t, scan));
+    assertEquals(registerPage({ words: PRINTED, ...TEMPLATE }, { words, ...scan }), null);
+  });
+}
+
+for (const [deg, scan, dx, dy] of [
+  [180, { width: 850, height: 1100 }, 850, 1100],
+  [8, { width: 1100, height: 1400 }, 200, 0],
+  [-8, { width: 1100, height: 1400 }, 0, 150]
+] as [number, { width: number; height: number }, number, number][]) {
+  Deno.test(`a page turned ${deg} degrees is still registered`, () => {
+    // Catches measuring the tilt from upright only, which refuses a page fed upside down, and a
+    // bound in the wrong units or the wrong direction, which refuses ordinary skew.
+    const t: Tilt = { deg, scale: 1, dx, dy };
+    const words = PRINTED.map((w) => onScan(w, t, scan));
+    const reg = registerPage({ words: PRINTED, ...TEMPLATE }, { words, ...scan });
+    assertExists(reg);
+    assertAlmostEquals(Math.abs(degrees(reg)), Math.abs(deg), 0.01);
+  });
+}
