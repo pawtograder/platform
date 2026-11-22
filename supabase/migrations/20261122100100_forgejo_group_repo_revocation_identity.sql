@@ -37,7 +37,7 @@ WHERE v.repository_id IS NULL
   AND r.git_provider = 'forgejo'
   AND r.repository = v.repository;
 
--- From 20261121200000_forgejo_group_repo_revocations.sql. The only change is recording r.id, on insert and
+-- From 20261121210100_forgejo_group_repo_revocations.sql. The only change is recording r.id, on insert and
 -- on the conflict update: a re-queue for the same (repo, login) may well be a different repository row.
 CREATE OR REPLACE FUNCTION public.forgejo_group_members_left(p_group_ids bigint[], p_profile_ids uuid[])
 RETURNS void

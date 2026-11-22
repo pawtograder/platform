@@ -10,7 +10,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
  * A Forgejo repo gets no jobs from here. The database does its access: deleting the old membership
  * queues the student's removal from the old group's repo, and inserting the new one marks the new
  * group's repo for re-granting; forgejo-reconciler does both
- * (20261121200000_forgejo_group_repo_revocations.sql).
+ * (20261121210100_forgejo_group_repo_revocations.sql).
  */
 export type MoveStudentDeps = {
   /** The calling instructor's client; RLS applies. */

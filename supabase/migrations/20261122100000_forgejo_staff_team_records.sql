@@ -50,7 +50,7 @@ $$;
 REVOKE ALL ON FUNCTION public.record_forgejo_staff_team(bigint, text, text, text, bigint) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_forgejo_staff_team(bigint, text, text, text, bigint) TO service_role;
 
--- From 20261121170000_forgejo_staff_teams.sql. The only change is the third arm of forgejo_classes: a class
+-- From 20261121210000_forgejo_staff_teams.sql. The only change is the third arm of forgejo_classes: a class
 -- with a recorded staff team stays in the backlog even once its repos and handouts are gone.
 CREATE OR REPLACE FUNCTION public.forgejo_staff_teams(p_instance_url text, p_limit integer)
 RETURNS TABLE (
