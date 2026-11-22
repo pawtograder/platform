@@ -799,6 +799,7 @@ export default class TableController<
   private _postSsrCatchUpDone: boolean = false;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
+  private _shouldRefetchUncachedIdOnly: ((id: IDType) => boolean) | null = null;
   /**
    * Optional select clause to use when fetching a single row (e.g., after realtime events).
    * This enables preserving joined columns for controllers initialized with joined selects.
@@ -1769,7 +1770,8 @@ export default class TableController<
     initialData,
     enableAutoRefetch,
     autoFetchMissingRows,
-    debounceJitter
+    debounceJitter,
+    shouldRefetchUncachedIdOnly
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1812,6 +1814,14 @@ export default class TableController<
      * Default: 500ms
      */
     debounceJitter?: number;
+    /**
+     * For an ID-only UPDATE (`{ id }` as data) about a row this controller doesn't hold, decides
+     * whether to fetch it. Without it, every such row is fetched. Privacy-aware broadcasts send
+     * every private row to every subscriber as an id, so most of those fetches return nothing:
+     * help_requests uses this to fetch only tickets the user is on (#1310). Rows already held are
+     * always refetched, so updates and RLS evictions still apply. Inserts are unaffected.
+     */
+    shouldRefetchUncachedIdOnly?: (id: IDType) => boolean;
   }) {
     this._rows = [];
     this._client = client;
@@ -1822,6 +1832,7 @@ export default class TableController<
     this._submissionId = submissionId || null;
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
+    this._shouldRefetchUncachedIdOnly = shouldRefetchUncachedIdOnly ?? null;
     this._debounceInterval = debounceInterval || 500;
     // Default jitter reduced from 5000ms to 500ms to improve perceived responsiveness
     // while still providing some thundering herd protection
@@ -2166,7 +2177,11 @@ export default class TableController<
         if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
         } else if (message.row_id ?? idOnly) {
-          idsToRefetch.push((message.row_id ?? idOnly) as IDType);
+          const id = (message.row_id ?? idOnly) as IDType;
+          const held = this._rows.some((r) => (r as ResultOne & { id: IDType }).id === id);
+          if (held || !this._shouldRefetchUncachedIdOnly || this._shouldRefetchUncachedIdOnly(id)) {
+            idsToRefetch.push(id);
+          }
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with

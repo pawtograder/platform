@@ -117,11 +117,12 @@ export const FORGEJO_UNSUPPORTED_SETTINGS = {
 export const FORGEJO_DETACH_REASON = "Removing a Forgejo handout from an assignment isn't supported yet.";
 
 /**
- * The Autograder page validates the grader repository and syncs grade.yml through
- * github-repo-configure-webhook and assignment-sync-autograder-workflow. Both reject Forgejo.
+ * A Forgejo assignment's grader repository stays on GitHub (D6), so the Autograder page sets it up.
+ * Turning the autograder on or off syncs grade.yml through assignment-sync-autograder-workflow,
+ * which rejects Forgejo, so that stays on Edit Assignment.
  */
 export const FORGEJO_GRADER_SETUP_REASON =
-  "This page sets up the grader through GitHub, which doesn't work for Forgejo assignments yet. Turn the autograder on or off from Edit Assignment.";
+  "The grader repository for a Forgejo assignment stays on GitHub. Turn the autograder on or off from Edit Assignment.";
 
 /** The saved row an edit form was loaded with, or undefined on the create form. */
 export type SavedHostValues = {
@@ -204,12 +205,15 @@ type AssignmentForPrompts = {
  * Whether to show the GitHub link and invitation prompts. On an assignment page, only a Forgejo
  * assignment hides them. On course pages they hide only when every live repository-backed
  * assignment is on Forgejo, the same rule the invitation queries in #1128 use. A course with no
- * such assignments keeps them, as on staging.
+ * such assignments keeps them, as on staging. A course with no GitHub organization never shows them:
+ * they invite students to join that organization, and GitHub repositories can't be created without it.
  */
 export function needsGitHubPrompts(
+  courseGitHubOrg: string | null,
   assignments: readonly AssignmentForPrompts[],
   assignmentGitProvider?: string | null
 ): boolean {
+  if (!courseGitHubOrg) return false;
   if (assignmentGitProvider) return assignmentGitProvider !== "forgejo";
   const repoBacked = assignments.filter(
     (a) => !a.archived_at && a.repo_mode !== "none" && a.repo_mode !== "no_submission"

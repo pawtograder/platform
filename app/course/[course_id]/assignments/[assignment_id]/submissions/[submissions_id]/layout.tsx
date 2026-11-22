@@ -2203,6 +2203,10 @@ function RubricView({
   const showPerStudentGradingTotals =
     gradingReview?.per_student_grading_totals &&
     isNonEmptyPerStudentGradingTotals(gradingReview.per_student_grading_totals);
+  // An exam is graded question by question from the rubric, so it comes straight after the score
+  // instead of after the tweak, release and automated check blocks, where it started below the
+  // fold and a grader scrolled for every answer (#1268). Other assignments keep the order they had.
+  const rubricFirst = assignment.assignment_type === "exam";
 
   return (
     <Box
@@ -2291,12 +2295,13 @@ function RubricView({
           isIndividualScores(gradingReview.individual_scores) && (
             <IndividualScoresDisplay individualScores={gradingReview.individual_scores} />
           )}
+        {rubricFirst && <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />}
         <SubmissionReviewScoreTweak showSplitStudentTotals={Boolean(showPerStudentGradingTotals)} />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
         <SubmissionRegradeRequestsPanel submissionId={submission.id} />
-        <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
+        {!rubricFirst && <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />}
         <Comments />
       </VStack>
     </Box>

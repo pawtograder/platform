@@ -271,9 +271,8 @@ export default function EditAssignment() {
         // still submits `true`. Running the guard first refused that whole save — dates, title,
         // the mode change and all — over a flag those very coercions were about to clear.
         //
-        // Skipped for Forgejo: the validation is a GitHub call, and the Autograder page this points
-        // at can't set up a grader for a Forgejo assignment yet.
-        if (values.has_autograder === true && queryData?.has_autograder === false && !isForgejo) {
+        // Forgejo too: its grader repo stays on GitHub (D6), so the same validation reads it.
+        if (values.has_autograder === true && queryData?.has_autograder === false) {
           const { data: graderRow } = await supabase
             .from("autograder")
             .select("grader_repo")

@@ -22,6 +22,7 @@ import {
   showRepositoryHostPicker,
   submissionModeUnavailableReason
 } from "@/lib/gitProviderOptions";
+import { COURSE_FEATURES, courseFeatureEnabled, MANAGEABLE_COURSE_FEATURES } from "@/lib/courseFeatures";
 import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 
 const FLAG_ON = [{ name: "cloud-workspaces", enabled: true }];
@@ -35,6 +36,17 @@ describe("cloud-workspaces flag", () => {
     expect(cloudWorkspacesEnabled([{ name: "cloud-workspaces", enabled: "true" as unknown as boolean }])).toBe(false);
     expect(cloudWorkspacesEnabled([...FLAG_OFF, ...FLAG_ON])).toBe(false);
     expect(cloudWorkspacesEnabled(FLAG_ON)).toBe(true);
+  });
+
+  // Turning it on creates a Forgejo account for everyone enrolled, so a course that never opted in
+  // must read as off everywhere, including through the generic courseFeatureEnabled.
+  it("is listed on the Feature flags page and is off by default", () => {
+    const entry = MANAGEABLE_COURSE_FEATURES.find((f) => f.name === COURSE_FEATURES.CLOUD_WORKSPACES);
+    expect(entry).toBeDefined();
+    expect(entry?.defaultWhenMissing).toBe(false);
+    expect(courseFeatureEnabled(null, COURSE_FEATURES.CLOUD_WORKSPACES)).toBe(false);
+    expect(courseFeatureEnabled([], COURSE_FEATURES.CLOUD_WORKSPACES)).toBe(false);
+    expect(courseFeatureEnabled(FLAG_ON, COURSE_FEATURES.CLOUD_WORKSPACES)).toBe(true);
   });
 });
 
@@ -156,24 +168,31 @@ describe("options Forgejo can't use yet", () => {
 });
 
 describe("GitHub prompts", () => {
+  const org = "neu-cs4535";
   const github = { git_provider: "github", repo_mode: "template_only_staff", archived_at: null };
   const forgejo = { git_provider: "forgejo", repo_mode: "template_only_staff", archived_at: null };
 
   it("hide on a Forgejo assignment page and stay on a GitHub one", () => {
-    expect(needsGitHubPrompts([github], "forgejo")).toBe(false);
-    expect(needsGitHubPrompts([forgejo], "github")).toBe(true);
+    expect(needsGitHubPrompts(org, [github], "forgejo")).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo], "github")).toBe(true);
   });
 
   it("hide on course pages only when every live repository-backed assignment is on Forgejo", () => {
-    expect(needsGitHubPrompts([])).toBe(true);
-    expect(needsGitHubPrompts([forgejo])).toBe(false);
-    expect(needsGitHubPrompts([forgejo, github])).toBe(true);
+    expect(needsGitHubPrompts(org, [])).toBe(true);
+    expect(needsGitHubPrompts(org, [forgejo])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, github])).toBe(true);
     // No-repository and archived GitHub assignments don't need a GitHub account.
-    expect(needsGitHubPrompts([forgejo, { ...github, repo_mode: "none" }])).toBe(false);
-    expect(needsGitHubPrompts([forgejo, { ...github, repo_mode: "no_submission" }])).toBe(false);
-    expect(needsGitHubPrompts([forgejo, { ...github, archived_at: "2026-10-01T00:00:00Z" }])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, { ...github, repo_mode: "none" }])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, { ...github, repo_mode: "no_submission" }])).toBe(false);
+    expect(needsGitHubPrompts(org, [forgejo, { ...github, archived_at: "2026-10-01T00:00:00Z" }])).toBe(false);
     // A course with only no-repository assignments keeps them, as on staging.
-    expect(needsGitHubPrompts([{ ...github, repo_mode: "none" }])).toBe(true);
+    expect(needsGitHubPrompts(org, [{ ...github, repo_mode: "none" }])).toBe(true);
+  });
+
+  it("never show in a course with no GitHub organization, which they would ask students to join", () => {
+    expect(needsGitHubPrompts(null, [])).toBe(false);
+    expect(needsGitHubPrompts(null, [github])).toBe(false);
+    expect(needsGitHubPrompts(null, [github], "github")).toBe(false);
   });
 });
 
