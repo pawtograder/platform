@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122120000_flashcards_manage_by_capability.sql`, `20261116120000_surveys_polls_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122120000_flashcards_manage_by_capability.sql`, `20261122120100_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -183,8 +183,6 @@ and every existing custom role hold it. Create / open / close / delete controls 
 `live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
 and cannot change them), and the anon/student insert path through `can_access_poll_response`.
 
-With a write-scoped API token, an active grader of both classes can copy surveys between them with
-`surveys copy` (one or all, keeping the source status) without `manage_surveys`. `assignments copy`
-needs an instructor in the target class, so linked-survey copying there is not a grader path.
-Creating a survey in the app needs `manage_surveys`. The team must decide whether `surveys copy`
-should require `manage_surveys` on both classes, which would take it away from default graders.
+CLI `surveys.copy` requires active instructor or grader access in the source class and
+`manage_surveys` in the target class. The target check uses the caller-scoped capability RPC,
+including for dry runs. `assignments.copy` requires instructor access in the target class.
