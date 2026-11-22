@@ -15,7 +15,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { getGitUrl } from "@/lib/gitUrls";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-// ... other imports
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";

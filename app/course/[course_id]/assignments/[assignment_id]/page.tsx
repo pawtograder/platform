@@ -1,7 +1,7 @@
 "use client";
-import { getGitUrl } from "@/lib/gitUrls";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import AssignmentLeaderboard from "@/components/ui/assignment-leaderboard";
