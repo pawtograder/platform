@@ -621,7 +621,7 @@ function setup() {
   const reported: unknown[] = [];
   const deps: Deps = {
     db,
-    coder: { url: CODER_URL, token: "owner-token", fetch: coder.fetch },
+    coder: { url: CODER_URL, token: "owner-token", ownerToken: "owner-token", fetch: coder.fetch },
     forgejo: { url: FORGEJO_URL, authorization: "Basic eA==", authSourceId: 1, fetch: forgejo.fetch },
     github: { url: "https://github.com", externalAuthId: "github" },
     report: (e) => reported.push(e),

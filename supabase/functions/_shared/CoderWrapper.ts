@@ -6,14 +6,15 @@
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { redactSecret } from "./SentryScrub.ts";
 
-export type CoderConfig = { url: string; token: string; fetch?: typeof fetch };
+// ownerToken is CODER_API_TOKEN. It survives `{ ...config, token: studentKey }`, so a call knows whose token it sent.
+export type CoderConfig = { url: string; token: string; ownerToken?: string; fetch?: typeof fetch };
 
 /** Null until the deployment sets both. */
 export function coderConfig(env: { get(name: string): string | undefined } = Deno.env): CoderConfig | null {
   const url = env.get("CODER_URL")?.replace(/\/+$/, "");
   const token = env.get("CODER_API_TOKEN");
   if (!url || !token) return null;
-  return { url, token };
+  return { url, token, ownerToken: token };
 }
 
 export class CoderApiError extends Error {
@@ -113,13 +114,13 @@ async function coder<T>(
     parsed = null;
   }
   if (res.ok) return { status: res.status, data: parsed as T, error: null };
-  // 401 means Coder rejected CODER_API_TOKEN itself. The common cause is expiry: Coder caps an
-  // admin-minted token at CODER_MAX_ADMIN_TOKEN_LIFETIME (168h by default), so a token minted
+  // A 401 on the owner's token means Coder rejected CODER_API_TOKEN itself. The common cause is
+  // expiry: Coder caps an admin-minted token at CODER_MAX_ADMIN_TOKEN_LIFETIME (168h by default), so a token minted
   // without a longer lifetime stops working after a week, and every call here 401s with "API key
   // expired". Left as a CoderApiError it reached the student as a generic 500, and nothing in the
   // message told an operator to re-mint the token. Named so the logs and the student's error both
   // point at it.
-  if (res.status === 401) {
+  if (res.status === 401 && config.token === config.ownerToken) {
     const detail = (parsed as CoderResponse | null)?.message ?? text.slice(0, 200);
     throw new UserVisibleError(
       `Coder rejected Pawtograder's API token (CODER_API_TOKEN: ${detail}). An administrator needs to mint a new one with "coder tokens create --lifetime".`,
