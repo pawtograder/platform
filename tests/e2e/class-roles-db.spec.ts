@@ -2175,11 +2175,18 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
       await client.from("flashcards").delete().eq("id", otherCard!.id).select("id"),
       "deleting another class's card"
     );
+    // The rows are hidden from headTa, so check with the service role that nothing changed.
     const { data: stillThere, error: checkError } = await supabase
       .from("flashcard_decks")
-      .select("id")
+      .select("id, description")
       .eq("id", otherDeck!.id);
     expect(checkError).toBeNull();
-    expect(stillThere ?? []).toHaveLength(1);
+    expect(stillThere ?? []).toEqual([{ id: otherDeck!.id, description: "not this class" }]);
+    const { data: cardStillThere, error: cardCheckError } = await supabase
+      .from("flashcards")
+      .select("id, title")
+      .eq("id", otherCard!.id);
+    expect(cardCheckError).toBeNull();
+    expect(cardStillThere ?? []).toEqual([{ id: otherCard!.id, title: "Other class card" }]);
   });
 });
