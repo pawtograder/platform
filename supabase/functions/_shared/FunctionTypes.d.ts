@@ -445,17 +445,8 @@ export type CheckRunStatus = {
   requested_at?: string;
   workflow_triggered_at?: string;
   check_run_marked_in_progress_at?: string;
-  /**
-   * The Actions run that graded this commit, recorded by forgejo-repo-webhook when a Forgejo run
-   * finishes. Forgejo's run URL uses the run's number in its repository, which the run id a job's
-   * token carries can't be turned into, so the URL is kept as sent.
-   */
   workflow_run_id?: number;
   workflow_run_url?: string;
-  /**
-   * When the recorded run stopped. A re-run keeps its run id, so this orders two completions of the same
-   * run: the one that stopped later is the current attempt.
-   */
   workflow_run_stopped_at?: string;
   /**
    * Records which workflow run was allowed through the "dispatched before the autograder
@@ -571,19 +562,7 @@ export type AssignmentSyncAutograderWorkflowResponse = {
    * assignment's forks keep a workflow that reports failing checks.
    */
   reconcile_blocked_by?: { id: number; title: string }[];
-  /**
-   * Forgejo only: how many student repositories this change did NOT reach.
-   *
-   * GitHub queues the handout out to existing student repositories (`repo_sync_queue_failed` above
-   * reports when that queueing fails). Forgejo has no handout sync yet, so a repository made before
-   * the toggle keeps the grade.yml it was generated with: after an enable it still has no workflow,
-   * and after a disable it still has a live one. Only repositories created after this call are
-   * generated from the handout it wrote.
-   *
-   * Callers must tell the instructor, since nothing else will: unlike the GitHub path there is no
-   * queued job that repairs it later, and on Forgejo an ungraded push records no submission at all
-   * (push-direct ingestion is #1110), so the work students push to those repositories is not kept.
-   */
+  /** Forgejo only: existing student repos that keep their old grade.yml; callers must warn the instructor. */
   forgejo_existing_repositories_unchanged?: number;
 };
 

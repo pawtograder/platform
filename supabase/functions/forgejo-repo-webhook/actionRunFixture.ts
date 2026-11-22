@@ -1,7 +1,4 @@
-/**
- * An `action_run_*` webhook body in the shape Forgejo 15.0.9 sends (`api.ActionPayload`), trimmed. Shared
- * by webhook.test.ts and actionRun.test.ts.
- */
+/** A trimmed `action_run_*` webhook body as Forgejo 15.0.9 sends it (`api.ActionPayload`). */
 import type { ForgejoActionRunPayload } from "./actionRun.ts";
 
 export const RUN_SHA = "d9eb975102fb245857b4b4f7165062854958d9bf";

@@ -846,7 +846,6 @@ function fakeOrgSupabase(classes: { slug: string; forgejo_org: string | null }[]
       calls.push(`limit ${count} ${options.referencedTable}`), query
     ),
     order: (column: string) => (calls.push(`order ${column}`), query),
-    // Pages the classes as the API does, so a query that never pages sees only the first one.
     range: (from: number, to: number) => {
       calls.push(`range ${from} ${to}`);
       const page = classes.slice(from, to + 1).map((c) => ({ ...c, repositories: [{ id: 1 }] }));
@@ -875,7 +874,6 @@ Deno.test("org hooks: every org holding Forgejo repos gets ensureOrg, named as t
     ensured.push(org);
     return Promise.resolve();
   });
-  // Two sections sharing an org are checked once; an empty forgejo_org falls back to the slug.
   assertEquals(ensured, ["cs3500", "cs4535"]);
   assertEquals(result, { checked: 2, failures: [] });
   assertEquals(calls, [
@@ -932,11 +930,9 @@ Deno.test("org hooks: with many orgs, each pass checks a bounded window and the 
   for (let hour = 0; hour < 3; hour++) {
     const window = orgHookWindow(orgs, hour * 3_600_000 + 1234);
     assertEquals(window.length, MAX_ORG_HOOKS_PER_PASS);
-    // Kicks later in the same hour check the same orgs.
     assertEquals(orgHookWindow(orgs, hour * 3_600_000 + 3_000_000), window);
     window.forEach((o) => seen.add(o));
   }
   assertEquals(seen.size, orgs.length);
-  // Few orgs: all of them, every pass.
   assertEquals(orgHookWindow(["b", "a", "b"], 0), ["a", "b"]);
 });

@@ -53,10 +53,7 @@ function statusVisual(status: string | null, conclusion: string | null): { color
   return { color: "blue", icon: FaSpinner };
 }
 
-/**
- * forgejo-repo-webhook stores Forgejo's run as `payload.run`, with the URL Forgejo sent: that URL uses
- * the run's number in its repository, and its host is the Forgejo instance, so it can't be built here.
- */
+/** Forgejo run URLs use the per-repo run number, which we don't have, so the stored URL is used as sent. */
 function forgejoRunUrl(payload: unknown): string | null {
   const p = payload as { provider?: unknown; run?: { html_url?: unknown } } | null;
   if (p?.provider !== "forgejo" || typeof p.run?.html_url !== "string") return null;
@@ -68,7 +65,6 @@ function forgejoRunUrl(payload: unknown): string | null {
   }
 }
 
-/** The Actions run URL for a check, when we have enough to build one. */
 function runUrl(check: WorkflowEvent): string | null {
   if ((check.payload as { provider?: unknown } | null)?.provider === "forgejo") {
     return forgejoRunUrl(check.payload);

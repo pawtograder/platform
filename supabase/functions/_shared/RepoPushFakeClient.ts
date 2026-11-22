@@ -1,6 +1,5 @@
 /**
- * In-memory stand-in for the admin Supabase client, covering only the calls RepoPush.ts and
- * forgejo-repo-webhook make.
+ * In-memory stand-in for the admin Supabase client, covering only the calls RepoPush.ts and forgejo-repo-webhook make.
  * `eq` and `ilike` filters are applied to the rows, so a test can tell a provider-scoped lookup from
  * one that ignores the provider, and an escaped ILIKE pattern from a wildcard. Used by RepoPush.test.ts and forgejo-repo-webhook/webhook.test.ts.
  */
@@ -28,7 +27,6 @@ function ilikeMatches(pattern: string, value: string): boolean {
   return new RegExp(`^${source}$`, "is").test(value);
 }
 
-/** JSON with object keys sorted, so two values compare equal as jsonb does, whatever their key order. */
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -43,13 +41,11 @@ function canonicalJson(value: unknown): string {
 function matches(row: Row, [column, value]: [string, unknown]): boolean {
   const ilike = (value as IlikeFilter | null)?.ilike;
   if (typeof ilike === "string") return ilikeMatches(ilike, String(row[column]));
-  // `data->>type`: the text of one field of a JSON column, as PostgREST reads it.
   const path = column.split("->>");
   if (path.length === 2) {
     const field = (row[path[0]] as Row | null | undefined)?.[path[1]];
     return field !== undefined && field !== null && String(field) === value;
   }
-  // A JSON column compared with a JSON string, as supabase-js sends one: equal as jsonb.
   const cell = row[column];
   if (cell && typeof cell === "object" && typeof value === "string") {
     try {
@@ -90,9 +86,6 @@ export function fakeSupabase(
           queries.push(query);
           return Promise.resolve({ data: rows()[0] ?? null, error: null });
         },
-        // Awaiting the chain without maybeSingle() resolves to every matching row, or, after
-        // update(), applies the update to them and resolves to the rows it changed (what
-        // `.update(...).select()` returns).
         then(resolve: (result: { data: Row[] | null; error: null }) => unknown) {
           if (updateValues) {
             const values = updateValues;

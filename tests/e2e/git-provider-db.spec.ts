@@ -268,8 +268,6 @@ test("course deletion explains the restriction and preserves the course", async 
   );
   expect(await ok(supabase.from("assignments").select("id").eq("id", assignment.id))).toHaveLength(0);
 });
-// assignment-sync-autograder-workflow is NOT in this list any more: it writes grade.yml to the Forgejo
-// handout instead of refusing (#1386). Its Forgejo path is covered by the test below.
 for (const endpoint of [
   "assignment-create-all-repos",
   "assignment-create-solution-repo",
@@ -303,9 +301,7 @@ for (const endpoint of [
 }
 
 test("assignment-sync-autograder-workflow takes the Forgejo path instead of refusing the assignment", async () => {
-  // It used to answer the GitHub refusal above. Now it syncs the Forgejo handout's grade.yml, so on a
-  // deployment with no Forgejo settings — which is what CI is — it reports that rather than refusing
-  // the assignment for its host. Either way it must not touch GitHub or create a repository.
+  // CI has no Forgejo settings, so the Forgejo path answers 503 instead of the GitHub refusal.
   const { course, assignment } = await fixture("forgejo");
   const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
   await ok(

@@ -1,8 +1,3 @@
-/**
- * Unit tests for recording finished Forgejo Actions runs.
- *
- * Run from supabase/functions:  deno test --no-check --allow-read --allow-env --allow-net forgejo-repo-webhook/
- */
 import { assert, assertEquals } from "jsr:@std/assert@^1";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { fakeSupabase, repositoryRow } from "../_shared/RepoPushFakeClient.ts";
@@ -45,7 +40,6 @@ const submission = (overrides: Record<string, unknown> = {}) => ({
   run_attempt: 1,
   profile_id: "student-profile",
   assignment_group_id: null,
-  // While the fixture's run was going (it started 16:53:40 and stopped 16:55:02).
   created_at: "2026-11-09T16:54:00.000Z",
   ...overrides
 });
@@ -104,7 +98,6 @@ Deno.test("a failed grading run is logged, and the commit's check run is finishe
 
   assertEquals(updates.length, 1);
   assertEquals(updates[0].table, "repository_check_runs");
-  // Conditional on the status it was decided from, so a concurrent write is never overwritten.
   assertEquals(updates[0].filters, [
     ["id", 55],
     ["status", JSON.stringify({ created_at: "2026-11-09T16:53:34.000Z", created_by: "forgejo push by alex" })]
@@ -118,7 +111,6 @@ Deno.test("a failed grading run is logged, and the commit's check run is finishe
     workflow_run_url: RUN_URL,
     workflow_run_stopped_at: "2026-11-09T16:55:02.000Z"
   });
-  // No submission came from the run, so there is nothing to give an error result.
   assertEquals(
     inserts.filter((i) => i.table === "grader_results"),
     []
@@ -197,9 +189,6 @@ Deno.test("a re-run is matched to its latest attempt's submission, not the earli
 });
 
 Deno.test("attempt 1's completion delivered after attempt 2 started is not taken for attempt 2's", async () => {
-  // A re-run keeps the run id and the payload has no attempt number. Attempt 2's submission was made
-  // after attempt 1 stopped (16:55:02), so this completion is attempt 1's: attempt 2 must not get a
-  // zero-score result before its own grader reports.
   const { client, inserts, upserts } = fakeSupabase(
     tables({
       submissions: [
@@ -240,7 +229,6 @@ Deno.test("a redelivered completion is logged once, so the Checks tab doesn't li
   await handleForgejoActionRun(client, run, new Sentry.Scope());
   await handleForgejoActionRun(client, run, new Sentry.Scope());
   assertEquals(inserts.filter((i) => i.table === "workflow_events").length, 1);
-  // A re-run of the same run id stops at another time, so it is logged as its own row.
   const rerun = actionRunPayload(FORGEJO_URL).run;
   rerun.stopped = "2026-11-09T17:10:00Z";
   rerun.updated = "2026-11-09T17:10:00Z";
@@ -279,7 +267,6 @@ Deno.test("an earlier attempt of the same run, delivered late, leaves the later 
       }
     })
   );
-  // Attempt 1 stopped at 16:55:02 with a failure; attempt 2's success is already recorded.
   const run = actionRunPayload(FORGEJO_URL, { action: "failure", status: "failure" }).run;
   await handleForgejoActionRun(client, run, new Sentry.Scope());
   assertEquals(
@@ -289,8 +276,6 @@ Deno.test("an earlier attempt of the same run, delivered late, leaves the later 
 });
 
 Deno.test("a status that changes between the read and the write is read again, not overwritten", async () => {
-  // Another delivery records run 99 after this one read the row but before it wrote. The write is
-  // conditional on the status it read, so it matches nothing; the reread sees run 99 and stops.
   const data = tables();
   const { client: base, updates } = fakeSupabase(data);
   let raced = false;
@@ -341,10 +326,6 @@ Deno.test("a run in a repository that isn't a Forgejo student repo is logged wit
 });
 
 Deno.test("a superseded run's late completion never overwrites the newer run's outcome", async () => {
-  // Re-running grading makes a second run for the same commit, and deliveries are not ordered:
-  // Forgejo retries a delivery the receiver was slow to answer, so the first run's failure can
-  // arrive after the second's success. Applying it would show the student a failing check for a
-  // run that is no longer the current one.
   const { client, updates } = fakeSupabase(
     tables({
       checkRunStatus: {
@@ -365,7 +346,6 @@ Deno.test("a superseded run's late completion never overwrites the newer run's o
 });
 
 Deno.test("the same run delivered twice changes nothing", async () => {
-  // action_run_recover carries the success a second time, and a hook retry can too.
   const { client, updates } = fakeSupabase(
     tables({
       checkRunStatus: {

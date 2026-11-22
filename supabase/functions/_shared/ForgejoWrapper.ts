@@ -414,18 +414,14 @@ export function repoPath(repository: string): string {
 /**
  * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
  * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
- * created there would belong to them. Then gives the org its hook, so student pushes and finished grading runs reach Commit History.
+ * created there would belong to them. Then gives the org its hook.
  */
 export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
   await claimOrg(config, org);
   if (config.pushHook) await ensurePushHook(config, org, config.pushHook);
 }
 
-/**
- * What the org hook is subscribed to: pushes for Commit History, and finished Actions runs so a failed,
- * cancelled or errored grading run is recorded with a link to it. Forgejo (as of 15.0.9) has no event for
- * a run being requested or starting, only these.
- */
+/** Forgejo (15.0.9) has no webhook event for a run being requested or starting. */
 export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failure"] as const;
 
 /**
@@ -433,18 +429,7 @@ export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failur
  * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
  * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
  * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
- *
- * Forgejo's hook PATCH (15.0.9) sets every event except the action_run ones, which it leaves as they were.
- * So a hook that was created before it needed them, and doesn't list them, is replaced instead.
- *
- * The replacement is created BEFORE the stale hook is removed. Deleting first and failing to create left the
- * org with no hook at all, and pushes in that gap were never delivered: Commit History simply missed them,
- * and nothing retried. Two hooks on the same URL for the moment in between is the safe side of that trade —
- * the webhook's own handlers are idempotent, so a duplicate delivery records what the first one did.
- *
- * Leftovers heal: every hook on this URL is considered, one that already has the events is kept and
- * rewritten, and the rest are deleted. A pass that died between the create and the delete therefore
- * converges on the next one instead of leaving a second hook behind for good.
+ * Forgejo 15.0.9's hook PATCH ignores action_run events, so a hook missing them is replaced, not patched.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
@@ -460,8 +445,6 @@ async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: s
     config: { url: hook.url, content_type: "json", secret: hook.secret }
   };
   const subscribed = matching.find((h) => ORG_HOOK_EVENTS.every((e) => h.events?.includes(e)));
-  // Keeping the subscribed hook means PATCH only has to repair the secret and active state (#1365's job),
-  // never the events it cannot add.
   const keep = subscribed ?? null;
   if (keep) {
     const res = await forgejo(config, "PATCH", `${path}/${keep.id}`, settings);
@@ -472,7 +455,7 @@ async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: s
     if (!created.ok) throw await failure(created, "org hook create");
     await created.body?.cancel();
   }
-  // Only now: the org has a hook with every event, so removing the stale ones cannot lose a delivery.
+  // Delete stale hooks only after a subscribed one exists: deleting first lost pushes when the create failed.
   for (const stale of matching) {
     if (keep && stale.id === keep.id) continue;
     const removed = await forgejo(config, "DELETE", `${path}/${stale.id}`);
@@ -620,7 +603,6 @@ export async function readFile(
   return (await readFileEntry(config, repository, path, ref))?.content ?? null;
 }
 
-/** Like readFile, with the blob sha that changeFiles needs to update or delete the file. */
 export async function readFileEntry(
   config: ForgejoConfig,
   repository: string,
@@ -642,10 +624,6 @@ export async function readFileEntry(
   };
 }
 
-/**
- * One change in a changeFiles commit. `sha` is the blob sha of the file being changed (of `fromPath` for a
- * rename), so a file someone changed since it was read fails the commit instead of being overwritten.
- */
 export type ForgejoFileChange =
   | { operation: "create"; path: string; content: string }
   | { operation: "update"; path: string; content: string; sha: string; fromPath?: string }
@@ -657,7 +635,6 @@ function base64(text: string): string {
   return btoa(binary);
 }
 
-/** Applies `changes` to `branch` as one commit and returns its sha. */
 export async function changeFiles(
   config: ForgejoConfig,
   repository: string,

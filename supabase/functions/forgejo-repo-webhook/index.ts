@@ -11,8 +11,7 @@ const adminClient = () =>
     auth: REQUEST_SCOPED_AUTH_OPTIONS
   });
 
-// Push and finished-Actions-run webhooks from Forgejo repositories (#1109). Forgejo calls this function
-// directly, so it is authenticated by the hook's HMAC signature (FORGEJO_WEBHOOK_SECRET), not by a JWT.
+// Forgejo calls this directly, so it's authenticated by the hook's HMAC signature (FORGEJO_WEBHOOK_SECRET), not a JWT.
 serveWithSentryFlush((req) =>
   handleForgejoWebhook(req, {
     secret: Deno.env.get("FORGEJO_WEBHOOK_SECRET"),

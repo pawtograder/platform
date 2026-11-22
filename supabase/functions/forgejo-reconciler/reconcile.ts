@@ -322,16 +322,10 @@ export async function reconcileForgejoWorkflowHashes(
   return result;
 }
 
-/** Orgs per pass, at about six Forgejo calls each (the ownership check in ensureOrg, then the hook). */
 export const MAX_ORG_HOOKS_PER_PASS = 20;
 
 export type OrgHookResult = { checked: number; failures: { org: string; error: unknown }[] };
 
-/**
- * The orgs a pass checks: every one when there are few, otherwise a window of MAX_ORG_HOOKS_PER_PASS that
- * moves on each hour, so the hourly passes reach every org in turn and the kicks within an hour repeat
- * the same window. Sorted first, so the window doesn't depend on the order the query returned rows in.
- */
 /** The API's max_rows (supabase/config.toml), so a short page means the last one. */
 export const CLASS_PAGE_SIZE = 1000;
 
@@ -343,13 +337,7 @@ export function orgHookWindow(orgs: string[], now: number): string[] {
   return Array.from({ length: MAX_ORG_HOOKS_PER_PASS }, (_, i) => sorted[(start + i) % sorted.length]);
 }
 
-/**
- * Runs ensureOrg for the orgs that already hold Forgejo repos, so each one's hook gets every event in
- * ORG_HOOK_EVENTS. The repo backlogs call ensureOrg only for orgs with a repo still to create, so an org
- * whose repos are all ready would otherwise keep a hook from before it needed the finished-run events,
- * and grading runs there would never be recorded. Orgs come from classes with a Forgejo repository, named
- * the way forgejo_repos_needed names them, so a pass never creates an org for a class that has none.
- */
+/** The repo backlogs only ensureOrg orgs with repos to create, so this upgrades every other org's hook. */
 export async function reconcileForgejoOrgHooks(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
@@ -357,11 +345,7 @@ export async function reconcileForgejoOrgHooks(
   now: number = Date.now()
 ): Promise<OrgHookResult> {
   const result: OrgHookResult = { checked: 0, failures: [] };
-  // Without a hook to install there is nothing to check.
   if (!config.pushHook) return result;
-  // Paged in a stable order: the API returns at most max_rows (1,000) classes per request, and the
-  // embedded limit below only caps each class's repositories. One unpaged query would leave every class
-  // past the first page out of every window, so their orgs would never be checked.
   const orgs: string[] = [];
   for (let from = 0; ; from += CLASS_PAGE_SIZE) {
     const { data: classes, error } = await supabase
@@ -439,13 +423,8 @@ export async function revokeDroppedTokens(
 
 /**
  * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos and workflow hashes; then revoking dropped students' and idle workspace tokens
- * (forgejo_repo_tokens_to_revoke); then org hooks last.
- *
- * Org hooks come after revocation because they are the one step whose cost grows with the number of orgs
- * rather than with a backlog: up to MAX_ORG_HOOKS_PER_PASS orgs, each several Forgejo requests. Run before
- * it, a slow Forgejo could hold the pass until the platform stopped it, and revocation, which has no other
- * trigger, would not run at all, leaving dropped students' tokens valid.
+ * repos and workflow hashes; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke);
+ * then org hooks, last, so a slow Forgejo can't keep revocation from running.
  */
 export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
   // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.

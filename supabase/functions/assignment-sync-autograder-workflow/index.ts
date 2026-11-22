@@ -223,7 +223,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   }
   scope.setTag("template_repo", templateRepo);
 
-  // A Forgejo handout's grade.yml is written through the Forgejo API (forgejo.ts). Everything below is GitHub's.
   if (assignment.git_provider === "forgejo") {
     const config = forgejoConfig();
     if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
@@ -243,8 +242,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     );
     const { existing_repositories_unchanged: unchanged, ...rest } = forgejoResult;
     if (unchanged > 0) {
-      // The GitHub path queues these repositories; Forgejo has no handout sync yet, so the honest
-      // outcome is to hand the instructor the gap rather than report a success that stops at the handout.
       scope.setTag("forgejo_existing_repositories_unchanged", String(unchanged));
     }
     return { ...rest, ...(unchanged > 0 ? { forgejo_existing_repositories_unchanged: unchanged } : {}) };

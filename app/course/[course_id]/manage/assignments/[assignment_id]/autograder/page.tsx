@@ -234,10 +234,6 @@ export default function AutograderPage() {
           });
         }
         if ((syncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
-          // Forgejo's counterpart of repo_sync_queue_failed, except that no job repairs it later:
-          // there is no Forgejo handout sync yet, so these repositories keep the grade.yml they were
-          // generated with until they are recreated. Saying nothing would leave an instructor
-          // believing the change reached students it never touched.
           const stale = syncResult!.forgejo_existing_repositories_unchanged!;
           toaster.create({
             title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${

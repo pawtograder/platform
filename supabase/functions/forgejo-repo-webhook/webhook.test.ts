@@ -156,7 +156,6 @@ Deno.test("fromForgejoPush handles a push with no commits, such as a branch dele
   assertEquals(push.pusherName, "alex");
 });
 
-/** Calls handleForgejoWebhook with spy push and action run handlers. */
 async function deliver(init: { body?: string; headers?: Record<string, string>; method?: string }, config = {}) {
   const pushes: RepoPush[] = [];
   const runs: ForgejoActionRun[] = [];

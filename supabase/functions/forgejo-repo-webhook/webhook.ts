@@ -180,7 +180,6 @@ export type ForgejoWebhookConfig = {
   secret: string | undefined;
   forgejoUrl: string | undefined;
   handlePush: (push: RepoPush, scope: Sentry.Scope) => Promise<void>;
-  /** A finished Actions run (`action_run_success` / `action_run_failure`). */
   handleActionRun: (run: ForgejoActionRun, scope: Sentry.Scope) => Promise<void>;
 };
 

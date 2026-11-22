@@ -632,8 +632,6 @@ export default function EditAssignment() {
             throw syncError;
           }
         }
-        // A Forgejo handout has no webhook to point, but its grade.yml still has to follow the flag: the sync
-        // adds or parks it through the Forgejo API. Only when the flag changed, as for GitHub above.
         if (
           values.template_repo &&
           isForgejo &&
@@ -651,16 +649,13 @@ export default function EditAssignment() {
               supabase
             );
           } catch (syncError) {
-            // The sync reads the flag from the row, so it was saved first. Put it back while the row still
-            // holds what this save wrote, so the flag and the handout agree.
+            // The sync reads has_autograder from the row, so a failed sync rolls the saved flag back.
             const { error: rollbackError } = await supabase
               .from("assignments")
               .update({ has_autograder: queryData.has_autograder })
               .eq("id", Number.parseInt(assignment_id as string))
               .eq("has_autograder", values.has_autograder);
             if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
-            // Only the flag goes back. The row write above already saved every other field, so "Failed to
-            // update the assignment" would describe a save whose other edits are in fact kept.
             const detail = syncError instanceof Error ? syncError.message : String(syncError);
             toaster.create({
               title: "Autograder setting not changed",
@@ -675,8 +670,6 @@ export default function EditAssignment() {
             return;
           }
           if ((forgejoSyncResult?.forgejo_existing_repositories_unchanged ?? 0) > 0) {
-            // Forgejo has no handout sync, so nothing repairs these repositories later: they keep the grade.yml
-            // they were generated with, and on Forgejo a push without a grading run records no submission.
             const stale = forgejoSyncResult!.forgejo_existing_repositories_unchanged!;
             toaster.create({
               title: `${stale} existing student repositor${stale === 1 ? "y" : "ies"} still ${
