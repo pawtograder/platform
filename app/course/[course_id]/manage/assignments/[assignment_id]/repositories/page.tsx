@@ -994,6 +994,9 @@ export default function RepositoriesPage() {
     columns: visibleColumns,
     tableController: repositories,
     enableRowSelection: canSync,
+    // Select by repository id, not row position, so a checked row stays the same repository when
+    // rows are added or removed.
+    getRowId: (row) => String(row.id),
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -1091,6 +1094,11 @@ export default function RepositoriesPage() {
   }, [data]);
 
   const selectedCount = getSelectedRowModel().rows.length;
+  // Clear the selection when Sync access goes, so Sync Selected can't act on old checks if it comes
+  // back.
+  useEffect(() => {
+    if (!canSync && selectedCount > 0) toggleAllRowsSelected(false);
+  }, [canSync, selectedCount, toggleAllRowsSelected]);
   const tableRows = getRowModel().rows;
   const rowWindow = useVirtualizedRowWindow(tableRows, {
     estimatedRowHeight: 72,
