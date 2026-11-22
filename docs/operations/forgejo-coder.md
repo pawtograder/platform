@@ -1,6 +1,6 @@
 # Cloud Workspaces operations on staging
 
-The staging configuration checked in at `bb341afa` (chart 0.4.6). Production
+The staging configuration checked in at `b53c484a` (chart 0.4.13). Production
 leaves both apps off. Run the [live checks](#live-checks) first. Chart
 reference: "Forgejo and Coder (optional)" in
 [`charts/pawtograder/README.md`](../../charts/pawtograder/README.md).
@@ -31,15 +31,19 @@ Run the commands in this document one at a time and read each output. They
 aren't scripts and don't stop on an error. A command that prints an error has
 failed, however the lines after it look. Comparisons print hashes, never
 secrets. `e3b0c442…` is the hash of an empty read, which means the read
-failed.
+failed. In `psql`, `\g` submits the query above it.
 
 ## Live checks
 
-1. Every functions pod, stable and canary, must hold six values, and
-   `FORGEJO_AUTH_SOURCE_ID` must equal the `pawtograder` login source's ID. The
-   chart sets `FORGEJO_URL` and `CODER_URL`. The rest come from Secrets or
-   `edgeFunctions.extraEnv`, and a pod keeps what it read at start. This prints
-   names and ok or MISSING, never values:
+1. Every stable and canary functions pod needs the values below. Compare
+   `FORGEJO_AUTH_SOURCE_ID` to the ID of the `pawtograder` login source. Staging
+   sets `forgejo.authSourceId: 1`. Check the live ID before relying on it.
+   The chart sets the app URLs and reads Forgejo's admin credentials from
+   `pawtograder-forgejo-admin`. With Forgejo on, the render refuses
+   `FORGEJO_URL`, `FORGEJO_ADMIN_USERNAME`, `FORGEJO_ADMIN_PASSWORD` and
+   `FORGEJO_AUTH_SOURCE_ID` in `edgeFunctions.extraEnv`. GitHub workspace
+   support adds `CODER_GITHUB_AUTH_ID` from `coder.externalAuth.github.id`.
+   The check prints only names, presence and the two provider IDs.
 
 ```bash
 kubectl -n "$NS" rollout status deploy/pawtograder-functions --timeout=60s
@@ -47,11 +51,16 @@ kubectl -n "$NS" rollout status deploy/pawtograder-functions-canary --timeout=60
 kubectl -n "$NS" get deploy pawtograder-functions pawtograder-functions-canary
 SEL='app.kubernetes.io/instance=pawtograder,app.kubernetes.io/component in (functions,functions-canary)'
 kubectl -n "$NS" get pod -l "$SEL"
-for p in $(kubectl -n "$NS" get pod -l "$SEL" -o name); do
+for p in $(kubectl -n "$NS" get pod -l "$SEL" -o name)
+do
   echo "== $p"
   kubectl -n "$NS" exec "$p" -c functions -- sh -c 'for v in FORGEJO_URL FORGEJO_ADMIN_USERNAME FORGEJO_ADMIN_PASSWORD \
-      FORGEJO_WEBHOOK_SECRET CODER_URL CODER_API_TOKEN; do [ -n "$(printenv "$v")" ] && echo "$v ok" || echo "$v MISSING"; done
-    echo "FORGEJO_AUTH_SOURCE_ID=$(printenv FORGEJO_AUTH_SOURCE_ID)"' || echo "exec FAILED"
+      FORGEJO_WEBHOOK_SECRET CODER_URL CODER_API_TOKEN
+    do
+      [ -n "$(printenv "$v")" ] && echo "$v ok" || echo "$v MISSING"
+    done
+    echo "FORGEJO_AUTH_SOURCE_ID=$(printenv FORGEJO_AUTH_SOURCE_ID)"
+    echo "CODER_GITHUB_AUTH_ID=$(printenv CODER_GITHUB_AUTH_ID)"' || echo "exec FAILED"
 done
 kubectl -n "$NS" exec deploy/pawtograder-forgejo -c forgejo -- forgejo admin auth list
 ```
@@ -60,14 +69,16 @@ The check passes only when no command printed an error, both rollouts report
 `successfully rolled out`, each Deployment's `READY` column shows a desired
 count that isn't 0 and is fully ready (`2/2`, not `0/0` or `1/2`), the pod
 list holds that many pods for each, every pod in the list is `Running` and
-Ready, each
-pod has an `==` block with six `ok` lines and no `exec FAILED`, and every `FORGEJO_AUTH_SOURCE_ID` equals the ID
-in the `pawtograder` row of the last table. An empty pod list, a blank ID or a
-missing `pawtograder` row means the check didn't run. It hasn't passed.
+Ready, each pod has an `==` block with six `ok` lines and no `exec FAILED`,
+and every `FORGEJO_AUTH_SOURCE_ID` equals the ID in the `pawtograder` row of
+the last table. Check that every `CODER_GITHUB_AUTH_ID` is `github`. Treat an
+empty pod list, a blank ID or a missing `pawtograder` row as a failed check.
 
-2. Nothing in the repository registers the push webhook. Find a hook on
-   `https://api.staging.pawtograder.net/functions/v1/forgejo-repo-webhook` in
-   Forgejo's site administration or the course organization's settings.
+2. In the course organization's settings, find the active JSON push hook at
+   `https://api.staging.pawtograder.net/functions/v1/forgejo-repo-webhook`.
+   Provisioning checks or creates it when it calls `ensureOrg` with the
+   webhook Secret set. An existing org with no provisioning work may need
+   the hook checked by hand. Check recent deliveries after changing it.
 
 When an authenticated call finds `FORGEJO_URL`, the admin credentials or a
 positive source ID missing, the reconciler logs `Skipped: FORGEJO_URL, admin
@@ -157,8 +168,9 @@ kubectl -n "$NS" get pod -l 'app.kubernetes.io/name in (forgejo,coder)'   # repe
   Pawtograder's OAuth clients and the stored tokens can go back to older
   values while the Kubernetes Secrets keep the current ones. Before reopening,
   run the live checks, then the checks under
-  [Sign in with Pawtograder](#sign-in-with-pawtograder-oidc), Broken Forgejo
-  linking under [Coder](#coder), and the token checks under
+  [Sign in with Pawtograder](#sign-in-with-pawtograder-oidc), then verify
+  Forgejo user secrets and GitHub external auth under [Coder](#coder). Check
+  the runner tokens under
   [Forgejo Actions runner](#forgejo-actions-runner).
 - **What is lost.** After a promotion, unreplicated writes are lost from all
   three databases. After a point-in-time restore, writes after the target are
@@ -169,9 +181,26 @@ kubectl -n "$NS" get pod -l 'app.kubernetes.io/name in (forgejo,coder)'   # repe
   first, because Forgejo and Coder sign in through Auth. Then scale both back
   to the recorded counts.
 
-Volume. Nothing backs up Forgejo's PVC (the nightly `backup` CronJob dumps
-only Pawtograder's database). Losing it loses the server copy of every
-repository and Forgejo's local files. Clones may still hold pushed code.
+Volume. The nightly `pawtograder-backup-forgejo` Job writes a matching
+`daily/forgejo-<TS>.dump` and `daily/forgejo-<TS>.tar.gz` to the staging backup
+bucket. The archive holds the on-volume repositories, `app.ini` and other
+local data. `pawtograder-backup-coder` dumps the Coder database. Workspace
+home PVCs need their own backup.
+
+```bash
+kubectl -n "$NS" get cronjob pawtograder-backup-forgejo pawtograder-backup-coder pawtograder-backup-verify
+kubectl -n "$NS" get jobs --sort-by=.metadata.creationTimestamp
+VERIFY_JOB='<replace-with-job-name>'
+kubectl -n "$NS" logs job/"$VERIFY_JOB"
+```
+
+Choose the latest Job owned by the verifier CronJob. The verifier checks
+dump age and readability,
+looks for the repository root and `app.ini` in the Forgejo archive, and
+fails on a set with an `.incomplete` marker. Use the same timestamp for the
+dump and archive. The chart README section "Restoring Forgejo" covers the
+volume restore. The optional restore drill checks throwaway databases and
+repository connectivity. Staging has verify on and the restore drill off.
 
 ## Sign in with Pawtograder (OIDC)
 
@@ -183,7 +212,7 @@ to a live row. Other releases may reuse the client names.
 
 ```sql
 -- Both live (deleted_at null). Forgejo: .../user/oauth2/pawtograder/callback. Coder: named Coder, .../api/v2/users/oidc/callback.
-SELECT id, client_name, redirect_uris, deleted_at FROM auth.oauth_clients WHERE id::text IN ('<forgejo id>', '<coder id>');
+SELECT id, client_name, redirect_uris, deleted_at FROM auth.oauth_clients WHERE id::text IN ('<forgejo id>', '<coder id>') \g
 ```
 
 GoTrue's OAuth server signs users in to Forgejo (login source `pawtograder`)
@@ -234,10 +263,9 @@ kubectl -n pawtograder-staging-workspaces get pod,pvc -l app.kubernetes.io/name=
 The `first-owner` init container creates the owner from
 `pawtograder-coder-admin`. The `pawtograder-coder-bootstrap` hook pushes the
 `kubernetes` template and its schedule on every install, upgrade and rollback.
-coderd and `first-owner` exit when `pawtograder-coder-external-auth` has no
-client ID. Workspaces clone with a token from Coder's Forgejo external auth,
-which each student links once, separately from signing in, so a working
-sign-in doesn't prove the link works.
+With GitHub external auth enabled, coderd and `first-owner` need the App
+client in `pawtograder-coder-external-auth`. Forgejo credentials come from
+Coder user secrets. Each path has its own checks below.
 
 For one workspace, sign in as the owner (`pawtograder-coder-admin`) and read
 its build and agent logs. Restart with `kubectl -n "$NS" rollout restart
@@ -245,39 +273,51 @@ deploy/coder`, also needed after any OIDC or external auth change. If the hook
 can't log in, `pawtograder-coder-admin`'s email and username must still be the
 first owner's. Fix the cause and reapply the release to rerun the hook.
 
-Broken Forgejo linking ("Cloning private repositories" in the chart README).
-If `kv/apps/pawtograder/coder-external-auth-staging` holds a valid client,
-repair the ESO sync, confirm both keys are set, then restart Coder. Otherwise
-run the script, adding `--rotate` if the stored client secret is bad or Forgejo
-no longer has the stored client ID. Without `--rotate` and with a client
-stored, it changes nothing: it exits 0 if Forgejo has the client, 1 if not.
-With the ExternalSecret present, it syncs it, waits for Coder's rollout, then
-deletes the old app. Students must relink after that.
+### Forgejo user secrets
 
-The script can't repair a path that exists but has an empty `client_id`. With
-no stored ID it writes with `-cas=0`, which OpenBao refuses once the path has a
-version, even with `--rotate`. Roll the path back to its last good version with
-`bao kv rollback` if it has one, then take the valid-client branch. If it has
-none, register a replacement OAuth app in Forgejo and write its `client_id`
-and `client_secret` to the path with `bao kv put -cas=<current version>`. The
-version is in `bao kv metadata get`, and CAS keeps the write from overwriting
-a repair someone else made meanwhile. Then wait for the Secret to sync and
-restart Coder.
+On create or restart through Pawtograder, `workspace-open` looks up the
+student's Forgejo login on the configured instance. It records the grant in
+`forgejo_repo_tokens`, mints a token scoped to that repo, and uses a short-lived
+Coder user key to write `git_credentials_repo_<repository id>` and `git_email`.
+Coder writes them at startup to `/home/coder/.git-credentials-<owner>--<repo>`
+and `/home/coder/.git-email`. Coder puts all of the owner's secrets in each of
+their workspaces. Each Forgejo token is scoped to its own repo.
+
+For `credentials_unavailable`, check the student's Forgejo login, live check
+1 and the `workspace-open` Sentry event for token mint or Coder secret errors.
+For a clone error, check that the expected file exists and is nonempty without
+reading its contents. A running workspace needs a restart to receive a new
+secret. Open it again from Pawtograder after correcting the cause. The
+reconciler revokes dropped students' tokens and tokens idle for 14 days.
+
+### GitHub external auth
+
+With `coder.externalAuth.github.enabled`, provider 0 has ID `github`.
+The Pawtograder GitHub App needs
+`https://coder.staging.pawtograder.net/external-auth/github/callback` as a
+callback and access to the course repo. The student accepts the course org
+invite and links GitHub in Coder. The Coder agent supplies the token through
+`GIT_ASKPASS`. This link is optional in the template, so it only matters for
+GitHub repos. Coder sign-in itself still uses Pawtograder OIDC.
+
+Compare the Secret hash pairs below with the configured OpenBao path. If they
+match and Coder still can't authenticate, verify the credentials belong to
+the configured GitHub App and confirm the callback URL. If the App credentials
+changed, update both fields at `forgejoCoderSecrets.externalSecret.coderExternalAuthPath`,
+wait for ESO, compare the hashes, then restart Coder. A missing client ID
+prevents Coder from starting. A bad secret, callback or App grant breaks GitHub
+linking or the clone.
 
 ```bash
-# Before restarting: each pair of hashes must match, and none may be e3b0c442….
 kubectl -n "$NS" get secret pawtograder-coder-external-auth -o jsonpath='{.data.CODER_EXTERNAL_AUTH_0_CLIENT_ID}' | base64 -d | sha256sum
 bao kv get -mount=kv -field=client_id apps/pawtograder/coder-external-auth-staging | sha256sum
 kubectl -n "$NS" get secret pawtograder-coder-external-auth -o jsonpath='{.data.CODER_EXTERNAL_AUTH_0_CLIENT_SECRET}' | base64 -d | sha256sum
 bao kv get -mount=kv -field=client_secret apps/pawtograder/coder-external-auth-staging | sha256sum
 kubectl -n "$NS" rollout restart deploy/coder
 kubectl -n "$NS" rollout status deploy/coder
-# First setup, or add --rotate.
-scripts/setup-coder-forgejo-auth.sh --env staging \
-  --forgejo-url https://git.staging.pawtograder.net --coder-url https://coder.staging.pawtograder.net
 ```
 
-A Coder restart doesn't touch workspaces. A stop deletes the workspace pod and
+Restarting the Coder Deployment leaves workspace pods and homes in place. A stop deletes the workspace pod and
 keeps its home PVC, losing files outside `/home/coder`. Unpushed work lives only
 on that PVC, which nothing backs up and which is deleted with the workspace.
 
@@ -300,10 +340,14 @@ the hook. A refused pod create (quota) leaves the job queued. For Forgejo
 errors, check the dispatcher Secret synced and its token is valid with
 `write:admin`. For a failed mirror hook, check the entry's `url` and `ref`
 before retrying the upgrade. A dispatcher restart leaves job pods and queued
-jobs alone.
+jobs alone. If a job starts but grading fails, check the handout has
+`.github/workflows/grade.yml` with `enable-openid-connect: true` and the public
+API as `grading_server`. The edge function reads the submission archive from
+Forgejo and fetches the grader from GitHub. For a single rerun, the selected
+commit needs the workflow file. Bulk reruns dispatch on the repository's host.
 
 Tokens live in `kv/apps/pawtograder/forgejo-runner-staging`. For first setup,
-run the first command without a flag. To rotate, run the steps in order. Old
+run the first command without `--rotate`. To rotate, run the steps in order. Old
 tokens stay valid until step 4. In step 3, a job already running uses its own
 ephemeral token and proves nothing.
 
@@ -337,21 +381,23 @@ group has no repository. Sentry events carry `function=forgejo-reconciler`.
 ```sql
 -- Did pg_cron enqueue the pass? Success here says nothing about the function.
 SELECT status, return_message, start_time FROM cron.job_run_details
-WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'forgejo-reconciler') ORDER BY start_time DESC LIMIT 5;
+WHERE jobid = (SELECT jobid FROM cron.job WHERE jobname = 'forgejo-reconciler') ORDER BY start_time DESC LIMIT 5 \g
 -- Eligible account candidates, capped at 10,000, excluding claims under 10 minutes old.
-SELECT count(*) FROM public.forgejo_accounts_needed('https://git.staging.pawtograder.net', 10, 10000);
+SELECT count(*) FROM public.forgejo_accounts_needed('https://git.staging.pawtograder.net', 10, 10000) \g
 -- Student repositories still owed (forgejo_group_repos_needed has the same arguments).
-SELECT * FROM public.forgejo_repos_needed('https://git.staging.pawtograder.net', 50);
+SELECT * FROM public.forgejo_repos_needed('https://git.staging.pawtograder.net', 50) \g
 ```
 
 Then `grep forgejo-reconciler` in the logs for the summary line and errors,
 which keep Forgejo's status and a known reason such as `e-mail already in use`.
 
 One pass creates up to 50 accounts, 50 student repositories and 50 group
-repositories, and fills up to 50 missing `grade.yml` hashes. pg_cron enqueues a
+repositories, fills up to 50 missing `grade.yml` hashes and processes up to
+100 workspace token revocations. pg_cron enqueues a
 pass at minute 41 hourly (job `forgejo-reconciler`). Triggers enqueue one when
 someone joins a flagged class, the flag turns on, a Forgejo assignment is
-released, or a group gains a member. Any repository needs a released Forgejo
+released, a group gains a member, or an enrollment with tokens is disabled
+or removed. Any repository needs a released Forgejo
 assignment with `repo_mode = 'template_only_staff'` and a `template_repo`
 marked as a template in the class's Forgejo organization (`classes.forgejo_org`,
 or the slug). A student repository also needs an active student with a Forgejo
@@ -362,7 +408,7 @@ student is in no group. Group repositories need `group_config` `groups` or
 Failures send one Sentry event per kind per pass, fingerprinted
 `forgejo-reconciler` plus `provision-failed`, `repo-failed` (with
 `assignment_id` and `profile_id`), `group-repo-failed` or
-`workflow-hash-failed`, with up to 20 IDs. A pass that throws sends one event
+`workflow-hash-failed` or `revoke-failed`, with up to 20 IDs. A pass that throws sends one event
 and answers 500. A skip sends nothing.
 
 - `The template repo isn't in the class's Forgejo org`: move the handout or
@@ -374,7 +420,7 @@ and answers 500. A skip sends nothing.
   access.
 - `The handout has no .github/workflows/grade.yml`: add it.
 
-Then run `SELECT public.invoke_forgejo_reconciler_background_task();` and read
+Then submit `SELECT public.invoke_forgejo_reconciler_background_task()` in `psql` and read
 the next summary line. A pass adopts existing accounts, repositories and
 grants, so confirm the course organization and inspect any unexpected
 repository first. A failed account is retried once its claim is 10 minutes
@@ -394,7 +440,7 @@ Forgejo calls this function on each push. It checks the HMAC signature
 against `FORGEJO_WEBHOOK_SECRET`, finds the repository by
 `git_provider = 'forgejo'` and name, and writes one `repository_check_runs` row
 per default-branch commit, one commit at a time: the student's commit history.
-It doesn't grade.
+Forgejo Actions runs grading separately.
 
 | Response                                                   | Cause                                                                                                                   |
 | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -405,15 +451,16 @@ It doesn't grade.
 | 500 `Error processing webhook`                             | Handler failure. See Sentry. Commits before the failing one may already be recorded                                     |
 | 200, no row                                                | Not a push or student repository, other branch, pull-request mode, an assignment mode with no repository, or SHA exists |
 
-Fix the Secret or the hook (restart the functions after a new Secret). Nothing
-retries or backfills. Take the commit SHAs from the failed delivery and check
+Fix the Secret or the course org hook. Restart the functions after a new
+Secret, then verify the hook uses it. A pass that provisions a repo in that
+org refreshes the matching hook. There is no commit backfill. Take the commit SHAs from the failed delivery and check
 which are recorded, before and after redelivering it from Forgejo if it still
 has it. Recording is idempotent. The commits stay in Forgejo. Only
 Pawtograder's history is incomplete.
 
 ```sql
 SELECT sha FROM public.repository_check_runs
-WHERE repository_id = <affected repository id> AND sha IN ('<commit SHA 1>', '<commit SHA 2>');
+WHERE repository_id = <affected repository id> AND sha IN ('<commit SHA 1>', '<commit SHA 2>') \g
 ```
 
 ## Workspaces (`workspace-open`, `workspace-status`, template)
@@ -426,33 +473,41 @@ SELECT a.coder_user_id, a.coder_username, w.coder_workspace_name, w.coder_worksp
        w.restart_phase, w.restart_started_at, w.superseded_at
 FROM public.coder_accounts a
 LEFT JOIN public.coder_workspaces w ON w.user_id = a.user_id AND w.instance_url = a.instance_url
-WHERE a.user_id = '<user id>' AND a.instance_url = 'https://coder.staging.pawtograder.net';
+WHERE a.user_id = '<user id>' AND a.instance_url = 'https://coder.staging.pawtograder.net' \g
 ```
 
-| Status or error                                           | Meaning                                                                        |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| 503 `Coder workspaces are not set up on this deployment`  | `CODER_URL`, `CODER_API_TOKEN` or `FORGEJO_URL` unset                          |
-| 403 `Cloud workspaces are not enabled for this course`    | The class flag is off                                                          |
-| 404 `You don't have a repository for this assignment yet` | No repository row matches the caller, assignment and group                     |
-| `needs_linking`                                           | Not signed in to Coder yet, or Forgejo not linked in Coder                     |
-| `account_conflict`                                        | An existing Coder user can't be safely bound to this login. See below          |
-| `failed`, step `clone`, `Git Clone failed: ...`           | Repository missing, link revoked, or 5-minute timeout. Log lines in response   |
-| `failed`, step `build`                                    | Read `message` and the build log in Coder, then describe the pod if one exists |
+| Status or error                                                     | Meaning                                                                                                                                                      |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 503 `Coder workspaces are not set up on this deployment`            | `CODER_URL` or `CODER_API_TOKEN` is missing                                                                                                                  |
+| 503 `Forgejo workspaces are not set up on this deployment`          | The Forgejo configuration is incomplete when opening a Forgejo repo. See live check 1                                                                        |
+| 400 `This deployment can't open GitHub repositories in a workspace` | `CODER_GITHUB_AUTH_ID` is missing when opening a GitHub repo                                                                                                 |
+| 403 `Cloud workspaces are not enabled for this course`              | The class flag is off                                                                                                                                        |
+| 404 `You don't have a repository for this assignment yet`           | No repository row matches the caller, assignment and group                                                                                                   |
+| `needs_linking`                                                     | The student needs to sign in to Coder, or to link their GitHub account for a GitHub repository                                                               |
+| `needs_org_invite`                                                  | Accept the GitHub course organization invitation, then try Open in Coder again                                                                               |
+| `credentials_unavailable`                                           | The Forgejo account is missing, or the function couldn't deliver the repo credentials or commit email. Read `message` and check Coder user secrets           |
+| `not_started`, `starting`, `restarting`, `ready`                    | Workspace is stopped or absent, starting, finishing a restart, or ready with an editor URL                                                                   |
+| `account_conflict`                                                  | An existing Coder user can't be safely bound to this login. See below                                                                                        |
+| `failed`, step `clone`, `Git Clone failed: ...`                     | Check repo access, the Forgejo credentials file or GitHub link, and network reachability. The clone times out after 5 minutes. Log lines are in the response |
+| `failed`, step `build`                                              | Read `message` and the build log in Coder, then describe the pod if one exists                                                                               |
 
 `workspace-open` checks enrollment, the class flag, and that the assignment and
-repository are on Forgejo. It creates the caller's Coder user
+repository are on supported hosts. It creates the caller's Coder user
 (`<user id>@coder.pawtograder.invalid`) and workspace `repo-<repository id>`, or
 starts or restarts an existing one, recording both in `coder_accounts` and
 `coder_workspaces`. `workspace-status` creates nothing but posts the start of a
 restart `workspace-open` began. "Git Clone" clones `repo_url` into
 `/home/coder/<repo>` on first start. Deploys pin `coder-workspace:staging-<sha>`.
-`redeploy-staging.sh` uses `:staging-latest`. No page calls these yet (#1095).
+`redeploy-staging.sh` uses `:staging-latest`. The assignment page's Open in
+Coder card calls `workspace-open` and reads `workspace-status` for enrolled
+students with a repository in a flagged course.
 
 A request has 20 seconds including auth. Running out answers 504, or
 `restarting` mid-restart. A thrown error reaches Sentry unless it answers 400
 or 404. These handlers keep the defaults, so user-visible and security errors
-are reported too. `failed`, `needs_linking` and `account_conflict` answer 200
-and aren't thrown.
+are reported too. `failed`, `needs_linking`, `needs_org_invite`,
+`credentials_unavailable` and `account_conflict` answer 200. Workspace-open
+also reports caught credential-delivery failures to Sentry.
 
 For a 401 or 403 from Coder, check the response, the deployed
 `CODER_API_TOKEN`, the Coder it targets and its owner's permissions. Opening
@@ -472,14 +527,14 @@ course before selecting Forgejo". Nothing monitors the flag. Set it in SQL,
 since the Feature flags page doesn't list it (#1091):
 
 ```sql
-SELECT id, slug, forgejo_org, public.cloud_workspaces_enabled(features) FROM public.classes WHERE id = <class id>;
+SELECT id, slug, forgejo_org, public.cloud_workspaces_enabled(features) FROM public.classes WHERE id = <class id> \g
 -- Replaces every existing entry. Use false to turn it off.
 UPDATE public.classes
 SET features = coalesce((SELECT jsonb_agg(f) FROM jsonb_array_elements(
                            CASE WHEN jsonb_typeof(features) = 'array' THEN features ELSE '[]'::jsonb END) f
                          WHERE f->>'name' IS DISTINCT FROM 'cloud-workspaces'), '[]'::jsonb)
                || '[{"name": "cloud-workspaces", "enabled": true}]'::jsonb
-WHERE id = <class id>;
+WHERE id = <class id> \g
 ```
 
 The first `cloud-workspaces` entry in `classes.features` decides, and only a
@@ -492,42 +547,29 @@ assignment can't be deleted. To delete one, first switch it to GitHub, which
 requires no repositories, no `template_repo` and no grader repository. Its
 fork source, and every assignment forked from it, must also be on GitHub.
 
-## Flags at `bb341afa`
+## Flags at `b53c484a`
 
-| Setting                                                       | Staging               | Turning it off                                                                                                                                                                          |
-| ------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cloud-workspaces` in `classes.features`                      | per class             | No new Forgejo assignments, accounts or repos. `workspace-open` answers 403. Existing access, webhook recording and hash fills continue.                                                |
-| `forgejo.enabled`                                             | `true`                | Removes Forgejo and `FORGEJO_URL`. Restarts Postgres and the standby. Render fails while Coder's Forgejo auth is on. Check PVC retention and copy the volume first.                     |
-| `coder.enabled`                                               | `true`                | Removes Coder. Workspace functions answer 503. Restarts Postgres and the standby. Workspace pods keep running: keep their PVCs, then delete the pods.                                   |
-| both apps off                                                 |                       | The `app-databases` Job stops, so set the old roles `NOLOGIN` yourself (chart README, "Databases").                                                                                     |
-| `forgejo.database` / `coder.database`                         | `pawtograder`         | `own` connects the app to an empty database and restarts Postgres and the standby. Move the data first.                                                                                 |
-| `forgejoRunner.enabled`                                       | `true`, capacity 2    | Deletes running job pods and their data. Rerun those jobs. Restart Forgejo afterwards.                                                                                                  |
-| `forgejoRunner.actions.source`                                | `mirrors`             | `upstream` sends bare `uses:` names to github.com after a Forgejo restart.                                                                                                              |
-| `auth.oauthServer.enabled`                                    | `true`                | Render fails while auto-approval or Coder OIDC is on. Otherwise Forgejo's init container fails, so Forgejo won't start.                                                                 |
-| `auth.oauthServer.autoApproveFirstParty`                      | `true`                | Users never approved see the consent page.                                                                                                                                              |
-| `auth.customAccessTokenHook.enabled`                          | `true` (default)      | Tokens lose Pawtograder's claims and `coder_email`.                                                                                                                                     |
-| `coder.oidc.enabled`                                          | `true`                | No new sign-ins to Coder. Users already bound and linked can still open workspaces.                                                                                                     |
-| `coder.externalAuth.forgejo.enabled`                          | `true`                | The template still requires the provider. Untested: on a scratch release, create and start a workspace from the existing template with it off and look for a validation or clone error. |
-| `coderBootstrap.enabled`                                      | `true` (default)      | Template pushes and schedule updates stop.                                                                                                                                              |
-| `coderBootstrap.schedule.defaultTTL` / `activityBump`         | `1h` / `1h` (default) | `defaultTTL` is copied into new workspaces, and `0` never stops them. `activityBump: 0` stops extending the stop time but doesn't remove it.                                            |
-| `forgejo.signInRedirect`                                      | `true` (default)      | Forgejo shows its login page. Restart Forgejo to apply.                                                                                                                                 |
-| `coder.oidc.allowSignups`, Forgejo `ENABLE_AUTO_REGISTRATION` | off                   | Already off. On, anyone who can sign in to Pawtograder gets an account (on Coder, with compute).                                                                                        |
-| `networkPolicy.cilium.enabled`                                | `true`                | Render refuses the runner and Coder while meta and Studio run.                                                                                                                          |
-| `forgejoCoderSecrets.externalSecret.enabled`                  | `true`                | ESO deletes the admin, database and runner-token Secrets, breaking each app's next start. OAuth, OIDC and external auth Secrets stay.                                                   |
-| `webhook.PAYLOAD_COMMIT_LIMIT` (Forgejo)                      | `2048` (default)      | Lower values record only the listed commits. `0` records only the head commit.                                                                                                          |
-
-## Not on staging yet
-
-- [#1239](https://github.com/pawtograder/platform/pull/1239): job tokens, archive download, staff matching and grading reruns.
-  It sets `FORGEJO_AUTH_SOURCE_ID: "1"`. Verify the source ID and the deployed reconciler credentials (live check 1) first.
-- [#1302](https://github.com/pawtograder/platform/pull/1302): token helpers and a revocation ledger. Restarts Forgejo and the functions.
-  Sets the reconciler settings through the chart and refuses them in `edgeFunctions.extraEnv`, overlapping #1239.
-- [#1303](https://github.com/pawtograder/platform/pull/1303): the token as a Coder user secret, and `credentials_unavailable`.
-  Students sign in to Coder but no longer link Forgejo.
-- [#1305](https://github.com/pawtograder/platform/pull/1305): Coder's external auth slot goes to GitHub, with workspace API support only.
-  Store the GitHub App client and add Coder's callback to the App before deploying.
-- [#1314](https://github.com/pawtograder/platform/pull/1314): nightly app database dumps and a Forgejo repository archive, with its chart README restore steps.
-  Checked by `backup-verify` and the optional drill. Coder homes stay unprotected.
+| Setting                                                       | Staging               | Turning it off                                                                                                                                                                               |
+| ------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloud-workspaces` in `classes.features`                      | per class             | No new Forgejo assignments, accounts or repos. `workspace-open` answers 403. Existing access, webhook recording and hash fills continue.                                                     |
+| `forgejo.enabled`                                             | `true`                | Removes Forgejo and `FORGEJO_URL`. Turn off the runner first to pass render. Restarts Postgres and the standby. Check PVC retention and verify the backup. GitHub workspaces can still open. |
+| `coder.enabled`                                               | `true`                | Removes Coder. Workspace functions answer 503. Restarts Postgres and the standby. Workspace pods keep running: keep their PVCs, then delete the pods.                                        |
+| both apps off                                                 |                       | The `app-databases` Job stops, so set the old roles `NOLOGIN` yourself (chart README, "Databases").                                                                                          |
+| `forgejo.database` / `coder.database`                         | `pawtograder`         | `own` connects the app to an empty database and restarts Postgres and the standby. Move the data first.                                                                                      |
+| `forgejoRunner.enabled`                                       | `true`, capacity 2    | Deletes running job pods and their data. Rerun those jobs. Restart Forgejo afterwards.                                                                                                       |
+| `forgejoRunner.actions.source`                                | `mirrors`             | `upstream` sends bare `uses:` names to github.com after a Forgejo restart.                                                                                                                   |
+| `auth.oauthServer.enabled`                                    | `true`                | Render fails while auto-approval or Coder OIDC is on. Otherwise Forgejo's init container fails, so Forgejo won't start.                                                                      |
+| `auth.oauthServer.autoApproveFirstParty`                      | `true`                | Users never approved see the consent page.                                                                                                                                                   |
+| `auth.customAccessTokenHook.enabled`                          | `true` (default)      | Tokens lose Pawtograder's claims and `coder_email`.                                                                                                                                          |
+| `coder.oidc.enabled`                                          | `true`                | No new Pawtograder OIDC sign-ins to Coder. Users already bound can still open workspaces if their repo credentials are available.                                                            |
+| `coder.externalAuth.github.enabled`                           | `true`                | Removes `CODER_GITHUB_AUTH_ID`. The workspace API refuses new GitHub opens. Forgejo workspaces use Coder user secrets.                                                                       |
+| `coderBootstrap.enabled`                                      | `true` (default)      | Template pushes and schedule updates stop.                                                                                                                                                   |
+| `coderBootstrap.schedule.defaultTTL` / `activityBump`         | `1h` / `1h` (default) | `defaultTTL` is copied into new workspaces, and `0` never stops them. `activityBump: 0` stops extending the stop time but doesn't remove it.                                                 |
+| `forgejo.signInRedirect`                                      | `true` (default)      | Forgejo shows its login page. Restart Forgejo to apply.                                                                                                                                      |
+| `coder.oidc.allowSignups`, Forgejo `ENABLE_AUTO_REGISTRATION` | off                   | Already off. On, anyone who can sign in to Pawtograder gets an account (on Coder, with compute).                                                                                             |
+| `networkPolicy.cilium.enabled`                                | `true`                | Render refuses the runner and Coder while meta and Studio run.                                                                                                                               |
+| `forgejoCoderSecrets.externalSecret.enabled`                  | `true`                | ESO deletes the admin, database and runner-token Secrets, breaking each app's next start. OAuth, OIDC and external auth Secrets stay.                                                        |
+| `forgejo.gitea.config.webhook.PAYLOAD_COMMIT_LIMIT`           | `2048` (default)      | Lower values record only the listed commits. `0` records only the head commit.                                                                                                               |
 
 ## Course risks, in priority order
 
@@ -537,22 +579,22 @@ fork source, and every assignment forked from it, must also be on GitHub.
    `pawtograder-forgejo-jobs-egress-deny` and
    `pawtograder-coder-workspaces-egress-deny` exist (`get ciliumnetworkpolicy`
    in each namespace), then run that check, and again after policy changes.
-2. Forgejo's volume has no backup until #1314 (`kubectl -n "$NS" get cronjob`).
-3. There is no tested database recovery with Forgejo and Coder running (see
-   Database under [Forgejo](#forgejo)). The platform's recovery runbooks also
-   have gaps of their own, such as a writer fence that can clear before
-   terminating pods exit, `audit-partitions` Jobs left running, and `pg_cron`
-   state after a promotion. Work one out and run it as a drill before a real
-   course depends on it.
-4. Students who leave keep access: nothing disables Forgejo accounts or removes
-   collaborators. List disabled enrollments with a Forgejo login, and compare
+2. Verify that Forgejo's dump and volume archive are both current and complete.
+   Repositories created, renamed or deleted during a backup can differ from the
+   dump. See [Forgejo](#forgejo) and use the restore drill to check the set.
+3. There is no tested database recovery with Forgejo and Coder running.
+   See Database under [Forgejo](#forgejo). Any drill must confirm all writer
+   pods and active write Jobs, including `audit-partitions`, have stopped.
+   Check that `pg_cron` stays paused until the recovery fence lifts.
+4. The reconciler revokes workspace tokens after a student leaves but keeps
+   Forgejo accounts and collaborator grants. List disabled enrollments with a Forgejo login, and compare
    them and each group's current members with the repositories' collaborators
    in Forgejo:
 
    ```sql
    SELECT ur.private_profile_id, ga.login FROM public.user_roles ur
    JOIN public.git_accounts ga ON ga.user_id = ur.user_id AND ga.provider = 'forgejo'
-   WHERE ur.class_id = <class id> AND ur.disabled;
+   WHERE ur.class_id = <class id> AND ur.disabled \g
    ```
 
 5. The reconciler can skip every pass and answer 200. See live check 1.
@@ -563,6 +605,7 @@ fork source, and every assignment forked from it, must also be on GitHub.
    Check the delivery's SHAs and redeliver if available ([Push webhook](#push-webhook-forgejo-repo-webhook)).
 8. Workspace homes have no backup or cleanup (#1223), and stopped workspaces
    keep their quota. Check `kubectl -n pawtograder-staging-workspaces get pvc`.
-9. Workspace start failures don't reach Sentry. See [Workspaces](#workspaces-workspace-open-workspace-status-template).
+9. A failed startup script is a workspace status. Check the build and agent
+   logs under [Workspaces](#workspaces-workspace-open-workspace-status-template).
 10. The flag is SQL-only (#1091), and the first entry decides. See
     [Course flag](#course-flag-and-repository-host-picker).
