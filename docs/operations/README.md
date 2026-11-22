@@ -26,6 +26,9 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
 - [Office Hours Queue Health](./office-hours-queue-health.md): the queue-health
   gauges, what normal looks like in and out of a session, and how to triage a
   queue that stays red.
+- [Paper Exam Scanning](./paper-exam-scanning.md): the batch status machine, the
+  worker's log lines and dead-letter table, what "slow" looks like at exam
+  scale, and how to tell a stuck batch from a working one.
 - [Incident Response](./incident-response.md): severity definitions, first
   response, and per-component triage.
 - [Data Retention & Storage Sizing](./data-retention.md): where data lives
