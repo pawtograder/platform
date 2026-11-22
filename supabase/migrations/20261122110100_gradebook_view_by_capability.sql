@@ -1,6 +1,6 @@
 -- #1010: seeing the gradebook follows manage_gradebook too.
 --
--- Why: the previous migration (20261121160100) moved arranging the gradebook to manage_gradebook,
+-- Why: the previous migration (20261122110000) moved arranging the gradebook to manage_gradebook,
 -- but every grader could still read every score and override cells, by opening the gradebook from
 -- search or its address. Now everything in the staff gradebook follows the one capability, so the
 -- page, the database and the instructor's role settings agree.

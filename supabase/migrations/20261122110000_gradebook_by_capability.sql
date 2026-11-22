@@ -43,7 +43,7 @@
 -- gradebook_column_move_left/right (SECURITY INVOKER, so the new UPDATE policy decides them). Also
 -- gradebook_enable_column_groups: it turns on a course feature through merge_class_feature, which
 -- is instructor-only, and only the instructor-only Feature flags page calls it.
--- (The next migration, 20261121200200, moves the cell policies and functions named here to
+-- (The next migration, 20261122110100, moves the cell policies and functions named here to
 -- manage_gradebook as well.)
 --
 -- Safe to run again: every policy is dropped first, functions are replaced, and the inserts skip

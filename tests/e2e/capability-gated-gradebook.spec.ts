@@ -1,6 +1,6 @@
 /**
- * #1010: the staff gradebook needs manage_gradebook (20261121160100_gradebook_by_capability.sql and
- * 20261121200200_gradebook_view_by_capability.sql). Without it, the gradebook page sends a staff
+ * #1010: the staff gradebook needs manage_gradebook (20261122110000_gradebook_by_capability.sql and
+ * 20261122110100_gradebook_view_by_capability.sql). Without it, the gradebook page sends a staff
  * member back to the course page, and the Gradebook link, the "Manage gradebook" search entry and
  * the Grades card on a student's page are hidden. A Head TA on a custom role with manage_gradebook
  * gets all of them and the gradebook's controls (Add Column, Import Columns, Auto-layout, the group

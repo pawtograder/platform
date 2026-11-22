@@ -1,6 +1,6 @@
 /**
- * #1010: the gradebook follows manage_gradebook (20261121160100_gradebook_by_capability.sql and
- * 20261121200200_gradebook_view_by_capability.sql).
+ * #1010: the gradebook follows manage_gradebook (20261122110000_gradebook_by_capability.sql and
+ * 20261122110100_gradebook_view_by_capability.sql).
  *
  * Adding, editing and deleting gradebook columns, deleting cells and row state, renaming and
  * deleting column groups and topics, and the RPCs that reorder, auto-layout, group, import and
