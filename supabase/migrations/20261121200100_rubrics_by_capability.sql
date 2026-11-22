@@ -25,7 +25,8 @@
 --
 -- Default graders lose the direct writes on rubrics, rubric_parts and rubric_checks. No screen or
 -- edge function used them (the editor saves through update_rubric_full, which was already
--- instructor-only, and the CLI writes as the service role), so nothing a grader can do in the app
+-- instructor-only, and the CLI checks manage_rubrics, then calls update_rubric_full as the caller
+-- through createAuthenticatedSupabaseClient(ctx.userId)), so nothing a grader can do in the app
 -- changes. Instructors hold every capability, so nothing changes for them.
 --
 -- Not changed: the SELECT policies (who can see a rubric), exam_sync_rubric_from_questions and
