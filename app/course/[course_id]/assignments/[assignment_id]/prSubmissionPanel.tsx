@@ -1,4 +1,5 @@
 "use client";
+import RepoLink from "@/components/ui/link";
 import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
@@ -142,13 +143,13 @@ export default function PrSubmissionPanel({
               {links.map((link) => (
                 <Table.Row key={link.id}>
                   <Table.Cell>
-                    <Link
+                    <RepoLink
                       href={repoWebUrl(repoHost, link.pr_repo, `/pull/${link.pr_number}`)}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       {link.pr_repo}#{link.pr_number}
-                    </Link>
+                    </RepoLink>
                   </Table.Cell>
                   <Table.Cell>
                     {link.confirmed ? (

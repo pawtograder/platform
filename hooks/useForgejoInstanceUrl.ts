@@ -32,6 +32,7 @@ export function repoWebUrl(
 ): string | undefined {
   if (!host || !repository) return undefined;
   const base = host.replace(/\/$/, "");
-  const webPath = base === "https://github.com" ? path : path.replace(/^\/blob\//, "/src/commit/");
+  const webPath =
+    base === "https://github.com" ? path : path.replace(/^\/blob\//, "/src/commit/").replace(/^\/pull\//, "/pulls/");
   return `${base}/${repository}${webPath}`;
 }

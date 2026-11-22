@@ -1,4 +1,5 @@
 "use client";
+import RepoLink from "@/components/ui/link";
 import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
@@ -410,10 +411,10 @@ export default function AssignmentPage() {
                   </Table.Cell>
                   <Table.Cell>
                     {submission.submitted_via === "pr" && submission.repository && submission.pr_number ? (
-                      <Link href={repoWebUrl(repoHost, submission.repository, `/pull/${submission.pr_number}`)}>
+                      <RepoLink href={repoWebUrl(repoHost, submission.repository, `/pull/${submission.pr_number}`)}>
                         #{submission.pr_number}
                         {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
-                      </Link>
+                      </RepoLink>
                     ) : submission.submitted_via !== "manual" &&
                       submission.submitted_via !== "upload" &&
                       submission.sha &&
@@ -424,9 +425,9 @@ export default function AssignmentPage() {
                       // link that 404s. Excluding the known non-git channels rather than
                       // requiring via === "git" keeps legacy rows -- real pushes recorded before
                       // submitted_via existed, so NULL with a genuine sha -- still linking.
-                      <Link href={repoWebUrl(repoHost, submission.repository, `/commit/${submission.sha}`)}>
+                      <RepoLink href={repoWebUrl(repoHost, submission.repository, `/commit/${submission.sha}`)}>
                         {submission.sha.slice(0, 7)}
-                      </Link>
+                      </RepoLink>
                     ) : submission.submitted_via === "manual" ? (
                       <span>Manual</span>
                     ) : (

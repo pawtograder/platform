@@ -17,6 +17,15 @@ describe("repository web URLs", () => {
     );
   });
 
+  it("uses Forgejo's pulls path for a pull request", () => {
+    expect(repoWebUrl("https://forgejo.example.test", "course/homework", "/pull/7")).toBe(
+      "https://forgejo.example.test/course/homework/pulls/7"
+    );
+    expect(repoWebUrl("https://github.com", "course/homework", "/pull/7")).toBe(
+      "https://github.com/course/homework/pull/7"
+    );
+  });
+
   it("has no link until both the host and repository are known", () => {
     expect(repoWebUrl(undefined, "course/homework", "/commit/abc123")).toBeUndefined();
     expect(repoWebUrl("https://forgejo.example.test", null)).toBeUndefined();

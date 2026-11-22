@@ -25,7 +25,8 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import TableController from "@/lib/TableController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { useCourseController } from "@/hooks/useCourseController";
+import RepoLink from "@/components/ui/link";
+import { useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { LuRefreshCw } from "react-icons/lu";
@@ -54,14 +55,11 @@ type WorkflowRunRow = Database["public"]["Tables"]["workflow_runs"]["Row"] & {
 function WorkflowRunTable() {
   const { course_id } = useParams();
   const supabase = useMemo(() => createClient(), []);
-  const {
-    classRealTimeController,
-    assignments: assignmentsController,
-    profiles: profilesController
-  } = useCourseController();
+  const { classRealTimeController, profiles: profilesController } = useCourseController();
 
   // Get data from TableControllers
-  const assignmentsData = assignmentsController.rows;
+  // Subscribed, so a Forgejo row's host is right even when assignments load after the runs.
+  const assignmentsData = useAssignments();
   const forgejoHost = useForgejoInstanceUrl(assignmentsData.some((a) => a.git_provider === "forgejo"));
   const profilesData = profilesController.rows;
 
@@ -201,7 +199,7 @@ function WorkflowRunTable() {
             );
           }
           return (
-            <Link
+            <RepoLink
               href={repoWebUrl(
                 assignmentsData.find((a) => a.id === row.original.assignment_id)?.git_provider === "forgejo"
                   ? forgejoHost
@@ -222,7 +220,7 @@ function WorkflowRunTable() {
                   <LuExternalLink />
                 </Icon>
               </HStack>
-            </Link>
+            </RepoLink>
           );
         },
         filterFn: (row, id, filterValue) => {

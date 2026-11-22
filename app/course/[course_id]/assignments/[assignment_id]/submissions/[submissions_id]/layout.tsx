@@ -2535,12 +2535,14 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
                   <Link href={repoWebUrl(repoHost, submission.repository, `/commit/${submission.sha}`)} target="_blank">
                     Commit {submission.sha.substring(0, 7)}
                   </Link>
-                  <Link
-                    href={repoWebUrl(repoHost, submission.repository, `/archive/${submission.sha}.zip`)}
-                    target="_blank"
-                  >
-                    (Download)
-                  </Link>
+                  {repoHost && (
+                    <Link
+                      href={repoWebUrl(repoHost, submission.repository, `/archive/${submission.sha}.zip`)}
+                      target="_blank"
+                    >
+                      (Download)
+                    </Link>
+                  )}
                 </>
               )}
               <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
