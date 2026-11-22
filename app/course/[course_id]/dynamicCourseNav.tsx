@@ -315,7 +315,9 @@ export default function DynamicCourseNav() {
       // A capability this filter doesn't know hides the link rather than showing it to everyone.
       const capability = "capability" in link ? link.capability : undefined;
       if (!capability) return true;
-      return capability === "manage_gradebook" && canManageGradebook;
+      // Instructors hold every capability. isInstructor keeps their link even if the capability
+      // lookup fails, since the provider stops retrying after a few failures.
+      return capability === "manage_gradebook" && (canManageGradebook || isInstructor);
     })
     .filter((link) => {
       const featureFlag = "feature_flag" in link ? link.feature_flag : undefined;

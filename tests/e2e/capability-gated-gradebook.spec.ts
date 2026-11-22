@@ -145,4 +145,13 @@ test.describe("gradebook controls gated by manage_gradebook", () => {
     await expectGradebookLink(page, true);
     await expect(page.getByRole("button", { name: "Download Gradebook" })).toBeVisible();
   });
+
+  // The capability provider stops retrying after a few failed lookups. Instructors hold every
+  // capability, so their link mustn't depend on that lookup.
+  test("an instructor keeps the Gradebook link when the capability lookup fails", async ({ page }) => {
+    await page.route("**/rpc/user_class_capabilities*", (route) => route.fulfill({ status: 500, body: "{}" }));
+    await loginAsUser(page, instructor, course);
+    await page.goto(`/course/${course.id}`);
+    await expectGradebookLink(page, true);
+  });
 });
