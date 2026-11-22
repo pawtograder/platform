@@ -560,10 +560,7 @@ class FakeDb implements WorkspaceDb {
     return r ? { ...r } : null;
   }
   async updateWorkspaceRow(id: number, patch: Parameters<WorkspaceDb["updateWorkspaceRow"]>[1]) {
-    Object.assign(
-      this.rows.find((r) => r.id === id)!,
-      patch
-    );
+    Object.assign(this.rows.find((r) => r.id === id)!, patch);
   }
   restartClaims = 0;
   // Each is synchronous once called, like the single UPDATE it stands for.
