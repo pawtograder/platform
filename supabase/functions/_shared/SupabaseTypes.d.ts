@@ -14216,6 +14216,7 @@ export type Database = {
         Args: {
           p_class_id: number;
           p_debug_id?: string;
+          p_git_provider?: string;
           p_org: string;
           p_repo: string;
         };

@@ -17,7 +17,8 @@
 --      deleting a GitHub row queues nothing
 --   2. enqueue_github_archive_repo stays GitHub-only: a Forgejo name queues neither a GitHub job nor a
 --      Forgejo archive, a GitHub name still queues the GitHub job, and a GitHub delete never queues a
---      live Forgejo repo with the same owner/name
+--      live Forgejo repo with the same owner/name; a caller passing p_git_provider => 'github' still
+--      archives the GitHub repo after deleting its row (20261121175000_github_archive_repo_host.sql)
 --   3. a name already pending isn't queued twice
 --   4. forgejo_repo_archives_due lists pending entries; claim_forgejo_repo_archive claims once and returns
 --      the claim, a live claim hides the entry, and an archived entry can't be claimed
@@ -138,6 +139,16 @@ delete from public.repositories where class_id = pg_temp.cls() and repository = 
 select public.enqueue_github_archive_repo(pg_temp.cls(), 'arc-org', 'shared-' || (select s from fx_run), 'test');
 select pg_temp.check('2d a GitHub delete never queues a live Forgejo repo with the same name',
   pg_temp.pending(pg_temp.n('shared')) = 0);
+update k set v = pg_temp.github_jobs(pg_temp.cls());
+select pg_temp.check('2e ... and with the host passed, the deleted GitHub repo is still archived on GitHub',
+  public.enqueue_github_archive_repo(pg_temp.cls(), 'arc-org', 'shared-' || (select s from fx_run), 'test',
+                                     p_git_provider => 'github') is not null
+  and pg_temp.github_jobs(pg_temp.cls()) = (select v from k) + 1
+  and pg_temp.pending(pg_temp.n('shared')) = 0);
+select pg_temp.check('2f a Forgejo host queues no GitHub job',
+  public.enqueue_github_archive_repo(pg_temp.cls(), 'arc-gh', 'hw2-group-g5-' || (select s from fx_run), 'test',
+                                     p_git_provider => 'forgejo') is null
+  and pg_temp.github_jobs(pg_temp.cls()) = (select v from k) + 1);
 
 -- 3
 select pg_temp.check('3a a name is queued once',

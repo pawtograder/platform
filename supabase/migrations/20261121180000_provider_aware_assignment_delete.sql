@@ -486,7 +486,9 @@ BEGIN
                     v_target.org,
                     v_target.repo,
                     format('assignment-delete-%s-%s-%s-%s', p_assignment_id, v_target.kind, v_index + 1,
-                           left(regexp_replace(v_target.repo, '[^a-zA-Z0-9_.-]+', '-', 'g'), 80))
+                           left(regexp_replace(v_target.repo, '[^a-zA-Z0-9_.-]+', '-', 'g'), 80)),
+                    -- The GitHub row is already deleted, so the host can't be read back by name.
+                    p_git_provider => 'github'
                 );
                 v_archives_queued := v_archives_queued + 1;
             END IF;
