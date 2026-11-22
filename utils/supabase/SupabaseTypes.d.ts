@@ -3671,20 +3671,6 @@ export type Database = {
             referencedColumns: ["id", "class_id"];
           },
           {
-            foreignKeyName: "exam_question_regions_exam_id_fkey";
-            columns: ["exam_id"];
-            isOneToOne: false;
-            referencedRelation: "exams";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "exam_question_regions_exam_question_id_fkey";
-            columns: ["exam_question_id"];
-            isOneToOne: false;
-            referencedRelation: "exam_questions";
-            referencedColumns: ["id"];
-          },
-          {
             foreignKeyName: "exam_question_regions_question_exam_fkey";
             columns: ["exam_question_id", "exam_id"];
             isOneToOne: false;
@@ -3758,13 +3744,6 @@ export type Database = {
             referencedColumns: ["id", "class_id"];
           },
           {
-            foreignKeyName: "exam_questions_exam_id_fkey";
-            columns: ["exam_id"];
-            isOneToOne: false;
-            referencedRelation: "exams";
-            referencedColumns: ["id"];
-          },
-          {
             foreignKeyName: "exam_questions_parent_id_fkey";
             columns: ["parent_id"];
             isOneToOne: false;
@@ -3824,13 +3803,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "exams";
             referencedColumns: ["id", "class_id"];
-          },
-          {
-            foreignKeyName: "exam_scan_batches_exam_id_fkey";
-            columns: ["exam_id"];
-            isOneToOne: false;
-            referencedRelation: "exams";
-            referencedColumns: ["id"];
           }
         ];
       };
@@ -3884,13 +3856,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "exam_scan_batches";
             referencedColumns: ["id", "class_id"];
-          },
-          {
-            foreignKeyName: "exam_scan_pages_batch_id_fkey";
-            columns: ["batch_id"];
-            isOneToOne: false;
-            referencedRelation: "exam_scan_batches";
-            referencedColumns: ["id"];
           },
           {
             foreignKeyName: "exam_scan_pages_class_id_fkey";
@@ -3987,13 +3952,6 @@ export type Database = {
             referencedColumns: ["id", "class_id"];
           },
           {
-            foreignKeyName: "exam_scanned_submissions_exam_id_fkey";
-            columns: ["exam_id"];
-            isOneToOne: false;
-            referencedRelation: "exams";
-            referencedColumns: ["id"];
-          },
-          {
             foreignKeyName: "exam_scanned_submissions_matched_profile_id_fkey";
             columns: ["matched_profile_id"];
             isOneToOne: false;
@@ -4082,13 +4040,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "exams";
             referencedColumns: ["id", "class_id"];
-          },
-          {
-            foreignKeyName: "exam_template_pages_exam_id_fkey";
-            columns: ["exam_id"];
-            isOneToOne: false;
-            referencedRelation: "exams";
-            referencedColumns: ["id"];
           }
         ];
       };
@@ -4153,34 +4104,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id", "class_id"];
-          },
-          {
-            foreignKeyName: "exams_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "assignment_overview";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "exams_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "assignments";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "exams_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "assignments_with_effective_due_dates";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "exams_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: true;
-            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "exams_class_id_fkey";
@@ -11884,6 +11807,24 @@ export type Database = {
           }
         ];
       };
+      user_whats_new_seen: {
+        Row: {
+          item: string;
+          seen_at: string;
+          user_id: string;
+        };
+        Insert: {
+          item: string;
+          seen_at?: string;
+          user_id?: string;
+        };
+        Update: {
+          item?: string;
+          seen_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       users: {
         Row: {
           avatar_url: Pii<"handle", string> | null;
@@ -15171,25 +15112,11 @@ export type Database = {
         };
         Returns: undefined;
       };
-      invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
-      office_hours_queue_health: {
-        Args: { p_class_id: number };
-        Returns: {
-          helping: number;
-          median_wait_seconds_today: number;
-          oldest_wait_seconds: number;
-          queue_id: number;
-          queue_name: string;
-          resolved_today: number;
-          staffed_tas: number;
-          unstaffed_seconds: number | null;
-          waiting: number;
-        }[];
-      };
       invoke_bug_report_retention_purge_background_task: {
         Args: never;
         Returns: undefined;
       };
+      invoke_calendar_sync_background_task: { Args: never; Returns: undefined };
       invoke_discord_async_worker_background_task: {
         Args: never;
         Returns: undefined;
@@ -15369,6 +15296,20 @@ export type Database = {
           class_id: string;
           conclusion: string;
           count: number;
+        }[];
+      };
+      office_hours_queue_health: {
+        Args: { p_class_id: number };
+        Returns: {
+          helping: number;
+          median_wait_seconds_today: number;
+          oldest_wait_seconds: number;
+          queue_id: number;
+          queue_name: string;
+          resolved_today: number;
+          staffed_tas: number;
+          unstaffed_seconds: number;
+          waiting: number;
         }[];
       };
       only_calendar_or_discord_ids_changed: {

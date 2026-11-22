@@ -227,6 +227,8 @@ export type ListFilesRequest = {
   courseId: number;
   orgName: string;
   repoName: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type FileListing = {
   name: string;
@@ -246,6 +248,8 @@ export type GetFileRequest = {
    * spinning for 15-30s. Callers racing fresh repo creation should leave it unset.
    */
   skipRetryOnNotFound?: boolean;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileRequest = {
   courseId: number;
@@ -256,6 +260,8 @@ export type WriteFileRequest = {
   message: string;
   /** Blob sha of the file being replaced. Omit to create a new file. */
   sha?: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileResponse = {
   commit_sha?: string;

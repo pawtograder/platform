@@ -684,6 +684,118 @@ export async function getCommit(config: ForgejoConfig, repository: string, ref: 
   return (await res.json()) as ForgejoCommit;
 }
 
+/** A Forgejo call that failed with a status the caller acts on: a missing file, or a stale or racing write. */
+export class ForgejoStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ForgejoStatusError";
+  }
+}
+
+async function statusFailure(res: Response, what: string): Promise<ForgejoStatusError> {
+  return new ForgejoStatusError(`Forgejo ${what} failed: ${res.status} ${reason(await res.text())}`, res.status);
+}
+
+/** A path inside a repo, for the contents API. A "." or ".." segment, or an empty one, never reaches the URL. */
+function filePath(path: string): string {
+  const parts = path.split("/");
+  if (parts.some((p) => p === "" || p === "." || p === "..")) throw new Error("Not a file path in the repository");
+  return parts.map(encodeURIComponent).join("/");
+}
+
+function toBase64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
+ * A file on the default branch with its blob sha, the same shape as GitHub's getFileFromRepo. A missing file
+ * throws a ForgejoStatusError with status 404.
+ */
+export async function getRepoFile(
+  config: ForgejoConfig,
+  repository: string,
+  path: string
+): Promise<{ content: string; sha: string }> {
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${filePath(path)}`);
+  if (!res.ok) throw await statusFailure(res, "file read");
+  const body = (await res.json()) as { type?: string; content?: string | null; sha: string } | unknown[];
+  if (Array.isArray(body) || body.type !== "file" || typeof body.content !== "string") {
+    throw new Error("File is not a file");
+  }
+  const bytes = Uint8Array.from(atob(body.content.replace(/\s/g, "")), (c) => c.charCodeAt(0));
+  return { content: new TextDecoder().decode(bytes), sha: body.sha };
+}
+
+/** Tree entries per page; Forgejo's default cap on a git tree page. */
+const TREE_PAGE_SIZE = 1000;
+
+/**
+ * Every file on the default branch, recursively, the same shape as GitHub's listFilesInRepo. An empty repo
+ * has no branch yet, so it lists nothing.
+ */
+export async function listRepoFiles(
+  config: ForgejoConfig,
+  repository: string
+): Promise<{ name: string; path: string; size: number; sha: string }[]> {
+  const path = repoPath(repository);
+  const repo = await forgejo(config, "GET", `/repos/${path}`);
+  if (!repo.ok) throw await statusFailure(repo, "repo lookup");
+  const { empty, default_branch } = (await repo.json()) as { empty?: boolean; default_branch: string };
+  if (empty) return [];
+  // The tree API takes a commit or tree sha, so the branch is resolved first.
+  const branch = await forgejo(config, "GET", `/repos/${path}/branches/${encodeURIComponent(default_branch)}`);
+  if (!branch.ok) throw await statusFailure(branch, "branch lookup");
+  const { commit } = (await branch.json()) as { commit: { id: string } };
+  const files: { name: string; path: string; size: number; sha: string }[] = [];
+  for (let page = 1; ; page++) {
+    const res = await forgejo(
+      config,
+      "GET",
+      `/repos/${path}/git/trees/${encodeURIComponent(commit.id)}?recursive=true&per_page=${TREE_PAGE_SIZE}&page=${page}`
+    );
+    if (!res.ok) throw await statusFailure(res, "tree read");
+    const tree = (await res.json()) as {
+      tree?: { path: string; type: string; size?: number; sha: string }[] | null;
+      truncated?: boolean;
+    };
+    const entries = tree.tree ?? [];
+    for (const entry of entries) {
+      if (entry.type !== "blob") continue;
+      files.push({ name: entry.path.split("/").pop()!, path: entry.path, size: entry.size ?? 0, sha: entry.sha });
+    }
+    // Forgejo marks every page but the last as truncated.
+    if (!tree.truncated || entries.length === 0) return files;
+  }
+}
+
+/**
+ * Creates the file on the default branch, or replaces it when `sha` names the blob being replaced, the same
+ * contract as GitHub's writeFileToRepo. A stale sha or a create that races an existing file throws a
+ * ForgejoStatusError with Forgejo's status (409 or 422, or 404 when the file was deleted since it was read).
+ */
+export async function writeRepoFile(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  content: string,
+  message: string,
+  sha?: string
+): Promise<{ commit_sha?: string; content_sha?: string }> {
+  const res = await forgejo(config, sha ? "PUT" : "POST", `/repos/${repoPath(repository)}/contents/${filePath(path)}`, {
+    content: toBase64(content),
+    message,
+    ...(sha ? { sha } : {})
+  });
+  if (!res.ok) throw await statusFailure(res, sha ? "file update" : "file create");
+  const body = (await res.json()) as { commit?: { sha?: string } | null; content?: { sha?: string } | null };
+  return { commit_sha: body.commit?.sha, content_sha: body.content?.sha };
+}
+
 /**
  * Runs grade.yml at `sha`, as GitHub's triggerWorkflow does: tag the commit pawtograder-submit/<sha>
  * and dispatch the workflow at that tag.
