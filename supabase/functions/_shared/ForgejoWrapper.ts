@@ -400,6 +400,14 @@ export async function downloadArchive(
 }
 
 /**
+ * The class's Forgejo org: forgejo_org, else the slug, lowercased like every Forgejo name Pawtograder stores. The
+ * same rule as the migrations' lower(coalesce(nullif(c.forgejo_org, ''), c.slug)).
+ */
+export function classForgejoOrg(cls: { forgejo_org?: string | null; slug?: string | null }): string {
+  return (cls.forgejo_org || cls.slug || "").toLowerCase();
+}
+
+/**
  * The repository's API path, for a plain owner/name only. The admin can call every endpoint, so a name with
  * "..", "?" or another slash, as an instructor could type into template_repo, must never reach the URL.
  */

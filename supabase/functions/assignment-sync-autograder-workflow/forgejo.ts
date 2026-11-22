@@ -1,12 +1,13 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   changeFiles,
+  classForgejoOrg,
   type ForgejoConfig,
   type ForgejoFileChange,
   getCommit,
   readFileEntry
 } from "../_shared/ForgejoWrapper.ts";
-import { forgejoGradeWorkflow } from "../_shared/forgejoGradeWorkflow.ts";
+import { forgejoGradeWorkflow, gradeWorkflowSha } from "../_shared/forgejoGradeWorkflow.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
@@ -88,11 +89,6 @@ export async function syncForgejoGradeWorkflow(
   return { commitSha, liveWorkflow: null, headSha: commitSha, headIsToggleCommit: true };
 }
 
-export async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 export type ForgejoSyncAssignment = {
   id: number;
   class_id: number;
@@ -120,7 +116,7 @@ export async function syncForgejoAssignmentWorkflow(
   gradingServer: string,
   ops?: ForgejoWorkflowOps
 ): Promise<ForgejoSyncResult> {
-  const org = (assignment.forgejo_org || assignment.class_slug).toLowerCase();
+  const org = classForgejoOrg({ forgejo_org: assignment.forgejo_org, slug: assignment.class_slug });
   const owner = assignment.template_repo.split("/")[0]?.toLowerCase();
   if (owner !== org) {
     throw new UserVisibleError("This assignment's handout isn't in the class's Forgejo org.", 400);
@@ -183,7 +179,7 @@ export async function syncForgejoAssignmentWorkflow(
   try {
     if (hasAutograder && change.liveWorkflow !== null) {
       // Grading checks grade.yml against workflow_sha; a file that was already live keeps its stored hash.
-      const workflowSha = await sha256Hex(change.liveWorkflow);
+      const workflowSha = await gradeWorkflowSha(change.liveWorkflow);
       let update = supabase.from("autograder").update({ workflow_sha: workflowSha }).in("id", ids);
       if (!wrote && !unfinished) update = update.is("workflow_sha", null);
       const { error } = await update;

@@ -1,11 +1,10 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoFileChange } from "../_shared/ForgejoWrapper.ts";
-import { forgejoGradeWorkflow } from "../_shared/forgejoGradeWorkflow.ts";
+import { forgejoGradeWorkflow, gradeWorkflowSha } from "../_shared/forgejoGradeWorkflow.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import {
   FORGEJO_DISABLED_GRADE_WORKFLOW_PATH as PARKED,
   FORGEJO_GRADE_WORKFLOW_PATH as LIVE,
-  sha256Hex,
   syncForgejoAssignmentWorkflow,
   syncForgejoGradeWorkflow,
   type ForgejoWorkflowOps
@@ -211,7 +210,7 @@ Deno.test("sync: enabling writes the workflow, sets the hash, then pins the new 
   assertEquals(writes, [
     {
       table: "autograder",
-      values: { workflow_sha: await sha256Hex(forgejoGradeWorkflow(server)) },
+      values: { workflow_sha: await gradeWorkflowSha(forgejoGradeWorkflow(server)) },
       filters: ["in id 7,8"]
     },
     {
@@ -246,7 +245,7 @@ Deno.test("sync: an already live grade.yml on a current revision only fills an u
   assertEquals(writes, [
     {
       table: "autograder",
-      values: { workflow_sha: await sha256Hex("custom") },
+      values: { workflow_sha: await gradeWorkflowSha("custom") },
       filters: ["in id 7", "is workflow_sha null"]
     }
   ]);
@@ -260,7 +259,7 @@ Deno.test("sync: a retry after a failed pin repairs the hash and the revision", 
   assertEquals(changes, []);
   assertEquals(result.action, "unchanged");
   assertEquals(writes, [
-    { table: "autograder", values: { workflow_sha: await sha256Hex("custom") }, filters: ["in id 7"] },
+    { table: "autograder", values: { workflow_sha: await gradeWorkflowSha("custom") }, filters: ["in id 7"] },
     {
       table: "assignments",
       values: { latest_template_sha: "committed-head" },
@@ -278,7 +277,7 @@ Deno.test("sync: an instructor's push past the stored revision is not taken for 
   assertEquals(writes, [
     {
       table: "autograder",
-      values: { workflow_sha: await sha256Hex("edited by hand") },
+      values: { workflow_sha: await gradeWorkflowSha("edited by hand") },
       filters: ["in id 7", "is workflow_sha null"]
     }
   ]);

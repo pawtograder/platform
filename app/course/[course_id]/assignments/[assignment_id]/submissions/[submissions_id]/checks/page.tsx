@@ -2,6 +2,7 @@
 
 import Link from "@/components/ui/link";
 import { useSubmission } from "@/hooks/useSubmission";
+import { httpUrlOrNull } from "@/lib/commitHistory";
 import { createClient } from "@/utils/supabase/client";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Text, VStack } from "@chakra-ui/react";
@@ -56,13 +57,7 @@ function statusVisual(status: string | null, conclusion: string | null): { color
 /** Forgejo run URLs use the per-repo run number, which we don't have, so the stored URL is used as sent. */
 function forgejoRunUrl(payload: unknown): string | null {
   const p = payload as { provider?: unknown; run?: { html_url?: unknown } } | null;
-  if (p?.provider !== "forgejo" || typeof p.run?.html_url !== "string") return null;
-  try {
-    const url = new URL(p.run.html_url);
-    return url.protocol === "https:" || url.protocol === "http:" ? p.run.html_url : null;
-  } catch {
-    return null;
-  }
+  return p?.provider === "forgejo" ? httpUrlOrNull(p.run?.html_url) : null;
 }
 
 function runUrl(check: WorkflowEvent): string | null {

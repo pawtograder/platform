@@ -1,6 +1,7 @@
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
+import { recordMissingGraderResult } from "../_shared/missingGraderResult.ts";
 import { findStudentRepository } from "../_shared/RepoPush.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 
@@ -54,10 +55,6 @@ export function forgejoTime(value: string | null | undefined): string | null {
   if (Number.isNaN(date.getTime()) || date.getUTCFullYear() <= 1) return null;
   return date.toISOString();
 }
-
-const MISSING_RESULT_MESSAGE = "Workflow terminated without creating a grader result.";
-const MISSING_RESULT_USER_MESSAGE =
-  "The grading container failed to terminate cleanly. This may indicate that the grading script ran out of memory or encountered an unexpected error. Please contact your instructor for assistance.";
 
 type RunSubmission = {
   id: number;
@@ -159,14 +156,24 @@ export async function handleForgejoActionRun(
   }
   for (const submission of submissions) {
     if (runAttempt === null) break;
-    await reportMissingGraderResult(
+    await recordMissingGraderResult(
       adminSupabase,
-      studentRepo.id,
-      studentRepo.class_id,
-      run,
-      runAttempt,
-      submission,
-      scope
+      {
+        repositoryId: studentRepo.id,
+        classId: studentRepo.class_id,
+        runNumber: run.id,
+        runAttempt,
+        submission,
+        errorData: {
+          workflow_run_id: run.id,
+          workflow_run_url: run.html_url,
+          workflow_conclusion: run.status,
+          workflow_status: "completed",
+          repository_name: run.repository.full_name,
+          sha: run.commit_sha
+        }
+      },
+      scope.clone()
     );
   }
 }
@@ -307,83 +314,4 @@ export function compareWithRecordedRun(
   // Without its own stop time an incoming attempt can't be shown to be later than one that has one.
   if (!Number.isNaN(recordedStop) && Number.isNaN(incomingStop)) return "older";
   return status.conclusion === run.status && status.workflow_run_url === run.html_url ? "same" : "newer";
-}
-
-async function reportMissingGraderResult(
-  adminSupabase: SupabaseClient<Database>,
-  repositoryId: number,
-  classId: number,
-  run: ForgejoActionRun,
-  runAttempt: number,
-  submission: RunSubmission,
-  scope: Sentry.Scope
-): Promise<void> {
-  const { data: graderResult, error: graderResultError } = await adminSupabase
-    .from("grader_results")
-    .select("id")
-    .eq("submission_id", submission.id)
-    .maybeSingle();
-  if (graderResultError) {
-    Sentry.captureException(graderResultError, scope);
-    return;
-  }
-  if (graderResult) return;
-
-  const { data: userVisible, error: userVisibleError } = await adminSupabase
-    .from("workflow_run_error")
-    .select("id")
-    .eq("repository_id", repositoryId)
-    .eq("run_number", run.id)
-    .eq("run_attempt", runAttempt)
-    .eq("data->>type", "user_visible_error")
-    .limit(1);
-  if (userVisibleError) Sentry.captureException(userVisibleError, scope);
-  if (userVisible && userVisible.length > 0) {
-    scope.setTag("missing_grader_result_skipped", "user_visible_error_present");
-    return;
-  }
-
-  const submissionScope = scope.clone();
-  submissionScope.setTag("error_type", "missing_grader_result");
-  submissionScope.setTag("submission_id", submission.id.toString());
-
-  const { error: errorRowError } = await adminSupabase.from("workflow_run_error").upsert(
-    {
-      repository_id: repositoryId,
-      class_id: classId,
-      submission_id: submission.id,
-      run_number: run.id,
-      run_attempt: runAttempt,
-      name: MISSING_RESULT_USER_MESSAGE,
-      data: {
-        workflow_run_id: run.id,
-        workflow_run_url: run.html_url,
-        workflow_conclusion: run.status,
-        workflow_status: "completed",
-        repository_name: run.repository.full_name,
-        sha: run.commit_sha,
-        error_type: "missing_grader_result",
-        detected_at: new Date().toISOString(),
-        technical_details: MISSING_RESULT_MESSAGE
-      }
-    },
-    { onConflict: "repository_id,run_number,run_attempt,name" }
-  );
-  if (errorRowError) Sentry.captureException(errorRowError, submissionScope);
-
-  const { error: resultError } = await adminSupabase.from("grader_results").insert({
-    submission_id: submission.id,
-    errors: { error: MISSING_RESULT_USER_MESSAGE },
-    score: 0,
-    ret_code: 137,
-    lint_output: "",
-    lint_output_format: "text",
-    lint_passed: false,
-    profile_id: submission.profile_id,
-    assignment_group_id: submission.assignment_group_id,
-    class_id: classId
-  });
-  if (resultError) Sentry.captureException(resultError, submissionScope);
-
-  Sentry.captureMessage(MISSING_RESULT_MESSAGE, submissionScope);
 }

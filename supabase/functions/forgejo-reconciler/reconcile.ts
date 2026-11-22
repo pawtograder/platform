@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
+  classForgejoOrg,
   ensureAccountForUser,
   ensureOrg,
   ensureRepoFromTemplate,
@@ -9,6 +10,7 @@ import {
   readFile,
   revokeRepoToken
 } from "../_shared/ForgejoWrapper.ts";
+import { gradeWorkflowSha } from "../_shared/forgejoGradeWorkflow.ts";
 
 /** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
 export const STALE_CLAIM_MINUTES = 10;
@@ -302,12 +304,11 @@ export async function reconcileForgejoWorkflowHashes(
   const result: HashReconcileResult = { set: 0, failures: [] };
   for (const assignment of assignments ?? []) {
     try {
-      assertTemplateInOrg(assignment.template_repo!, assignment.classes.forgejo_org || assignment.classes.slug);
+      assertTemplateInOrg(assignment.template_repo!, classForgejoOrg(assignment.classes));
       const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
       // Every submission to this assignment would be rejected, so report it rather than skip it.
       if (workflow === null) throw new Error("The handout has no .github/workflows/grade.yml");
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workflow));
-      const workflowSha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const workflowSha = await gradeWorkflowSha(workflow);
       const { error: saveError } = await supabase
         .from("autograder")
         .update({ workflow_sha: workflowSha })
@@ -357,7 +358,7 @@ export async function reconcileForgejoOrgHooks(
       .range(from, from + CLASS_PAGE_SIZE - 1);
     if (error) throw error;
     for (const c of classes ?? []) {
-      const org = (c.forgejo_org || c.slug || "").toLowerCase();
+      const org = classForgejoOrg(c);
       if (org) orgs.push(org);
     }
     if ((classes ?? []).length < CLASS_PAGE_SIZE) break;

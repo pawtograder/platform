@@ -100,7 +100,8 @@ export function normalizeCommitStatus(status: unknown): CommitStatusForHistory {
   };
 }
 
-function httpUrlOrNull(value: unknown): string | null {
+/** The value when it is an http(s) URL, else null: a stored link is only rendered as one when it is. */
+export function httpUrlOrNull(value: unknown): string | null {
   if (typeof value !== "string") return null;
   try {
     const url = new URL(value);
