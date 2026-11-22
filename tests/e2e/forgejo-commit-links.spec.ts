@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { expect, test } from "../global-setup";
 import {
   createClass,
@@ -31,7 +32,7 @@ test("a Forgejo submission links its commit to the Forgejo host", async ({ page 
         provider: "forgejo",
         instance_url: host,
         login: `fj-${suffix}`,
-        remote_user_id: Math.floor(Math.random() * 1_000_000_000)
+        remote_user_id: randomInt(1_000_000_000)
       })
     ).error
   ).toBeNull();
