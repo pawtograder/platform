@@ -874,16 +874,22 @@ function GroupDetails({
   );
 }
 
+const READY_SUFFIX = " (ready ✅)";
+
+// Until the reconciler has created the Forgejo repo and given the student access, `is_github_ready`
+// is false and a link would 404, so the repo is plain text that says so. Repository changes are
+// only broadcast to staff, so a student sees the link after the page reloads.
 function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
   const instanceUrl = useForgejoInstanceUrl();
-  const label = `${repository.repository}${repository.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}`;
-  if (!instanceUrl) {
+  if (!repository.is_github_ready || !instanceUrl) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
-        {label}
+        {repository.repository}
+        {repository.is_github_ready ? READY_SUFFIX : " (waiting for access)"}
       </Text>
     );
   }
+  const label = `${repository.repository}${READY_SUFFIX}`;
   return (
     <Link
       href={`${instanceUrl}/${repository.repository}`}
