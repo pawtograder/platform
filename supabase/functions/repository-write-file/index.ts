@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import * as github from "../_shared/GitHubWrapper.ts";
+import { assertForgejoCourseOrg, parseGitProvider, repoFilesFor } from "../_shared/repoFileAccess.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -74,33 +74,38 @@ function checkRateLimit(orgName: string, repoName: string, path: string): void {
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { courseId, orgName, repoName, path, content, message, sha } =
+  const { courseId, orgName, repoName, path, content, message, sha, gitProvider } =
     (await req.json()) as FunctionTypes.WriteFileRequest;
+  const provider = parseGitProvider(gitProvider);
   scope?.setTag("function", "repository-write-file");
   scope?.setTag("courseId", courseId.toString());
   scope?.setTag("orgName", orgName);
   scope?.setTag("repoName", repoName);
   scope?.setTag("path", path);
-
+  scope?.setTag("git_provider", provider);
   const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
-  const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
-  // Surface a real (retryable) lookup failure instead of letting a null `data` fall through
-  // to a misleading "...associated with undefined" 403 below.
-  if (courseOrgName.error) {
-    throw new UserVisibleError(
-      `Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`,
-      500
-    );
-  }
-  // NOTE: this only checks the course's github_org, not that repoName belongs to this course.
-  // A shared org means an instructor of one course could target another course's repo. Scoping
-  // writes to repos the course actually owns needs a repo->course ownership model — tracked as
-  // a follow-up. See PR #831 discussion.
-  if (courseOrgName.data?.github_org !== orgName) {
-    throw new UserVisibleError(
-      `Requested to write a file to ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`,
-      403
-    );
+  if (provider === "forgejo") {
+    await assertForgejoCourseOrg(supabase, courseId, orgName);
+  } else {
+    const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
+    // Surface a real (retryable) lookup failure instead of letting a null `data` fall through
+    // to a misleading "...associated with undefined" 403 below.
+    if (courseOrgName.error) {
+      throw new UserVisibleError(
+        `Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`,
+        500
+      );
+    }
+    // NOTE: this only checks the course's github_org, not that repoName belongs to this course.
+    // A shared org means an instructor of one course could target another course's repo. Scoping
+    // writes to repos the course actually owns needs a repo->course ownership model — tracked as
+    // a follow-up. See PR #831 discussion.
+    if (courseOrgName.data?.github_org !== orgName) {
+      throw new UserVisibleError(
+        `Requested to write a file to ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`,
+        403
+      );
+    }
   }
 
   if (!message || message.trim() === "") {
@@ -117,11 +122,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     );
   }
 
-  // Check rate limit before making the GitHub API call
+  // Check rate limit before calling the host
   checkRateLimit(orgName, repoName, normalisedPath);
 
   try {
-    return await github.writeFileToRepo(orgName + "/" + repoName, normalisedPath, content, message, sha, scope);
+    return await repoFilesFor(provider).writeFile(
+      orgName + "/" + repoName,
+      normalisedPath,
+      content,
+      message,
+      sha,
+      scope
+    );
   } catch (error) {
     scope?.setTag("write_file_error", JSON.stringify(error));
     const status =
@@ -129,7 +141,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // Surface a conflict so the client can re-fetch and retry. GitHub returns 409 for a stale
     // sha, and 422 when a create (no sha) races an already-existing file. Both mean the
     // client's view is out of date; RepoFileEditor.handleSave reloads on this exact message.
-    if (status === 409 || status === 422) {
+    // Forgejo answers 404 to an update whose file was deleted since it was read: the same stale view.
+    if (status === 409 || status === 422 || (provider === "forgejo" && status === 404 && sha)) {
       throw new UserVisibleError(
         `The file ${normalisedPath} changed since you loaded it. Please re-open the editor to get the latest version.`,
         409
