@@ -29,6 +29,8 @@ type RepoFileEditorProps = {
    */
   paths?: { label: string; path: string }[];
   onSaved?: (newSha: string | undefined) => void;
+  /** The repository's host. Omitted means GitHub. */
+  gitProvider?: "github" | "forgejo";
 };
 
 const PAWTOGRADER_SCHEMA_URI = "https://pawtograder.com/schemas/pawtograder.yml.json";
@@ -104,7 +106,15 @@ function isKnownSchemaUrl(url: string, kind: "pawtograder" | "workflow"): boolea
  * - Saves via repository-write-file using the loaded sha for optimistic concurrency; on a
  *   stale-sha conflict it re-fetches and warns.
  */
-export default function RepoFileEditor({ courseId, orgName, repoName, path, paths, onSaved }: RepoFileEditorProps) {
+export default function RepoFileEditor({
+  courseId,
+  orgName,
+  repoName,
+  path,
+  paths,
+  onSaved,
+  gitProvider
+}: RepoFileEditorProps) {
   const { colorMode } = useColorMode();
   const monacoRef = useRef<Monaco | null>(null);
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
@@ -162,7 +172,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
       // skipRetryOnNotFound: a not-yet-created file is a valid "create new file" starting point
       // here, so fail fast instead of letting the function sleep 15s + retry before returning 404.
       const res = await repositoryGetFile(
-        { courseId, orgName, repoName, path: currentPath, skipRetryOnNotFound: true },
+        { courseId, orgName, repoName, path: currentPath, skipRetryOnNotFound: true, gitProvider },
         supabase
       );
       setContent(res.content ?? "");
@@ -188,7 +198,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     } finally {
       setLoading(false);
     }
-  }, [courseId, orgName, repoName, currentPath]);
+  }, [courseId, orgName, repoName, currentPath, gitProvider]);
 
   useEffect(() => {
     loadFile();
@@ -359,7 +369,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     const supabase = createClient();
     try {
       const res = await repositoryWriteFile(
-        { courseId, orgName, repoName, path: currentPath, content, message: commitMessage.trim(), sha },
+        { courseId, orgName, repoName, path: currentPath, content, message: commitMessage.trim(), sha, gitProvider },
         supabase
       );
       setSha(res.content_sha);
@@ -374,7 +384,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
       const message = err instanceof EdgeFunctionError || err instanceof Error ? err.message : String(err);
       if (message.includes("changed since you loaded")) {
         toaster.create({
-          title: "File changed on GitHub",
+          title: gitProvider === "forgejo" ? "File changed on Forgejo" : "File changed on GitHub",
           description: "Reloading the latest version. Re-apply your edits and save again.",
           type: "warning"
         });
@@ -385,7 +395,7 @@ export default function RepoFileEditor({ courseId, orgName, repoName, path, path
     } finally {
       setSaving(false);
     }
-  }, [canSave, courseId, orgName, repoName, currentPath, content, commitMessage, sha, onSaved, loadFile]);
+  }, [canSave, courseId, orgName, repoName, currentPath, content, commitMessage, sha, onSaved, loadFile, gitProvider]);
 
   return (
     <VStack align="stretch" gap={3} data-testid="repo-file-editor">

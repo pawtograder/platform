@@ -2099,6 +2099,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "user_roles.sis_sync_opt_out": "none",
   "user_roles.updated_at": "none",
   "user_roles.user_id": "none",
+  // user_whats_new_seen holds walkthrough names (e.g. "oh-escalation:v1") and a timestamp; nothing a user typed.
+  "user_whats_new_seen.item": "none",
+  "user_whats_new_seen.seen_at": "none",
+  "user_whats_new_seen.user_id": "none",
   "users.avatar_url": "handle",
   "users.created_at": "none",
   "users.discord_id": "handle",
