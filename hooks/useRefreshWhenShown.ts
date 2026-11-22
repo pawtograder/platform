@@ -30,7 +30,9 @@ const REFRESH_TIMEOUT_MS = 15_000;
  * the page as it was and gives the minute back, so the next show tries again. A refresh that failed
  * delivered nothing, and retrying costs one request per show. A response cut off partway is the
  * exception, described on `refreshCurrentPage`. A refresh that has not answered within 15 seconds
- * also allows a retry on the next show. The timeout cannot cancel the underlying server action.
+ * stops this hook waiting, but cannot cancel the action or unblock Next's server action queue.
+ * The next eligible show may queue one retry, which goes out when the stalled action ends.
+ * Further shows wait until an underlying action settles before queuing another refresh.
  *
  * An answer other than true means this tab can't refresh in place. False is another build. Nothing
  * at all is a page that isn't the action's reply: a build that no longer has this action, or a
@@ -46,6 +48,7 @@ export function useRefreshWhenShown(
   minIntervalMs: number = REFRESH_WHEN_SHOWN_MIN_INTERVAL_MS
 ): void {
   const lastRefreshAt = useRef(0);
+  const unsettledRefreshes = useRef(new Set<object>());
   const refreshInFlight = useRef<{ timer?: ReturnType<typeof setTimeout> } | null>(null);
 
   useEffect(() => {
@@ -56,8 +59,10 @@ export function useRefreshWhenShown(
       if (document.visibilityState !== "visible") return;
       // Before lastRefreshAt is written, so a skipped refresh doesn't use up the minute.
       if (!navigator.onLine) return;
-      // Wait for the current attempt to answer or time out before allowing another.
+      // The timeout only stops this hook waiting; it cannot unblock Next's action queue.
+      // Allow one queued retry to go out when the stalled action ends.
       if (refreshInFlight.current) return;
+      if (unsettledRefreshes.current.size >= 2) return;
       const now = Date.now();
       const previous = lastRefreshAt.current;
       // Negative when the clock was set back, which says nothing about how long ago the last one was.
@@ -69,15 +74,20 @@ export function useRefreshWhenShown(
       const timeout = new Promise<never>((_, reject) => {
         attempt.timer = setTimeout(() => reject(new Error("Page refresh timed out")), REFRESH_TIMEOUT_MS);
       });
+      unsettledRefreshes.current.add(attempt);
+      const refresh = refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA);
+      const settled = () => unsettledRefreshes.current.delete(attempt);
+      // Track the action itself: a timeout leaves it in Next's queue.
+      void refresh.then(settled, settled);
       // The race ignores late answers, including a build mismatch from an expired attempt.
-      Promise.race([refreshCurrentPage(process.env.NEXT_PUBLIC_GIT_COMMIT_SHA), timeout])
+      Promise.race([refresh, timeout])
         .then(
           (sameBuild) => {
             // Not after a link took the student elsewhere: a reload there could lose what they're typing.
-            if (sameBuild !== true && mounted && refreshInFlight.current === attempt) recoverFromStaleBundle();
+            if (sameBuild !== true && mounted) recoverFromStaleBundle();
           },
           () => {
-            if (mounted && refreshInFlight.current === attempt && lastRefreshAt.current === now) {
+            if (mounted && lastRefreshAt.current === now) {
               lastRefreshAt.current = previous;
             }
           }
