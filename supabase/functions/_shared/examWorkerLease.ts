@@ -67,10 +67,11 @@ export async function setLease(
 // reader no longer holds the message. Never throws. The chain runs even when the first call fails,
 // because a call that timed out may have committed a lease that then needs renewing. "released" is
 // not logged. After our own archive it is expected, and a takeover is logged by the reader that took
-// the message. Calling the returned function with a number of seconds sets the lease once more, to
-// that, after any call in flight has returned. That is best effort: a call the client abandoned can
-// still commit later, on a slow database, and leave the shorter lease in place. `renewMs` is for
-// tests; the worker uses LEASE_RENEW_MS.
+// the message. The returned function stops the chain and waits for any call in flight to return
+// (at most LEASE_RPC_TIMEOUT_MS) before it resolves. Called with a number of seconds, it then sets
+// the lease once more, to that. That is best effort: a call the client abandoned can still commit
+// later, on a slow database, and leave the shorter lease in place. `renewMs` is for tests; the
+// worker uses LEASE_RENEW_MS.
 export async function holdLease(
   client: LeaseClient,
   queue: string,
@@ -95,8 +96,11 @@ export async function holdLease(
   return async (seconds?: number) => {
     stopped = true;
     clearTimeout(timer);
-    if (seconds === undefined) return;
+    // Wait for a call in flight in both forms, so no lease call is still open once this returns:
+    // none overlaps the worker's next read, outlives runBatch, or keeps a timer alive after a
+    // test. Bounded by LEASE_RPC_TIMEOUT_MS, and setLease never throws.
     await inFlight;
+    if (seconds === undefined) return;
     await setLease(client, queue, msg, seconds);
   };
 }

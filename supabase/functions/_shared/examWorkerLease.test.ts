@@ -47,7 +47,7 @@ function fakeClient(replies: Reply[] = []) {
       })
     })
   } as unknown as LeaseClient;
-  return { client, calls, maxActive: () => maxActive };
+  return { client, calls, active: () => active, maxActive: () => maxActive };
 }
 
 function silenceWarnings() {
@@ -167,6 +167,36 @@ Deno.test("release(seconds) waits for the call in flight, then sets the lease on
     assertEquals(fake.calls[2].args.read_ct, 3);
     await advance(time, 10);
     assertEquals(fake.calls.length, 3);
+  } finally {
+    finishRenewal();
+    time.restore();
+  }
+});
+
+Deno.test("release() waits for a renewal in flight, and no call is open when it returns", async () => {
+  const time = new FakeTime();
+  let finishRenewal!: () => void;
+  const blockedRenewal = new Promise<Result>((resolve) => {
+    finishRenewal = () => resolve(HELD);
+  });
+  const fake = fakeClient([HELD, blockedRenewal]);
+  try {
+    const release = await holdLease(fake.client, "exam_processing", msg);
+    await advance(time, 1); // the second call is now waiting on blockedRenewal
+    assertEquals(fake.calls.length, 2);
+    assertEquals(fake.active(), 1);
+    let returned = false;
+    const released = release().then(() => {
+      returned = true;
+    });
+    await time.runMicrotasks();
+    assertEquals(returned, false, "release() must not return while a renewal is in flight");
+    finishRenewal();
+    await released;
+    assertEquals(fake.active(), 0, "no lease call may still be open once release() returns");
+    assertEquals(fake.calls.length, 2, "release() with no seconds makes no call of its own");
+    await advance(time, 10);
+    assertEquals(fake.calls.length, 2);
   } finally {
     finishRenewal();
     time.restore();
