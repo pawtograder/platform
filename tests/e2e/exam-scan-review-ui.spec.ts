@@ -51,9 +51,13 @@ test.describe("Scan & Match progress and refresh (#1262)", () => {
     await expect(page.getByRole("status").filter({ hasText: "Matching names" })).toBeVisible({ timeout: 15_000 });
 
     // Now let the real worker finish: the review table appears on its own.
-    // Undo the hand-made OCR so the worker really reads page 0 (and finds Alice on it).
+    // Undo the hand-made OCR so the worker really reads page 0 (and finds Alice on it), and the
+    // hand-made status, since Process refuses a batch that's already matching (#1329).
     expect(
       (await supabase.from("exam_scan_pages").update({ ocr_text: null, ocr_data: null }).eq("id", firstPage!.id)).error
+    ).toBeNull();
+    expect(
+      (await supabase.from("exam_scan_batches").update({ status: "uploaded" }).eq("id", batchId)).error
     ).toBeNull();
     await processToReview(batchId);
     await expect(page.getByRole("heading", { name: "Review matches (3 exams)" })).toBeVisible({ timeout: 15_000 });

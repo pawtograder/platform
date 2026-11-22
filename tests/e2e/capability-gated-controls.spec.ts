@@ -521,9 +521,9 @@ test.describe("poll controls gated by run_polls", () => {
     await expect(page.getByRole("row").filter({ hasText: "Gate poll?" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Create Poll/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Poll actions" }).click();
+    await expect(page.getByRole("menuitem", { name: /View Poll/ })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: /Open Poll|Close Poll/ })).toHaveCount(0);
     await expect(page.getByRole("menuitem", { name: /Delete Poll/ })).toHaveCount(0);
-    await expect(page.getByRole("menuitem", { name: /View Poll/ })).toHaveCount(1);
   });
 
   test("a grader without run_polls does not see Start/Stop and is redirected from new poll", async ({ page }) => {

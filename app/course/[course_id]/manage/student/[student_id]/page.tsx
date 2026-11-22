@@ -18,7 +18,7 @@ import {
 } from "@/lib/TableController";
 import type { Assignment, AssignmentGroupWithMembersAndMentor, LabSection } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import { Badge, Box, Button, Card, HStack, Heading, Separator, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import Link from "next/link";
@@ -102,6 +102,9 @@ export default function StudentPage() {
   const controller = useCourseController();
   const { client, gradebookColumns, assignmentGroupsWithMembers } = controller;
   const { realRole, isViewingAsStudent, enterViewAs } = useClassProfiles();
+  // The gradebook's private grades follow manage_gradebook (#1010); get_student_summary leaves them
+  // out otherwise. Instructors hold every capability; realRole keeps their card if the lookup fails.
+  const canManageGradebook = useCapability("manage_gradebook") || realRole === "instructor";
   const [studentSummary, setStudentSummary] = useState<StudentSummary | null>(null);
   const columns = useTableControllerTableValues(gradebookColumns);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -744,46 +747,48 @@ export default function StudentPage() {
         </Card.Body>
       </Card.Root>
 
-      <Card.Root>
-        <Card.Header>
-          <Heading size="md">Grades</Heading>
-        </Card.Header>
-        <Separator />
-        <Card.Body>
-          {isLoading ? (
-            <Skeleton height="180px" />
-          ) : studentSummary && studentSummary.grades_private.length > 0 ? (
-            <Box role="region" aria-label="Private grades table" overflowX="auto">
-              <Table.Root variant="outline" size="sm" width="100%">
-                <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeader>Column</Table.ColumnHeader>
-                    <Table.ColumnHeader textAlign="right">Score</Table.ColumnHeader>
-                    <Table.ColumnHeader textAlign="right">Max</Table.ColumnHeader>
-                    <Table.ColumnHeader>Released</Table.ColumnHeader>
-                  </Table.Row>
-                </Table.Header>
-                <Table.Body>
-                  {sortedPrivateGrades.map((g) => (
-                    <Table.Row key={`${g.gradebook_column_id}`}>
-                      <Table.Cell>{columnsById.get(g.gradebook_column_id)?.name ?? g.gradebook_column_id}</Table.Cell>
-                      <ReportBlock>
-                        <Table.Cell textAlign="right">{g.score_override ?? g.score ?? "—"}</Table.Cell>
-                      </ReportBlock>
-                      <Table.Cell textAlign="right">
-                        {columnsById.get(g.gradebook_column_id)?.max_score ?? "—"}
-                      </Table.Cell>
-                      <Table.Cell>{g.released ? "Yes" : "No"}</Table.Cell>
+      {canManageGradebook && (
+        <Card.Root>
+          <Card.Header>
+            <Heading size="md">Grades</Heading>
+          </Card.Header>
+          <Separator />
+          <Card.Body>
+            {isLoading ? (
+              <Skeleton height="180px" />
+            ) : studentSummary && studentSummary.grades_private.length > 0 ? (
+              <Box role="region" aria-label="Private grades table" overflowX="auto">
+                <Table.Root variant="outline" size="sm" width="100%">
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.ColumnHeader>Column</Table.ColumnHeader>
+                      <Table.ColumnHeader textAlign="right">Score</Table.ColumnHeader>
+                      <Table.ColumnHeader textAlign="right">Max</Table.ColumnHeader>
+                      <Table.ColumnHeader>Released</Table.ColumnHeader>
                     </Table.Row>
-                  ))}
-                </Table.Body>
-              </Table.Root>
-            </Box>
-          ) : (
-            renderEmptyState("private grades")
-          )}
-        </Card.Body>
-      </Card.Root>
+                  </Table.Header>
+                  <Table.Body>
+                    {sortedPrivateGrades.map((g) => (
+                      <Table.Row key={`${g.gradebook_column_id}`}>
+                        <Table.Cell>{columnsById.get(g.gradebook_column_id)?.name ?? g.gradebook_column_id}</Table.Cell>
+                        <ReportBlock>
+                          <Table.Cell textAlign="right">{g.score_override ?? g.score ?? "—"}</Table.Cell>
+                        </ReportBlock>
+                        <Table.Cell textAlign="right">
+                          {columnsById.get(g.gradebook_column_id)?.max_score ?? "—"}
+                        </Table.Cell>
+                        <Table.Cell>{g.released ? "Yes" : "No"}</Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              </Box>
+            ) : (
+              renderEmptyState("private grades")
+            )}
+          </Card.Body>
+        </Card.Root>
+      )}
     </VStack>
   );
 }

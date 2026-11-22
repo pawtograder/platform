@@ -27,12 +27,12 @@
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
- * 20261122120000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * 20261122200000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
  * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
  * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
  * the capability (or a demoted former grader) cannot manage decks they made.
  *
- * 20261122120100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
+ * 20261122200100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *
@@ -53,6 +53,7 @@ import {
 const SEEDED_CAPABILITIES = [
   "manage_assignments",
   "manage_flashcards",
+  "manage_gradebook",
   "manage_review_assignments",
   "manage_roles",
   "manage_student_repositories",
@@ -2598,8 +2599,13 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       .select("id");
     expect(deleteBError).toBeNull();
     expect(deleteB ?? [], "deleting a B assignment without manage_surveys in B").toHaveLength(0);
-    const { data: stillB } = await supabase.from("survey_assignments").select("id").eq("id", assignmentB!.id);
+    const { data: stillB, error: stillBError } = await supabase
+      .from("survey_assignments")
+      .select("id, profile_id")
+      .eq("id", assignmentB!.id);
+    expect(stillBError).toBeNull();
     expect(stillB ?? []).toHaveLength(1);
+    expect(stillB?.[0].profile_id).toBe(studentB.private_profile_id);
   });
 
   test("a manage_surveys holder can repair or delete a legacy mismatched assignment", async () => {
