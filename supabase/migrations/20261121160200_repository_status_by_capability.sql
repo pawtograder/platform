@@ -17,6 +17,8 @@
 --      refusal now raises 42501 (insufficient_privilege). Each still acts on one class only:
 --      retry_repository_creation reads the class from the repository row, and the other two only read
 --      and change rows of p_class_id. Signatures, grants and search_path are unchanged.
+--      A holder gets exactly what an instructor has: Retry and Fix Permissions work on student and
+--      group repositories, and Cleanup only on individual ones.
 --
 -- Who gains or loses: instructors hold every capability, so nothing changes for them. Default
 -- graders, students and admins hold no manage_student_repositories, so they still can't run these.
@@ -36,7 +38,7 @@
 INSERT INTO public.capabilities (name, description)
 VALUES (
   'manage_student_repositories',
-  'Retry repository creation, fix repository permissions, and clean up individual repositories (deletes their submissions and archives the repos)'
+  'Retry creation and fix permissions for any student or group repository; clean up individual repositories (deletes their submissions and archives the repos)'
 )
 ON CONFLICT (name) DO NOTHING;
 
