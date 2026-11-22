@@ -536,8 +536,9 @@ since deleting a workspace deletes its home. Then the student opens again.
 ## Course flag and repository host picker
 
 Instructors see no GitHub/Forgejo picker, or "Enable cloud-workspaces for this
-course before selecting Forgejo". Nothing monitors the flag. Set it in SQL,
-since the Feature flags page doesn't list it (#1091):
+course before selecting Forgejo". Nothing monitors the flag. An instructor turns
+it on or off under Course Settings, Feature flags, "Cloud workspaces" (#1351).
+To check it, or to set it without the page:
 
 ```sql
 SELECT id, slug, forgejo_org, public.cloud_workspaces_enabled(features) FROM public.classes WHERE id = <class id> \g
@@ -632,5 +633,6 @@ fork source, and every assignment forked from it, must also be on GitHub.
    keep their quota. Check `kubectl -n pawtograder-staging-workspaces get pvc`.
 9. A failed startup script is a workspace status. Check the build and agent
    logs under [Workspaces](#workspaces-workspace-open-workspace-status-template).
-10. The flag is SQL-only (#1091), and the first entry decides. See
+10. Any instructor can turn the flag off from Feature flags (#1351). The
+    first entry in `classes.features` decides. See
     [Course flag](#course-flag-and-repository-host-picker).
