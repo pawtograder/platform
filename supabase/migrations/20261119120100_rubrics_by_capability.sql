@@ -14,11 +14,11 @@
 --      (insert, update, delete) needs manage_rubrics in the row's class. A child row must also sit
 --      on a rubric of that same class, and a rubric on an assignment of that class, so a role in
 --      one class can't attach rows to another class's rubric or assignment.
---   3. update_rubric_full checks manage_rubrics instead of authorizeforclassinstructor. When it
---      creates a rubric it also fills the assignment's empty link to it (grading_rubric_id,
+--   3. update_rubric_full checks manage_rubrics instead of authorizeforclassinstructor. On every
+--      save it also fills the assignment's empty link to the rubric (grading_rubric_id,
 --      self_review_rubric_id or meta_grading_rubric_id). The editor used to write that link itself,
 --      which needs manage_assignments, so a Head TA's new rubric would have been saved but not
---      attached.
+--      attached. If someone else created a rubric for the same round first, a create is refused.
 --   4. A rubric part or criterion can't be moved to another rubric.
 --
 -- Default graders lose the direct writes on rubrics, rubric_parts and rubric_checks. No screen or
@@ -255,11 +255,11 @@ CREATE POLICY "Rubric managers can delete rubric check references" ON public.rub
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_rubrics')));
 
 -- ---------------------------------------------------------------------------
--- 3. update_rubric_full checks manage_rubrics and links a new rubric
+-- 3. update_rubric_full checks manage_rubrics and links the rubric
 -- ---------------------------------------------------------------------------
 
 -- The body from 20261015120000_lock_down_security_definer_functions.sql (section 4f), with two
--- changes: the access check, and the assignment link after a new rubric is inserted.
+-- changes: the access check, and filling the assignment's empty link to the rubric on every save.
 CREATE OR REPLACE FUNCTION public.update_rubric_full(p_rubric jsonb)
  RETURNS text
  LANGUAGE plpgsql
@@ -282,6 +282,10 @@ DECLARE
   v_old_cap boolean;
   v_old_hide_unless_assigned boolean;
   v_old_assignment_id bigint;
+  v_old_review_round review_round;
+  v_link_round review_round;
+  v_linked_rubric_id bigint;
+  v_link_rows int := 0;
 
   v_new_name text;
   v_new_description text;
@@ -489,34 +493,12 @@ BEGIN
     )
     RETURNING id INTO v_rubric_id;
     v_is_new_rubric := true;
-
-    -- Link the new rubric to its assignment, as the editor did after saving. That write went
-    -- through the assignments UPDATE policy, which needs manage_assignments, so it belongs here.
-    -- Only an empty link is filled: re-pointing an assignment at a different rubric stays an
-    -- assignment edit.
-    -- Grading and self-review rubrics are normally made with the assignment
-    -- (assignments_grader_config_auto_populate); a meta-grading rubric is made here.
-    IF v_assignment_id IS NOT NULL THEN
-      CASE v_review_round
-        WHEN 'grading-review' THEN
-          UPDATE public.assignments SET grading_rubric_id = v_rubric_id
-          WHERE id = v_assignment_id AND grading_rubric_id IS NULL;
-        WHEN 'self-review' THEN
-          UPDATE public.assignments SET self_review_rubric_id = v_rubric_id
-          WHERE id = v_assignment_id AND self_review_rubric_id IS NULL;
-        WHEN 'meta-grading-review' THEN
-          UPDATE public.assignments SET meta_grading_rubric_id = v_rubric_id
-          WHERE id = v_assignment_id AND meta_grading_rubric_id IS NULL;
-        ELSE
-          NULL;
-      END CASE;
-    END IF;
     v_broad_change := true;
   ELSE
     SELECT name, description, is_private, cap_score_to_assignment_points, hide_unless_assigned,
-           assignment_id
+           assignment_id, review_round
     INTO v_old_name, v_old_description, v_old_is_private, v_old_cap, v_old_hide_unless_assigned,
-         v_old_assignment_id
+         v_old_assignment_id, v_old_review_round
     FROM public.rubrics
     WHERE id = v_rubric_id AND class_id = v_class_id
     FOR UPDATE;
@@ -552,6 +534,55 @@ BEGIN
 
     IF v_old_cap IS DISTINCT FROM v_new_cap THEN
       v_broad_change := true;
+    END IF;
+  END IF;
+
+  -- Link the rubric to its assignment when that round's link is empty, as the editor did after
+  -- saving. That write went through the assignments UPDATE policy, which needs
+  -- manage_assignments, so it belongs here. It runs on every save, so a rubric left unlinked by
+  -- the old two-step save gets linked the next time someone saves it. Only an empty link is
+  -- filled: re-pointing an assignment at a different rubric stays an assignment edit.
+  -- Grading and self-review rubrics are normally made with the assignment
+  -- (assignments_grader_config_auto_populate); a meta-grading rubric is made here.
+  -- An existing rubric uses its stored round: the payload's round is never written to it.
+  v_link_round := CASE WHEN v_is_new_rubric THEN v_review_round ELSE v_old_review_round END;
+  IF v_assignment_id IS NOT NULL
+     AND v_link_round IN ('grading-review', 'self-review', 'meta-grading-review') THEN
+    SELECT CASE v_link_round
+             WHEN 'grading-review' THEN a.grading_rubric_id
+             WHEN 'self-review' THEN a.self_review_rubric_id
+             ELSE a.meta_grading_rubric_id
+           END
+    INTO v_linked_rubric_id
+    FROM public.assignments a
+    WHERE a.id = v_assignment_id;
+
+    -- Read first, so a save that changes nothing doesn't fire the assignments update triggers.
+    -- The UPDATEs keep "IS NULL": if another save fills the link in between, it matches no row.
+    IF v_linked_rubric_id IS NULL THEN
+      CASE v_link_round
+        WHEN 'grading-review' THEN
+          UPDATE public.assignments SET grading_rubric_id = v_rubric_id
+          WHERE id = v_assignment_id AND grading_rubric_id IS NULL;
+          GET DIAGNOSTICS v_link_rows = ROW_COUNT;
+        WHEN 'self-review' THEN
+          UPDATE public.assignments SET self_review_rubric_id = v_rubric_id
+          WHERE id = v_assignment_id AND self_review_rubric_id IS NULL;
+          GET DIAGNOSTICS v_link_rows = ROW_COUNT;
+        ELSE
+          UPDATE public.assignments SET meta_grading_rubric_id = v_rubric_id
+          WHERE id = v_assignment_id AND meta_grading_rubric_id IS NULL;
+          GET DIAGNOSTICS v_link_rows = ROW_COUNT;
+      END CASE;
+    END IF;
+
+    -- Two editors can open the same empty round and both create a rubric. The first one is
+    -- linked; the second would be saved but not used, while the editor reports success. Roll it
+    -- back instead, so the editor shows an error and keeps the draft. unique_violation (HTTP 409),
+    -- not serialization_failure: PostgREST retries a serialization_failure without end.
+    IF v_is_new_rubric AND v_link_rows = 0 THEN
+      RAISE EXCEPTION 'A rubric for this round was just created by someone else, so your changes weren''t saved. Reload the page to edit it.'
+        USING ERRCODE = 'unique_violation';
     END IF;
   END IF;
 

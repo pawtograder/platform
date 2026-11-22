@@ -5,11 +5,10 @@
  * saving through update_rubric_full, need manage_rubrics in the class. The default instructor role
  * holds it; the default grader role doesn't. Reading rubrics doesn't change.
  *
- * update_rubric_full also links a new rubric to its assignment, so a Head TA with manage_rubrics
- * but not manage_assignments can create one.
- *
- * A part or criterion can't move to another rubric, and a reference must use its rubric's
- * assignment.
+ * update_rubric_full also fills the assignment's empty link to the rubric, so a Head TA with
+ * manage_rubrics but not manage_assignments can create one, and refuses a create for a round that
+ * already has a rubric. A part or criterion can't move to another rubric, and a reference must use
+ * its rubric's assignment.
  *
  * PostgREST reports a blocked insert as an error, but an update or delete that RLS hides changes 0
  * rows without one, so each blocked write is checked and then confirmed through the service client.
@@ -342,17 +341,51 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .single();
     expect(linked!.meta_grading_rubric_id).toBe(created!.id);
 
-    // A second new rubric for the same round doesn't replace the link: that stays an assignment edit.
+    // A second create for the same round (two editors who opened the empty round at once) is
+    // refused and rolled back: no second rubric, and the link stays on the first.
     const { error: secondError } = await client.rpc("update_rubric_full", {
       p_rubric: payload({ assignment_id: own.id, review_round: "meta-grading-review", name: "Second meta" }) as never
     });
-    expect(secondError).toBeNull();
+    expect(secondError?.code, "a create for a round that already has a rubric").toBe("23505");
+    expect(secondError?.message).toContain("just created by someone else");
+    const { data: metaRubrics } = await supabase
+      .from("rubrics")
+      .select("id")
+      .eq("assignment_id", own.id)
+      .eq("review_round", "meta-grading-review");
+    expect((metaRubrics ?? []).map((r) => r.id)).toEqual([created!.id]);
     const { data: stillLinked } = await supabase
       .from("assignments")
       .select("meta_grading_rubric_id")
       .eq("id", own.id)
       .single();
     expect(stillLinked!.meta_grading_rubric_id).toBe(created!.id);
+  });
+
+  test("saving an existing rubric fills its assignment's empty link", async () => {
+    // A rubric left unlinked, as the old two-step save could leave one.
+    const own = await newAssignment("relink");
+    const rubricId = own.grading_rubric_id!;
+    expect((await supabase.from("assignments").update({ grading_rubric_id: null }).eq("id", own.id)).error).toBeNull();
+
+    const client = await createAuthenticatedClient(headTa);
+    const { error } = await client.rpc("update_rubric_full", {
+      // A wrong round in the payload doesn't matter: the rubric's stored round picks the link.
+      p_rubric: payload({
+        id: rubricId,
+        assignment_id: own.id,
+        review_round: "self-review",
+        name: "Relinked"
+      }) as never
+    });
+    expect(error).toBeNull();
+    const { data: linked } = await supabase
+      .from("assignments")
+      .select("grading_rubric_id, self_review_rubric_id")
+      .eq("id", own.id)
+      .single();
+    expect(linked!.grading_rubric_id).toBe(rubricId);
+    expect(linked!.self_review_rubric_id).toBe(own.self_review_rubric_id);
   });
 
   test("a part or criterion can't be moved to another rubric", async () => {

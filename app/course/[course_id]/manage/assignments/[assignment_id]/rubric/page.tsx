@@ -71,6 +71,12 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
 
 const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
 
+/**
+ * update_rubric_full refused to create a rubric because someone else created one for the same round
+ * first (unique_violation). An expected outcome, not a fault, so it isn't reported to Sentry.
+ */
+class RubricSaveConflictError extends Error {}
+
 function hydrateRubricTree(
   rubric: Omit<HydratedRubric, "rubric_parts">,
   parts: HydratedRubricPart[],
@@ -1451,6 +1457,7 @@ function InnerRubricPage() {
         p_rubric: payload as never
       });
       if (error) {
+        if (error.code === "23505") throw new RubricSaveConflictError(error.message);
         throw new Error(error.message);
       }
 
@@ -1657,9 +1664,9 @@ function InnerRubricPage() {
                     meta: { closable: true }
                   });
                 } catch (error) {
-                  if (error instanceof NegativePointsError) {
-                    // A rubric-authoring mistake, not a fault: show the offending paths and do not
-                    // report it to Sentry as "an unexpected error occurred".
+                  if (error instanceof NegativePointsError || error instanceof RubricSaveConflictError) {
+                    // A rubric-authoring mistake or a save conflict, not a fault: show the message and
+                    // do not report it to Sentry as "an unexpected error occurred".
                     toaster.error({
                       title: "Cannot save rubric",
                       description: error.message,
