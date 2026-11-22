@@ -498,6 +498,12 @@ function InnerRubricPage() {
   // started as a new rubric. activeRubric can't tell: when someone else creates this round's rubric,
   // the effect below swaps it in while the draft text stays, so a save would overwrite theirs.
   const draftBaseRubricIdRef = useRef<Record<string, number>>({});
+  // The round on screen now. A save reads it when it finishes, since the user may have switched
+  // rounds while it ran.
+  const currentRoundRef = useRef(activeReviewRound);
+  useLayoutEffect(() => {
+    currentRoundRef.current = activeReviewRound;
+  }, [activeReviewRound]);
   useEffect(() => {
     if (!activeReviewRound) return;
     if (!hasUnsavedChanges) {
@@ -1273,6 +1279,7 @@ function InnerRubricPage() {
       if (!assignmentDetails || !activeReviewRound) {
         throw new Error("Cannot save: Missing assignment details or active review round.");
       }
+      const savedRound = activeReviewRound;
 
       let parsedRubricFromEditor: HydratedRubric;
       let negativePointsWarnings: PointsValidationWarning[];
@@ -1481,21 +1488,24 @@ function InnerRubricPage() {
         throw new Error(error.message);
       }
 
-      setHasUnsavedChanges(false);
-      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+      // Clear what belongs to the saved round. If the user switched to another round while the save
+      // ran, that round's draft, unsaved flag and base rubric stay as they are.
+      setUnsavedStatusPerTab((prev) => ({ ...prev, [savedRound]: false }));
       setStashedEditorStates((prev) => {
         const newState = { ...prev };
-        if (activeReviewRound) delete newState[activeReviewRound];
+        delete newState[savedRound];
         return newState;
       });
+      delete draftBaseRubricIdRef.current[savedRound];
+      if (currentRoundRef.current === savedRound) setHasUnsavedChanges(false);
 
       invalidate({ resource: "assignments", invalidates: ["all"] });
       await refetchCurrentRubric();
 
-      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, activeReviewRound);
+      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, savedRound);
       // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
       // only manage_rubrics, not manage_assignments.
-      if (freshRubric) {
+      if (freshRubric && currentRoundRef.current === savedRound) {
         syncEditorFromSavedRubric(freshRubric);
       }
 

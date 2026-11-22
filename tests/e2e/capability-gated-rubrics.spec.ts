@@ -174,4 +174,93 @@ test.describe("rubric editing gated by manage_rubrics", () => {
       )
       .toContain(newName);
   });
+
+  // A save that finishes after the user switched rounds clears only the round it saved. The round
+  // on screen keeps its new-rubric draft, its Save button and its guard, so it can't save over a
+  // rubric someone else created for that round in the meantime.
+  test("a save that finishes on another round leaves that round's new-rubric draft guarded", async ({ page }) => {
+    await loginAsUser(page, headTa, course);
+    await page.goto(`${assignmentUrl()}/rubric`);
+    const tab = (label: string) =>
+      rubricEditor(page).getByRole("tab", {
+        name: new RegExp(`^\\s*${label}\\s*(\\*\\s*\\(Unsaved Changes\\))?\\s*$`, "i")
+      });
+    const gradingTab = tab("Grading Review");
+    const metaTab = tab("Meta Grading Review");
+    const saveButton = rubricEditor(page).getByRole("button", { name: "Save" });
+    const suffix = Date.now().toString(36);
+
+    // Round B (meta-grading) has no rubric: start a new one.
+    await metaTab.click();
+    await expect(metaTab).toHaveAttribute("aria-selected", "true");
+    await rubricEditor(page).getByRole("button", { name: "Create New Rubric" }).click();
+    // The new draft keeps its default name; the preview beside the editor shows it.
+    const draftPreview = page.getByText(/^Meta Grading Review Rubric for /);
+    await expect(draftPreview).toBeVisible();
+
+    // Round A (grading): edit, then hold its save until the user is back on round B.
+    await gradingTab.click();
+    await expect(gradingTab).toHaveAttribute("aria-selected", "true");
+    const firstPart = rubricEditor(page).getByRole("region", { name: /^Part 1:/ });
+    await firstPart.scrollIntoViewIfNeeded();
+    const savedName = `Head TA saved part ${suffix}`;
+    await firstPart.getByLabel("Name").first().fill(savedName);
+
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/rpc/update_rubric_full*", async (route) => {
+      await released;
+      await route.continue();
+    });
+    const saveRequest = page.waitForRequest((r) => r.url().includes("/rpc/update_rubric_full"));
+    await saveButton.click();
+    await saveRequest;
+
+    await metaTab.click();
+    await expect(metaTab).toHaveAttribute("aria-selected", "true");
+    await expect(draftPreview).toBeVisible();
+
+    const saveResponse = page.waitForResponse((r) => r.url().includes("/rpc/update_rubric_full"));
+    release();
+    expect((await saveResponse).ok()).toBe(true);
+    await expect(rubricEditor(page).getByRole("button", { name: "Saving..." })).toHaveCount(0, { timeout: 30_000 });
+    await page.unroute("**/rpc/update_rubric_full*");
+
+    const { data: parts } = await supabase
+      .from("rubric_parts")
+      .select("name")
+      .eq("rubric_id", assignment.grading_rubric_id!);
+    expect((parts ?? []).map((part) => part.name)).toContain(savedName);
+
+    // Round B is untouched: still unsaved, still savable, still its own draft.
+    await expect(metaTab).toHaveText(/Unsaved Changes/);
+    await expect(saveButton).toBeEnabled();
+    await expect(draftPreview).toBeVisible();
+
+    // Someone else creates round B's rubric. Saving the draft is refused and theirs stays.
+    const otherName = `Other editor meta ${suffix}`;
+    const { data: other, error: otherError } = await supabase
+      .from("rubrics")
+      .insert({
+        class_id: course.id,
+        assignment_id: assignment.id,
+        review_round: "meta-grading-review",
+        name: otherName
+      })
+      .select("id")
+      .single();
+    expect(otherError).toBeNull();
+    expect(
+      (await supabase.from("assignments").update({ meta_grading_rubric_id: other!.id }).eq("id", assignment.id)).error
+    ).toBeNull();
+
+    await saveButton.click();
+    await expect(page.getByText("Cannot save rubric")).toBeVisible({ timeout: 30_000 });
+    const { data: metaRubrics } = await supabase
+      .from("rubrics")
+      .select("id, name")
+      .eq("assignment_id", assignment.id)
+      .eq("review_round", "meta-grading-review");
+    expect(metaRubrics).toEqual([{ id: other!.id, name: otherName }]);
+  });
 });
