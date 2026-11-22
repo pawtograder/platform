@@ -1,7 +1,12 @@
 "use client";
 
 import { useAssignmentController } from "@/hooks/useAssignment";
-import { useCapability, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import {
+  useCapability,
+  useCapabilityOnceLoaded,
+  useIsGraderOrInstructor,
+  useIsInstructor
+} from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
@@ -167,6 +172,8 @@ export function ManageAssignmentNav({
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const canManageAssignments = useCapability("manage_assignments");
   const canManageRubrics = useCapability("manage_rubrics");
+  // Lets tests wait until hidden items mean "not held" rather than "still loading".
+  const capabilitiesLoaded = useCapabilityOnceLoaded("manage_rubrics") !== undefined;
   // The capabilities nav items can name. One that isn't here hides its item.
   const heldCapabilities: Record<string, boolean> = React.useMemo(
     () => ({ manage_assignments: canManageAssignments, manage_rubrics: canManageRubrics }),
@@ -223,7 +230,14 @@ export function ManageAssignmentNav({
   return (
     <>
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
-        <Box as="nav" aria-label="Assignment management" w="xs" pr={2} flex={0}>
+        <Box
+          as="nav"
+          aria-label="Assignment management"
+          data-capabilities-loaded={capabilitiesLoaded ? "true" : undefined}
+          w="xs"
+          pr={2}
+          flex={0}
+        >
           <VStack align="flex-start">
             {filteredLinkItems.map((item, _idx, arr) => {
               // Exact match wins; otherwise longest-prefix so nested sub-routes
@@ -288,7 +302,13 @@ export function ManageAssignmentNav({
         </Box>
       </Flex>
       <Flex display={{ base: "flex", lg: "none" }} flexDir={"column"}>
-        <Box as="nav" aria-label="Assignment management" width="100%" marginTop="5">
+        <Box
+          as="nav"
+          aria-label="Assignment management"
+          data-capabilities-loaded={capabilitiesLoaded ? "true" : undefined}
+          width="100%"
+          marginTop="5"
+        >
           <Heading size="md" id="manage-assignment-mobile-nav-heading">
             Select assignment page
           </Heading>

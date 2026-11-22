@@ -64,11 +64,10 @@ test.describe("rubric editing gated by manage_rubrics", () => {
   const assignmentUrl = () => `/course/${course.id}/manage/assignments/${assignment.id}`;
 
   // useCapability is false while loading, so "hidden" only means something once the answer is in.
+  // The nav sets data-capabilities-loaded in the same render that applies the answer.
   async function openGroupsPage(page: Page) {
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(page, `${assignmentUrl()}/groups`, "Configure Groups");
-    await capabilities;
-    await expect(page.getByRole("link", { name: "Manage Groups" }).first()).toBeVisible();
+    await expect(page.locator('nav[data-capabilities-loaded="true"]').first()).toBeAttached();
   }
 
   // The manage layout renders the page twice (mobile and desktop); the region picks the visible copy.
