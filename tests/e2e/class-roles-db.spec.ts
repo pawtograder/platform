@@ -32,7 +32,7 @@
  * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
  * the capability (or a demoted former grader) cannot manage decks they made.
  *
- * 20261116120000_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
+ * 20261122120100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *

@@ -418,7 +418,9 @@ test.describe("survey controls gated by manage_surveys", () => {
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/manage/surveys`, "Manage Surveys");
     await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
 
+    await expect(page.getByRole("row").filter({ hasText: "E2E Survey" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Create New Survey/ })).toHaveCount(0);
     await expect(page.getByRole("link", { name: /Manage Series/ })).toHaveCount(0);
   });
@@ -448,6 +450,7 @@ test.describe("survey controls gated by manage_surveys", () => {
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/surveys/new`);
     await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
     await expect(page.getByRole("heading", { name: "Create New Survey" })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/new`));
 
@@ -513,7 +516,9 @@ test.describe("poll controls gated by run_polls", () => {
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/manage/polls`, "Manage Polls");
     await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
 
+    await expect(page.getByRole("row").filter({ hasText: "Gate poll?" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Create Poll/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Poll actions" }).click();
     await expect(page.getByRole("menuitem", { name: /Open Poll|Close Poll/ })).toHaveCount(0);
@@ -526,6 +531,7 @@ test.describe("poll controls gated by run_polls", () => {
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/polls/${pollId}/responses`);
     await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
     // Header always shows Present for staff with view access; wait for it so a
     // still-loading page cannot pass the Start/Stop absence check below.
     await expect(page.getByRole("button", { name: "Present" })).toBeVisible();
@@ -540,6 +546,7 @@ test.describe("poll controls gated by run_polls", () => {
     const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
     await page.goto(`/course/${course.id}/manage/polls/${pollId}/responses`);
     await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
     await expect(page.getByTestId("toggle-poll-button")).toBeVisible();
 
     const newCapabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
