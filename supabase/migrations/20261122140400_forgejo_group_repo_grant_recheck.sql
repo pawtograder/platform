@@ -31,7 +31,7 @@ $$;
 REVOKE ALL ON FUNCTION public.forgejo_group_member_logins(bigint, text) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.forgejo_group_member_logins(bigint, text) TO service_role;
 
--- From 20261121210100_forgejo_group_repo_revocations.sql. A rejoin now cancels only rows no pass has claimed.
+-- From 20261122140100_forgejo_group_repo_revocations.sql. A rejoin now cancels only rows no pass has claimed.
 -- A claimed row is mid-removal: deleting it would leave nothing to retry if that pass fails before
 -- finish_forgejo_group_repo_revocation, which is what re-grants a member who is back. Kept, a retry removes
 -- the member briefly and finish re-grants them.

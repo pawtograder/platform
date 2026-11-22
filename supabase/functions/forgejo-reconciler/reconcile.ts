@@ -502,7 +502,7 @@ export type GroupLeaveResult = {
 
 /**
  * Takes students who left a group off its Forgejo repo (#1374). The database queues one row per student and repo
- * when a membership leaves a group (20261121210100_forgejo_group_repo_revocations.sql), and cancels it if they
+ * when a membership leaves a group (20261122140100_forgejo_group_repo_revocations.sql), and cancels it if they
  * rejoin first. Each row is removed once now and once more after a 10-minute grace, in case a group pass that
  * read the roster before they left granted them afterwards.
  *
