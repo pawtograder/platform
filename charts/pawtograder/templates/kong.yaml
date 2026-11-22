@@ -118,15 +118,23 @@ spec:
             # lands at 6.4-9.5 KB and trips this.
             #
             # Measured on Khoury prod 2026-09-11: 8100 B of Cookie passed, 8200 B
-            # 400'd, and the 400 carried x-kong-request-id — it was Kong, not the
-            # ingress in front of it, which passed 12 KB happily. PR #877 read the
-            # same 8 KB wall as the ingress's and worked around it by shrinking the
-            # cookie; it is ours, and this raises it.
+            # 400'd, and the 400 carried x-kong-request-id — it was Kong. PR #877
+            # read the same 8 KB wall as the ingress's and worked around it by
+            # shrinking the cookie; it is ours, and this raises it.
+            #
+            # That measurement was HTTP/2 (curl's default), and it only shows the
+            # ingress passing h2. Over HTTP/1.1, the protocol of EVERY wss
+            # handshake, an nginx ingress at its defaults rejects the same request
+            # at ~8 KB before it reaches Kong: a plain "Request Header Or Cookie
+            # Too Large" page with no x-kong-* headers. So this setting alone does
+            # not fix Realtime. The deployment must also raise the ingress's
+            # large_client_header_buffers via ingress.annotations (#1065; Khoury,
+            # on NGINX Inc.'s controller, uses nginx.org/server-snippets). Test
+            # header limits with `curl --http1.1`.
             #
             # 16k lines up with the realtime.maxHeaderLength Khoury prod already
-            # runs (16384), so Kong and Cowboy agree. The real ceiling above both
-            # is the ingress, measured at ~12 KB. Buffers are allocated on demand,
-            # so a request that does not need them pays nothing.
+            # runs (16384), so Kong and Cowboy agree. Buffers are allocated on
+            # demand, so a request that does not need them pays nothing.
             - name: KONG_NGINX_HTTP_LARGE_CLIENT_HEADER_BUFFERS
               value: "4 16k"
             - name: SUPABASE_ANON_KEY

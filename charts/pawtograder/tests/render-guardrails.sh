@@ -1717,6 +1717,8 @@ echo "== Kong must bound the CLIENT REQUEST headers, not just upstream responses
 # the api host on every navigation and wss handshake, and @supabase/ssr's 3180 B
 # chunking puts a three-chunk session at 6.4-9.5 KB -- past the default.
 # Khoury prod, 2026-09-11: 8100 B passed, 8200 B 400'd with x-kong-request-id.
+# (That was HTTP/2. Over HTTP/1.1, which wss uses, the ingress's own 8k default
+# bites first and must be raised in the deployment's ingress.annotations; #1065.)
 #
 # Pin the VALUE, not just the name: the regression this guards against is someone
 # restoring the "4 8k" default, and an env var set to the broken value is present
