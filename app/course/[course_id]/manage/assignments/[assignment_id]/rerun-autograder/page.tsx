@@ -1042,9 +1042,21 @@ export default function RerunAutograderPage() {
   if (isAssignmentLoading) {
     return <Skeleton height="100px" />;
   }
-  if (!assignment?.data?.autograder?.grader_repo) {
+  if (!assignment?.data) {
     return <Text>Assignment not found</Text>;
   }
+  if (!assignment.data.autograder?.grader_repo) {
+    return (
+      <Box>
+        <Heading size="md">Rerun Autograder</Heading>
+        <Text data-testid="rerun-autograder-no-grader-repo">
+          This assignment has no grader repository yet, so there is no autograder to rerun. Set one on the{" "}
+          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/autograder`}>Autograder</Link> page.
+        </Text>
+      </Box>
+    );
+  }
+  const isForgejo = assignment.data.git_provider === "forgejo";
   return (
     <Box>
       <Heading size="md">Rerun Autograder</Heading>
@@ -1055,10 +1067,20 @@ export default function RerunAutograderPage() {
       </Text>
       <Text fontSize="sm" color="fg.muted">
         Re-running the autograder can be a time-consuming process, and it will occur asynchronously. After you select
-        &quot;Regrade selected&quot;, the rows will be updated to show that a re-run was requested. Once it has been
-        received by GitHub, it will no longer show as &quot;Requested&quot; here, but you will be able to see the queued
-        workflow runs begin to appear in the{" "}
-        <Link href={`/course/${course_id}/manage/workflow-runs`}>Workflow Runs Table</Link>.
+        &quot;Regrade selected&quot;, the rows will be updated to show that a re-run was requested.{" "}
+        {isForgejo ? (
+          <>
+            Once Forgejo has started the run, it will no longer show as &quot;Requested&quot; here. Each run happens in
+            Forgejo Actions in the student&apos;s repository, so you can follow it in that repository&apos;s Actions
+            tab.
+          </>
+        ) : (
+          <>
+            Once it has been received by GitHub, it will no longer show as &quot;Requested&quot; here, but you will be
+            able to see the queued workflow runs begin to appear in the{" "}
+            <Link href={`/course/${course_id}/manage/workflow-runs`}>Workflow Runs Table</Link>.
+          </>
+        )}
       </Text>
       <Text fontSize="sm" color="fg.muted">
         If auto-promote is off, the new scores appear under the &quot;What-if&quot; columns and can be promoted manually
@@ -1082,7 +1104,8 @@ export default function RerunAutograderPage() {
           </List.Item>
           <List.Item>
             Check the detailed output of running the autograder on those test submissions by viewing the GitHub Actions
-            logs for your new commit.
+            logs for your new commit
+            {isForgejo ? " in the grader repository, which stays on GitHub for a Forgejo assignment" : ""}.
           </List.Item>
           <List.Item>Refresh and check this table to compare the new autograder scores to the old one.</List.Item>
           <List.Item>

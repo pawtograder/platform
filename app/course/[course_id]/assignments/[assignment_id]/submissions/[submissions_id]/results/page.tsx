@@ -5,6 +5,7 @@ import { SpokenValue } from "@/components/ui/spoken-value";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -232,6 +233,8 @@ export default function GraderResults() {
   useEffect(() => {
     setShowHiddenOutput(isGraderOrInstructor && !isObfuscatedGradesMode);
   }, [isObfuscatedGradesMode, isGraderOrInstructor]);
+  const gitProvider = query.data?.data.assignments?.git_provider;
+  const repoHost = useRepoWebHost(gitProvider);
   if (query.isLoading) {
     return (
       <Box>
@@ -257,6 +260,8 @@ export default function GraderResults() {
   // workflow_run_error, so the error branch below would otherwise send every such student to a
   // 404 and describe a grading run that never existed.
   const hasActionsRun = (query.data.data.run_number ?? 0) > 0;
+  const repoLabel = `your ${gitProvider === "forgejo" ? "Forgejo" : "GitHub"} repository`;
+  const repoLink = repoHost ? <Link href={`${repoHost}/${query.data.data.repository}`}>{repoLabel}</Link> : repoLabel;
   if (query.data.data.workflow_run_error && query.data.data.workflow_run_error.length > 0) {
     const errors = filterWorkflowRunErrorsForDisplay(query.data.data.workflow_run_error);
 
@@ -270,8 +275,7 @@ export default function GraderResults() {
         <Box p={4} margin={{ base: "2", lg: "4" }}>
           {hasUserVisibleErrors ? (
             <Alert title="Submission Error" status="error" role="alert" p={4} mb={4}>
-              An error occurred while processing your submission. Your code has been submitted to{" "}
-              <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>, but the
+              An error occurred while processing your submission. Your code has been submitted to {repoLink}, but the
               autograder encountered issues.
               {userVisibleErrors.map((error) => {
                 const errorMessage = error.name;
@@ -329,8 +333,7 @@ export default function GraderResults() {
           ) : (
             <Alert title="Submission Processing Error" status="warning" role="alert" p={4} mb={4}>
               {hasActionsRun ? "The autograder reported a problem" : "There was a problem recording this submission"},
-              but the detailed message is only visible to course staff. Your code was still pushed to{" "}
-              <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
+              but the detailed message is only visible to course staff. Your code was still pushed to {repoLink}.
               <Box mt={4}>
                 <Text fontSize="sm">
                   {hasActionsRun ? (

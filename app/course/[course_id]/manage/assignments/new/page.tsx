@@ -10,6 +10,7 @@ import { useParams } from "next/navigation";
 import { useCallback } from "react";
 import type { FieldValues } from "react-hook-form";
 import CreateAssignment from "./form";
+import { useSelectedGitProvider } from "./repositoryHostPicker";
 import { Box, Heading, Text } from "@chakra-ui/react";
 
 export default function NewAssignmentPage() {
@@ -348,14 +349,16 @@ export default function NewAssignmentPage() {
     },
     [course_id, getValues, mutateAsync, revalidateServerCaches]
   );
+  const isForgejoSelected = useSelectedGitProvider(form) === "forgejo";
   return (
     <Box p={4}>
       <Heading size="lg">Create New Assignment</Heading>
       <Text fontSize="sm" color="fg.muted" maxW="4xl">
-        Create a new programming assignment for your course. Each student will automatically have a GitHub repository
-        created for them to submit their work, and a new gradebook column will be created to track grades. After
-        creating the assignment, you will be able to customize the grading configuration further and edit the handout
-        and grader repositories.
+        Create a new programming assignment for your course. Each student will automatically have a{" "}
+        {isForgejoSelected ? "Forgejo" : "GitHub"} repository created for them to submit their work, and a new gradebook
+        column will be created to track grades. After creating the assignment, you will be able to customize the grading
+        configuration further and edit the handout and grader repositories.
+        {isForgejoSelected && " The grader repository stays on GitHub, and you choose it on the Autograder page."}
       </Text>
       <CreateAssignment form={form} onSubmit={onSubmit} />
     </Box>
