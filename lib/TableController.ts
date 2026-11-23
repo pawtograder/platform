@@ -9,11 +9,14 @@ import * as Sentry from "@sentry/nextjs";
 import { bugReportIngest, registerRowSource, unregisterRowSource } from "@/lib/bugReport/ingestGate";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
-export type TablesThatHaveAnIDField = {
-  [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
-}[keyof DatabaseTableTypes];
+export type TablesThatHaveAnIDField =
+  | {
+      [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
+    }[keyof DatabaseTableTypes]
+  | "role_capabilities"
+  | "capabilities";
 
-type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
+type ExtractIdType<T extends TablesThatHaveAnIDField> = (DatabaseTableTypes[T]["Row"] & { id: string | number })["id"];
 
 /**
  * Channel types that broadcast table changes.
@@ -137,6 +140,9 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   student_deadline_extensions: ["staff"],
   tags: ["staff"],
   user_roles: ["staff"],
+  class_roles: ["staff"],
+  role_capabilities: ["staff"],
+  capabilities: [],
   discussion_threads: ["staff", "students", "discussion_thread_root"],
   discussion_topics: ["staff", "students"],
   gradebook_columns: ["staff", "students"],
@@ -970,13 +976,34 @@ export default class TableController<
     };
   }
 
+  private _onError?: (error: unknown) => void;
+  private _keyColumns?: string[];
+
+  private _keyedRow<Row>(row: Row): Row {
+    if (!this._keyColumns || !row) return row;
+    const values = row as Record<string, unknown>;
+    return { ...row, id: JSON.stringify(this._keyColumns.map((column) => values[column])) };
+  }
+
+  // Keep SQL predicates on real columns; synthetic ids exist only in the cache.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _filterKey(query: any, id: unknown) {
+    if (!this._keyColumns) return query.eq("id", id);
+    const values = JSON.parse(String(id));
+    for (const [index, column] of this._keyColumns.entries()) query = query.eq(column, values[index]);
+    return query;
+  }
+
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
-    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).maybeSingle();
+    const { data, error } = await this._filterKey(
+      this._client.from(this._table).select(selectClause),
+      id
+    ).maybeSingle();
     if (error) {
       throw error;
     }
-    return data as unknown as ResultOne | undefined;
+    return this._keyedRow(data) as unknown as ResultOne | undefined;
   }
 
   /**
@@ -984,6 +1011,9 @@ export default class TableController<
    * Performs basic validation and table-name matching before queueing.
    */
   protected enqueueBroadcast(message: BroadcastMessage): void {
+    if (this._keyColumns && message.type !== "gradebook_row_recalc_state" && message.data) {
+      message = { ...message, data: this._keyedRow(message.data) };
+    }
     if (this._closed) return;
     // Filter by table name if provided
     if (message.table && message.table !== this._table) {
@@ -1131,6 +1161,14 @@ export default class TableController<
    */
   private async _refetchRowsByIds(ids: IDType[], queriedIds?: Set<IDType>): Promise<Map<IDType, ResultOne>> {
     const results = new Map<IDType, ResultOne>();
+    if (this._keyColumns) {
+      for (const id of ids) {
+        const row = await this._fetchRow(id);
+        queriedIds?.add(id);
+        if (row) results.set(id, row);
+      }
+      return results;
+    }
     const batchSize = 100;
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
 
@@ -1307,13 +1345,14 @@ export default class TableController<
     const pageSize = POSTGREST_PAGE_SIZE_DEFAULT;
     let nRows: number | undefined;
 
-    // Always add ORDER BY id to ensure deterministic pagination
+    // Order by the primary key to ensure deterministic pagination
     // This prevents rows from being skipped or duplicated across page boundaries
     // when PostgreSQL returns results in non-deterministic order.
     // NOTE: PostgREST builders are mutable and `.order()` appends to the shared
     // URL, so we derive from a cloned query (`_freshQuery`) to avoid leaking
     // `order=id.asc` into `this._query` on every refetch.
-    const orderedQuery = this._freshQuery().order("id", { ascending: true });
+    let orderedQuery = this._freshQuery();
+    for (const column of this._keyColumns ?? ["id"]) orderedQuery = orderedQuery.order(column, { ascending: true });
 
     if (loadEntireTable) {
       // Load initial data, do all of the pages.
@@ -1335,7 +1374,7 @@ export default class TableController<
         if (!data || data.length === 0) {
           break;
         }
-        rows.push(...(data as unknown as ResultOne[]));
+        rows.push(...(data as unknown as ResultOne[]).map((row) => this._keyedRow(row)));
         if (data.length < pageSize) {
           break;
         }
@@ -1349,7 +1388,7 @@ export default class TableController<
       if (!data || data.length === 0) {
         return [];
       }
-      rows.push(...(data as unknown as ResultOne[]));
+      rows.push(...(data as unknown as ResultOne[]).map((row) => this._keyedRow(row)));
     }
 
     this._lastFetchTimestamp = Date.now();
@@ -1359,7 +1398,7 @@ export default class TableController<
   /**
    * Refetch all data and notify subscribers of changes (full refresh)
    */
-  private async _refetchAllDataFull(): Promise<void> {
+  private async _refetchAllDataFull(throwOnError = false): Promise<void> {
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -1451,6 +1490,8 @@ export default class TableController<
       }
     } catch (error) {
       Sentry.captureException(error);
+      this._onError?.(error);
+      if (throwOnError) throw error;
     } finally {
       // Set refetch state to false and notify listeners
       this._isRefetching = false;
@@ -1479,7 +1520,7 @@ export default class TableController<
    * Useful when entries may have been created after the initial fetch but before
    * realtime subscriptions were established by the consumer.
    */
-  async refetchAll(): Promise<void> {
+  async refetchAll(options?: { force?: boolean }): Promise<void> {
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call refetchAll(). This indicates a stale reference is being used.`
@@ -1495,14 +1536,15 @@ export default class TableController<
     // tests/UI flicker between empty and populated states.
     if (this._isRefetching) {
       await this.waitForRefetchToComplete();
-      return;
+      if (!options?.force) return;
     }
-    if (Date.now() - this._lastRefetchAllTime < 3000) {
+    if (!options?.force && Date.now() - this._lastRefetchAllTime < 3000) {
       throw new Error("Refetch all called too frequently");
     }
     this._lastRefetchAllTime = Date.now();
 
-    await this._refetchAllData();
+    if (options?.force) await this._refetchAllDataFull(true);
+    else await this._refetchAllData();
   }
 
   /**
@@ -1758,6 +1800,8 @@ export default class TableController<
 
   constructor({
     query,
+    onError,
+    keyColumns,
     client,
     table,
     classRealTimeController,
@@ -1780,6 +1824,10 @@ export default class TableController<
       RelationName,
       Database["public"]["Tables"][RelationName]["Relationships"]
     >;
+    /** Reports background full-refresh failures to the caller without changing existing error handling. */
+    onError?: (error: unknown) => void;
+    /** Natural key columns for read-only caches without id. Cached rows receive a JSON-encoded synthetic id. */
+    keyColumns?: (keyof DatabaseTableTypes[RelationName]["Row"] & string)[];
     client: SupabaseClient<Database>;
     table: RelationName;
     classRealTimeController?: ClassRealTimeController;
@@ -1823,6 +1871,8 @@ export default class TableController<
      */
     shouldRefetchUncachedIdOnly?: (id: IDType) => boolean;
   }) {
+    this._onError = onError;
+    this._keyColumns = keyColumns;
     this._rows = [];
     this._client = client;
     this._query = query;
@@ -1885,7 +1935,7 @@ export default class TableController<
         let dataToLoad: ResultOne[];
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
-          dataToLoad = initialData;
+          dataToLoad = initialData.map((row) => this._keyedRow(row));
           // Server-hydrated rows never pass the fetch hook; hand them to the taint ingest.
           const ingest = bugReportIngest.sink;
           if (ingest) ingest.rows(table, initialData, this._bugReportSelect());
@@ -2792,7 +2842,7 @@ export default class TableController<
     //Check to see if we already have this row in our cache
     const matcher = (r: ResultOne & { id: ExtractIdType<RelationName> }) => {
       for (const filter of filters) {
-        if (r[filter.column as keyof ResultOne & { id: ExtractIdType<RelationName> }] !== filter.value) {
+        if (r[filter.column as keyof ResultOne] !== filter.value) {
           return false;
         }
       }
@@ -3225,14 +3275,14 @@ export default class TableController<
       );
     }
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
-    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
+    const { data, error } = await this._filterKey(this._client.from(this._table).select(selectClause), id).single();
     if (error) {
       throw error;
     }
     if (!data) {
       return;
     }
-    const typedData = data as unknown as ResultOne;
+    const typedData = this._keyedRow(data) as unknown as ResultOne;
     const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (existingRow) {
       this._updateRow(id as IDType, typedData as ResultOne & { id: IDType }, false);
@@ -3245,6 +3295,7 @@ export default class TableController<
   }
 
   private _addRow(row: PossiblyTentativeResult<ResultOne>) {
+    row = this._keyedRow(row);
     // Enforce uniqueness by ID. If a row with the same ID already exists, treat this as an update.
     if ("id" in row) {
       const id = (row as { id: IDType }).id;
@@ -3345,6 +3396,7 @@ export default class TableController<
   }
 
   async create(row: Database["public"]["Tables"][RelationName]["Insert"]): Promise<ResultOne> {
+    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call create(). This indicates a stale reference is being used.`
@@ -3389,6 +3441,7 @@ export default class TableController<
   }
 
   async hardDelete(id: ExtractIdType<RelationName>): Promise<void> {
+    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
@@ -3418,6 +3471,7 @@ export default class TableController<
    * @returns
    */
   async delete(id: ExtractIdType<RelationName>): Promise<void> {
+    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
@@ -3442,6 +3496,7 @@ export default class TableController<
     return;
   }
   async update(id: IDType, row: Partial<ResultOne>): Promise<ResultOne> {
+    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call update(${id}). This indicates a stale reference is being used.`
