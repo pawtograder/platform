@@ -198,15 +198,13 @@ function WorkflowRunTable() {
               </Text>
             );
           }
+          // An assignment that hasn't loaded yet gets no host, so the SHA shows as text rather than a github.com guess.
+          const gitProvider = assignmentsData.find((a) => a.id === row.original.assignment_id)?.git_provider;
+          const repoHost =
+            gitProvider === undefined ? undefined : gitProvider === "forgejo" ? forgejoHost : "https://github.com";
           return (
             <RepoLink
-              href={repoWebUrl(
-                assignmentsData.find((a) => a.id === row.original.assignment_id)?.git_provider === "forgejo"
-                  ? forgejoHost
-                  : "https://github.com",
-                repoName,
-                `/commit/${sha}`
-              )}
+              href={repoWebUrl(repoHost, repoName, `/commit/${sha}`)}
               target="_blank"
               rel="noopener noreferrer"
               color="blue.600"
