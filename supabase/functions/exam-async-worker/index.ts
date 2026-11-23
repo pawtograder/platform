@@ -8,8 +8,10 @@ import { FINALIZE_ANSWER_REGION_SELECT } from "./finalizeQueries.ts";
 import {
   COMPLETED_FROM,
   errorFrom,
+  isKnownMethod,
   isTransitionOutcome,
   MATCHING_FROM,
+  PAGES_CHANGED_ERROR_FROM,
   REJECTED_SCAN_ERROR_FROM,
   REVIEW_FROM,
   type BatchStatus,
@@ -110,6 +112,20 @@ async function setBatchStatus(
   // No fallback for a missing function: runBatch does not claim until the database contract is
   // deployed (contractStatus), so a missing function here is an error like any other.
   throw new Error(`set batch ${batchId} to ${status} failed: ${error.message}`);
+}
+
+/**
+ * The batch's pages changed between this match reading them and linking them (staff added a page or
+ * changed pages-per-exam), and no other match message for the batch is left to match them
+ * (exam_worker_link_scan_groups, 'pages_changed'). Matching again from here could need OCR that
+ * nothing has queued, so the message gives up at once: the batch goes to error, only from
+ * 'matching', and Process re-queues OCR and matching for the current pages.
+ */
+class PagesChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PagesChangedError";
+  }
 }
 
 /**
@@ -425,7 +441,9 @@ async function doMatch(
   // the grouping the batch's current pages give, and a suggestion only lands on an exam that still
   // holds the pages it was read from. A refusal returns state_changed and this match stops; the run
   // whose link is current suggests for every exam (exam_worker_link_scan_groups,
-  // exam_worker_set_match_suggestion).
+  // exam_worker_set_match_suggestion). A refused link from the last match message left for the
+  // batch is pages_changed instead: no other run will finish it, so it gives up (PagesChangedError)
+  // and staff restart the batch with Process.
   const toMatching = await setBatchStatus(admin, fence, batch.id, "matching", MATCHING_FROM);
   if (toMatching === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
   if (toMatching === "state_changed") return ACK;
@@ -552,6 +570,11 @@ async function doMatch(
   }
   if (linked.outcome === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
   if (linked.outcome === "state_changed") return ACK;
+  if (linked.outcome === "pages_changed") {
+    throw new PagesChangedError(
+      `batch ${batch.id}: its pages changed while it was being matched; process the batch again`
+    );
+  }
   const linkedRows = linked.rows;
   const rowAt = new Map(
     ((linkedRows ?? []) as { exam_index: number; scanned_submission_id: number; match_status: string }[]).map((r) => [
@@ -952,6 +975,12 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       );
       return;
     }
+    if (error instanceof PagesChangedError) {
+      // Retrying would group pages that may still need OCR; staff restart it with Process instead.
+      Sentry.captureException(error, scope);
+      await giveUp(error, PAGES_CHANGED_ERROR_FROM);
+      return;
+    }
     if (error instanceof ScanPathRejectedError) {
       // A rejected scan path rejects again on every retry, so surface it on the batch now
       // instead of after five retries. Through giveUp, so a reader that lost the message leaves
@@ -1169,7 +1198,23 @@ async function runBatch(): Promise<number> {
         // The DLQ record keeps the body; the error, which also goes to Sentry, does not.
         const err = new Error(`msg ${msg.msg_id} has no usable envelope (${problem}) — DLQ`);
         Sentry.captureException(err, scope.clone());
-        await giveUpMessage(admin, { msgId: msg.msg_id, readCt: msg.read_ct }, msg.message, null, [], err);
+        // A body whose batch_id and method are usable (only another field is malformed) still names
+        // its batch, and the batch may be waiting on it: error that batch, from that method's phase
+        // only, as any give-up would, so it isn't left in 'finalizing' or 'ocr' with nothing queued.
+        // Otherwise no batch is touched.
+        const { batch_id: bodyBatchId, method: bodyMethod } = (msg.message ?? {}) as {
+          batch_id?: unknown;
+          method?: unknown;
+        };
+        const named = Number.isSafeInteger(bodyBatchId) && isKnownMethod(bodyMethod);
+        await giveUpMessage(
+          admin,
+          { msgId: msg.msg_id, readCt: msg.read_ct },
+          msg.message,
+          named ? (bodyBatchId as number) : null,
+          named ? errorFrom(bodyMethod as string) : [],
+          err
+        );
         processed++;
         continue;
       }

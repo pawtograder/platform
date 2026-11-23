@@ -131,7 +131,7 @@ Deno.test("match writes call their functions with the claim and map the reply", 
     p_match_confidence: 0,
     p_page_ids: [1, 2]
   });
-  for (const outcome of ["not_owner", "state_changed"] as const) {
+  for (const outcome of ["not_owner", "state_changed", "pages_changed"] as const) {
     const f = fakeClient({ exam_worker_link_scan_groups: ok({ outcome }) });
     assertEquals(await linkScanGroups(f.client, claim, 7, []), { outcome });
   }

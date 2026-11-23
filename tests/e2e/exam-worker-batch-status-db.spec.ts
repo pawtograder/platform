@@ -25,6 +25,7 @@ import {
   requeueArgs,
   suggestionArgs
 } from "../../supabase/functions/_shared/examWorkerFence";
+import { PAGES_CHANGED_ERROR_FROM } from "../../supabase/functions/exam-async-worker/batchTransitions";
 
 type Claim = { msgId: number; readCt: number; tag: string };
 
@@ -148,7 +149,8 @@ async function setStatus(
 }
 
 async function batchRow(batchId: number) {
-  const { data } = await supabase.from("exam_scan_batches").select("status, error").eq("id", batchId).single();
+  const { data, error } = await supabase.from("exam_scan_batches").select("status, error").eq("id", batchId).single();
+  expect(error, error?.message).toBeNull();
   return data;
 }
 
@@ -983,6 +985,51 @@ test.describe("a message with no usable envelope is dead-lettered on its first r
       }
     }
   });
+
+  // A body whose batch_id and method are usable still names a batch that may be waiting on it. Only
+  // its retry_count is malformed here: it is dead-lettered on its first read as before, and its
+  // batch is errored from the finalize phase, as any finalize give-up would, so it isn't left in
+  // 'finalizing' with nothing queued (CodeRabbit 6017515539).
+  test("a malformed retry_count on a finalize for a real batch errors that batch, from its phase only", async () => {
+    const client = await privilegedClient();
+    const tag = `bad-retry-final-${randomUUID()}`;
+    try {
+      const { classId, batchId } = await seedBatch("finalizing");
+      const { rows } = await client.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
+        JSON.stringify({
+          method: "finalize",
+          class_id: classId,
+          batch_id: batchId,
+          args: { scanned_submission_id: -1 },
+          retry_count: "5",
+          test_tag: tag
+        })
+      ]);
+      const msgId = Number(rows[0].id);
+      await expect
+        .poll(
+          async () => {
+            await runExamWorker();
+            return (await tagged(client, tag)).archived;
+          },
+          { timeout: 30_000, intervals: [1000, 2000, 3000] }
+        )
+        .toEqual([msgId]);
+      expect((await tagged(client, tag)).queued).toEqual([]);
+      const batch = await batchRow(batchId);
+      expect(batch?.status).toBe("error");
+      expect(batch?.error).toMatch(new RegExp(`msg ${msgId} .*retry_count is not a nonnegative integer \\(string\\)`));
+      const dlq = await dlqRecords(client, tag);
+      expect(dlq.queue).toBe(1);
+      expect(dlq.audit).toHaveLength(1);
+    } finally {
+      try {
+        await cleanupTag(client, tag);
+      } finally {
+        await client.end();
+      }
+    }
+  });
 });
 
 /**
@@ -1016,12 +1063,13 @@ test.describe("match writes: only the holder, only while matching, never over a 
   }
   const groupsOf = (pageIds: number[]) => pageIds.map((id, i) => ({ exam_index: i, page_ids: [id] }));
   async function rows(batchId: number) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("exam_scanned_submissions")
       .select("id, exam_index, match_status, matched_profile_id, match_confidence, detected_name")
       .eq("batch_id", batchId)
       .order("exam_index");
-    return data ?? [];
+    expect(error, error?.message).toBeNull();
+    return data!;
   }
   const suggestion = (profileId: string | null, pageIds: number[]) => ({
     detectedName: "Detected Name",
@@ -1194,12 +1242,20 @@ test.describe("match writes: only the holder, only while matching, never over a 
  * (the fence is per message): run 1's match re-queued while waiting for OCR, the batch errored, and
  * staff clicked Process again before it was read. If staff changed the batch's pages in between, the
  * leftover's link and suggestions describe pages as they were. Each is refused, and the newer run
- * finishes every exam (#1158 review, CodeRabbit 6016517634).
+ * finishes every exam (#1158 review, CodeRabbit 6016517634). A refused link is acknowledged only while
+ * another match message for the batch is queued; the last one left gives up instead, so the batch
+ * goes to error and Process restarts it (CodeRabbit 6017515539; investigations H1).
  */
 test.describe("a match from an earlier run cannot write over a newer run's grouping (#1158)", () => {
   async function matchingBatch(pages: number) {
     const { classId, examId, batchId } = await seedBatch("matching");
-    await supabase.from("exam_scan_batches").update({ total_pages: pages, pages_per_exam: 1 }).eq("id", batchId);
+    const resized = await supabase
+      .from("exam_scan_batches")
+      .update({ total_pages: pages, pages_per_exam: 1 })
+      .eq("id", batchId)
+      .select("id");
+    expect(resized.error).toBeNull();
+    expect(resized.data).toHaveLength(1);
     const ids: number[] = [];
     for (let i = 0; i < pages; i++) {
       const { data, error } = await supabase
@@ -1222,6 +1278,38 @@ test.describe("a match from an earlier run cannot write over a newer run's group
     const student = await createUserInClass({ role: "student", class_id: classId });
     return { classId, examId, batchId, pages: ids, grader, profileId: student.private_profile_id };
   }
+  type Batch = Awaited<ReturnType<typeof matchingBatch>>;
+  /**
+   * Two match messages for the batch (an earlier run's and a newer run's), each claimed the way the
+   * worker claims, and hidden for an hour in the same transaction, so no running worker can take
+   * either while the grader edits the batch.
+   */
+  async function twoMatchClaims(client: Client, b: Batch): Promise<[Claim, Claim]> {
+    await client.query("BEGIN");
+    const claims: Claim[] = [];
+    for (let i = 0; i < 2; i++) {
+      const tag = randomUUID();
+      queuedTags.add(tag);
+      const sent = await client.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
+        JSON.stringify({
+          method: "match",
+          class_id: b.classId,
+          batch_id: b.batchId,
+          args: { batch_id: b.batchId },
+          test_tag: tag
+        })
+      ]);
+      const claim = (await claimAs(client, tag))!;
+      expect(claim.msgId).toBe(Number(sent.rows[0].id));
+      await client.query(
+        "UPDATE pgmq.q_exam_processing SET vt = clock_timestamp() + interval '1 hour' WHERE msg_id = $1",
+        [claim.msgId]
+      );
+      claims.push(claim);
+    }
+    await client.query("COMMIT");
+    return [claims[0], claims[1]];
+  }
   const groupsOf = (pageIds: number[]) => pageIds.map((id, i) => ({ exam_index: i, page_ids: [id] }));
   const suggestion = (name: string, profileId: string, pageIds: number[]) => ({
     detectedName: name,
@@ -1230,23 +1318,26 @@ test.describe("a match from an earlier run cannot write over a newer run's group
     confidence: 0.9,
     pageIds
   });
-  /** Each exam of the batch with the pages linked to it now. */
+  /** Each exam of the batch with the pages linked to it now. A failed read fails the test. */
   async function exams(batchId: number) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("exam_scanned_submissions")
-      .select("id, exam_index, match_status, detected_name, exam_scan_pages(id)")
+      .select("id, exam_index, match_status, detected_name, matched_profile_id, exam_scan_pages(id)")
       .eq("batch_id", batchId)
       .order("exam_index");
-    return (data ?? []).map((r) => ({
+    expect(error, error?.message).toBeNull();
+    expect(data).not.toBeNull();
+    return data!.map((r) => ({
       id: r.id,
       exam_index: r.exam_index,
       match_status: r.match_status,
       detected_name: r.detected_name,
-      pages: (r.exam_scan_pages as { id: number }[]).map((p) => p.id).sort((a, b) => a - b)
+      matched_profile_id: r.matched_profile_id,
+      pages: (r.exam_scan_pages as { id: number }[]).map((p) => p.id).sort((x, y) => x - y)
     }));
   }
   /** Staff, through the database API as the grader: a page ahead of the others, and total_pages to match. */
-  async function addPageFirst(b: Awaited<ReturnType<typeof matchingBatch>>) {
+  async function addPageFirst(b: Batch) {
     const asGrader = await createAuthenticatedClient(b.grader);
     const { data, error } = await asGrader
       .from("exam_scan_pages")
@@ -1267,12 +1358,18 @@ test.describe("a match from an earlier run cannot write over a newer run's group
       .update({ total_pages: b.pages.length + 1 })
       .eq("id", b.batchId)
       .select("id");
+    expect(bump.error).toBeNull();
     expect(bump.data).toHaveLength(1);
     return data!.id;
   }
-  /** The newer run suggests for every exam it linked, then moves the batch to review. */
-  async function newerRunFinishes(client: Client, newer: Claim, b: Awaited<ReturnType<typeof matchingBatch>>) {
-    for (const e of await exams(b.batchId)) {
+  /**
+   * The newer run suggests for exactly the exams it linked (`linked`: their ids and pages), then moves
+   * the batch to review; every one of those exams, and no other, ends suggested by it.
+   */
+  async function newerRunFinishes(client: Client, newer: Claim, b: Batch, linked: { id: number; pages: number[] }[]) {
+    expect(linked.length).toBeGreaterThan(0);
+    expect((await exams(b.batchId)).map((e) => ({ id: e.id, pages: e.pages }))).toEqual(linked);
+    for (const e of linked) {
       expect(
         await callFn(
           "exam_worker_set_match_suggestion",
@@ -1281,17 +1378,32 @@ test.describe("a match from an earlier run cannot write over a newer run's group
       ).toBe("applied");
     }
     expect(await setStatus(client, newer, b.batchId, "review", ["uploaded", "ocr", "matching"])).toBe("applied");
-    expect(
-      (await exams(b.batchId)).every((e) => e.match_status === "suggested" && e.detected_name === "newer run")
-    ).toBe(true);
+    expect(await exams(b.batchId)).toEqual(
+      linked.map((e, i) => ({
+        id: e.id,
+        exam_index: i,
+        match_status: "suggested",
+        detected_name: "newer run",
+        matched_profile_id: b.profileId,
+        pages: e.pages
+      }))
+    );
+    expect((await batchRow(b.batchId))?.status).toBe("review");
+  }
+  /** Every message for the batch still in the queue table, visible or not. */
+  async function queuedFor(client: Client, batchId: number) {
+    const { rows } = await client.query<{ msg_id: string; method: string }>(
+      "SELECT msg_id, message->>'method' AS method FROM pgmq.q_exam_processing WHERE message->>'batch_id' = $1::text ORDER BY msg_id",
+      [batchId]
+    );
+    return rows.map((r) => ({ msgId: Number(r.msg_id), method: r.method }));
   }
 
   test("a suggestion read from pages its exam no longer holds is refused", async () => {
     const client = await privilegedClient();
     try {
       const b = await matchingBatch(2);
-      const older = await queueAndClaim(client, b.classId, b.batchId);
-      const newer = await queueAndClaim(client, b.classId, b.batchId);
+      const [older, newer] = await twoMatchClaims(client, b);
       // The older run links, and reads identity for exam 0 from page 0.
       expect(
         (
@@ -1301,8 +1413,9 @@ test.describe("a match from an earlier run cannot write over a newer run's group
           )
         ).outcome
       ).toBe("applied");
-      const [exam0] = await exams(b.batchId);
-      expect(exam0.pages).toEqual([b.pages[0]]);
+      const before = await exams(b.batchId);
+      expect(before.map((e) => e.pages)).toEqual([[b.pages[0]], [b.pages[1]]]);
+      const exam0 = before[0];
       // Staff add a page ahead of the others; the newer run links the grouping that gives.
       const added = await addPageFirst(b);
       expect(
@@ -1314,7 +1427,8 @@ test.describe("a match from an earlier run cannot write over a newer run's group
         ).outcome
       ).toBe("applied");
       const relinked = await exams(b.batchId);
-      expect(relinked[0]).toMatchObject({ id: exam0.id, pages: [added], match_status: "unmatched" });
+      expect(relinked.map((e) => e.pages)).toEqual([[added], [b.pages[0]], [b.pages[1]]]);
+      expect(relinked[0]).toMatchObject({ id: exam0.id, match_status: "unmatched" });
 
       // The older run's suggestion for exam 0, read from page 0, which exam 0 no longer holds.
       expect(await holds(client, older)).toBe(true);
@@ -1325,18 +1439,22 @@ test.describe("a match from an earlier run cannot write over a newer run's group
         )
       ).toBe("state_changed");
       expect(await exams(b.batchId)).toEqual(relinked);
-      await newerRunFinishes(client, newer, b);
+      await newerRunFinishes(
+        client,
+        newer,
+        b,
+        relinked.map((e) => ({ id: e.id, pages: e.pages }))
+      );
     } finally {
       await client.end();
     }
   });
 
-  test("a link of the grouping read before staff changed the pages is refused", async () => {
+  test("a link of the grouping read before staff changed the pages is refused, and the newer run finishes", async () => {
     const client = await privilegedClient();
     try {
       const b = await matchingBatch(2);
-      const older = await queueAndClaim(client, b.classId, b.batchId);
-      const newer = await queueAndClaim(client, b.classId, b.batchId);
+      const [older, newer] = await twoMatchClaims(client, b);
       // The older run grouped the pages it loaded; before it links, staff add a page and the newer
       // run links the new grouping.
       const olderGroups = groupsOf(b.pages);
@@ -1352,13 +1470,88 @@ test.describe("a match from an earlier run cannot write over a newer run's group
       const linked = await exams(b.batchId);
       expect(linked.map((e) => e.pages)).toEqual([[added], [b.pages[0]], [b.pages[1]]]);
 
-      // Linked, this put page 0 back on exam 0 beside the added page and left exam 2 with none.
+      // Linked, this put page 0 back on exam 0 beside the added page and left exam 2 with none. The
+      // newer run's message is still queued, so the older one is told to stop, not to give up.
       expect(await holds(client, older)).toBe(true);
       expect(await callFn("exam_worker_link_scan_groups", linkArgs(older, b.batchId, olderGroups))).toEqual({
         outcome: "state_changed"
       });
       expect(await exams(b.batchId)).toEqual(linked);
-      await newerRunFinishes(client, newer, b);
+      expect((await batchRow(b.batchId))?.status).toBe("matching");
+      await newerRunFinishes(
+        client,
+        newer,
+        b,
+        linked.map((e) => ({ id: e.id, pages: e.pages }))
+      );
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("when the last match message left finds the pages changed, it gives up and Process restarts the batch", async () => {
+    const client = await privilegedClient();
+    try {
+      const b = await matchingBatch(2);
+      const [older, newer] = await twoMatchClaims(client, b);
+      // Both grouped the pages before the grader changed them.
+      const stale = groupsOf(b.pages);
+      const added = await addPageFirst(b);
+
+      // The older one: another match message (the newer) is queued, so it stops.
+      expect(await callFn("exam_worker_link_scan_groups", linkArgs(older, b.batchId, stale))).toEqual({
+        outcome: "state_changed"
+      });
+      expect(await callFn("exam_worker_ack", { p_msg_id: older.msgId, p_read_ct: older.readCt })).toBe("acked");
+      expect(await queuedFor(client, b.batchId)).toEqual([{ msgId: newer.msgId, method: "match" }]);
+
+      // The newer one is now the only match message: its refusal says so.
+      expect(await callFn("exam_worker_link_scan_groups", linkArgs(newer, b.batchId, stale))).toEqual({
+        outcome: "pages_changed"
+      });
+      expect(await exams(b.batchId)).toEqual([]);
+      // What the worker then does (PagesChangedError): give up from 'matching' only.
+      expect(
+        await callFn(
+          "exam_worker_give_up",
+          giveUpArgs(newer, {
+            batchId: b.batchId,
+            from: PAGES_CHANGED_ERROR_FROM,
+            error: "its pages changed while it was being matched; process the batch again",
+            errorType: "PagesChangedError",
+            envelope: { method: "match", batch_id: b.batchId }
+          })
+        )
+      ).toBe("given_up");
+      expect(await batchRow(b.batchId)).toEqual({
+        status: "error",
+        error: "its pages changed while it was being matched; process the batch again"
+      });
+      expect(await queuedFor(client, b.batchId)).toEqual([]);
+
+      // Staff can restart it: Process (as the grader, rolled back so no worker runs it) queues OCR for
+      // every page, the added one included, and one match.
+      await beginAsUser(client, b.grader.user_id);
+      try {
+        const { rows } = await client.query<{ n: number }>("SELECT public.enqueue_exam_process_batch($1) AS n", [
+          b.batchId
+        ]);
+        expect(rows[0].n).toBe(3);
+        await client.query("RESET ROLE");
+        const sent = await client.query<{ method: string; page: string | null }>(
+          "SELECT message->>'method' AS method, message->'args'->>'scan_page_id' AS page FROM pgmq.q_exam_processing WHERE message->>'batch_id' = $1::text ORDER BY msg_id",
+          [b.batchId]
+        );
+        expect(
+          sent.rows
+            .filter((r) => r.method === "process_page")
+            .map((r) => Number(r.page))
+            .sort((x, y) => x - y)
+        ).toEqual([added, ...b.pages].sort((x, y) => x - y));
+        expect(sent.rows.filter((r) => r.method === "match")).toHaveLength(1);
+      } finally {
+        await client.query("ROLLBACK");
+      }
     } finally {
       await client.end();
     }

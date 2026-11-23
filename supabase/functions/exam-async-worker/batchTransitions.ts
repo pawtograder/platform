@@ -48,6 +48,17 @@ const ERROR_FROM_BY_METHOD: Record<string, readonly BatchStatus[]> = {
 };
 const ERROR_FROM_UNKNOWN_METHOD: readonly BatchStatus[] = ["ocr", "matching", "finalizing"];
 
+/** A method the dispatcher handles (own keys only, as in errorFrom). */
+export function isKnownMethod(method: unknown): method is string {
+  return typeof method === "string" && Object.hasOwn(ERROR_FROM_BY_METHOD, method);
+}
+
+/**
+ * A match whose batch's pages changed under it, with no other match message left, errors the batch
+ * only while it is still matching: never over review, finalizing, completed or an existing error.
+ */
+export const PAGES_CHANGED_ERROR_FROM: readonly BatchStatus[] = ["matching"];
+
 export function errorFrom(method: string | undefined): readonly BatchStatus[] {
   // Own keys only: a malformed message's method could be "constructor" or "toString", which a plain
   // lookup resolves to an inherited function, and spreading that into the status RPC throws, so the

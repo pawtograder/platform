@@ -16,7 +16,7 @@
  */
 
 /** The version of the SQL functions this worker needs. Matches exam_worker_contract_version(). */
-export const CONTRACT_VERSION = 2;
+export const CONTRACT_VERSION = 3;
 
 /** A message as this reader claimed it: pgmq's id and the read_ct its read produced. */
 export type Claim = { msgId: number; readCt: number };
@@ -163,7 +163,10 @@ export type MatchWriteOutcome = "not_owner" | "state_changed";
 export type LinkOutcome =
   | { outcome: "applied"; rows: unknown }
   | { outcome: "not_owner" }
-  | { outcome: "state_changed" };
+  | { outcome: "state_changed" }
+  // The batch's pages changed since this reader grouped them, and no other match message for the
+  // batch is queued: this message is the only way the batch finishes matching.
+  | { outcome: "pages_changed" };
 
 export const linkArgs = (claim: Claim, batchId: number, groups: { exam_index: number; page_ids: number[] }[]) => ({
   p_msg_id: claim.msgId,
@@ -184,6 +187,7 @@ export async function linkScanGroups(
   if (outcome === "applied") return { outcome, rows: (data as { rows?: unknown }).rows ?? [] };
   if (outcome === "not_owner") return { outcome };
   if (outcome === "state_changed") return { outcome };
+  if (outcome === "pages_changed") return { outcome };
   return unexpected("exam_worker_link_scan_groups", data);
 }
 

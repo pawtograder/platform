@@ -12,6 +12,8 @@ import { dirname, join } from "path";
 import {
   COMPLETED_FROM,
   errorFrom,
+  isKnownMethod,
+  PAGES_CHANGED_ERROR_FROM,
   MATCHING_FROM,
   REJECTED_SCAN_ERROR_FROM,
   REVIEW_FROM,
@@ -66,6 +68,15 @@ describe("issue #1158: worker batch status transitions", () => {
       }
     }
     expect(ALL).toEqual(expect.arrayContaining([...errorFrom(undefined)]));
+  });
+
+  test("a match whose pages changed under it, as the last match left, errors only a matching batch", () => {
+    expect([...PAGES_CHANGED_ERROR_FROM]).toEqual(["matching"]);
+  });
+
+  test("only the dispatcher's own methods count as known, so a malformed body never names a phase", () => {
+    for (const m of ["process_page", "match", "finalize"]) expect(isKnownMethod(m)).toBe(true);
+    for (const m of ["constructor", "toString", "", undefined, 5, null]) expect(isKnownMethod(m)).toBe(false);
   });
 
   test("a rejected scan errors its batch from any phase except completed (#1078)", () => {

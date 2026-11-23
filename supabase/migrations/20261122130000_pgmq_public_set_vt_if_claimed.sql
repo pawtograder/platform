@@ -135,7 +135,7 @@ returns integer
 language sql
 immutable
 set search_path to ''
-as $function$ select 2 $function$;
+as $function$ select 3 $function$;
 
 revoke all on function public.exam_worker_contract_version() from public, anon, authenticated;
 grant execute on function public.exam_worker_contract_version() to service_role;
@@ -317,10 +317,18 @@ grant execute on function public.exam_worker_give_up(bigint, integer, bigint, te
 -- left over from an earlier Process run holds its own message validly, beside the newer run's. If
 -- staff changed those inputs in between (a page added, pages_per_exam), the leftover's grouping
 -- describes pages as they were, and linking it over the newer run's put two exams' pages on one row.
--- That case is 'state_changed' too: the newer run's match links and suggests from the current pages.
+-- Which answer the caller gets depends on whether another match message for the batch is still in
+-- the queue (read or not). If one is, it is 'state_changed': that match links from the pages as they
+-- are when it gets there, and finishes or fails the batch. If none is, this message is the batch's
+-- only way to finish matching, so the answer is 'pages_changed', and the worker gives up on it: the
+-- batch goes to error, which staff clear with Process (it re-queues OCR for any page added without
+-- it, then matches again). Acknowledging it instead left the batch in 'matching' with no work and
+-- no way to process it again. No new match message can appear meanwhile: Process refuses a batch in
+-- matching, and a re-queue replaces its message in one transaction.
 -- pages_per_exam cannot change under this (the batch row is share-locked). A page inserted while
 -- this runs is not linked, as before.
--- Returns {"outcome": "not_owner" | "state_changed"} or {"outcome": "applied", "rows": [...]}.
+-- Returns {"outcome": "not_owner" | "state_changed" | "pages_changed"} or
+-- {"outcome": "applied", "rows": [...]}.
 -- exam_link_scan_groups's own errors (EX409: it would regroup a decided exam) propagate.
 create or replace function public.exam_worker_link_scan_groups(
   p_msg_id bigint,
@@ -367,7 +375,15 @@ begin
        join public.exam_scan_batches b on b.id = p.batch_id
       where p.batch_id = p_batch_id)
   ) then
-    return jsonb_build_object('outcome', 'state_changed');
+    if exists (
+      select 1 from pgmq.q_exam_processing q
+       where q.msg_id <> p_msg_id
+         and q.message->>'method' = 'match'
+         and q.message->>'batch_id' = p_batch_id::text
+    ) then
+      return jsonb_build_object('outcome', 'state_changed');
+    end if;
+    return jsonb_build_object('outcome', 'pages_changed');
   end if;
   return jsonb_build_object('outcome', 'applied', 'rows', public.exam_link_scan_groups(p_batch_id, p_groups));
 end;

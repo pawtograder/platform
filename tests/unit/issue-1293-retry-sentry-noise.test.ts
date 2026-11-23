@@ -84,11 +84,13 @@ describe("issue #1293: only give-ups reach Sentry", () => {
     expect(dispatcher).toContain("`rate-limit retry ");
   });
 
-  test("all four give-up paths still capture", () => {
+  test("every give-up path still captures", () => {
     // The point of the change is that these become findable, not that Sentry goes quiet. If a
-    // future edit removes one of these the worker would abandon work in silence.
+    // future edit removes one of these the worker would abandon work in silence. The five: the
+    // poison-pill guard, a match whose pages changed under it as the last match left (#1158), a
+    // rejected scan, rate limits exhausted, and transient retries exhausted.
     const captures = dispatcher.match(/Sentry\.captureException/g) ?? [];
-    expect(captures).toHaveLength(4);
+    expect(captures).toHaveLength(5);
   });
 
   test("captured events carry the attempt number", () => {
