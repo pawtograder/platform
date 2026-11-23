@@ -71,11 +71,13 @@
 -- the submissionreviewreleasecascade trigger, and the SELECT policies.
 --
 -- Number: this was 20261122150000 until 2026-11-23, when it collided with #1395's
--- 20261122150000_workflow_events_forgejo_completion_key.sql. It now sorts after the newest
--- migration on staging (20261122140500) and after #1299-#1301, which also redefine
--- seed_default_class_roles() with an older list, and before #1409 (20261123040100) and #1410
--- (20261123040200), which build on it. #1429 (20261123140100) redefines the function later with
--- the same list.
+-- 20261122150000_workflow_events_forgejo_completion_key.sql, and then 20261123040000 until #1425
+-- put 20261123120000 on staging later that day. It now sorts after every migration on staging and
+-- in every open PR (the newest was #1398's 20261123170400), and before #1409 (20261123180100) and
+-- #1410 (20261123180200), which build on it. #1429 (20261123140100) and #1299-#1301
+-- (20261123160200 to 20261123160400) also redefine seed_default_class_roles() and run before this
+-- one. #1429's has the same list, and #1299-#1301's leave out moderate_discussion, which this one
+-- names.
 --
 -- Safe to run again: the inserts skip rows that exist, policies are dropped before they are
 -- created, and CREATE OR REPLACE gives the same functions.

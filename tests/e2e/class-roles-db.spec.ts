@@ -36,7 +36,7 @@
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *
- * 20261123040000_grading_and_release_by_capability.sql: the default grader role holds
+ * 20261123180000_grading_and_release_by_capability.sql: the default grader role holds
  * grade_submissions (graders could all grade before), so every copy of it starts with it too.
  * release_grades is on the instructor role only. seed_default_class_roles() names the shared #1010
  * grader list (DEFAULT_GRADER_SEED_LIST), and a new class's grader holds the names on it that exist.
