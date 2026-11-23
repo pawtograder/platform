@@ -6,6 +6,8 @@
  * - A refused update or delete changes 0 rows and returns no error, so those checks read the row
  *   back. A refused insert fails with 42501.
  * - A meeting's lab section and a leader's profile must be in the row's class, for everyone.
+ * - Only an instructor can set or change a lab section's sis_crn, because SIS sync enrolls that
+ *   SIS section's roster with their SIS roles (instructors and TAs included).
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
@@ -139,6 +141,58 @@ test.describe("Lab sections follow manage_roster (#1010)", () => {
     const sectionDelete = await r.client.from("lab_sections").delete().eq("id", r.created.data![0].id).select();
     expect(sectionDelete.error).toBeNull();
     expect(sectionDelete.data).toHaveLength(1);
+  });
+
+  test("only an instructor can set or change a lab section's sis_crn", async () => {
+    const headTaClient = await createAuthenticatedClient(headTa);
+    const instructorClient = await createAuthenticatedClient(instructor);
+    const crn = 90000 + Math.floor(Math.random() * 9000);
+
+    // A Head TA can't create a lab section linked to an SIS section.
+    expectRefused(
+      await headTaClient.from("lab_sections").insert({ ...sectionValues(classA.id), sis_crn: crn }),
+      "creating a lab section with a sis_crn"
+    );
+
+    // Nor link an existing one, or change or clear its link.
+    const sectionId = await serviceSection(classA.id);
+    expectRefused(
+      await headTaClient.from("lab_sections").update({ sis_crn: crn }).eq("id", sectionId),
+      "setting a lab section's sis_crn"
+    );
+    expect((await supabase.from("lab_sections").update({ sis_crn: crn }).eq("id", sectionId)).error).toBeNull();
+    expectRefused(
+      await headTaClient
+        .from("lab_sections")
+        .update({ sis_crn: crn + 1 })
+        .eq("id", sectionId),
+      "changing a lab section's sis_crn"
+    );
+    expectRefused(
+      await headTaClient.from("lab_sections").update({ sis_crn: null }).eq("id", sectionId),
+      "clearing a lab section's sis_crn"
+    );
+
+    // Editing a linked section while sending its sis_crn back unchanged works, as the page does.
+    const renamed = `kept crn ${++unique}`;
+    const keep = await headTaClient
+      .from("lab_sections")
+      .update({ name: renamed, sis_crn: crn })
+      .eq("id", sectionId)
+      .select("id");
+    expect(keep.error).toBeNull();
+    expect(keep.data).toHaveLength(1);
+    const { data: after } = await supabase.from("lab_sections").select("name, sis_crn").eq("id", sectionId).single();
+    expect(after).toEqual({ name: renamed, sis_crn: crn });
+
+    // An instructor still can.
+    const byInstructor = await instructorClient
+      .from("lab_sections")
+      .update({ sis_crn: crn + 2 })
+      .eq("id", sectionId)
+      .select("sis_crn");
+    expect(byInstructor.error).toBeNull();
+    expect(byInstructor.data).toEqual([{ sis_crn: crn + 2 }]);
   });
 
   test("a default grader is refused every lab section change", async () => {

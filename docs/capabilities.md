@@ -150,6 +150,8 @@ on the default instructor role only.
 - **Lab sections:** creating, changing and deleting `lab_sections`, `lab_section_meetings` and
   `lab_section_leaders`, and the lab sections page (without it, the page sends you to the lab
   roster). A meeting's lab section and a leader's profile must be in the row's class, for everyone.
+  A lab section's `sis_crn` stays instructor-only (`guard_lab_section_sis_crn`): SIS sync enrolls
+  that SIS section's roster with their SIS roles, so whoever sets it could make people staff.
 - **Class sections:** `update_class_section_name()`. It still changes only the name.
 - **Enrollments, students only:** someone with `manage_roster` who isn't an instructor of the class
   can remove a student, change a student's SIS sync override, cancel a pending student invitation,

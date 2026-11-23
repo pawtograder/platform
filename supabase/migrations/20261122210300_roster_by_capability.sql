@@ -16,9 +16,14 @@
 --      a leader's profile must be in the leader row's class. Before, an instructor could attach a
 --      meeting to another class's lab section, or make someone from another class a leader.
 --      (sync_lab_section_leaders_class_id already sets a leader row's class from its lab section.)
+--   4. A lab section's sis_crn stays instructor-only. SIS sync (course-import-sis) reads every lab
+--      section's sis_crn and enrolls that SIS section's roster with their SIS roles, instructors and
+--      TAs included. If a Head TA could set it, they could point a lab section at another course and
+--      have the next sync make people staff here. A BEFORE trigger lets someone who isn't an
+--      instructor create lab sections without a sis_crn and edit them while keeping it unchanged.
 --
--- Safe to run again: every policy is dropped before it is created, and the inserts skip rows that
--- exist.
+-- Safe to run again: every policy and trigger is dropped before it is created, the function is
+-- CREATE OR REPLACE, and the inserts skip rows that exist.
 
 -- ---------------------------------------------------------------------------
 -- 1. The capability, on every default instructor role
@@ -117,3 +122,40 @@ CREATE POLICY "Roster managers can update lab_section_leaders" ON public.lab_sec
 CREATE POLICY "Roster managers can delete lab_section_leaders" ON public.lab_section_leaders
   FOR DELETE TO authenticated
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_roster')));
+
+-- ---------------------------------------------------------------------------
+-- 5. lab_sections.sis_crn: instructors only
+-- ---------------------------------------------------------------------------
+
+-- SECURITY INVOKER on purpose, like guard_roster_manager_update: an update straight from the API
+-- runs as `authenticated`. The service role, migrations, cron and SECURITY DEFINER functions (SIS
+-- sync among them) aren't `authenticated`, so they pass.
+CREATE OR REPLACE FUNCTION public.guard_lab_section_sis_crn()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF current_user <> 'authenticated'
+     OR public.authorizeforclassinstructor(NEW.class_id)
+     OR public.authorize_for_admin() THEN
+    RETURN NEW;
+  END IF;
+
+  IF (TG_OP = 'INSERT' AND NEW.sis_crn IS NOT NULL)
+     OR (TG_OP = 'UPDATE' AND NEW.sis_crn IS DISTINCT FROM OLD.sis_crn) THEN
+    RAISE EXCEPTION 'Only an instructor can link a lab section to an SIS section (sis_crn)'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.guard_lab_section_sis_crn() IS
+'BEFORE INSERT OR UPDATE trigger on lab_sections: only an instructor of the class (or a platform admin) may set or change sis_crn, which SIS sync uses to enroll people with their SIS roles.';
+
+DROP TRIGGER IF EXISTS guard_lab_section_sis_crn ON public.lab_sections;
+CREATE TRIGGER guard_lab_section_sis_crn
+  BEFORE INSERT OR UPDATE ON public.lab_sections
+  FOR EACH ROW
+  EXECUTE FUNCTION public.guard_lab_section_sis_crn();
