@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import useAuthState from "@/hooks/useAuthState";
 import { useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { courseFeatureEnabled } from "@/lib/courseFeatures";
@@ -17,9 +18,13 @@ import { BsClock, BsStars, BsX } from "react-icons/bs";
 /**
  * Walkthroughs dismissed since the page loaded. Staff can leave a page and come back before
  * markSeen's upsert commits. The new instance's read then finds no row, so the automatic open also
- * checks this set. It lives at module level so it outlasts a remount.
+ * checks this set. It lives at module level so it outlasts a remount. Keys include the user id:
+ * signing out doesn't reload the page, so the next person to sign in on the tab must not inherit
+ * this person's dismissals.
  */
-const dismissedThisPageLoad = new Set<WhatsNewId>();
+const dismissedThisPageLoad = new Set<string>();
+
+const dismissalKey = (userId: string | undefined, id: WhatsNewId) => `${userId ?? ""}:${id}`;
 
 /** Clears dismissedThisPageLoad. Only tests call it, to start each case from a fresh page load. */
 export function resetWhatsNewForTests() {
@@ -68,6 +73,7 @@ function isPast(showUntil: string) {
 export function WhatsNew({ page }: { page: WhatsNewPage }) {
   const isStaff = useIsGraderOrInstructor();
   const isStudent = useIsStudent();
+  const userId = useAuthState().user?.id;
   const course = useCourse() as CourseWithFeatures;
   const features = course?.features;
 
@@ -100,7 +106,7 @@ export function WhatsNew({ page }: { page: WhatsNewPage }) {
     let cancelled = false;
     void readSeen(ids).then((seen) => {
       if (cancelled || seen === null || handledRef.current) return;
-      const next = ids.find((id) => !seen.has(id) && !dismissedThisPageLoad.has(id));
+      const next = ids.find((id) => !seen.has(id) && !dismissedThisPageLoad.has(dismissalKey(userId, id)));
       if (!next) return;
       setStep(-1);
       setOpenId(next);
@@ -108,16 +114,16 @@ export function WhatsNew({ page }: { page: WhatsNewPage }) {
     return () => {
       cancelled = true;
     };
-  }, [autoOpenIds]);
+  }, [autoOpenIds, userId]);
 
   const close = useCallback(() => {
     handledRef.current = true;
     if (openId) {
-      dismissedThisPageLoad.add(openId);
+      dismissedThisPageLoad.add(dismissalKey(userId, openId));
       void markSeen(openId);
     }
     setOpenId(null);
-  }, [openId]);
+  }, [openId, userId]);
 
   const newest = entries[entries.length - 1];
   // The entry the dialog last showed. It stays mounted while it closes, so the close animation
