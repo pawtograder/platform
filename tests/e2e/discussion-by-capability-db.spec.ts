@@ -1,6 +1,6 @@
 /**
  * #1010: moderating discussions follows moderate_discussion
- * (20261123140100_discussion_by_capability.sql).
+ * (20261123180300_discussion_by_capability.sql).
  *
  * Moderation: pinning, editing someone else's post, marking an answer (discussion_threads UPDATE),
  * and the RPCs set_discussion_thread_topic, mark_discussion_thread_duplicate,

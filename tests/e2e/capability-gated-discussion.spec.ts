@@ -1,6 +1,6 @@
 /**
  * #1010: moderation controls on a discussion thread follow moderate_discussion
- * (20261123140100_discussion_by_capability.sql). A default grader holds it and sees Pin, Mark
+ * (20261123180300_discussion_by_capability.sql). A default grader holds it and sees Pin, Mark
  * Duplicate and Edit on a student's post. A TA on a custom role with it turned off sees none of
  * them, but still sees the staff tools (Manage Error Pins), which stay on the staff check.
  */
