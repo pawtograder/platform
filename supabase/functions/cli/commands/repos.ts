@@ -220,6 +220,10 @@ async function handleSyncGradeWorkflowContext(
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdf);
+  // The local sync clones from github.com and reads grade.yml through the GitHub API.
+  if (assignment.git_provider !== "github") {
+    throw new CLICommandError("Syncing grade.yml for Forgejo assignments is not supported yet", 400);
+  }
   const templateRepo = assignment.template_repo?.trim();
   if (!templateRepo) {
     throw new CLICommandError("Assignment has no template_repo (handout)", 400);
@@ -288,6 +292,10 @@ async function handleCrossAssignmentCopyContext(
 
   if (source.id === target.id) {
     throw new CLICommandError("source_assignment and target_assignment must differ", 400);
+  }
+  // The local copy clones both sides from github.com.
+  if (source.git_provider !== "github" || target.git_provider !== "github") {
+    throw new CLICommandError("Copying repositories for Forgejo assignments is not supported yet", 400);
   }
 
   const [sourceRepos, targetRepos, sourceGroupNames, targetGroupNames] = await Promise.all([
