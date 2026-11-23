@@ -550,8 +550,9 @@ function SubmissionControllerCreator({
   });
 
   const [submissionFiles, setSubmissionFiles] = useState<SubmissionWithGraderResultsAndFiles["submission_files"]>();
-  // The raw error; the message is built where it is shown, with the viewer's role.
-  const [filesError, setFilesError] = useState<unknown>(null);
+  // The raw error, wrapped so a rejection with a falsy value (undefined, an empty string) still
+  // toasts. The message is built where it is shown, with the viewer's role.
+  const [filesError, setFilesError] = useState<{ error: unknown } | null>(null);
   const errorRole = useViewerErrorRole();
   useEffect(() => {
     let cancelled = false;
@@ -568,7 +569,7 @@ function SubmissionControllerCreator({
       .catch((e) => {
         if (cancelled) return;
         // Don't block the whole submission view on the files: surface the error and show none.
-        setFilesError(e);
+        setFilesError({ error: e });
         setSubmissionFiles([]);
       });
     return () => {
@@ -599,7 +600,7 @@ function SubmissionControllerCreator({
     if (filesError) {
       toaster.error({
         title: "Error loading submission files",
-        description: getUserFacingErrorMessage(filesError, { role: errorRole })
+        description: getUserFacingErrorMessage(filesError.error, { role: errorRole })
       });
     }
   }, [filesError, errorRole]);

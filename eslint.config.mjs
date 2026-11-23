@@ -63,6 +63,17 @@ const eslintConfig = [
     }
   },
   {
+    // Edge functions are Deno: they can't import "@/lib/studentFacingErrorMessages", and their errors
+    // go to logs and HTTP responses, not toasts. So the generic-fallback ban doesn't apply there.
+    files: ["supabase/functions/**"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...RESTRICTED_SYNTAX.filter((restriction) => restriction.selector !== GENERIC_ERROR_FALLBACK)
+      ]
+    }
+  },
+  {
     // A later no-restricted-syntax replaces the earlier one instead of adding to it, so this block
     // repeats the shared selectors.
     files: ["app/**", "components/**", "hooks/**"],

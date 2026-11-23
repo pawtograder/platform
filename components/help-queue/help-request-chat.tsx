@@ -172,6 +172,7 @@ const HelpingTimer = ({ startTime }: { startTime: string }) => {
  */
 const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequest; compact?: boolean }) => {
   const { private_profile_id } = useClassProfiles();
+  const errorRole = useViewerErrorRole();
   const profiles = useAllProfilesForClass();
 
   // Get student data using individual hooks
@@ -206,12 +207,12 @@ const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequ
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData, errorRole]
   );
 
   // Disable assignment actions for resolved/closed requests
@@ -836,6 +837,7 @@ const HelpRequestStudents = ({
   const { course_id } = useParams();
 
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  const errorRole = useViewerErrorRole();
 
   // Get student associations for activity logging
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -862,12 +864,12 @@ const HelpRequestStudents = ({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData, errorRole]
   );
 
   // Initialize selected students when editing mode is entered
@@ -1033,12 +1035,12 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [params.course_id, request_id, studentHelpActivity, helpRequestStudentData]
+    [params.course_id, request_id, studentHelpActivity, helpRequestStudentData, errorRole]
   );
 
   // Note: helpRequestMessages and helpRequestStudentData are already defined above

@@ -2,6 +2,7 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 import { useErrorPinsForPattern } from "@/hooks/useTestInsights";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
@@ -25,6 +26,7 @@ interface ErrorPinIntegrationProps {
  */
 export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClose, isOpen }: ErrorPinIntegrationProps) {
   const { private_profile_id } = useClassProfiles();
+  const errorRole = useStaffErrorRole();
   const [searchTerm, setSearchTerm] = useState("");
   const [discussionThreads, setDiscussionThreads] = useState<
     Array<{ id: number; subject: string; created_at: string }>
@@ -67,12 +69,12 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to search threads: ${getUserFacingErrorMessage(error)}`
+        description: `Failed to search threads: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setIsSearching(false);
     }
-  }, [searchTerm, courseId]);
+  }, [searchTerm, courseId, errorRole]);
 
   useEffect(() => {
     const debounceTimer = setTimeout(() => {
@@ -146,12 +148,12 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create error pin: ${getUserFacingErrorMessage(error)}`
+        description: `Failed to create error pin: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setIsCreating(false);
     }
-  }, [selectedThread, assignmentId, courseId, errorGroup, private_profile_id, onClose]);
+  }, [selectedThread, assignmentId, courseId, errorGroup, private_profile_id, onClose, errorRole]);
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && onClose()} size="xl">

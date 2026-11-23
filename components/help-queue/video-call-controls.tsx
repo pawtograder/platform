@@ -16,6 +16,7 @@ import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 type VideoCallControlsProps = {
   request: HelpRequest;
   /** Whether the current user can start video calls (TAs/instructors) */
@@ -41,6 +42,7 @@ export default function VideoCallControls({
   const [isEndingCall, setIsEndingCall] = useState(false);
   const { openMeetingWindow } = useMeetingWindows();
   const { private_profile_id } = useClassProfiles();
+  const errorRole = useViewerErrorRole();
   const allHelpRequestStudents = useHelpRequestStudents();
 
   const { mutateAsync: updateRequest } = useUpdate<HelpRequest>({
@@ -78,12 +80,12 @@ export default function VideoCallControls({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity: ${getUserFacingErrorMessage(error)}`
+            description: `Failed to log ${activityType} activity: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [private_profile_id, allHelpRequestStudents, request, createStudentActivity]
+    [private_profile_id, allHelpRequestStudents, request, createStudentActivity, errorRole]
   );
 
   // Helper function to log activity for all students in the request
@@ -105,12 +107,12 @@ export default function VideoCallControls({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error)}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [allHelpRequestStudents, request, createStudentActivity]
+    [allHelpRequestStudents, request, createStudentActivity, errorRole]
   );
 
   /**
@@ -152,7 +154,7 @@ export default function VideoCallControls({
     } catch (error) {
       toaster.error({
         title: "Failed to start video call",
-        description: getUserFacingErrorMessage(error)
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
 
       // Revert the video live status on error. If the first update was refused, this one will be too;
@@ -171,7 +173,7 @@ export default function VideoCallControls({
     } finally {
       setIsStartingCall(false);
     }
-  }, [canStartCall, isStartingCall, updateRequest, request, openMeetingWindow, logVideoActivity]);
+  }, [canStartCall, isStartingCall, updateRequest, request, openMeetingWindow, logVideoActivity, errorRole]);
 
   /**
    * Joins an existing video call
@@ -219,12 +221,12 @@ export default function VideoCallControls({
     } catch (error) {
       toaster.error({
         title: "Failed to end video call",
-        description: getUserFacingErrorMessage(error)
+        description: getUserFacingErrorMessage(error, { role: errorRole })
       });
     } finally {
       setIsEndingCall(false);
     }
-  }, [isEndingCall, request, logVideoActivityForAllStudents]);
+  }, [isEndingCall, request, logVideoActivityForAllStudents, errorRole]);
 
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
   const currentUserIsInstructorOrGrader = true;

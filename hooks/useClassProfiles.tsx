@@ -95,12 +95,12 @@ export function useIsGraderOrInstructor() {
   return role.role === "grader" || role.role === "instructor";
 }
 
-/** Whether the viewer is a student in the **effective** course identity (including view-as). */
 /** The effective course role, or `undefined` outside a `ClassProfileProvider`. Never throws. */
 export function useOptionalCourseRole(): string | undefined {
   return useContext(ClassProfileContext)?.role.role;
 }
 
+/** Whether the viewer is a student in the **effective** course identity (including view-as). */
 export function useIsStudent() {
   const { role } = useClassProfiles();
   return role.role === "student";
