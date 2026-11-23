@@ -15,6 +15,9 @@
 --                           role (graders could all grade before), and on the grader role of new
 --                           classes through seed_default_class_roles();
 --        release_grades     on the default instructor role only.
+--      seed_default_class_roles() gives the grader role of a new class the shared #1010 list
+--      (moderate_discussion, grade_submissions, handle_regrades, grant_extensions, help_students,
+--      manage_flashcards, run_polls); only the names that are capabilities yet join.
 --   2. submission_reviews UPDATE: release_grades replaces the instructor check, grade_submissions
 --      replaces the grader check (still only on a review that is unreleased or incomplete, #843).
 --      The assignee branch is unchanged.
@@ -27,11 +30,17 @@
 --      submission_comments, submission_file_comments and submission_artifact_comments refuses
 --      released = true on a comment whose review isn't released, by insert or update, for a
 --      signed-in user without release_grades: a student sees any released comment on their own
---      submission, so this would release one comment early.
+--      submission, so this would release one comment early. A third trigger refuses a change to
+--      the score tweak (tweak, tweak_note, per_student_tweaks, per_student_tweak_notes) by a
+--      signed-in user without release_grades: the screens show the tweak editor only to
+--      release_grades holders, but the UPDATE policy lets grade_submissions holders and assignees
+--      write the row.
 --   4. Comment INSERT on submission_comments, submission_file_comments and
 --      submission_artifact_comments: the role branch becomes "release_grades, or grade_submissions
---      on no review or an unreleased review of the same class". The non-review branch
---      (authorize_for_submission) and the assignee branch with its hard-deadline check are copied
+--      on an unreleased review", either one on no review or a review of the comment's class. The
+--      assignee branch keeps its hard-deadline check, and a staff member without release_grades
+--      can no longer use it on a released review (isLockedByRelease in
+--      hooks/useGradingPermissions.ts). The non-review branch (authorize_for_submission) is copied
 --      unchanged from 20260417120000.
 --   5. Comment UPDATE (edit, soft delete) on the same three tables: release_grades replaces the
 --      instructor check, and grade_submissions replaces the grader check inside the unreleased
@@ -44,19 +53,22 @@
 --   * Instructors hold both capabilities, so nothing changes for them.
 --   * Default graders and Head TAs keep grading as before, but can no longer release or unrelease
 --     (through a direct update or the release RPCs), can no longer add a comment or rubric
---     check to a released review, and can no longer mark one comment released before its review
---     is. The screens already hid all three from graders.
+--     check to a released review (even one they are assigned to), can no longer mark one comment
+--     released before its review is, and can no longer change a score tweak. The screens already
+--     hid all four from graders.
 --   * A grader on a custom role with release_grades turned on can release and unrelease grades
 --     (including Release all and Unrelease all) and change a released grade the way an instructor
---     can: edit any review, and add, edit or delete any comment or rubric check.
---   * A custom role with grade_submissions turned off can't grade, except a review they are
---     assigned to (the assignee branches are unchanged).
+--     can: edit any review and its tweaks, and add, edit or delete any comment or rubric check.
+--     That reaches only their own class: a comment that names their class but points at another
+--     class's review is refused.
+--   * A custom role with grade_submissions turned off can't grade, except an unreleased review
+--     they are assigned to.
 --   * Students are unchanged: self-review and their own submission comments use the assignee and
---     non-review branches.
+--     non-review branches, and the released-review lock on the assignee branch is for staff only.
 --
--- Not changed: the regrade request functions, the assignee branches and the review_assignments
--- policies, the release RPCs' bodies (they follow the policy and the trigger), the
--- submissionreviewreleasecascade trigger, and the SELECT policies.
+-- Not changed: the regrade request functions, the assignee branch of the UPDATE policies, the
+-- review_assignments policies, the release RPCs' bodies (they follow the policy and the trigger),
+-- the submissionreviewreleasecascade trigger, and the SELECT policies.
 --
 -- Safe to run again: the inserts skip rows that exist, policies are dropped before they are
 -- created, and CREATE OR REPLACE gives the same functions.
@@ -92,7 +104,7 @@ WHERE cr.default_for = 'instructor'
 ON CONFLICT DO NOTHING;
 
 -- New classes: the instructor role gets every capability through the CROSS JOIN, and the grader
--- role now gets grade_submissions. The body from 20261027120000 plus the second INSERT.
+-- role now gets grade_submissions. The body from 20261027120000 plus the grader INSERT.
 CREATE OR REPLACE FUNCTION public.seed_default_class_roles(p_class_id bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -115,9 +127,18 @@ BEGIN
   WHERE cr.class_id = p_class_id AND cr.default_for = 'instructor'
   ON CONFLICT DO NOTHING;
 
+  -- What the default grader role can do today, for new classes (#1010). One list for every #1010
+  -- migration that redefines this function, so whichever runs last keeps the others' grants. A
+  -- name joins only once its capability exists, so the list can name capabilities other open PRs
+  -- add (moderate_discussion is #1429's; help_students, manage_flashcards and run_polls are
+  -- #1299-#1301's). Each of those PRs also gives its capability to existing grader roles.
   INSERT INTO public.role_capabilities (role_id, capability)
-  SELECT cr.id, 'grade_submissions'
+  SELECT cr.id, c.name
   FROM public.class_roles cr
+  JOIN public.capabilities c ON c.name IN (
+    'moderate_discussion', 'grade_submissions', 'handle_regrades', 'grant_extensions',
+    'help_students', 'manage_flashcards', 'run_polls'
+  )
   WHERE cr.class_id = p_class_id AND cr.default_for = 'grader'
   ON CONFLICT DO NOTHING;
 END;
@@ -155,7 +176,7 @@ WITH CHECK (
 );
 
 COMMENT ON POLICY "Release managers full; graders limited on released complete reviews" ON public.submission_reviews IS
-  'release_grades: any review in the class. grade_submissions: a review that is unreleased or incomplete (#843: a grader may complete a released, incomplete review). Assignee: while the review is incomplete. Changing released also needs release_grades (trigger submission_reviews_release_needs_capability).';
+  'release_grades: any review in the class. grade_submissions: a review that is unreleased or incomplete (#843: a grader may complete a released, incomplete review). Assignee: while the review is incomplete. Changing released, or the score tweak, also needs release_grades (triggers submission_reviews_release_needs_capability and submission_reviews_tweak_needs_capability).';
 
 -- ---------------------------------------------------------------------------
 -- 3. Changing `released` needs release_grades
@@ -186,6 +207,34 @@ CREATE TRIGGER submission_reviews_release_needs_capability
 BEFORE UPDATE OF released ON public.submission_reviews
 FOR EACH ROW EXECUTE FUNCTION public.submission_reviews_release_needs_capability();
 
+-- The score tweak is what the tweak editor writes, and the screens show that editor only to
+-- release_grades holders. The UPDATE policy lets a grade_submissions holder or an assignee write the
+-- rest of the row, so a trigger refuses a tweak change from a signed-in user without release_grades,
+-- the same way as `released`.
+CREATE OR REPLACE FUNCTION public.submission_reviews_tweak_needs_capability()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
+BEGIN
+  IF current_user = 'authenticated'
+     AND (NEW.tweak, NEW.tweak_note, NEW.per_student_tweaks, NEW.per_student_tweak_notes)
+       IS DISTINCT FROM (OLD.tweak, OLD.tweak_note, OLD.per_student_tweaks, OLD.per_student_tweak_notes)
+     AND NEW.class_id NOT IN (SELECT public.user_class_ids_with_capability('release_grades')) THEN
+    RAISE EXCEPTION 'Changing a score tweak needs the release_grades capability in this class'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.submission_reviews_tweak_needs_capability() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS submission_reviews_tweak_needs_capability ON public.submission_reviews;
+CREATE TRIGGER submission_reviews_tweak_needs_capability
+BEFORE UPDATE OF tweak, tweak_note, per_student_tweaks, per_student_tweak_notes ON public.submission_reviews
+FOR EACH ROW EXECUTE FUNCTION public.submission_reviews_tweak_needs_capability();
+
 -- Each comment has its own `released` flag, and a student sees a released comment on their own
 -- submission whatever its review says. So a signed-in user without release_grades can't make a
 -- comment released while its review isn't: not by inserting it released, not by flipping it, and
@@ -193,10 +242,16 @@ FOR EACH ROW EXECUTE FUNCTION public.submission_reviews_release_needs_capability
 -- branch at once (a grader assigned to the review passes the assignee branch, too). Comments with
 -- no review and comments on a released review are not affected, and the screens always write the
 -- review's own flag.
+--
+-- The search_path is public, not empty, though every name below is schema-qualified. The function
+-- runs as the caller, so reading submission_reviews applies its SELECT policy, and for a student
+-- that policy calls authorize_for_submission_review(), which has no search_path of its own and
+-- names its tables without a schema. With an empty path it would fail with "relation does not
+-- exist" instead of the refusal below.
 CREATE OR REPLACE FUNCTION public.submission_comment_release_needs_capability()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path TO ''
+SET search_path TO public
 AS $$
 DECLARE
   v_review_released boolean;
@@ -252,13 +307,31 @@ DROP POLICY IF EXISTS "insert for self with deadline check" ON public.submission
 DROP POLICY IF EXISTS "insert for self with deadline check" ON public.submission_file_comments;
 DROP POLICY IF EXISTS "insert for self with deadline check" ON public.submission_artifact_comments;
 
+-- Each policy has three branches. The release_grades and grade_submissions branch checks the
+-- capability in the comment's class_id, so it also requires the review to be in that class: else a
+-- TA with release_grades in one class could comment on another class's grade. The assignee branch
+-- follows isLockedByRelease in hooks/useGradingPermissions.ts: a staff member (instructor or grader
+-- in the review's class) without release_grades can't add to a released review, even one they are
+-- assigned to. A student's self-review isn't locked by its release.
+
 CREATE POLICY "insert for self with deadline check" ON public.submission_comments
     FOR INSERT
     TO authenticated
     WITH CHECK (
         public.authorizeforprofile(author)
         AND (
-            class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+            (
+                class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+                AND (
+                    submission_review_id IS NULL
+                    OR EXISTS (
+                        SELECT 1
+                        FROM public.submission_reviews sr
+                        WHERE sr.id = submission_comments.submission_review_id
+                          AND sr.class_id = submission_comments.class_id
+                    )
+                )
+            )
             OR (
                 class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
                 AND (
@@ -290,6 +363,14 @@ CREATE POLICY "insert for self with deadline check" ON public.submission_comment
                       AND ra.due_date < NOW()
                       AND ra.hard_deadline = true
                 )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM public.submission_reviews sr
+                    WHERE sr.id = submission_comments.submission_review_id
+                      AND sr.released
+                      AND public.authorizeforclassgrader(sr.class_id)
+                      AND sr.class_id NOT IN (SELECT public.user_class_ids_with_capability('release_grades'))
+                )
             )
         )
     );
@@ -300,7 +381,18 @@ CREATE POLICY "insert for self with deadline check" ON public.submission_file_co
     WITH CHECK (
         public.authorizeforprofile(author)
         AND (
-            class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+            (
+                class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+                AND (
+                    submission_review_id IS NULL
+                    OR EXISTS (
+                        SELECT 1
+                        FROM public.submission_reviews sr
+                        WHERE sr.id = submission_file_comments.submission_review_id
+                          AND sr.class_id = submission_file_comments.class_id
+                    )
+                )
+            )
             OR (
                 class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
                 AND (
@@ -332,6 +424,14 @@ CREATE POLICY "insert for self with deadline check" ON public.submission_file_co
                       AND ra.due_date < NOW()
                       AND ra.hard_deadline = true
                 )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM public.submission_reviews sr
+                    WHERE sr.id = submission_file_comments.submission_review_id
+                      AND sr.released
+                      AND public.authorizeforclassgrader(sr.class_id)
+                      AND sr.class_id NOT IN (SELECT public.user_class_ids_with_capability('release_grades'))
+                )
             )
         )
     );
@@ -342,7 +442,18 @@ CREATE POLICY "insert for self with deadline check" ON public.submission_artifac
     WITH CHECK (
         public.authorizeforprofile(author)
         AND (
-            class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+            (
+                class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+                AND (
+                    submission_review_id IS NULL
+                    OR EXISTS (
+                        SELECT 1
+                        FROM public.submission_reviews sr
+                        WHERE sr.id = submission_artifact_comments.submission_review_id
+                          AND sr.class_id = submission_artifact_comments.class_id
+                    )
+                )
+            )
             OR (
                 class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
                 AND (
@@ -373,6 +484,14 @@ CREATE POLICY "insert for self with deadline check" ON public.submission_artifac
                       )
                       AND ra.due_date < NOW()
                       AND ra.hard_deadline = true
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM public.submission_reviews sr
+                    WHERE sr.id = submission_artifact_comments.submission_review_id
+                      AND sr.released
+                      AND public.authorizeforclassgrader(sr.class_id)
+                      AND sr.class_id NOT IN (SELECT public.user_class_ids_with_capability('release_grades'))
                 )
             )
         )

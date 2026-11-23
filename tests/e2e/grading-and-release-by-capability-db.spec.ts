@@ -195,6 +195,63 @@ test.describe("grading and releasing grades follow grade_submissions and release
     return data!;
   }
 
+  /**
+   * The student's self-review, assigned to them, as auto_assign_self_reviews does. A trigger may
+   * already have made either row, so find it first.
+   */
+  async function assignedSelfReview(sub: { submission_id: number; student: TestingUser }) {
+    let selfReviewId: number;
+    const { data: existingReview, error: lookupError } = await supabase
+      .from("submission_reviews")
+      .select("id")
+      .eq("submission_id", sub.submission_id)
+      .eq("rubric_id", assignment.self_review_rubric_id!)
+      .maybeSingle();
+    expect(lookupError).toBeNull();
+    if (existingReview) {
+      selfReviewId = existingReview.id;
+    } else {
+      const { data: created, error: reviewError } = await supabase
+        .from("submission_reviews")
+        .insert({
+          class_id: classA.id,
+          submission_id: sub.submission_id,
+          rubric_id: assignment.self_review_rubric_id!,
+          name: "Self Review",
+          total_score: 0,
+          tweak: 0,
+          total_autograde_score: 0,
+          released: false
+        })
+        .select("id")
+        .single();
+      expect(reviewError).toBeNull();
+      selfReviewId = created!.id;
+    }
+    const { data: existingAssignment, error: assignmentLookupError } = await supabase
+      .from("review_assignments")
+      .select("id")
+      .eq("submission_review_id", selfReviewId)
+      .eq("assignee_profile_id", sub.student.private_profile_id);
+    expect(assignmentLookupError).toBeNull();
+    if ((existingAssignment ?? []).length === 0) {
+      expect(
+        (
+          await supabase.from("review_assignments").insert({
+            assignee_profile_id: sub.student.private_profile_id,
+            class_id: classA.id,
+            assignment_id: assignment.id,
+            submission_id: sub.submission_id,
+            submission_review_id: selfReviewId,
+            rubric_id: assignment.self_review_rubric_id!,
+            due_date: addDays(new Date(), 3).toISOString()
+          })
+        ).error
+      ).toBeNull();
+    }
+    return selfReviewId;
+  }
+
   async function holds(client: Client, capability: string) {
     const { data, error } = await client.rpc("user_class_ids_with_capability", { p_capability: capability });
     expect(error).toBeNull();
@@ -348,6 +405,127 @@ test.describe("grading and releasing grades follow grade_submissions and release
     );
     expect(await comment(ownCheck)).toMatchObject({ points: 10, deleted_at: null });
     expect((await review(sub.grading_review_id)).tweak).toBe(0);
+  });
+
+  test("an assigned grader without release_grades can't add to a released review either", async () => {
+    const sub = await newSubmission();
+    await setReview(sub.grading_review_id, { released: true, completed: true });
+    for (const assignee of [plainGrader, headTa]) {
+      expect(
+        (
+          await supabase.from("review_assignments").insert({
+            assignee_profile_id: assignee.private_profile_id,
+            class_id: classA.id,
+            assignment_id: assignment.id,
+            submission_id: sub.submission_id,
+            submission_review_id: sub.grading_review_id,
+            rubric_id: assignment.grading_rubric_id!,
+            due_date: addDays(new Date(), 3).toISOString()
+          })
+        ).error
+      ).toBeNull();
+    }
+
+    // Before: the assignee branch never looked at release, so the assignment let the grader in.
+    // isLockedByRelease (hooks/useGradingPermissions.ts) locks a staff member without release_grades.
+    expectRefused(
+      await graderClient.from("submission_comments").insert({ ...rubricCheckRow(sub, plainGrader), released: true }),
+      "an assigned grader adding a rubric check to a released review"
+    );
+    expectRefused(
+      await graderClient.from("submission_file_comments").insert({
+        submission_id: sub.submission_id,
+        submission_file_id: sub.file_id,
+        submission_review_id: sub.grading_review_id,
+        class_id: classA.id,
+        author: plainGrader.private_profile_id,
+        comment: "Late line comment",
+        line: 1,
+        released: true,
+        eventually_visible: true
+      }),
+      "an assigned grader adding a line comment to a released review"
+    );
+    const { data: rows, error: rowsError } = await supabase
+      .from("submission_comments")
+      .select("id")
+      .eq("submission_review_id", sub.grading_review_id);
+    expect(rowsError).toBeNull();
+    expect(rows).toHaveLength(0);
+
+    // An assigned Head TA holds release_grades, so isn't locked.
+    expect(
+      (await headTaClient.from("submission_comments").insert({ ...rubricCheckRow(sub, headTa), released: true })).error
+    ).toBeNull();
+  });
+
+  test("changing a score tweak needs release_grades, as the tweak editor does", async () => {
+    const sub = await newSubmission();
+    const tweaks: Database["public"]["Tables"]["submission_reviews"]["Update"][] = [
+      { tweak: 5 },
+      { tweak_note: "Late penalty" },
+      { per_student_tweaks: { [sub.student.private_profile_id]: 2 } },
+      { per_student_tweak_notes: { [sub.student.private_profile_id]: "Extra credit" } }
+    ];
+    // Before: the review is unreleased, so the grade_submissions branch let a grader write any of these.
+    for (const change of tweaks) {
+      expectRefused(
+        await graderClient.from("submission_reviews").update(change).eq("id", sub.grading_review_id),
+        `a grader changing ${Object.keys(change)[0]}`
+      );
+    }
+    // Assigned to the review, the grader also passes the assignee branch; the tweak still needs it.
+    expect(
+      (
+        await supabase.from("review_assignments").insert({
+          assignee_profile_id: plainGrader.private_profile_id,
+          class_id: classA.id,
+          assignment_id: assignment.id,
+          submission_id: sub.submission_id,
+          submission_review_id: sub.grading_review_id,
+          rubric_id: assignment.grading_rubric_id!,
+          due_date: addDays(new Date(), 3).toISOString()
+        })
+      ).error
+    ).toBeNull();
+    expectRefused(
+      await graderClient.from("submission_reviews").update({ tweak: 5 }).eq("id", sub.grading_review_id),
+      "an assigned grader changing the tweak"
+    );
+
+    // Writing the tweak columns without changing them still works.
+    const { data: unchanged, error: unchangedError } = await graderClient
+      .from("submission_reviews")
+      .update({ tweak: 0, tweak_note: null, per_student_tweaks: null, per_student_tweak_notes: null })
+      .eq("id", sub.grading_review_id)
+      .select("id");
+    expect(unchangedError).toBeNull();
+    expect(unchanged).toHaveLength(1);
+
+    // A Head TA and an instructor hold release_grades.
+    expect(
+      (await headTaClient.from("submission_reviews").update({ tweak: 3 }).eq("id", sub.grading_review_id)).error
+    ).toBeNull();
+    expect(
+      (
+        await instructorClient
+          .from("submission_reviews")
+          .update({ tweak_note: "Redo credit" })
+          .eq("id", sub.grading_review_id)
+      ).error
+    ).toBeNull();
+    const { data: final, error: finalError } = await supabase
+      .from("submission_reviews")
+      .select("tweak, tweak_note, per_student_tweaks, per_student_tweak_notes")
+      .eq("id", sub.grading_review_id)
+      .single();
+    expect(finalError).toBeNull();
+    expect(final).toEqual({
+      tweak: 3,
+      tweak_note: "Redo credit",
+      per_student_tweaks: null,
+      per_student_tweak_notes: null
+    });
   });
 
   test("a default grader can't release one comment before its review: insert, flip, move, or as an assignee", async () => {
@@ -580,6 +758,37 @@ test.describe("grading and releasing grades follow grade_submissions and release
       ).error,
       "a class A grader attaching a comment to a class B review"
     ).not.toBeNull();
+    // So is one from a Head TA, who holds release_grades in class A. Before, the release_grades
+    // branch checked only the comment's class_id, so this added to class B's released grade.
+    expectRefused(
+      await headTaClient.from("submission_comments").insert({
+        ...rubricCheckRow(subB, headTa, classA.id),
+        rubric_check_id: null
+      }),
+      "a class A Head TA attaching a comment to a class B review"
+    );
+    expectRefused(
+      await headTaClient.from("submission_file_comments").insert({
+        submission_id: subB.submission_id,
+        submission_file_id: subB.file_id,
+        submission_review_id: subB.grading_review_id,
+        class_id: classA.id,
+        author: headTa.private_profile_id,
+        comment: "Line comment",
+        line: 1,
+        released: true,
+        eventually_visible: true
+      }),
+      "a class A Head TA attaching a line comment to a class B review"
+    );
+    for (const table of ["submission_comments", "submission_file_comments"] as const) {
+      const { data: rows, error: rowsError } = await supabase
+        .from(table)
+        .select("id")
+        .eq("submission_review_id", subB.grading_review_id);
+      expect(rowsError).toBeNull();
+      expect(rows, `nothing was added to class B's review in ${table}`).toHaveLength(0);
+    }
 
     // Class B's own instructor still can.
     const instructorBClient = await createAuthenticatedClient(instructorB);
@@ -656,57 +865,7 @@ test.describe("grading and releasing grades follow grade_submissions and release
     const sub = await newSubmission();
     const studentClient = await createAuthenticatedClient(sub.student);
 
-    // The student's self-review, assigned to them, as auto_assign_self_reviews does. A trigger may
-    // already have made either row, so find it first.
-    let selfReviewId: number;
-    const { data: existingReview, error: lookupError } = await supabase
-      .from("submission_reviews")
-      .select("id")
-      .eq("submission_id", sub.submission_id)
-      .eq("rubric_id", assignment.self_review_rubric_id!)
-      .maybeSingle();
-    expect(lookupError).toBeNull();
-    if (existingReview) {
-      selfReviewId = existingReview.id;
-    } else {
-      const { data: created, error: reviewError } = await supabase
-        .from("submission_reviews")
-        .insert({
-          class_id: classA.id,
-          submission_id: sub.submission_id,
-          rubric_id: assignment.self_review_rubric_id!,
-          name: "Self Review",
-          total_score: 0,
-          tweak: 0,
-          total_autograde_score: 0,
-          released: false
-        })
-        .select("id")
-        .single();
-      expect(reviewError).toBeNull();
-      selfReviewId = created!.id;
-    }
-    const { data: existingAssignment, error: assignmentLookupError } = await supabase
-      .from("review_assignments")
-      .select("id")
-      .eq("submission_review_id", selfReviewId)
-      .eq("assignee_profile_id", sub.student.private_profile_id);
-    expect(assignmentLookupError).toBeNull();
-    if ((existingAssignment ?? []).length === 0) {
-      expect(
-        (
-          await supabase.from("review_assignments").insert({
-            assignee_profile_id: sub.student.private_profile_id,
-            class_id: classA.id,
-            assignment_id: assignment.id,
-            submission_id: sub.submission_id,
-            submission_review_id: selfReviewId,
-            rubric_id: assignment.self_review_rubric_id!,
-            due_date: addDays(new Date(), 3).toISOString()
-          })
-        ).error
-      ).toBeNull();
-    }
+    const selfReviewId = await assignedSelfReview(sub);
 
     // The assignee branch of the INSERT policy, with its hard-deadline check.
     const { data: selfCheck, error: selfCheckError } = await studentClient
@@ -752,5 +911,39 @@ test.describe("grading and releasing grades follow grade_submissions and release
       (await studentClient.from("submission_comments").insert(rubricCheckRow(sub, sub.student))).error,
       "a student applying a check to their own grading review"
     ).not.toBeNull();
+  });
+
+  test("a student releasing a comment early gets the not-allowed refusal, not a missing-table error", async () => {
+    const sub = await newSubmission();
+    const studentClient = await createAuthenticatedClient(sub.student);
+    const selfReviewId = await assignedSelfReview(sub);
+
+    // The release trigger runs as the student, before the INSERT policy, on both reviews.
+    expectRefused(
+      await studentClient.from("submission_comments").insert({
+        submission_id: sub.submission_id,
+        submission_review_id: selfReviewId,
+        class_id: classA.id,
+        author: sub.student.private_profile_id,
+        comment: "My self-review, released",
+        rubric_check_id: selfReviewCheckId,
+        points: 5,
+        released: true,
+        eventually_visible: true
+      }),
+      "a student inserting a released comment on their own self-review"
+    );
+    expectRefused(
+      await studentClient
+        .from("submission_comments")
+        .insert({ ...rubricCheckRow(sub, sub.student), rubric_check_id: null, released: true }),
+      "a student inserting a released comment on their own grading review"
+    );
+    const { data: rows, error } = await supabase
+      .from("submission_comments")
+      .select("id")
+      .eq("submission_id", sub.submission_id);
+    expect(error).toBeNull();
+    expect(rows).toHaveLength(0);
   });
 });

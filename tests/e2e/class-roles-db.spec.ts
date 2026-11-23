@@ -38,7 +38,8 @@
  *
  * 20261122150000_grading_and_release_by_capability.sql: the default grader role holds
  * grade_submissions (graders could all grade before), so every copy of it starts with it too.
- * release_grades is on the instructor role only.
+ * release_grades is on the instructor role only. seed_default_class_roles() names the shared #1010
+ * grader list (DEFAULT_GRADER_SEED_LIST), and a new class's grader holds the names on it that exist.
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
@@ -71,10 +72,29 @@ const SEEDED_CAPABILITIES = [
   "run_polls",
   "send_announcements"
 ];
-// What the default grader role holds in a new class (seed_default_class_roles), and so what a new
-// custom role starts with.
-const DEFAULT_GRADER_CAPABILITIES = ["grade_submissions", "manage_flashcards", "run_polls"];
+// The names seed_default_class_roles() gives the default grader role of a new class: one list in
+// every #1010 migration that redefines it. A name joins only once its capability exists, and some
+// come from PRs that may not have merged here.
+const DEFAULT_GRADER_SEED_LIST = [
+  "moderate_discussion",
+  "grade_submissions",
+  "handle_regrades",
+  "grant_extensions",
+  "help_students",
+  "manage_flashcards",
+  "run_polls"
+];
+// What the default grader role holds in a new class, and so what a new custom role starts with: the
+// names on that list that are capabilities in this database, sorted.
+let DEFAULT_GRADER_CAPABILITIES: string[] = [];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
+
+test.beforeAll(async () => {
+  const { data, error } = await supabase.from("capabilities").select("name").in("name", DEFAULT_GRADER_SEED_LIST);
+  expect(error).toBeNull();
+  DEFAULT_GRADER_CAPABILITIES = (data ?? []).map((c) => c.name).sort();
+  expect(DEFAULT_GRADER_CAPABILITIES, "this branch's grader capability").toContain("grade_submissions");
+});
 
 async function defaultRoles(class_id: number) {
   const { data, error } = await supabase
