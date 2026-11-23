@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsInstructor } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import {
   useIsTableControllerReady,
@@ -193,7 +193,10 @@ type ClassSectionRow = ClassSection & {
 
 function ClassSectionsTable() {
   const controller = useCourseController();
+  // Renaming follows manage_roster (#1010), the same check as update_class_section_name.
+  // Instructors hold every capability; isInstructor keeps their button if the lookup fails.
   const isInstructor = useIsInstructor();
+  const canRename = useCapability("manage_roster") || isInstructor;
   const sectionsReady = useIsTableControllerReady(controller.classSections);
 
   const {
@@ -290,12 +293,12 @@ function ClassSectionsTable() {
           // The Box is the tooltip trigger, not the Button: a disabled button emits no
           // pointer events, so a tooltip attached to it would never reach a grader --
           // who is exactly the person needing to be told why it is disabled.
-          <Tooltip content={isInstructor ? "Rename class section" : "Only instructors can rename class sections"}>
+          <Tooltip content={canRename ? "Rename class section" : "Your role can't rename class sections"}>
             <Box display="inline-block">
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={!isInstructor}
+                disabled={!canRename}
                 aria-label={`Rename ${row.original.name}`}
                 onClick={() => openRenameModal(row.original)}
               >
@@ -306,7 +309,7 @@ function ClassSectionsTable() {
         )
       }
     ],
-    [isInstructor, openRenameModal]
+    [canRename, openRenameModal]
   );
 
   const table = useReactTable({

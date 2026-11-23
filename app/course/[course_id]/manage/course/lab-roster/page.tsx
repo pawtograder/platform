@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignments,
   useCourseController,
@@ -103,7 +103,10 @@ export default function LabRosterPage() {
   const searchParams = useSearchParams();
   const controller = useCourseController();
   const { private_profile_id } = useClassProfiles();
+  // Managing lab sections follows manage_roster (#1010), the same check as the page it links to.
+  // Instructors hold every capability; isInstructor keeps their link if the lookup fails.
   const isInstructor = useIsInstructor();
+  const canManageRoster = useCapability("manage_roster") || isInstructor;
   const labSections = useLabSections();
   const userRoles = useUserRolesWithProfiles();
   const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
@@ -659,7 +662,7 @@ export default function LabRosterPage() {
         <HStack justify="space-between" align="center">
           <Heading size="lg">Lab Sections</Heading>
           <HStack gap={2}>
-            {isInstructor && (
+            {canManageRoster && (
               <Button asChild variant="outline">
                 <Link href={`/course/${course_id}/manage/course/lab-sections`}>
                   <HStack gap={2}>
