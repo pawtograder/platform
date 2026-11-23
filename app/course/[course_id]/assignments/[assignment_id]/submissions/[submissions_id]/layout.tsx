@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -734,7 +735,8 @@ function generateSubmissionMarkdown(
   submissions: FullSubmissionData[],
   assignmentTitle: string,
   studentName: string,
-  groupName?: string
+  groupName?: string,
+  repoHost?: string
 ): string {
   const lines: string[] = [];
 
@@ -780,7 +782,8 @@ function generateSubmissionMarkdown(
     if (sub.sha && sub.repository) {
       lines.push(`- **Commit:** \`${sub.sha}\``);
       lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
-      lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+      const commitUrl = repoWebUrl(repoHost, sub.repository, `/commit/${sub.sha}`);
+      if (commitUrl) lines.push(`- **Repository Link:** [View Commit](${commitUrl})`);
     } else {
       lines.push(`- **Submitted via:** ${sub.submitted_via === "manual" ? "Manual (instructor)" : "File upload"}`);
     }
@@ -998,6 +1001,7 @@ function generateSubmissionMarkdown(
 }
 
 function ExportSubmissionMetadataButton({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const repoHost = useRepoWebHost(useAssignmentController().assignment.git_provider);
   const [isExporting, setIsExporting] = useState(false);
   const { assignment } = useAssignmentController();
   const supabase = useMemo(() => createClient(), []);
@@ -1068,7 +1072,8 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
         submissions as FullSubmissionData[],
         assignment.title || "Untitled Assignment",
         studentName,
-        groupName
+        groupName,
+        repoHost
       );
 
       // Create and download the file
@@ -1100,7 +1105,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
     } finally {
       setIsExporting(false);
     }
-  }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers, isInstructor]);
+  }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers, isInstructor, repoHost]);
 
   return (
     <Tooltip content="Export all submission history, grader results, and diffs to markdown">
@@ -2354,6 +2359,7 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
   const gradingReviewForDefault = useSubmissionReviewOrGradingReview(submission.grading_review_id ?? undefined);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const { assignment } = useAssignmentController();
+  const repoHost = useRepoWebHost(assignment.git_provider);
   // No-submission assignments (graded manually, no artifact) have no files or autograder output,
   // so those tabs don't exist. The Grade tab is the only relevant one and gets the full screen.
   const isNoSubmissionAssignment = assignment.repo_mode === "no_submission";
@@ -2526,15 +2532,17 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
             <HStack gap={1} flexWrap="wrap">
               {submission.sha && submission.repository && (
                 <>
-                  <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
+                  <Link href={repoWebUrl(repoHost, submission.repository, `/commit/${submission.sha}`)} target="_blank">
                     Commit {submission.sha.substring(0, 7)}
                   </Link>
-                  <Link
-                    href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`}
-                    target="_blank"
-                  >
-                    (Download)
-                  </Link>
+                  {repoHost && (
+                    <Link
+                      href={repoWebUrl(repoHost, submission.repository, `/archive/${submission.sha}.zip`)}
+                      target="_blank"
+                    >
+                      (Download)
+                    </Link>
+                  )}
                 </>
               )}
               <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>

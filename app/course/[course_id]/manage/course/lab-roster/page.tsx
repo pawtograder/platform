@@ -2,13 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
-import {
-  useAssignments,
-  useCourseController,
-  useLabSections,
-  useUserRolesWithProfiles
-} from "@/hooks/useCourseController";
+import { useCapability, useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useAssignments, useCourseController, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
 import { Assignment, LabSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
@@ -103,12 +98,18 @@ export default function LabRosterPage() {
   const searchParams = useSearchParams();
   const controller = useCourseController();
   const { private_profile_id } = useClassProfiles();
+  // Managing lab sections follows manage_roster (#1010), the same check as the page it links to.
+  // Instructors hold every capability; isInstructor keeps their link if the lookup fails.
   const isInstructor = useIsInstructor();
-  const labSections = useLabSections();
+  const canManageRoster = useCapability("manage_roster") || isInstructor;
+  // Read straight from the controller: if it already finished loading, the first render has the
+  // sections, so the page doesn't start with an empty list while labSectionsReady is true.
+  const labSections = useTableControllerTableValues(controller.labSections);
   const userRoles = useUserRolesWithProfiles();
   const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
   const profiles = useTableControllerTableValues(controller.profiles);
   const labSectionLeadersReady = useIsTableControllerReady(controller.labSectionLeaders);
+  const labSectionsReady = useIsTableControllerReady(controller.labSections);
   const allAssignments = useAssignments();
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
@@ -163,8 +164,9 @@ export default function LabRosterPage() {
 
   // Initialize selection to first section in list, and accordion state
   useEffect(() => {
-    // Wait for lab sections to be loaded, leader data to be ready, and controller to exist
-    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady && controller.labSectionLeaders != null) {
+    // Wait for lab sections and leaders to finish loading. A class can have no lab sections, so
+    // wait for the load itself, not for at least one section.
+    if (!isInitialized && labSectionsReady && labSectionLeadersReady && controller.labSectionLeaders != null) {
       // If user has no sections, expand other sections accordion by default
       if (mySections.length === 0) {
         setIsOtherSectionsOpen(true);
@@ -179,7 +181,14 @@ export default function LabRosterPage() {
 
       setIsInitialized(true);
     }
-  }, [labSections, labSectionLeadersReady, controller.labSectionLeaders, mySections, otherSections, isInitialized]);
+  }, [
+    labSectionsReady,
+    labSectionLeadersReady,
+    controller.labSectionLeaders,
+    mySections,
+    otherSections,
+    isInitialized
+  ]);
 
   // Create a map from section ID to section name
   const sectionIdToName = useMemo(() => {
@@ -659,7 +668,7 @@ export default function LabRosterPage() {
         <HStack justify="space-between" align="center">
           <Heading size="lg">Lab Sections</Heading>
           <HStack gap={2}>
-            {isInstructor && (
+            {canManageRoster && (
               <Button asChild variant="outline">
                 <Link href={`/course/${course_id}/manage/course/lab-sections`}>
                   <HStack gap={2}>
