@@ -15,6 +15,7 @@
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
+import { randomInt } from "node:crypto";
 import { test, expect } from "../global-setup";
 import { supabase, createClass, createUserInClass, createAuthenticatedClient, type TestingUser } from "./TestingUtils";
 
@@ -77,7 +78,7 @@ test.describe("Enrollments follow manage_roster, students only (#1010)", () => {
         class_id,
         role,
         // No user has this SIS id, so the auto-accept trigger leaves the invitation pending.
-        sis_user_id: 900_000_000 + Math.floor(Math.random() * 90_000_000),
+        sis_user_id: randomInt(900_000_000, 990_000_000),
         name: `E2E invitee ${unique}`,
         public_profile_id: await profile(false),
         private_profile_id: await profile(true)
@@ -251,7 +252,7 @@ test.describe("Enrollments follow manage_roster, students only (#1010)", () => {
     const insert = await client.from("invitations").insert({
       class_id: classA.id,
       role: "student",
-      sis_user_id: 980_000_000 + Math.floor(Math.random() * 10_000_000),
+      sis_user_id: randomInt(980_000_000, 990_000_000),
       public_profile_id: profiles!.public_profile_id,
       private_profile_id: profiles!.private_profile_id
     });
