@@ -89,6 +89,21 @@ async function click(element: HTMLElement) {
   });
 }
 
+/**
+ * Runs the button's onClick even though the button is disabled. React never calls onClick on a
+ * disabled button, so a click can't show whether the save handler refuses a stale list by itself.
+ * React 18 keeps a DOM node's props under a `__reactProps$…` key; this throws if that changes.
+ */
+async function runOnClick(element: HTMLElement) {
+  const propsKey = Object.keys(element).find((key) => key.startsWith("__reactProps$"));
+  const props = propsKey ? (element as unknown as Record<string, { onClick?: () => unknown }>)[propsKey] : undefined;
+  if (!props?.onClick) throw new Error("No React onClick found on this element");
+  const onClick = props.onClick;
+  await act(async () => {
+    await onClick();
+  });
+}
+
 beforeEach(() => {
   mockList.state = { rows: { data: [] }, error: null };
   mockCreate.mockReset().mockResolvedValue({ data: SAVED_ROW });
@@ -128,9 +143,12 @@ describe("saving regression tests", () => {
     expect(screen.getByText("The regression test list didn't load")).toBeInTheDocument();
     expect(saveButton()).toBeDisabled();
 
-    // Retrying Save against the stale list does nothing.
-    await click(saveButton());
+    // The save handler itself refuses the stale list too: run it past the disabled button. Without
+    // that check it would insert the row again and reload, and the reload would fail again.
+    mockRefetch.mockImplementation(failedRefetch);
+    await runOnClick(saveButton());
     expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
 
     // A second failed reload keeps Save off.
     mockRefetch.mockImplementationOnce(failedRefetch);
