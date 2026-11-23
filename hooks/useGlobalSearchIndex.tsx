@@ -1,6 +1,6 @@
 "use client";
 
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import {
   useAssignments,
@@ -32,6 +32,8 @@ type StaticPage = {
   feature?: CourseFeatureName;
   defaultEnabled?: boolean;
   audience?: Audience;
+  /** Shown only to users holding this capability (#1010). */
+  capability?: "manage_gradebook";
 };
 
 const STATIC_PAGES: StaticPage[] = [
@@ -86,7 +88,8 @@ const STAFF_STATIC_PAGES: StaticPage[] = [
     href: (c) => `/course/${c}/manage/gradebook`,
     feature: COURSE_FEATURES.GRADEBOOK,
     defaultEnabled: true,
-    audience: "staff"
+    audience: "staff",
+    capability: "manage_gradebook"
   },
   { label: "Manage office hours", href: (c) => `/course/${c}/manage/office-hours`, audience: "staff" },
   {
@@ -140,6 +143,7 @@ export function useGlobalSearchIndex(): SearchHit[] {
   const courseId = role?.class_id ?? 0;
   const isInstructor = useIsInstructor();
   const isStaff = useIsGraderOrInstructor();
+  const canManageGradebook = useCapability("manage_gradebook");
   const rawFeatures = (course as Partial<CourseWithFeatures> | undefined)?.features;
   const features = React.useMemo(() => (Array.isArray(rawFeatures) ? rawFeatures : []), [rawFeatures]);
 
@@ -180,6 +184,9 @@ export function useGlobalSearchIndex(): SearchHit[] {
       for (const page of STAFF_STATIC_PAGES) {
         if (!isFeatureOn(page.feature, page.defaultEnabled ?? true)) continue;
         if (!audienceAllows(page.audience)) continue;
+        // Instructors hold every capability; isInstructor keeps their entry if the lookup fails,
+        // like the sidebar link.
+        if (page.capability === "manage_gradebook" && !(canManageGradebook || isInstructor)) continue;
         out.push({
           id: `setting:${page.label}`,
           kind: "setting",
@@ -284,6 +291,7 @@ export function useGlobalSearchIndex(): SearchHit[] {
     return out;
   }, [
     assignments,
+    canManageGradebook,
     courseId,
     features,
     filterDiscussionTeaser,
