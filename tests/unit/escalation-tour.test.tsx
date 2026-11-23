@@ -6,12 +6,14 @@
  *   by Close (no tutorial) or by finishing the tour. "Seen" is a per-user row in
  *   public.user_whats_new_seen, so it holds across browsers and devices. The header button
  *   reopens it at the prompt.
+ * - Once dismissed, it stays closed for the rest of the page load even if the component remounts
+ *   before the row is saved.
  * - Show me walks through every step in order, and Back returns to the previous one.
  * - When the record can't be read the prompt stays closed instead of reopening on every page load.
  */
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { EscalationTour } from "@/components/help-queue/escalation-tour";
+import { EscalationTour, resetEscalationTourForTests } from "@/components/help-queue/escalation-tour";
 
 let mockIsStaff = true;
 jest.mock("@/hooks/useClassProfiles", () => ({ useIsGraderOrInstructor: () => mockIsStaff }));
@@ -50,6 +52,7 @@ const dialogTitle = () =>
   screen.queryByRole("heading", { name: new RegExp(`^(${[PROMPT, ...STEP_TITLES].join("|")})$`) });
 
 beforeEach(() => {
+  resetEscalationTourForTests();
   mockIsStaff = true;
   mockSeen.clear();
   mockReadError = null;
@@ -178,6 +181,32 @@ describe("EscalationTour", () => {
     mockSeen.clear();
     release();
     await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
+  });
+
+  it("stays closed after Close when it remounts before the record is saved", async () => {
+    // Staff can leave the office hours layout and come back before the upsert commits. The new
+    // instance's read then finds no row, so it must also check what this page session dismissed.
+    let save!: () => void;
+    mockUpsert.mockImplementation(
+      (row: { item: string }) =>
+        new Promise((resolve) => {
+          save = () => {
+            mockSeen.add(row.item);
+            resolve({ error: null });
+          };
+        })
+    );
+    const { unmount } = renderTour();
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
+    expectSeenWritten();
+
+    unmount();
+    mockFrom.mockClear();
+    renderTour();
+    await waitFor(() => expect(mockFrom).toHaveBeenCalled());
+    await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
+    save();
   });
 
   it("keeps every control inside a step's preview out of the tab order", async () => {
