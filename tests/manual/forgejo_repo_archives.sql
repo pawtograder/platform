@@ -160,6 +160,25 @@ select pg_temp.check('3b a pending name isn''t queued again, in any case',
   public.queue_forgejo_repo_archives(array[pg_temp.cls()], array[upper(pg_temp.n('hw1-group-g4'))]) = 0
   and pg_temp.pending(pg_temp.n('hw1-group-g4')) = 1);
 
+-- A worker observed members and is about to mark the job kept. The last member
+-- leaves first: requeue must invalidate the old completion token, not lose cleanup.
+create temp table keep_claim as
+  select id, public.claim_forgejo_repo_archive(id, 10) as token
+  from public.forgejo_repo_archives
+  where class_id = pg_temp.cls() and repository = pg_temp.n('hw1-group-g4');
+select public.queue_forgejo_repo_archives(array[pg_temp.cls()], array[pg_temp.n('hw1-group-g4')]);
+with stale_completion as (
+  update public.forgejo_repo_archives set archived_at = clock_timestamp()
+  where id = (select id from keep_claim) and claimed_at = (select token from keep_claim)
+    and archived_at is null returning id
+)
+select pg_temp.check('3c departure fences the old kept completion',
+  (select count(*) from stale_completion) = 0
+  and pg_temp.pending(pg_temp.n('hw1-group-g4')) = 1);
+select pg_temp.check('3d superseded keep work is immediately retryable',
+  exists (select 1 from public.forgejo_repo_archives_due(10, NULL)
+          where id = (select id from keep_claim)));
+
 -- 4
 create temp table due as select * from public.forgejo_repo_archives_due(10, NULL) where class_id = pg_temp.cls();
 select pg_temp.check('4a every pending entry is due', (select count(*) from due) = 3, (select count(*) from due)::text);
