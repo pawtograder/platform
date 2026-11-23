@@ -56,7 +56,8 @@ const SEEDED_CAPABILITIES = [
   "manage_roster",
   "manage_rubrics",
   "manage_student_repositories",
-  "publish_groups"
+  "publish_groups",
+  "send_announcements"
 ];
 /** Capabilities seed_default_class_roles() puts on the default grader role (not only instructor). */
 const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards"];
