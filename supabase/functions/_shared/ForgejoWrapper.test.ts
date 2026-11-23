@@ -15,13 +15,16 @@ import {
   ensureHandoutRepo,
   ensureOrg,
   ensureRepoFromTemplate,
+  ensureStaffTeam,
   forgejoConfig,
   type ForgejoConfig,
   getCommit,
+  grantTeamRepos,
   grantWrite,
   IDLE_TOKEN_MS,
   mintRepoToken,
   readFile,
+  removeCollaborator,
   REPLACED_TOKEN_GRACE_MS,
   repoPath,
   revokeAllCoderTokens,
@@ -29,6 +32,7 @@ import {
   revokeReplacedTokens,
   revokeRepoToken,
   startGrading,
+  syncTeamMembers,
   usernameFromEmail
 } from "./ForgejoWrapper.ts";
 
@@ -621,6 +625,36 @@ Deno.test("grantWrite: adds the student as a writer and trusts only what Forgejo
   });
 });
 
+Deno.test("removeCollaborator: removes the student, and a student already gone is success", async () => {
+  await withForgejo([new Response(null, { status: 204 })], async (calls) => {
+    await removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim");
+    assertEquals(calls[0].method, "DELETE");
+    assertEquals(
+      calls[0].url,
+      "https://git.example.edu/api/v1/repos/cs4535/cs4535-hw1-group-blue/collaborators/alex.kim"
+    );
+  });
+  // The repo is gone, or the account is.
+  await withForgejo([status(404)], async () => {
+    await removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim");
+  });
+  await withForgejo([unprocessable("user does not exist [uid: 0, name: alex.kim]")], async () => {
+    await removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim");
+  });
+  // Anything else keeps the row for the next pass, and the message never quotes Forgejo's text.
+  await withForgejo([unprocessable("something about alex.kim@northeastern.edu")], async () => {
+    const error = await assertRejects(() => removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim"));
+    assertEquals((error as Error).message, "Forgejo collaborator remove failed: 422 unrecognized response");
+  });
+  await withForgejo([status(500)], async () => {
+    await assertRejects(() => removeCollaborator(config, "cs4535/cs4535-hw1-group-blue", "alex.kim"), Error, "500");
+  });
+  await withForgejo([], async (calls) => {
+    await assertRejects(() => removeCollaborator(config, "../admin", "alex.kim"), Error, "Not a Forgejo owner/name");
+    assertEquals(calls, []);
+  });
+});
+
 Deno.test("readFile: a repository that isn't owner/name never reaches Forgejo", async () => {
   await withForgejo([], async (calls) => {
     await assertRejects(
@@ -1142,6 +1176,202 @@ Deno.test("token list: a list that keeps changing is an error, so nothing is tak
       await assertRejects(() => revokeIdleTokens(config, "alex.kim", 1, now + IDLE_TOKEN_MS), Error, "kept changing");
     }
   );
+});
+
+/** A list page with Forgejo's X-Total-Count header; the total defaults to the page's own length. */
+const list = (body: unknown[], total = body.length) =>
+  new Response(JSON.stringify(body), { status: 200, headers: { "X-Total-Count": String(total) } });
+
+Deno.test("ensureStaffTeam: creates a write team that holds only the repos it's given", async () => {
+  await withForgejo(
+    [list([{ id: 1, name: "Owners", permission: "owner", includes_all_repositories: true }]), ok({ id: 12 }, 201)],
+    async (calls) => {
+      assertEquals(await ensureStaffTeam(config, "cs4535", "cs4535-staff"), 12);
+      assertEquals(
+        calls.map((c) => `${c.method} ${c.url}`),
+        [
+          "GET https://git.example.edu/api/v1/orgs/cs4535/teams?page=1&limit=50",
+          "POST https://git.example.edu/api/v1/orgs/cs4535/teams"
+        ]
+      );
+      const body = calls[1].body!;
+      assertEquals(body.name, "cs4535-staff");
+      assertEquals(body.permission, "write");
+      assertEquals(body.includes_all_repositories, false);
+      assertEquals(body.can_create_org_repo, false);
+      assertEquals((body.units_map as Record<string, string>)["repo.code"], "write");
+    }
+  );
+});
+
+Deno.test(
+  "ensureStaffTeam: adopts the team by name, any case, without editing it when it's already right",
+  async () => {
+    await withForgejo(
+      [list([{ id: 12, name: "CS4535-Staff", permission: "write", includes_all_repositories: false }])],
+      async (calls) => {
+        assertEquals(await ensureStaffTeam(config, "cs4535", "cs4535-staff"), 12);
+        assertEquals(calls.length, 1);
+      }
+    );
+  }
+);
+
+Deno.test("ensureStaffTeam: a team edited by hand is set back to write on its own repos", async () => {
+  await withForgejo(
+    [list([{ id: 12, name: "cs4535-staff", permission: "admin", includes_all_repositories: true }]), ok({ id: 12 })],
+    async (calls) => {
+      assertEquals(await ensureStaffTeam(config, "cs4535", "cs4535-staff"), 12);
+      assertEquals(calls[1].method, "PATCH");
+      assertEquals(calls[1].url, "https://git.example.edu/api/v1/teams/12");
+      assertEquals(calls[1].body?.permission, "write");
+      assertEquals(calls[1].body?.includes_all_repositories, false);
+    }
+  );
+});
+
+Deno.test("ensureStaffTeam: a team allowed to create org repos is set back", async () => {
+  await withForgejo(
+    [
+      list([
+        {
+          id: 12,
+          name: "cs4535-staff",
+          permission: "write",
+          includes_all_repositories: false,
+          can_create_org_repo: true
+        }
+      ]),
+      ok({ id: 12 })
+    ],
+    async (calls) => {
+      assertEquals(await ensureStaffTeam(config, "cs4535", "cs4535-staff"), 12);
+      assertEquals(calls[1].method, "PATCH");
+      assertEquals(calls[1].body?.can_create_org_repo, false);
+    }
+  );
+});
+
+Deno.test("ensureStaffTeam: never repurposes the org's owner team", async () => {
+  await withForgejo(
+    [list([{ id: 1, name: "cs4535-staff", permission: "owner", includes_all_repositories: true }])],
+    async () => {
+      await assertRejects(() => ensureStaffTeam(config, "cs4535", "cs4535-staff"), Error, "owners");
+    }
+  );
+});
+
+Deno.test("ensureStaffTeam: reads every page of teams before deciding to create", async () => {
+  const page1 = Array.from({ length: 50 }, (_, i) => ({
+    id: 100 + i,
+    name: `t${i}`,
+    permission: "read",
+    includes_all_repositories: false
+  }));
+  await withForgejo(
+    [
+      list(page1, 51),
+      list([{ id: 12, name: "cs4535-staff", permission: "write", includes_all_repositories: false }], 51)
+    ],
+    async (calls) => {
+      assertEquals(await ensureStaffTeam(config, "cs4535", "cs4535-staff"), 12);
+      assertEquals(calls[1].url, "https://git.example.edu/api/v1/orgs/cs4535/teams?page=2&limit=50");
+    }
+  );
+});
+
+Deno.test("syncTeamMembers: adds the missing staff and removes everyone else, by case-insensitive login", async () => {
+  await withForgejo([list([{ login: "Prof" }, { login: "old-ta" }]), noContent(), noContent()], async (calls) => {
+    assertEquals(await syncTeamMembers(config, 12, ["prof", "new-ta"]), { added: 1, removed: 1 });
+    assertEquals(
+      calls.map((c) => `${c.method} ${c.url}`),
+      [
+        "GET https://git.example.edu/api/v1/teams/12/members?page=1&limit=50",
+        "DELETE https://git.example.edu/api/v1/teams/12/members/old-ta",
+        "PUT https://git.example.edu/api/v1/teams/12/members/new-ta"
+      ]
+    );
+  });
+});
+
+Deno.test("syncTeamMembers: a failed addition still removes the departed member first", async () => {
+  await withForgejo(
+    [list([{ login: "prof" }, { login: "old-ta" }]), noContent(), new Response("boom", { status: 500 })],
+    async (calls) => {
+      await assertRejects(() => syncTeamMembers(config, 12, ["prof", "new-ta"]), Error, "team member add failed: 500");
+      assertEquals(
+        calls.slice(1).map((c) => `${c.method} ${c.url}`),
+        [
+          "DELETE https://git.example.edu/api/v1/teams/12/members/old-ta",
+          "PUT https://git.example.edu/api/v1/teams/12/members/new-ta"
+        ]
+      );
+    }
+  );
+});
+
+Deno.test("syncTeamMembers: an account Forgejo no longer has is skipped; other failures stop", async () => {
+  await withForgejo([list([]), notFound(), noContent()], async () => {
+    assertEquals(await syncTeamMembers(config, 12, ["gone", "ta"]), { added: 1, removed: 0 });
+  });
+  await withForgejo([list([]), new Response("boom", { status: 500 })], async () => {
+    await assertRejects(() => syncTeamMembers(config, 12, ["ta"]), Error, "team member add failed: 500");
+  });
+});
+
+Deno.test("syncTeamMembers: an unreadable member list removes nobody", async () => {
+  await withForgejo([new Response("boom", { status: 500 })], async (calls) => {
+    await assertRejects(() => syncTeamMembers(config, 12, []), Error, "team members read failed");
+    assertEquals(calls.length, 1);
+  });
+});
+
+Deno.test("grantTeamRepos: adds only repos the team lacks, and skips one that no longer exists", async () => {
+  await withForgejo([list([{ full_name: "cs4535/HW1-handout" }]), noContent(), notFound()], async (calls) => {
+    const added = await grantTeamRepos(config, 12, "cs4535", [
+      "cs4535/hw1-handout",
+      "cs4535/cs4535-hw1-alex",
+      "cs4535/deleted"
+    ]);
+    assertEquals(added, 1);
+    assertEquals(
+      calls.slice(1).map((c) => `${c.method} ${c.url}`),
+      [
+        "PUT https://git.example.edu/api/v1/teams/12/repos/cs4535/cs4535-hw1-alex",
+        "PUT https://git.example.edu/api/v1/teams/12/repos/cs4535/deleted"
+      ]
+    );
+  });
+});
+
+Deno.test(
+  "grantTeamRepos: a repo outside the team's org, or not owner/name, is refused before it's added",
+  async () => {
+    for (const repository of ["othercourse/hw1", "cs4535/../x", "cs4535"]) {
+      await withForgejo([list([])], async (calls) => {
+        await assertRejects(() => grantTeamRepos(config, 12, "cs4535", [repository]));
+        assertEquals(calls.length, 1, repository);
+      });
+    }
+  }
+);
+
+Deno.test("syncTeamMembers: a page shorter than asked for, with more to come, is read past", async () => {
+  // MAX_RESPONSE_ITEMS set to 2: three members arrive two and one.
+  await withForgejo(
+    [list([{ login: "a" }, { login: "b" }], 3), list([{ login: "c" }], 3), noContent()],
+    async (calls) => {
+      assertEquals(await syncTeamMembers(config, 12, ["a", "b"]), { added: 0, removed: 1 });
+      assertEquals(calls[2].url, "https://git.example.edu/api/v1/teams/12/members/c");
+    }
+  );
+});
+
+Deno.test("syncTeamMembers: without X-Total-Count the list ends at an empty page", async () => {
+  await withForgejo([ok([{ login: "a" }]), ok([{ login: "b" }]), ok([]), noContent()], async (calls) => {
+    assertEquals(await syncTeamMembers(config, 12, ["a"]), { added: 0, removed: 1 });
+    assertEquals(calls[3].method, "DELETE");
+  });
 });
 
 const page = (body: unknown[], total = body.length) =>

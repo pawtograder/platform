@@ -6,6 +6,11 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 /**
  * Everything the move needs from outside, so tests can substitute an in-memory database and
  * record the GitHub jobs instead of enqueueing them (see moveStudent.test.ts).
+ *
+ * A Forgejo repo gets no jobs from here. The database does its access: deleting the old membership
+ * queues the student's removal from the old group's repo, and inserting the new one marks the new
+ * group's repo for re-granting; forgejo-reconciler does both
+ * (20261122140100_forgejo_group_repo_revocations.sql).
  */
 export type MoveStudentDeps = {
   /** The calling instructor's client; RLS applies. */
@@ -36,7 +41,8 @@ export type MoveStudentDeps = {
  *
  * When the student was the last member, the old group and its repository are deleted, unless the
  * group has submissions. Then group, repo and submissions are kept, and the repo is re-synced to
- * an empty member list so the students who left lose GitHub access.
+ * an empty member list so the students who left lose GitHub access. A dissolved group's Forgejo
+ * repo is not archived: Forgejo has no archive job yet, and the student has already lost access.
  */
 export async function moveStudentBetweenGroups(
   {
@@ -57,7 +63,7 @@ export async function moveStudentBetweenGroups(
   let newGroup: {
     assignment_id: number;
     class_id: number;
-    repositories: { repository: string }[];
+    repositories: { repository: string; git_provider: string }[];
     classes: { github_org: string | null; slug: string | null } | null;
   } | null = null;
   if (new_assignment_group_id !== null) {
@@ -139,9 +145,9 @@ export async function moveStudentBetweenGroups(
             const slash = oldGroupRepo.repository.indexOf("/");
             const owner = slash >= 0 ? oldGroupRepo.repository.slice(0, slash) : currentGroup.classes!.github_org!;
             const repoName = slash >= 0 ? oldGroupRepo.repository.slice(slash + 1) : oldGroupRepo.repository;
-            // A Forgejo repo was queued for archiving by the repositories delete trigger (#1378); a GitHub job
-            // for its name would fail, since the owner is a Forgejo org.
-            if (repoName && oldGroupRepo.git_provider !== "forgejo") {
+            // A Forgejo repo was queued for archiving by the repositories delete trigger (#1378), and its
+            // owner/name could also name a GitHub repo, which must not be archived.
+            if (repoName && oldGroupRepo.git_provider === "github") {
               // The repo row is gone, so a failed enqueue only leaves the GitHub repo unarchived.
               try {
                 await deps.enqueueGithubArchiveRepo(class_id, owner, repoName);
@@ -171,7 +177,7 @@ export async function moveStudentBetweenGroups(
         }
         oldRepoStays = keepGroup;
       }
-      if (oldGroupRepo && oldRepoStays) {
+      if (oldGroupRepo && oldRepoStays && oldGroupRepo.git_provider === "github") {
         // Reconciles the repo to the remaining members, so the student who left loses access.
         // A kept empty group syncs to an empty list, which revokes every student collaborator.
         try {
@@ -227,7 +233,7 @@ export async function moveStudentBetweenGroups(
       return;
     }
     const repository = newGroup.repositories[0];
-    if (repository) {
+    if (repository?.git_provider === "github") {
       try {
         await deps.enqueueSyncRepoPermissions({
           class_id,

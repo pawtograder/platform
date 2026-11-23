@@ -34,7 +34,8 @@ export type SyncStatus =
   | "Sync Finalizing"
   | "Sync Error"
   | "Sync Blocked"
-  | "Sync in Progress";
+  | "Sync in Progress"
+  | "Unavailable on Forgejo";
 
 /**
  * Computes the sync status for a repository row based on its sync data and latest template SHA.
@@ -48,6 +49,11 @@ export function computeSyncStatus(repositoryRow: RepositoryRow, latestSha?: stri
   const desiredSha = repositoryRow.desired_handout_sha;
   const syncedSha = repositoryRow.synced_handout_sha;
   const syncData = repositoryRow.sync_data as SyncData;
+
+  // Handout sync only works on GitHub, and queue_repository_syncs skips Forgejo repositories.
+  if (repositoryRow.git_provider === "forgejo") {
+    return "Unavailable on Forgejo";
+  }
 
   if (!desiredSha) {
     return "No Sync Requested";

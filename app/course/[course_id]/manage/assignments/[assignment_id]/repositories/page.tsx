@@ -90,9 +90,19 @@ function ResendOrgInvitation({ userId, classId }: { userId?: string; classId?: n
   );
 }
 
+const FORGEJO_SYNC_UNAVAILABLE = "Handout sync isn't available for Forgejo repositories yet.";
+
 function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; latestTemplateSha?: string | null }) {
   const syncData = row.sync_data as SyncData;
   const status = computeSyncStatus(row, latestTemplateSha);
+
+  if (status === "Unavailable on Forgejo") {
+    return (
+      <Badge colorPalette="gray" title={FORGEJO_SYNC_UNAVAILABLE}>
+        Unavailable on Forgejo
+      </Badge>
+    );
+  }
 
   if (status === "No Sync Requested") {
     return <Badge colorPalette="gray">No Sync Requested</Badge>;
@@ -255,12 +265,22 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
 
 function SyncButton({
   repoId,
+  isForgejo,
   tableController
 }: {
   repoId: number;
+  isForgejo: boolean;
   tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
 }) {
   const [isSyncing, setIsSyncing] = useState(false);
+
+  if (isForgejo) {
+    return (
+      <Text fontSize="xs" color="fg.muted">
+        {FORGEJO_SYNC_UNAVAILABLE}
+      </Text>
+    );
+  }
 
   const handleSync = async () => {
     const supabase = createClient();
@@ -961,7 +981,11 @@ export default function RepositoriesPage() {
         cell: ({ row }) => {
           return (
             <HStack gap={2}>
-              <SyncButton repoId={row.original.id} tableController={repositories} />
+              <SyncButton
+                repoId={row.original.id}
+                isForgejo={row.original.git_provider === "forgejo"}
+                tableController={repositories}
+              />
             </HStack>
           );
         }
@@ -1038,10 +1062,12 @@ export default function RepositoriesPage() {
         queued_count: number;
         skipped_count: number;
         skipped_in_flight_count?: number;
+        skipped_forgejo_count?: number;
         error_count: number;
       };
 
       const alreadyRunning = syncResult.skipped_in_flight_count ?? 0;
+      const onForgejo = syncResult.skipped_forgejo_count ?? 0;
       toaster.success({
         title: "Sync Queued",
         description:
@@ -1049,7 +1075,8 @@ export default function RepositoriesPage() {
           `${syncResult.skipped_count} skipped (already up to date).` +
           // Counted apart from the others because it is not a repository with nothing to do:
           // it is one whose sync is still running, and it will not be queued twice.
-          (alreadyRunning > 0 ? ` ${alreadyRunning} already syncing.` : "")
+          (alreadyRunning > 0 ? ` ${alreadyRunning} already syncing.` : "") +
+          (onForgejo > 0 ? ` ${onForgejo} on Forgejo, where handout sync isn't available yet.` : "")
       });
 
       toggleAllRowsSelected(false);
@@ -1266,7 +1293,10 @@ export default function RepositoriesPage() {
                                   { label: "Sync Finalizing", value: "Sync Finalizing" },
                                   { label: "Sync in Progress", value: "Sync in Progress" },
                                   { label: "Sync Blocked", value: "Sync Blocked" },
-                                  { label: "Sync Error", value: "Sync Error" }
+                                  { label: "Sync Error", value: "Sync Error" },
+                                  ...(isForgejo
+                                    ? [{ label: "Unavailable on Forgejo", value: "Unavailable on Forgejo" }]
+                                    : [])
                                 ]}
                                 placeholder="Filter by sync status..."
                               />

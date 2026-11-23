@@ -10,8 +10,9 @@
  *
  * Covers: dissolving an empty group, keeping a group that has submissions (and revoking GitHub
  * access to its repo), syncing the remaining members, repo names containing a slash, rejecting a
- * move before changing anything, and finishing the move when a cleanup step or a GitHub enqueue
- * fails after the student has already been removed.
+ * move before changing anything, finishing the move when a cleanup step or a GitHub enqueue
+ * fails after the student has already been removed, and Forgejo repos getting no GitHub jobs (the
+ * database triggers and forgejo-reconciler handle their access; see reconcile.test.ts).
  *
  * Run from supabase/functions:
  *   deno test --no-check --allow-read --allow-env assignment-group-instructor-move-student/
@@ -66,11 +67,16 @@ class FakeDb {
   failOn = new Set<FailOn>();
   /** Every call the move made to delete_repository_rows. */
   repoDeleteCalls: number[][] = [];
+  /**
+   * repositories_validate_git_provider refuses to delete a Forgejo row (feature_not_supported) until
+   * provider-aware cleanup (#1398) lands, so the fake refuses too unless a test opts out.
+   */
+  refuseForgejoDeletes = true;
   private nextId = 1000;
 
   addGroup(
     id: number,
-    opts: { repo?: string; repoId?: number; classId?: number; assignmentId?: number; gitProvider?: string } = {}
+    opts: { repo?: string; repoId?: number; classId?: number; assignmentId?: number; provider?: string } = {}
   ) {
     this.groups.push({
       id,
@@ -83,7 +89,7 @@ class FakeDb {
         id: opts.repoId ?? id * 10,
         assignment_group_id: id,
         repository: opts.repo,
-        git_provider: opts.gitProvider ?? "github"
+        git_provider: opts.provider ?? "github"
       });
     }
   }
@@ -301,6 +307,18 @@ function makeClient(db: FakeDb) {
       if (db.failOn.has("delete_repository_rows")) {
         return { data: null, error: db.injected("delete_repository_rows") };
       }
+      if (
+        db.refuseForgejoDeletes &&
+        db.repos.some((r) => args.p_repository_ids.includes(r.id) && r.git_provider === "forgejo")
+      ) {
+        return {
+          data: null,
+          error: {
+            code: "0A000",
+            message: "Deleting Forgejo repositories is not supported until provider-aware cleanup exists"
+          }
+        };
+      }
       // Never deletes submissions: one that still references the repo blocks the delete.
       if (db.submissions.some((s) => s.repository_id !== null && args.p_repository_ids.includes(s.repository_id))) {
         return { data: null, error: db.fk("submissions_repository_id_fkey") };
@@ -485,7 +503,7 @@ Deno.test(
   "a Forgejo group repo is deleted without a GitHub archive job: the delete trigger queues its archive",
   async () => {
     const db = new FakeDb();
-    db.addGroup(1, { repo: "cs3100/cs3100-hw1-group-1", gitProvider: "forgejo" });
+    db.addGroup(1, { repo: "cs3100/cs3100-hw1-group-1", provider: "forgejo" });
     db.addMember(1, "alice");
     const { deps, archives } = harness(db);
 
@@ -702,4 +720,110 @@ Deno.test("adding to the new group fails: the error surfaces", async () => {
   const { deps } = harness(db);
 
   await assertRejects(() => moveStudentBetweenGroups(move(1, 2), deps), Error, "Failed to add member to group");
+});
+
+// ---- Forgejo repos ---------------------------------------------------------
+
+const FORGEJO_OLD = "cs3100-f26/cs3100-f26-hw1-group-1";
+const FORGEJO_NEW = "cs3100-f26/cs3100-f26-hw1-group-2";
+
+/** Group 1 (alice alone) and group 2 (bob), each with a Forgejo repo. */
+function twoForgejoGroups() {
+  const db = new FakeDb();
+  db.addGroup(1, { repo: FORGEJO_OLD, provider: "forgejo" });
+  db.addGroup(2, { repo: FORGEJO_NEW, provider: "forgejo" });
+  db.addMember(1, "alice");
+  db.addMember(2, "bob");
+  return db;
+}
+
+Deno.test("Forgejo: a move between groups changes membership and enqueues no GitHub job", async () => {
+  const db = twoForgejoGroups();
+  db.addMember(1, "carol");
+  const { deps, archives, syncs, reported } = harness(db);
+
+  await moveStudentBetweenGroups(move(1, 2), deps);
+
+  assertEquals(db.membersOf(1), ["carol"]);
+  assertEquals(db.membersOf(2).sort(), ["alice", "bob"]);
+  assertEquals(db.members.find((m) => m.profile_id === "alice")?.added_by, INSTRUCTOR);
+  assertEquals(archives, []);
+  assertEquals(syncs, []);
+  assertEquals(reported, []);
+});
+
+Deno.test(
+  "Forgejo: while the database refuses Forgejo repo deletes, the last member still moves and the group is kept",
+  async () => {
+    const db = twoForgejoGroups();
+    const { deps, archives, syncs, reported } = harness(db);
+
+    await moveStudentBetweenGroups(move(1, 2), deps);
+
+    assertEquals(db.repoDeleteCalls, [[10]]);
+    assertEquals(db.repoOf(1)?.repository, FORGEJO_OLD);
+    assert(db.groups.some((g) => g.id === 1));
+    assertEquals(db.membersOf(1), []);
+    assertEquals(db.membersOf(2).sort(), ["alice", "bob"]);
+    assertEquals(reported.length, 1);
+    assertEquals((reported[0] as { code?: string }).code, "0A000");
+    assertEquals(archives, []);
+    assertEquals(syncs, []);
+  }
+);
+
+Deno.test(
+  "Forgejo: once Forgejo repo deletes are allowed, the last member leaving dissolves the group and its repo row, without a GitHub archive",
+  async () => {
+    const db = twoForgejoGroups();
+    db.refuseForgejoDeletes = false;
+    const { deps, archives, syncs, reported } = harness(db);
+
+    await moveStudentBetweenGroups(move(1, 2), deps);
+
+    assertEquals(db.repoDeleteCalls, [[10]]);
+    assertEquals(
+      db.groups.find((g) => g.id === 1),
+      undefined
+    );
+    // The owner/name is the class's Forgejo org, which may also be a GitHub org with a repo of that name.
+    assertEquals(archives, []);
+    assertEquals(syncs, []);
+    assertEquals(reported, []);
+  }
+);
+
+Deno.test("Forgejo: the last member leaving a group with a submission keeps it, with no GitHub sync", async () => {
+  const db = twoForgejoGroups();
+  db.addSubmission({ assignment_group_id: 1, repository_id: 10 });
+  const { deps, archives, syncs } = harness(db);
+
+  await moveStudentBetweenGroups(move(1, null), deps);
+
+  assertEquals(db.repoOf(1)?.repository, FORGEJO_OLD);
+  assertEquals(db.membersOf(1), []);
+  assertEquals(archives, []);
+  assertEquals(syncs, []);
+});
+
+Deno.test("Forgejo: joining a group from no group deactivates individual submissions", async () => {
+  const db = twoForgejoGroups();
+  db.addSubmission({ profile_id: "zoe" });
+  const { deps, syncs } = harness(db);
+
+  await moveStudentBetweenGroups(move(null, 2, "zoe"), deps);
+
+  assertEquals(db.membersOf(2).sort(), ["bob", "zoe"]);
+  assertEquals(db.submissions[0].is_active, false);
+  assertEquals(syncs, []);
+});
+
+Deno.test("Forgejo: the same validation applies before anything changes", async () => {
+  const db = twoForgejoGroups();
+  const { deps } = harness(db);
+  // Same group, and a student who isn't in the old group.
+  await assertRejects(() => moveStudentBetweenGroups(move(1, 1), deps), IllegalArgumentError);
+  await assertRejects(() => moveStudentBetweenGroups(move(2, 1), deps), IllegalArgumentError);
+  assertEquals(db.membersOf(1), ["alice"]);
+  assertEquals(db.membersOf(2), ["bob"]);
 });

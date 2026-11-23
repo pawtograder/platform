@@ -2,7 +2,7 @@
 
 import { SubmissionArtifact } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import { cropAspect } from "@/lib/exam/regionMath";
+import { cropAspect, cropDisplayWidth } from "@/lib/exam/regionMath";
 import { Box, Button, Flex, Heading, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -40,24 +40,21 @@ export function questionHeading(q: ExamQuestionResult): string {
 /**
  * CSS sprite-style crop: show only `region` of the page image.
  *
- * `height` is a target, not a guarantee. The box is sized by width plus aspectRatio with
- * `maxWidth: 100%`, so when the flex row clamps a wide crop it scales down whole and ends up
- * shorter than `height`. That is deliberate: setting width and height independently is what let a
- * clamped crop distort again, which is half of #1073. Preserving the shape matters more than
- * hitting an exact height, since the point is reading handwriting.
+ * Sized from the region's share of the page width (#1263), so a crop's scale no longer follows how
+ * tall a box the instructor drew. `maxWidth: 100%` below still clamps a crop wider than its row,
+ * which is the one case where two crops end up at different zooms; `cropDisplayWidth` records why
+ * that bound stands.
+ *
+ * There is no height target any more: the old `height = 120` default fixed the rendered height and
+ * let width follow the aspect ratio, which made the zoom a function of how tall a box the
+ * instructor happened to draw. This supersedes the note #1138 added about height being a
+ * target rather than a guarantee; the prop it described is gone.
+ *
+ * Width plus aspectRatio is still one driver, not two. Setting width and height independently is
+ * what let a clamped crop distort again, which was half of #1073, so a crop the flex row has to
+ * clamp still scales down whole and keeps its shape.
  */
-function RegionCrop({
-  url,
-  region,
-  page,
-  /** Target height in px. See above: a clamped crop renders shorter than this. */
-  height = 120
-}: {
-  url: string;
-  region: NormRect;
-  page?: ExamPageRef;
-  height?: number;
-}) {
+function RegionCrop({ url, region, page }: { url: string; region: NormRect; page?: ExamPageRef }) {
   // background-position as a percentage relative to the un-shown remainder
   const posX = region.width < 1 ? (region.x / (1 - region.width)) * 100 : 0;
   const posY = region.height < 1 ? (region.y / (1 - region.height)) * 100 : 0;
@@ -69,7 +66,7 @@ function RegionCrop({
       style={{
         // One driver, not two. width + aspectRatio keeps the shape when the flex row clamps
         // the box; an independent width/height pair re-introduces the distortion at that point.
-        width: `${Math.round(height * aspect)}px`,
+        width: `${cropDisplayWidth(region)}px`,
         aspectRatio: `${aspect}`,
         maxWidth: "100%",
         backgroundImage: `url("${url}")`,
