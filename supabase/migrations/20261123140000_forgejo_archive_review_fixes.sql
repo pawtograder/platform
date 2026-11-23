@@ -36,6 +36,7 @@ DECLARE
     v_skipped_org_mismatch_details jsonb := '[]'::jsonb;
     v_forgejo_queued integer := 0;
     v_skipped_not_in_group integer := 0;
+    v_kept_message text;
 BEGIN
     IF auth.uid() IS NULL THEN
         RAISE EXCEPTION 'Not authenticated';
@@ -62,36 +63,38 @@ BEGIN
         RAISE EXCEPTION 'Assignment not found for this course';
     END IF;
 
-    SELECT coalesce(array_agg(r.id), '{}')
-    INTO v_individual_repo_ids
+    -- Lock the membership that makes each Forgejo repo eligible. A concurrent leave either
+    -- happens first, preserving the repo, or waits until cleanup has finished.
+    SELECT coalesce(array_agg(r.id) FILTER (
+               WHERE r.git_provider <> 'forgejo' OR membership.found
+           ), '{}'),
+           count(*) FILTER (WHERE r.git_provider = 'forgejo' AND membership.found IS NULL)::integer
+    INTO v_individual_repo_ids, v_skipped_not_in_group
     FROM public.repositories r
+    LEFT JOIN LATERAL (
+        SELECT true AS found
+        FROM public.assignment_groups_members m
+        WHERE r.git_provider = 'forgejo'
+          AND m.assignment_id = r.assignment_id AND m.profile_id = r.profile_id
+        LIMIT 1
+        FOR UPDATE OF m
+    ) membership ON true
     WHERE r.class_id = p_class_id
       AND r.assignment_id = p_assignment_id
       AND r.assignment_group_id IS NULL
-      AND r.profile_id IS NOT NULL
-      AND (r.git_provider <> 'forgejo' OR EXISTS (
-          SELECT 1 FROM public.assignment_groups_members m
-          WHERE m.assignment_id = p_assignment_id AND m.profile_id = r.profile_id
-      ));
+      AND r.profile_id IS NOT NULL;
 
-    -- Forgejo repos of students in no group stay: forgejo_repos_needed lists those students, so the
-    -- reconciler would archive the deleted repo and make them a blank one under the same name.
-    SELECT count(*)::integer
-    INTO v_skipped_not_in_group
-    FROM public.repositories r
-    WHERE r.class_id = p_class_id
-      AND r.assignment_id = p_assignment_id
-      AND r.assignment_group_id IS NULL
-      AND r.profile_id IS NOT NULL
-      AND r.git_provider = 'forgejo'
-      AND NOT EXISTS (
-          SELECT 1 FROM public.assignment_groups_members m
-          WHERE m.assignment_id = p_assignment_id AND m.profile_id = r.profile_id
-      );
+    IF v_skipped_not_in_group > 0 THEN
+        v_kept_message := format(
+            'Kept %s Forgejo %s for students who are not in a group.',
+            v_skipped_not_in_group,
+            CASE WHEN v_skipped_not_in_group = 1 THEN 'repository' ELSE 'repositories' END
+        );
+    END IF;
 
-    IF v_individual_repo_ids IS NULL OR cardinality(v_individual_repo_ids) = 0 THEN
+    IF cardinality(v_individual_repo_ids) = 0 THEN
         RETURN jsonb_build_object(
-            'message', 'No individual repositories found for this assignment.',
+            'message', coalesce(v_kept_message, 'No individual repositories found for this assignment.'),
             'summary', jsonb_build_object(
                 'repositories_enqueued_for_archive', 0,
                 'repositories_deleted', 0,
@@ -275,19 +278,7 @@ BEGIN
         WHERE s.id = ANY (v_submission_ids);
     END IF;
 
-    DELETE FROM public.repository_check_runs rcr
-    WHERE rcr.repository_id = ANY (v_individual_repo_ids);
-
-    DELETE FROM public.workflow_events we
-    WHERE we.repository_id = ANY (v_individual_repo_ids);
-
-    DELETE FROM public.workflow_run_error wre
-    WHERE wre.repository_id = ANY (v_individual_repo_ids);
-
-    DELETE FROM public.repositories r
-    WHERE r.id = ANY (v_individual_repo_ids);
-
-    GET DIAGNOSTICS v_deleted_repos = ROW_COUNT;
+    v_deleted_repos := public.delete_repository_rows(v_individual_repo_ids);
 
     RETURN jsonb_build_object(
         'message', format(
@@ -295,9 +286,7 @@ BEGIN
             v_enqueued,
             v_forgejo_queued,
             v_deleted_repos
-        ) || CASE WHEN v_skipped_not_in_group > 0 THEN format(
-            ' Kept %s Forgejo repositories of students who are in no group.', v_skipped_not_in_group
-        ) ELSE '' END,
+        ) || coalesce(' ' || v_kept_message, ''),
         'summary', jsonb_build_object(
             'repositories_enqueued_for_archive', v_enqueued,
             'repositories_deleted', v_deleted_repos,
@@ -345,3 +334,61 @@ GRANT EXECUTE ON FUNCTION public.prepare_forgejo_repo_archive(text) TO service_r
 
 COMMENT ON COLUMN public.forgejo_repo_archives.archived_as IS
   'Where the repo was renamed to. Null once archived_at is set means nothing was renamed: the repo was deleted, was already gone, or was kept because its group had members again.';
+
+-- The student handler calls this after checking the course enrollment and formation deadline.
+-- Serialize departures before removing any member so one caller always observes the empty group.
+CREATE OR REPLACE FUNCTION public.leave_forgejo_assignment_group(p_membership_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_assignment_id bigint;
+  v_group_id bigint;
+  v_repo record;
+BEGIN
+  SELECT m.assignment_id, m.assignment_group_id INTO v_assignment_id, v_group_id
+  FROM public.assignment_groups_members m WHERE m.id = p_membership_id;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  -- Take the assignment lock first, in the same order as assignment deletion.
+  PERFORM 1 FROM public.assignments a
+  WHERE a.id = v_assignment_id AND a.git_provider = 'forgejo' FOR SHARE;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  -- This also orders the last-member check against inserts that reference the group.
+  PERFORM 1 FROM public.assignment_groups g
+  WHERE g.id = v_group_id AND g.assignment_id = v_assignment_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  -- The existing membership DELETE trigger also records the departing student's access revocation.
+  DELETE FROM public.assignment_groups_members m
+  WHERE m.id = p_membership_id AND m.assignment_group_id = v_group_id;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.assignment_groups_members m WHERE m.assignment_group_id = v_group_id
+  ) THEN
+    FOR v_repo IN
+      UPDATE public.repositories r SET is_github_ready = false
+      WHERE r.assignment_group_id = v_group_id AND r.git_provider = 'forgejo'
+      RETURNING r.class_id, r.repository
+    LOOP
+      PERFORM public.queue_forgejo_repo_archives(ARRAY[v_repo.class_id], ARRAY[v_repo.repository]);
+    END LOOP;
+  END IF;
+  RETURN true;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.leave_forgejo_assignment_group(bigint) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.leave_forgejo_assignment_group(bigint) TO service_role;

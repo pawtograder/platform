@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { assertForgejoCourseOrg } from "../_shared/repoFileAccess.ts";
 import {
   IllegalArgumentError,
   UserVisibleError,
@@ -251,7 +252,11 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
     if (!forgejo) {
       throw new UserVisibleError("Cannot delete a Forgejo assignment: Forgejo is not configured on this server.", 400);
     }
-    await assertForgejoRepositoriesHaveOnlyTemplateCommits(forgejo, assignmentRepositories, assignment.template_repo);
+    const handout = assignment.template_repo?.trim().toLowerCase();
+    if (handout) {
+      await assertForgejoCourseOrg(adminSupabase, class_id, handout.split("/")[0]);
+    }
+    await assertForgejoRepositoriesHaveOnlyTemplateCommits(forgejo, assignmentRepositories, handout || null);
   } else {
     await assertRepositoriesHaveOnlyTemplateCommits(assignmentRepositories, assignment.template_repo);
   }

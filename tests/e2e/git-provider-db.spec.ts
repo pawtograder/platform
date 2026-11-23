@@ -263,7 +263,7 @@ test("GitHub enqueue RPCs remain inaccessible to anonymous callers", async () =>
 for (const provider of ["github", "forgejo"] as const) {
   test(`deleting a ${provider} assignment outside the RPC queues only a Forgejo handout for archiving`, async () => {
     const { course, assignment } = await fixture(provider);
-    const handout = `e2e-ignore/Handout-${crypto.randomUUID()}`;
+    const handout = `${provider === "forgejo" ? course.slug : "e2e-ignore"}/Handout-${crypto.randomUUID()}`;
     // Remove rubrics so their restrictive FK does not mask the assignment delete.
     await ok(
       supabase
@@ -277,17 +277,12 @@ for (const provider of ["github", "forgejo"] as const) {
         .eq("id", assignment.id)
     );
     await ok(supabase.from("rubrics").delete().eq("class_id", course.id));
-    // Deleting the course is where the handout would be queued from: classes cascades to assignments,
-    // whose AFTER DELETE trigger queues a Forgejo handout. That cascade can't be reached from here on
-    // either host, and never could be: assignment_self_review_settings.class_id references classes with
-    // NO ACTION while assignments.self_review_setting_id is NOT NULL, so the settings row can't go
-    // before the assignment, and the class delete always fails that check at the end of the statement.
-    // What this PR changes is that both hosts now fail the same generic way (23503) instead of Forgejo
-    // alone being refused by assignments_guard_forgejo_delete (0A000).
+    // Class deletion still fails on either host: assignment_self_review_settings.class_id references
+    // classes with NO ACTION while assignments.self_review_setting_id is NOT NULL. Both hosts fail
+    // with 23503 now that the Forgejo-specific assignment delete guard is gone.
     expect((await supabase.from("classes").delete().eq("id", course.id)).error?.code).toBe("23503");
     expect(await ok(supabase.from("classes").select("id").eq("id", course.id))).toHaveLength(1);
-    // Deleting the assignment row fires the same AFTER DELETE trigger that cascade would, and is the
-    // path an instructor deleting one outside delete_assignment_with_all_data takes.
+    // Deleting the assignment outside the RPC fires its AFTER DELETE trigger with the course still present.
     //
     // Its autograder row is in the way, and so are the autograder's own children: creating an assignment
     // seeds a regression-test row, and `autograder_regression_test.autograder_id` references `autograder`

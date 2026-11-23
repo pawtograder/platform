@@ -591,12 +591,9 @@ function CleanupIndividualReposButton({
                   This will:
                 </Text>
                 <Box as="ul" pl={5} fontSize="sm" style={{ listStyleType: "disc" }}>
-                  <li>
-                    Archive {individualRepoCount} individual student{" "}
-                    {individualRepoCount === 1 ? "repository" : "repositories"} on GitHub (async queue)
-                  </li>
-                  <li>Delete related submissions, grades, and workflow data from Pawtograder</li>
-                  <li>Remove the individual repository records (group repos are unchanged)</li>
+                  <li>Queue eligible individual repositories for archiving on GitHub or Forgejo</li>
+                  <li>Delete submissions, grades, and workflow data tied to the repositories being cleaned up</li>
+                  <li>Remove the eligible individual repository records from Pawtograder</li>
                   <li>
                     On Forgejo, keep the repositories of students who aren&apos;t in a group, since Pawtograder would
                     otherwise give them a new, empty one

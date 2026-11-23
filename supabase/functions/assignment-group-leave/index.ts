@@ -1,12 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import {
-  archiveRepoAndLock,
-  enqueueGithubArchiveRepo,
-  enqueueSyncRepoPermissions,
-  syncRepoPermissions
-} from "../_shared/GitHubWrapper.ts";
+import { enqueueGithubArchiveRepo, enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
@@ -50,6 +45,22 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
     throw new IllegalArgumentError("You are not a member of any group for this assignment");
   }
 
+  if (assignment.git_provider === "forgejo") {
+    // Membership removal, readiness, and archive queueing must commit together.
+    // function-grants: service-role
+    const { data: removed, error } = await adminSupabase.rpc("leave_forgejo_assignment_group", {
+      p_membership_id: membership.id
+    });
+    if (error) {
+      console.error(error);
+      throw new Error("Failed to remove member from group");
+    }
+    if (!removed) {
+      throw new IllegalArgumentError("You are not a member of any group for this assignment");
+    }
+    return { message: "You have left the group" };
+  }
+
   //OK I guess we can do it!
   const { error: remove_member_error } = await adminSupabase
     .from("assignment_groups_members")
@@ -72,32 +83,7 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
     throw new Error("Failed to get remaining members");
   }
   const repository = membership.assignment_groups!.repositories[0];
-  if (repository?.git_provider === "forgejo") {
-    // A Forgejo repo's access is the database's: deleting the membership queued the student's removal for
-    // forgejo-reconciler. When the group is now empty its repo is archived too (#1378). The row stays, so the
-    // repositories delete trigger never queues it; queue it here. It's marked not ready first: the repo is
-    // about to be renamed away, and a group with no ready repo is listed by forgejo_group_repos_needed again
-    // once it has members, so it gets a new repo under the same name.
-    if (remaining_members.length === 0) {
-      const { error: ready_error } = await adminSupabase
-        .from("repositories")
-        .update({ is_github_ready: false })
-        .eq("id", repository.id);
-      if (ready_error) {
-        console.error(ready_error);
-        throw new Error("Failed to mark the group's Forgejo repository not ready");
-      }
-      // function-grants: service-role
-      const { error: archive_error } = await adminSupabase.rpc("queue_forgejo_repo_archives", {
-        p_class_ids: [membership.class_id],
-        p_repositories: [repository.repository]
-      });
-      if (archive_error) {
-        console.error(archive_error);
-        throw new Error("Failed to queue the group's Forgejo repository for archiving");
-      }
-    }
-  } else if (repository?.git_provider === "github") {
+  if (repository?.git_provider === "github") {
     // Only a GitHub row gets these jobs: a Forgejo repo's owner/name could also name a GitHub repo, which they
     // would change.
     if (remaining_members.length === 0) {

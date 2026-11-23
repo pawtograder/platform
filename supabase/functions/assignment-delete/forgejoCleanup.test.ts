@@ -125,7 +125,7 @@ Deno.test("Forgejo safety check: nothing to check without repos or a handout", a
   );
 });
 
-type Pending = { id: number; repository: string };
+type Pending = { id: number; repository: string; archived_as?: string };
 function fakeSupabase(pending: Pending[], opts: { unclaimable?: number[]; saveError?: boolean } = {}) {
   const log: string[] = [];
   const client = {
@@ -145,7 +145,10 @@ function fakeSupabase(pending: Pending[], opts: { unclaimable?: number[]; saveEr
             maybeSingle() {
               log.push(`find ${name}`);
               const row = pending.find((p) => p.repository === name);
-              return Promise.resolve({ data: row ? { id: row.id } : null, error: null });
+              return Promise.resolve({
+                data: row ? { id: row.id, archived_as: row.archived_as ?? null } : null,
+                error: null
+              });
             }
           };
           return chain;
@@ -171,9 +174,10 @@ function fakeSupabase(pending: Pending[], opts: { unclaimable?: number[]; saveEr
         }
       };
     },
-    rpc(name: string, args: { p_id: number; p_stale_minutes: number }) {
+    rpc(name: string, args: { p_id: number; p_stale_minutes: number; p_require_no_destination: boolean }) {
       assertEquals(name, "claim_forgejo_repo_archive");
       assertEquals(args.p_stale_minutes, 10);
+      assertEquals(args.p_require_no_destination, true);
       log.push(`claim ${args.p_id}`);
       const claimed = !(opts.unclaimable ?? []).includes(args.p_id);
       return Promise.resolve({ data: claimed ? `claim-${args.p_id}` : null, error: null });
@@ -204,12 +208,10 @@ Deno.test("small batch: each queued repo is claimed, deleted, then marked done",
   );
   assertEquals(counts, { deleted: 1, queued: 0, skipped: 1 });
   assertEquals(deleted, ["org/a", "org/handout"]);
-  // The repo that was deleted records no name, clearing any destination a reconciler pass wrote down for it.
-  // The one already gone from that name keeps it: that pass may have renamed the repo and lost the write.
   assertEquals(log, [
     "find org/a",
     "claim 1",
-    "done 1 archived_at,archived_as if claim claim-1 pending true",
+    "done 1 archived_at if claim claim-1 pending true",
     "find org/handout",
     "claim 2",
     "done 2 archived_at if claim claim-2 pending true"
@@ -220,7 +222,11 @@ Deno.test(
   "small batch: a repo the reconciler holds is left queued, and one it already archived is skipped",
   async () => {
     const { client, log } = fakeSupabase([{ id: 1, repository: "org/a" }], { unclaimable: [1] });
-    const remove = () => Promise.reject(new Error("must not delete"));
+    const removeCalls: string[] = [];
+    const remove = (_config: ForgejoConfig, name: string) => {
+      removeCalls.push(name);
+      return Promise.reject(new Error("must not delete"));
+    };
     const counts = await deleteForgejoRepositoriesSynchronously(
       client,
       config,
@@ -230,8 +236,18 @@ Deno.test(
     // org/a is held by a live claim, so it stays queued; org/b has no pending entry, so it was already archived.
     assertEquals(counts, { deleted: 0, queued: 1, skipped: 1 });
     assertEquals(log, ["find org/a", "claim 1", "find org/b"]);
+    assertEquals(removeCalls, []);
   }
 );
+
+Deno.test("small batch: a repo with a recorded archive destination is left to the reconciler", async () => {
+  const { client, log } = fakeSupabase([{ id: 1, repository: "org/a", archived_as: "archived-a" }]);
+  const counts = await deleteForgejoRepositoriesSynchronously(client, config, [target("org/a")], () =>
+    Promise.resolve(false)
+  );
+  assertEquals(counts, { deleted: 0, queued: 1, skipped: 0 });
+  assertEquals(log, ["find org/a"]);
+});
 
 Deno.test("small batch: a failed delete stays queued and never throws", async () => {
   const { client, log } = fakeSupabase([{ id: 1, repository: "org/a" }]);

@@ -13821,7 +13821,7 @@ export type Database = {
         Returns: number;
       };
       claim_forgejo_repo_archive: {
-        Args: { p_id: number; p_stale_minutes: number };
+        Args: { p_id: number; p_require_no_destination?: boolean; p_stale_minutes: number };
         Returns: string;
       };
       claim_forgejo_repo_token_revocation: {
@@ -15352,6 +15352,10 @@ export type Database = {
         Returns: boolean;
       };
       kick_forgejo_reconciler: { Args: never; Returns: undefined };
+      leave_forgejo_assignment_group: {
+        Args: { p_membership_id: number };
+        Returns: boolean;
+      };
       log_api_gateway_call: {
         Args: {
           p_class_id?: number;

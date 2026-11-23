@@ -13,8 +13,7 @@
 -- start of each pass:
 --   1. deleting a Forgejo repositories row, by any path (group dissolve, individual repo cleanup,
 --      instructor move), through a statement-level trigger;
---   2. assignment-group-leave, when the last member leaves a group whose row is Forgejo (the row stays,
---      so the trigger doesn't see it), calls queue_forgejo_repo_archives itself.
+--   2. leave_forgejo_assignment_group, when the last member leaves a Forgejo group whose repo row stays.
 -- enqueue_github_archive_repo stays GitHub-only. Its callers pass a name, often after deleting the GitHub
 -- row, and a class can hold the same owner/name on both hosts, so routing by name could archive a live
 -- Forgejo repo that belongs to another assignment. Callers that hold a Forgejo row route by its provider.
@@ -120,8 +119,13 @@ $$;
 -- The caller's claim on this entry, or null when it's archived or a live pass holds it. The claim is the
 -- claimed_at it wrote: every later write to the entry filters on it (and on archived_at IS NULL), so a pass
 -- that stalls past p_stale_minutes and loses the entry to another can't overwrite what that one recorded.
+-- Immediate deletion requires no recorded destination, including when it begins between the lookup and claim.
 DROP FUNCTION IF EXISTS public.claim_forgejo_repo_archive(bigint, integer);
-CREATE FUNCTION public.claim_forgejo_repo_archive(p_id bigint, p_stale_minutes integer)
+CREATE OR REPLACE FUNCTION public.claim_forgejo_repo_archive(
+  p_id bigint,
+  p_stale_minutes integer,
+  p_require_no_destination boolean DEFAULT false
+)
 RETURNS timestamptz
 LANGUAGE sql
 VOLATILE
@@ -132,11 +136,12 @@ AS $$
   SET claimed_at = clock_timestamp()
   WHERE id = p_id
     AND archived_at IS NULL
+    AND (NOT p_require_no_destination OR archived_as IS NULL)
     AND (claimed_at IS NULL OR claimed_at < now() - make_interval(mins => p_stale_minutes))
   RETURNING claimed_at;
 $$;
 
 REVOKE ALL ON FUNCTION public.forgejo_repo_archives_due(integer, integer) FROM public, anon, authenticated;
-REVOKE ALL ON FUNCTION public.claim_forgejo_repo_archive(bigint, integer) FROM public, anon, authenticated;
+REVOKE ALL ON FUNCTION public.claim_forgejo_repo_archive(bigint, integer, boolean) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.forgejo_repo_archives_due(integer, integer) TO service_role;
-GRANT EXECUTE ON FUNCTION public.claim_forgejo_repo_archive(bigint, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.claim_forgejo_repo_archive(bigint, integer, boolean) TO service_role;

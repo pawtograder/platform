@@ -19,7 +19,7 @@
 --   Deleting a course with assignments still fails on either host, with or without this migration:
 --   assignment_self_review_settings.class_id references classes with NO ACTION while
 --   assignments.self_review_setting_id is NOT NULL, so the class delete raises 23503. The trigger
---   in 2 would also cover that cascade if a later schema change made it possible.
+--   in 2 requires a live course whose Forgejo organization can be verified.
 --   3. The guard trigger is dropped.
 --
 -- Body is otherwise verbatim from 20261016120000_assignment_delete_atomic_archive.sql, the live
@@ -338,36 +338,24 @@ BEGIN
         USING public.submissions s
         WHERE sr.submission_id = s.id AND s.assignment_id = p_assignment_id;
 
+        -- A check run can reference a submission even if its own repository will be kept.
+        UPDATE public.repository_check_runs rcr
+        SET target_submission_id = NULL
+        FROM public.submissions s
+        WHERE s.id = rcr.target_submission_id AND s.assignment_id = p_assignment_id;
+
         -- Delete submissions
         DELETE FROM public.submissions WHERE assignment_id = p_assignment_id;
 
-        -- Delete repository check runs (before repositories due to FK constraint)
-        DELETE FROM public.repository_check_runs rcr
-        USING public.repositories r
-        WHERE rcr.repository_id = r.id AND r.assignment_id = p_assignment_id;
-
-        -- Delete workflow events that reference repositories for this assignment
-        DELETE FROM public.workflow_events we
-        USING public.repositories r
-        WHERE we.repository_id = r.id AND r.assignment_id = p_assignment_id;
-
-        -- Delete workflow run errors that reference repositories for this assignment
-        DELETE FROM public.workflow_run_error wre
-        USING public.repositories r
-        WHERE wre.repository_id = r.id AND r.assignment_id = p_assignment_id;
-
-        -- Delete repositories, keeping exactly what was removed: these are the cleanup targets,
-        -- split by host. The Forgejo rows are also queued in forgejo_repo_archives by the
-        -- repositories AFTER DELETE trigger (20261122160000_forgejo_repo_archives.sql).
-        WITH deleted AS (
-            DELETE FROM public.repositories WHERE assignment_id = p_assignment_id
-            RETURNING id, repository, git_provider
-        )
-        SELECT array_agg(id ORDER BY id),
-               array_agg(repository ORDER BY id) FILTER (WHERE git_provider = 'github'),
+        -- Capture cleanup targets from the locked rows. The shared delete helper fires the
+        -- repositories AFTER DELETE trigger, which queues Forgejo rows in the same transaction.
+        SELECT array_agg(repository ORDER BY id) FILTER (WHERE git_provider = 'github'),
                array_agg(repository ORDER BY id) FILTER (WHERE git_provider = 'forgejo')
-          INTO v_repository_ids, v_repository_names, v_forgejo_names
-          FROM deleted;
+          INTO v_repository_names, v_forgejo_names
+          FROM public.repositories
+         WHERE id = ANY (v_repository_ids);
+
+        PERFORM public.delete_repository_rows(v_repository_ids);
 
         -- Delete assignment group members
         DELETE FROM public.assignment_groups_members WHERE assignment_id = p_assignment_id;
@@ -552,9 +540,28 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
+DECLARE
+  v_handout text := lower(btrim(OLD.template_repo));
+  v_org text;
 BEGIN
-  IF OLD.git_provider = 'forgejo' AND OLD.template_repo IS NOT NULL THEN
-    PERFORM public.queue_forgejo_repo_archives(ARRAY[OLD.class_id], ARRAY[lower(btrim(OLD.template_repo))]);
+  IF OLD.git_provider = 'forgejo' AND v_handout <> '' THEN
+    -- Also runs inside delete_assignment_with_all_data before its Forgejo targets are queued.
+    -- Use the course slug when no explicit org was set, as handout creation does.
+    SELECT lower(coalesce(nullif(btrim(c.forgejo_org), ''), btrim(c.slug))) INTO v_org
+    FROM public.classes c
+    WHERE c.id = OLD.class_id
+    FOR SHARE;
+
+    -- A parent course being deleted no longer has an org we can validate.
+    IF NOT FOUND THEN
+      RETURN NULL;
+    END IF;
+    IF v_org IS NULL OR split_part(v_handout, '/', 1) <> v_org
+       OR v_handout !~ '^[a-z0-9._-]+/[a-z0-9._-]+$' THEN
+      RAISE EXCEPTION 'Cannot delete assignment: its handout must belong to the course''s Forgejo organization.'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    PERFORM public.queue_forgejo_repo_archives(ARRAY[OLD.class_id], ARRAY[v_handout]);
   END IF;
   RETURN NULL;
 END;

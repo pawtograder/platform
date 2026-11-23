@@ -2982,6 +2982,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   is_instructor_for_class: "none",
   is_instructor_for_student: "none",
   kick_forgejo_reconciler: "none",
+  leave_forgejo_assignment_group: "none",
   log_api_gateway_call: "none",
   log_flashcard_interaction: "none",
   log_help_request_activity: "none",
