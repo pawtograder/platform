@@ -18,12 +18,17 @@ const FORBIDDEN_PALETTE_BG_WITH_WHITE =
 const GENERIC_ERROR_FALLBACK =
   "ConditionalExpression[test.operator='instanceof'][test.right.name='Error'][alternate.type='Literal'][alternate.value=/^(Unknown error|An unexpected error occurred)/]";
 
-// Bans `e instanceof Error ? e.message : String(e)`. For a PostgREST error, a plain object, the
-// String() branch shows "[object Object]" (#983). Only checked in app/ (not app/api), components/
-// and hooks/: lib/ and API routes mostly write errors to logs, not users, and the user-facing
-// mapper is the wrong fix there.
+// Bans `e instanceof Error ? e.message : String(e)`, and the `e instanceof X || e instanceof Error`
+// form of the test. For a PostgREST error, a plain object, the String() branch shows
+// "[object Object]" (#983). Only checked in app/ (not app/api), components/ and hooks/: lib/ and
+// API routes mostly write errors to logs, not users, and the user-facing mapper is the wrong fix
+// there.
 const STRING_ERROR_FALLBACK =
-  "ConditionalExpression[test.operator='instanceof'][test.right.name='Error'][alternate.type='CallExpression'][alternate.callee.name='String']";
+  "ConditionalExpression:matches(" +
+  "[test.operator='instanceof'][test.right.name='Error']," +
+  "[test.operator='||'][test.left.operator='instanceof'][test.left.right.name='Error']," +
+  "[test.operator='||'][test.right.operator='instanceof'][test.right.right.name='Error']" +
+  ")[alternate.type='CallExpression'][alternate.callee.name='String']";
 
 const RESTRICTED_SYNTAX = [
   {
