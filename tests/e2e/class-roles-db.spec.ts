@@ -62,7 +62,8 @@ const SEEDED_CAPABILITIES = [
   "manage_student_repositories",
   "manage_surveys",
   "publish_groups",
-  "run_polls"
+  "run_polls",
+  "send_announcements"
 ];
 /** Capabilities seed_default_class_roles() puts on the default grader role (not only instructor). */
 const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards", "run_polls"];
