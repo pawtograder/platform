@@ -76,6 +76,8 @@ const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
  * first (unique_violation). An expected outcome, not a fault, so it isn't reported to Sentry.
  */
 class RubricSaveConflictError extends Error {}
+// update_rubric_full raises the round conflict as a unique_violation with this hint.
+const RUBRIC_ROUND_CONFLICT_HINT = "rubric_round_conflict";
 
 function hydrateRubricTree(
   rubric: Omit<HydratedRubric, "rubric_parts">,
@@ -1493,7 +1495,11 @@ function InnerRubricPage() {
         p_rubric: payload as never
       });
       if (error) {
-        if (error.code === "23505") throw new RubricSaveConflictError(error.message);
+        // Only the round conflict is an expected refusal. Any other duplicate key is a fault and
+        // goes to Sentry like other save errors.
+        if (error.code === "23505" && error.hint === RUBRIC_ROUND_CONFLICT_HINT) {
+          throw new RubricSaveConflictError(error.message);
+        }
         throw new Error(error.message);
       }
 

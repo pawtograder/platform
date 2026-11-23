@@ -349,6 +349,7 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
     });
     expect(secondError?.code, "a create for a round that already has a rubric").toBe("23505");
     expect(secondError?.message).toContain("just created by someone else");
+    expect(secondError?.hint, "the editor recognizes the round conflict by its hint").toBe("rubric_round_conflict");
     const { data: metaRubrics } = await supabase
       .from("rubrics")
       .select("id")
@@ -361,6 +362,40 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
       .eq("id", own.id)
       .single();
     expect(stillLinked!.meta_grading_rubric_id).toBe(created!.id);
+  });
+
+  // The editor treats only the round conflict as an expected refusal. Another duplicate key, here
+  // the same reference listed twice, is a 23505 without that hint, so the editor reports it as an
+  // unexpected error instead of telling the user someone else created the rubric.
+  test("a duplicate reference in the payload is a 23505 without the round-conflict hint", async () => {
+    const own = await newAssignment("dup-ref");
+    const client = await createAuthenticatedClient(headTa);
+    const base = payload({
+      id: own.grading_rubric_id!,
+      assignment_id: own.id,
+      review_round: "grading-review",
+      name: "Duplicate reference"
+    });
+    const reference = { referenced_rubric_check_id: checkId };
+    const withDuplicate = {
+      ...base,
+      parts: [
+        {
+          ...base.parts[0],
+          criteria: [
+            {
+              ...base.parts[0].criteria[0],
+              checks: [{ name: "Saved check", points: 5, references: [reference, reference] }]
+            }
+          ]
+        }
+      ]
+    };
+    const { error } = await client.rpc("update_rubric_full", { p_rubric: withDuplicate as never });
+    expect(error?.code, "the same reference twice").toBe("23505");
+    expect(error?.hint ?? null).not.toBe("rubric_round_conflict");
+    const { data: rubric } = await supabase.from("rubrics").select("name").eq("id", own.grading_rubric_id!).single();
+    expect(rubric!.name, "the save was rolled back").not.toBe("Duplicate reference");
   });
 
   test("saving an existing rubric fills its assignment's empty link", async () => {
