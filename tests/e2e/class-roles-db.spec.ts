@@ -102,7 +102,7 @@ test.beforeAll(async () => {
   expect(error).toBeNull();
   DEFAULT_GRADER_CAPABILITIES = (data ?? []).map((c) => c.name).sort();
   expect(DEFAULT_GRADER_CAPABILITIES, "this branch's grader capabilities").toEqual(
-    expect.arrayContaining(["grade_submissions", "handle_regrades"])
+    expect.arrayContaining(["grade_submissions", "grant_extensions", "handle_regrades"])
   );
 });
 

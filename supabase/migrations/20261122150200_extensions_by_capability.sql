@@ -42,9 +42,10 @@
 -- policy letting students give themselves negative exceptions, and the triggers that create
 -- extensions from student_deadline_extensions and for new assignments.
 --
--- seed_default_class_roles() is re-created in full, so its body is the one from
--- 20261122150100_regrades_by_capability.sql (grade_submissions and handle_regrades on the default
--- grader role) plus grant_extensions. A later migration that redefines it must keep all three.
+-- seed_default_class_roles() is re-created in full with the same body as
+-- 20261123040100_regrades_by_capability.sql. Its grader list is the one every #1010 migration that
+-- redefines it writes (moderate_discussion, grade_submissions, handle_regrades, grant_extensions,
+-- help_students, manage_flashcards, run_polls); only the names that are capabilities yet join.
 --
 -- Safe to run again: the inserts skip rows that exist, CREATE OR REPLACE gives the same function,
 -- and each policy is dropped first.
@@ -63,8 +64,9 @@ FROM public.class_roles cr
 WHERE cr.default_for IN ('instructor', 'grader') OR cr.default_for IS NULL
 ON CONFLICT DO NOTHING;
 
--- The body from 20261122150100_regrades_by_capability.sql, plus grant_extensions on the default
--- grader role. Instructors already get it from the CROSS JOIN.
+-- The same function as 20261123040000_grading_and_release_by_capability.sql and
+-- 20261123040100_regrades_by_capability.sql: the grader list there already names grant_extensions,
+-- which joins now that it exists. Instructors get it from the CROSS JOIN.
 CREATE OR REPLACE FUNCTION public.seed_default_class_roles(p_class_id bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -87,29 +89,24 @@ BEGIN
   WHERE cr.class_id = p_class_id AND cr.default_for = 'instructor'
   ON CONFLICT DO NOTHING;
 
+  -- What the default grader role can do today, for new classes (#1010). One list for every #1010
+  -- migration that redefines this function, so whichever runs last keeps the others' grants. A
+  -- name joins only once its capability exists, so the list can name capabilities other open PRs
+  -- add (moderate_discussion is #1429's; help_students, manage_flashcards and run_polls are
+  -- #1299-#1301's). Each of those PRs also gives its capability to existing grader roles.
   INSERT INTO public.role_capabilities (role_id, capability)
-  SELECT cr.id, 'grade_submissions'
+  SELECT cr.id, c.name
   FROM public.class_roles cr
-  WHERE cr.class_id = p_class_id AND cr.default_for = 'grader'
-  ON CONFLICT DO NOTHING;
-
-  -- Graders can resolve regrade requests today (#1010), so new classes put handle_regrades on the
-  -- default grader role.
-  INSERT INTO public.role_capabilities (role_id, capability)
-  SELECT cr.id, 'handle_regrades'
-  FROM public.class_roles cr
-  WHERE cr.class_id = p_class_id AND cr.default_for = 'grader'
-  ON CONFLICT DO NOTHING;
-
-  -- Graders can grant extensions today (#1010), so new classes put grant_extensions on the default
-  -- grader role.
-  INSERT INTO public.role_capabilities (role_id, capability)
-  SELECT cr.id, 'grant_extensions'
-  FROM public.class_roles cr
+  JOIN public.capabilities c ON c.name IN (
+    'moderate_discussion', 'grade_submissions', 'handle_regrades', 'grant_extensions',
+    'help_students', 'manage_flashcards', 'run_polls'
+  )
   WHERE cr.class_id = p_class_id AND cr.default_for = 'grader'
   ON CONFLICT DO NOTHING;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.seed_default_class_roles(bigint) FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. assignment_due_date_exceptions
