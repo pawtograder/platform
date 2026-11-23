@@ -40,6 +40,21 @@ import {
 
 test.describe.configure({ mode: "serial" });
 
+// useCapability is false while loading, and the provider also renders its loaded marker after a
+// failed lookup, with no capabilities. So "hidden" only means something once a lookup for this
+// class has succeeded. The listener goes on before navigating so a fast reply isn't missed.
+async function gotoWhenCapabilitiesLoaded(page: Page, classId: number, url: string, heading: string) {
+  const lookup = page.waitForResponse(
+    (response) =>
+      response.url().includes("/rpc/user_class_capabilities") &&
+      response.url().includes(`class_id=eq.${classId}`) &&
+      response.ok()
+  );
+  await gotoCourseUrlWhenHeadingVisible(page, url, heading);
+  await lookup;
+  await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+}
+
 const REVIEW_LINKS = ["Bulk Assign Grading", "Reassign Grading by Grader"];
 const REVIEW_ACTIONS = [
   "Bulk edit grading due dates",
@@ -114,10 +129,8 @@ test.describe("controls gated by capabilities", () => {
 
   const reviewsUrl = () => `/course/${course.id}/manage/assignments/${assignmentId}/reviews`;
 
-  // useCapability is false while loading, so "hidden" only means something once the answer is in.
   async function gotoWithCapabilities(page: Page, url: string, heading: string) {
-    await gotoCourseUrlWhenHeadingVisible(page, url, heading);
-    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+    await gotoWhenCapabilitiesLoaded(page, course.id, url, heading);
   }
 
   async function openReviewsTable(page: Page) {
@@ -313,12 +326,12 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     page
   }) => {
     await loginAsUser(page, graderWithout, course);
-    await gotoCourseUrlWhenHeadingVisible(
+    await gotoWhenCapabilitiesLoaded(
       page,
+      course.id,
       `/course/${course.id}/manage/course/flashcard-decks`,
       "Flashcard Decks"
     );
-    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
 
     const deckRow = page.getByRole("row").filter({ hasText: deckName });
     await expect(deckRow).toBeVisible();
@@ -334,12 +347,12 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     page
   }) => {
     await loginAsUser(page, graderWithout, course);
-    await gotoCourseUrlWhenHeadingVisible(
+    await gotoWhenCapabilitiesLoaded(
       page,
+      course.id,
       `/course/${course.id}/manage/course/flashcard-decks/${deckId}`,
       "Edit Flashcard Deck"
     );
-    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
 
     const cardRow = page.getByRole("group", { name: "Gating card", exact: true });
     await expect(cardRow).toBeVisible();
