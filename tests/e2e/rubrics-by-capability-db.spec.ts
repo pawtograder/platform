@@ -214,7 +214,11 @@ test.describe("rubrics follow manage_rubrics (#1010)", () => {
         `${table} update`
       );
 
-      expectBlocked(await client.from(table).delete().eq("id", rowIds[table]).select("id"), `${table} delete`);
+      // A policy denial: no error and no rows. A foreign-key error (23503) would mean a delete
+      // policy let the grader through.
+      const deleted = await client.from(table).delete().eq("id", rowIds[table]).select("id");
+      expect(deleted.error, `${table} delete`).toBeNull();
+      expect(deleted.data, `${table} delete`).toEqual([]);
       expect(await rowExists(table, rowIds[table]), `${table} row is still there`).toBe(true);
     }
 
