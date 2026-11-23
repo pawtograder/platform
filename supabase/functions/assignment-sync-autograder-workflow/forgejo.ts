@@ -21,8 +21,16 @@ export type ForgejoWorkflowChange = {
   commitSha: string | null;
   liveWorkflow: string | null;
   headSha: string | null;
-  headIsToggleCommit: boolean;
 };
+
+/**
+ * Why a Forgejo assignment can't turn its autograder off. handleForgejoPush records check rows only,
+ * so a push becomes a submission through a grading run and nothing else. Lift this once push-direct
+ * submissions exist on Forgejo.
+ */
+export const FORGEJO_AUTOGRADER_REQUIRED_MESSAGE =
+  "The autograder can't be turned off on a Forgejo assignment yet. On Forgejo a push only becomes a " +
+  "submission through a grading run, so students would have no way to submit.";
 
 const ENABLE_COMMIT_MESSAGE = "Enable autograder workflow: this assignment has an autograder";
 const DISABLE_COMMIT_MESSAGE = "Disable autograder workflow: this assignment has no autograder";
@@ -36,18 +44,17 @@ export async function syncForgejoGradeWorkflow(
   ops: ForgejoWorkflowOps = { read: readFileEntry, change: changeFiles, head: getCommit }
 ): Promise<ForgejoWorkflowChange> {
   const message = hasAutograder ? ENABLE_COMMIT_MESSAGE : DISABLE_COMMIT_MESSAGE;
-  let head: { sha: string; message: string } | null = null;
+  let head: { sha: string } | null = null;
   try {
     const commit = await ops.head(config, templateRepo, "main");
-    head = { sha: commit.sha, message: commit.commit?.message ?? "" };
+    head = { sha: commit.sha };
   } catch {
     // Empty handout or failed lookup: read at the default branch and pin nothing.
   }
   const unchanged = (liveWorkflow: string | null): ForgejoWorkflowChange => ({
     commitSha: null,
     liveWorkflow,
-    headSha: head?.sha ?? null,
-    headIsToggleCommit: head !== null && head.message.trim() === message
+    headSha: head?.sha ?? null
   });
   const read = (path: string) => ops.read(config, templateRepo, path, head?.sha);
 
@@ -66,7 +73,7 @@ export async function syncForgejoGradeWorkflow(
         }
       : { operation: "create", path: FORGEJO_GRADE_WORKFLOW_PATH, content };
     const commitSha = await ops.change(config, templateRepo, [change], message);
-    return { commitSha, liveWorkflow: content, headSha: commitSha, headIsToggleCommit: true };
+    return { commitSha, liveWorkflow: content, headSha: commitSha };
   }
 
   if (!live) return unchanged(null);
@@ -86,7 +93,7 @@ export async function syncForgejoGradeWorkflow(
         }
       ];
   const commitSha = await ops.change(config, templateRepo, changes, message);
-  return { commitSha, liveWorkflow: null, headSha: commitSha, headIsToggleCommit: true };
+  return { commitSha, liveWorkflow: null, headSha: commitSha };
 }
 
 export type ForgejoSyncAssignment = {
@@ -99,15 +106,18 @@ export type ForgejoSyncAssignment = {
 };
 
 export type ForgejoSyncResult = {
-  action: "added" | "removed" | "unchanged";
-  has_autograder: boolean;
+  action: "added" | "unchanged";
+  has_autograder: true;
   template_repo: string;
   existing_repositories_unchanged: number;
-  /** The handout already holds the requested state, but recording its hash or revision failed; a re-sync repairs it. */
+  /** The handout already holds the workflow, but recording its hash or revision failed; a re-sync repairs it. */
   record_error?: string;
 };
 
-/** The handout must be in the class's org: the admin credential can write any repo on the instance. */
+/**
+ * Turns the autograder on for a Forgejo handout. Turning it off is refused (FORGEJO_AUTOGRADER_REQUIRED_MESSAGE).
+ * The handout must be in the class's org: the admin credential can write any repo on the instance.
+ */
 export async function syncForgejoAssignmentWorkflow(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
@@ -116,6 +126,7 @@ export async function syncForgejoAssignmentWorkflow(
   gradingServer: string,
   ops?: ForgejoWorkflowOps
 ): Promise<ForgejoSyncResult> {
+  if (!hasAutograder) throw new UserVisibleError(FORGEJO_AUTOGRADER_REQUIRED_MESSAGE, 409);
   const org = classForgejoOrg({ forgejo_org: assignment.forgejo_org, slug: assignment.class_slug });
   const owner = assignment.template_repo.split("/")[0]?.toLowerCase();
   if (owner !== org) {
@@ -137,7 +148,7 @@ export async function syncForgejoAssignmentWorkflow(
     a.repo_mode !== "none" &&
     a.repo_mode !== "no_submission" &&
     a.has_autograder !== false;
-  const disagreeing = sharers.filter((a) => effective(a) !== hasAutograder);
+  const disagreeing = sharers.filter((a) => !effective(a));
   if (disagreeing.length > 0) {
     throw new UserVisibleError(
       `The handout ${assignment.template_repo} is also used by ${disagreeing.length} other assignment` +
@@ -156,39 +167,60 @@ export async function syncForgejoAssignmentWorkflow(
     .eq("git_provider", "forgejo");
   if (repoCountError) throw repoCountError;
 
+  const attempt = () => syncForgejoGradeWorkflow(config, assignment.template_repo, true, gradingServer, ops);
   let change: ForgejoWorkflowChange;
   try {
-    change = await syncForgejoGradeWorkflow(config, assignment.template_repo, hasAutograder, gradingServer, ops);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new UserVisibleError(
-      `Could not ${hasAutograder ? "add" : "park"} ${FORGEJO_GRADE_WORKFLOW_PATH} in ${assignment.template_repo}. ` +
-        `Please try again: ${msg}`,
-      502
-    );
+    change = await attempt();
+  } catch (first) {
+    // Two enables can both read grade.yml as absent, and Forgejo rejects the second commit. Reading
+    // again lets the loser find the winner's file instead of failing, which the caller would answer
+    // by putting the flag back to off while grade.yml is live.
+    try {
+      change = await attempt();
+    } catch {
+      const msg = first instanceof Error ? first.message : String(first);
+      throw new UserVisibleError(
+        `Could not add ${FORGEJO_GRADE_WORKFLOW_PATH} to ${assignment.template_repo}. Please try again: ${msg}`,
+        502
+      );
+    }
   }
 
-  // Pin the revision LAST: a stale pin on a toggle commit is how a retry detects an unfinished attempt.
-  const headSha = change.headSha;
+  // Past this point the handout holds the workflow, so a failed write is returned rather than
+  // thrown: a thrown error would make the caller restore the old flag.
   const wrote = change.commitSha !== null;
-  const unfinished =
-    !wrote && change.headIsToggleCommit && headSha !== null && assignment.latest_template_sha !== headSha;
-  // Past this point the handout already holds the requested state, so a failed write is
-  // returned rather than thrown: a thrown error would make the caller restore the old flag.
+  let hashRepaired = false;
   let recordError: string | undefined;
   try {
-    if (hasAutograder && change.liveWorkflow !== null) {
-      // Grading checks grade.yml against workflow_sha; a file that was already live keeps its stored hash.
+    // A concurrent disable request saves false before it is refused. Setting the flag back here,
+    // after the commit, means the saved flag can't end up off while grade.yml is live.
+    const { error: flagError } = await supabase
+      .from("assignments")
+      .update({ has_autograder: true })
+      .in("id", ids)
+      .eq("git_provider", "forgejo")
+      .eq("has_autograder", false);
+    if (flagError) throw flagError;
+    if (change.liveWorkflow !== null) {
+      // Grading checks grade.yml against workflow_sha. Compared with the live file rather than
+      // inferred from the head commit: a hash write that failed after an earlier commit, or a
+      // parked copy edited while parked, leaves it stale however many commits land on top.
       const workflowSha = await gradeWorkflowSha(change.liveWorkflow);
-      let update = supabase.from("autograder").update({ workflow_sha: workflowSha }).in("id", ids);
-      if (!wrote && !unfinished) update = update.is("workflow_sha", null);
-      const { error } = await update;
+      const { data: repaired, error } = await supabase
+        .from("autograder")
+        .update({ workflow_sha: workflowSha })
+        .in("id", ids)
+        .or(`workflow_sha.is.null,workflow_sha.neq.${workflowSha}`)
+        .select("id");
       if (error) throw error;
+      hashRepaired = (repaired ?? []).length > 0;
     }
-    if (headSha !== null && (wrote || unfinished)) {
+    // Pinned last and whenever it differs from the head, so a retry repairs a pin that failed
+    // even after other commits landed on the handout.
+    if (change.headSha !== null && (wrote || assignment.latest_template_sha !== change.headSha)) {
       const { error } = await supabase
         .from("assignments")
-        .update({ latest_template_sha: headSha })
+        .update({ latest_template_sha: change.headSha })
         .in("id", ids)
         .eq("git_provider", "forgejo");
       if (error) throw error;
@@ -198,10 +230,11 @@ export async function syncForgejoAssignmentWorkflow(
   }
 
   return {
-    action: change.commitSha ? (hasAutograder ? "added" : "removed") : "unchanged",
-    has_autograder: hasAutograder,
+    action: wrote ? "added" : "unchanged",
+    has_autograder: true,
     template_repo: assignment.template_repo,
-    existing_repositories_unchanged: wrote || unfinished ? (existingRepos ?? 0) : 0,
+    // A repaired hash means an earlier attempt committed the workflow, so the same repos lack it.
+    existing_repositories_unchanged: wrote || hashRepaired ? (existingRepos ?? 0) : 0,
     ...(recordError !== undefined ? { record_error: recordError } : {})
   };
 }

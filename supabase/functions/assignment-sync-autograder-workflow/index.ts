@@ -20,7 +20,7 @@ import { assertUserHasCapabilityOrServiceRole, UserVisibleError, wrapRequestHand
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
-import { syncForgejoAssignmentWorkflow } from "./forgejo.ts";
+import { FORGEJO_AUTOGRADER_REQUIRED_MESSAGE, syncForgejoAssignmentWorkflow } from "./forgejo.ts";
 
 /**
  * Where the live workflow is parked while the autograder is off. GitHub only runs
@@ -156,6 +156,50 @@ async function queueHandoutSyncsForAssignments(
   return { queued: queuedCount, failed: false };
 }
 
+/**
+ * A Forgejo assignment can't turn its autograder off yet (FORGEJO_AUTOGRADER_REQUIRED_MESSAGE). The
+ * request already saved false, so the flag is put back here rather than left to the caller's
+ * rollback, and the handout is brought back to a live grade.yml in case an earlier disable parked it.
+ * Always throws.
+ */
+async function refuseForgejoDisable(
+  adminSupabase: SupabaseClient<Database>,
+  config: NonNullable<ReturnType<typeof forgejoConfig>>,
+  assignment: Parameters<typeof syncForgejoAssignmentWorkflow>[2],
+  modeForcesOff: boolean,
+  scope: Sentry.Scope
+): Promise<never> {
+  scope.setTag("forgejo_disable_refused", "true");
+  // PR and no-repo modes aren't offered on Forgejo; if one got saved anyway, leave the flag alone.
+  if (modeForcesOff) throw new UserVisibleError(FORGEJO_AUTOGRADER_REQUIRED_MESSAGE, 409);
+  const { error: flagError } = await adminSupabase
+    .from("assignments")
+    .update({ has_autograder: true })
+    .eq("id", assignment.id)
+    .eq("git_provider", "forgejo")
+    .eq("has_autograder", false);
+  if (flagError) {
+    Sentry.captureException(flagError, scope);
+    throw new UserVisibleError(
+      `${FORGEJO_AUTOGRADER_REQUIRED_MESSAGE} Turning it back on failed, so save it as enabled: ${flagError.message}`,
+      409
+    );
+  }
+  let detail = " The autograder was left on.";
+  try {
+    const result = await syncForgejoAssignmentWorkflow(adminSupabase, config, assignment, true, publicSupabaseUrl());
+    if (result.record_error !== undefined) {
+      Sentry.captureMessage(`Forgejo handout updated but not recorded: ${result.record_error}`, scope);
+    }
+  } catch (e) {
+    Sentry.captureException(e, scope);
+    detail +=
+      " The handout's grading workflow could not be checked, so save the autograder as enabled again to retry: " +
+      (e instanceof Error ? e.message : String(e));
+  }
+  throw new UserVisibleError(FORGEJO_AUTOGRADER_REQUIRED_MESSAGE + detail, 409);
+}
+
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, reconcile_only } = (await req.json()) as AssignmentSyncAutograderWorkflowRequest;
   scope?.setTag("function", "assignment-sync-autograder-workflow");
@@ -226,18 +270,22 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (assignment.git_provider === "forgejo") {
     const config = forgejoConfig();
     if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
+    const forgejoAssignment = {
+      id: assignment.id,
+      class_id: assignment.class_id,
+      template_repo: templateRepo,
+      forgejo_org: assignment.classes?.forgejo_org ?? null,
+      class_slug: assignment.classes?.slug ?? "",
+      latest_template_sha: assignment.latest_template_sha ?? null
+    };
+    if (!hasAutograder) {
+      await refuseForgejoDisable(adminSupabase, config, forgejoAssignment, isPrMode || isNoRepoMode, scope);
+    }
     const forgejoResult = await syncForgejoAssignmentWorkflow(
       adminSupabase,
       config,
-      {
-        id: assignment.id,
-        class_id: assignment.class_id,
-        template_repo: templateRepo,
-        forgejo_org: assignment.classes?.forgejo_org ?? null,
-        class_slug: assignment.classes?.slug ?? "",
-        latest_template_sha: assignment.latest_template_sha ?? null
-      },
-      hasAutograder,
+      forgejoAssignment,
+      true,
       publicSupabaseUrl()
     );
     const { existing_repositories_unchanged: unchanged, record_error: recordError, ...rest } = forgejoResult;
