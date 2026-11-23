@@ -7,7 +7,7 @@ import {
   toastForgejoRepositoriesUnchanged
 } from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { FORGEJO_DETACH_REASON } from "@/lib/gitProviderOptions";
+import { FORGEJO_DETACH_REASON, forgejoAutograderLockedOn } from "@/lib/gitProviderOptions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
@@ -262,6 +262,16 @@ export default function EditAssignment() {
           values.upstream_repo = null;
           values.pr_branch_convention = null;
           values.require_pr_open = false;
+        }
+        // The form holds a Forgejo assignment's autograder on (forgejoAutograderLockedOn), and the
+        // sync refuses turning it off, so write what the form shows.
+        if (
+          isForgejo &&
+          !isNoRepo &&
+          values.submission_mode !== "pr" &&
+          forgejoAutograderLockedOn("forgejo", queryData ?? undefined)
+        ) {
+          values.has_autograder = true;
         }
         // Enabling the autograder from THIS form skips the grader-repo setup the
         // autograder page performs, so without a configured grader repo we would

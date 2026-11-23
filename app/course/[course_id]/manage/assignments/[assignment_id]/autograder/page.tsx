@@ -8,7 +8,11 @@ import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import { toastAutograderNotRecorded, toastForgejoRepositoriesUnchanged } from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { FORGEJO_GRADER_SETUP_REASON } from "@/lib/gitProviderOptions";
+import {
+  FORGEJO_AUTOGRADER_REQUIRED_REASON,
+  FORGEJO_GRADER_SETUP_REASON,
+  forgejoAutograderLockedOn
+} from "@/lib/gitProviderOptions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -370,6 +374,11 @@ export default function AutograderPage() {
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");
+  // Judged on the saved flag, so a Forgejo assignment saved with the autograder off can still turn it on.
+  const autograderLockedOn = forgejoAutograderLockedOn(currentAssignment?.git_provider ?? "github", {
+    git_provider: currentAssignment?.git_provider,
+    has_autograder: savedHasAutograder.current
+  });
 
   // grader_repo is "owner/repo". Parse into exactly two segments so a malformed value
   // (extra slashes) is rejected here rather than silently producing a slash-containing
@@ -422,7 +431,9 @@ export default function AutograderPage() {
               label="Autograder configuration for this assignment"
               helperText={
                 currentAssignment?.git_provider === "forgejo"
-                  ? "Disabling the autograder parks the grading workflow in the handout repository, so no grading runs start. On Forgejo a push without a grading run does not create a submission yet. Student repositories that already exist keep their own copy of the workflow: Forgejo cannot sync handout changes into them yet."
+                  ? autograderLockedOn
+                    ? FORGEJO_AUTOGRADER_REQUIRED_REASON
+                    : "This assignment was saved with the autograder off, so student pushes create no submissions. Enable it to restore the grading workflow in the handout. Student repositories that already exist keep their own copy of the handout: Forgejo cannot sync handout changes into them yet."
                   : "Disabling the autograder removes the grading workflow from the handout repository, so no grading runs start and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
               }
               errorText={errors.enabled?.message?.toString()}
@@ -438,7 +449,9 @@ export default function AutograderPage() {
                     onValueChange={(details) => field.onChange(details.value === "true")}
                   >
                     <Radio value="true">Enabled</Radio>
-                    <Radio value="false">Disabled</Radio>
+                    <Radio value="false" disabled={autograderLockedOn}>
+                      Disabled
+                    </Radio>
                   </RadioGroup.Root>
                 )}
               />
