@@ -453,7 +453,21 @@ Forgejo calls this function on each push. It checks the HMAC signature
 against `FORGEJO_WEBHOOK_SECRET`, finds the repository by
 `git_provider = 'forgejo'` and name, and writes one `repository_check_runs` row
 per default-branch commit, one commit at a time: the student's commit history.
-Forgejo Actions runs grading separately.
+With the autograder on, Forgejo Actions runs grading separately.
+
+With the autograder off on a push-mode assignment, each default-branch push is
+also the student's submission, made the way GitHub's webhook makes it: the
+function downloads the commit's archive through the admin API and records the
+files. It skips pushes by `FORGEJO_ADMIN_USERNAME` (Pawtograder's own commits),
+pushes by staff to a student's repository, handout-sync commits and deliveries
+the branch head has moved past. Late pushes, empty pushes and oversized
+repositories become rejected submissions the student can see. This needs the
+admin settings (`FORGEJO_ADMIN_USERNAME`, `FORGEJO_ADMIN_PASSWORD`,
+`FORGEJO_AUTH_SOURCE_ID`) in the functions as well as the webhook secret.
+Forgejo does not retry a failed delivery, so a 500 here means the push has no
+submission until the delivery is redelivered from the hook's settings or the
+student pushes again. Redelivering is safe: a commit that already has its
+submission is left alone.
 
 | Response                                                   | Cause                                                                                                                   |
 | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -462,6 +476,7 @@ Forgejo Actions runs grading separately.
 | 400 `Body is not JSON` / `Not a push payload`              | The hook sends a form body, or the payload is malformed                                                                 |
 | 403 `Repository is not on the configured Forgejo instance` | `html_url` isn't under `FORGEJO_URL`                                                                                    |
 | 500 `Error processing webhook`                             | Handler failure. See Sentry. Commits before the failing one may already be recorded                                     |
+| 500, `repo_not_ready_kind` in Sentry                       | Autograder off, and a student pushed before the repository was marked ready. Redeliver once the reconciler marks it     |
 | 200, no row                                                | Not a push or student repository, other branch, pull-request mode, an assignment mode with no repository, or SHA exists |
 
 Fix the Secret or the course org hook. Restart the functions after a new

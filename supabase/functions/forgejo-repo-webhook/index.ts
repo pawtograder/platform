@@ -2,11 +2,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { serveWithSentryFlush } from "../_shared/SentryInit.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { handleForgejoPush, handleForgejoWebhook } from "./webhook.ts";
 
 // Push webhooks from Forgejo repositories (#1109). Forgejo calls this function directly, so it is
-// authenticated by the hook's HMAC signature (FORGEJO_WEBHOOK_SECRET), not by a JWT.
+// authenticated by the hook's HMAC signature (FORGEJO_WEBHOOK_SECRET), not by a JWT. Push-direct
+// submissions (autograder off) also need the admin API settings, read by forgejoConfig().
 serveWithSentryFlush((req) =>
   handleForgejoWebhook(req, {
     secret: Deno.env.get("FORGEJO_WEBHOOK_SECRET"),
@@ -17,7 +19,10 @@ serveWithSentryFlush((req) =>
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
         { auth: REQUEST_SCOPED_AUTH_OPTIONS }
       );
-      return handleForgejoPush(adminSupabase, push, scope);
+      return handleForgejoPush(adminSupabase, push, scope, {
+        forgejo: forgejoConfig(),
+        adminLogin: Deno.env.get("FORGEJO_ADMIN_USERNAME")
+      });
     }
   })
 );

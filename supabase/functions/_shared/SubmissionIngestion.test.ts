@@ -16,7 +16,7 @@
  * Run from supabase/functions:  deno test _shared/SubmissionIngestion.test.ts
  * (it pulls npm:jszip + npm:unzipper from the global deno cache; no DB needed).
  */
-import { assert, assertEquals } from "jsr:@std/assert@^1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import JSZip from "npm:jszip@3.10.1";
@@ -40,7 +40,13 @@ async function generateDummyPkcs8Pem(): Promise<string> {
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", await generateDummyPkcs8Pem());
 Deno.env.set("GITHUB_APP_ID", "1");
 
-const { ingestSubmissionFilesFromZip, collectTextFilesFromZipBuffer } = await import("./SubmissionIngestion.ts");
+const {
+  ingestSubmissionFilesFromZip,
+  ingestSubmissionFilesFromRepo,
+  collectTextFilesFromZipBuffer,
+  ForgejoIngestionNotConfiguredError,
+  SubmissionTooLargeError
+} = await import("./SubmissionIngestion.ts");
 
 // ---- helpers -------------------------------------------------------------
 
@@ -562,4 +568,160 @@ Deno.test("collectTextFilesFromZipBuffer: skips extensionless binaries, keeps ex
   for (const [name, contents] of Object.entries(files)) {
     assert(!contents.includes("\0"), `${name} must not carry a NUL`);
   }
+});
+
+// ---- Forgejo download --------------------------------------------------------
+
+const FORGEJO = { url: "https://git.example.edu", authorization: "Basic eA==", authSourceId: 3 };
+
+/** Runs `fn` with fetch answering `respond`, and returns the URLs it was asked for. */
+async function withFetch(respond: (url: string) => Response, fn: () => Promise<void>): Promise<string[]> {
+  const realFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = ((input: string | URL | Request) => {
+    urls.push(String(input));
+    return Promise.resolve(respond(String(input)));
+  }) as typeof fetch;
+  try {
+    await fn();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  return urls;
+}
+
+Deno.test("ingestSubmissionFilesFromRepo: a Forgejo repository is read from its own archive at the sha", async () => {
+  // Forgejo's archive has one top-level directory named after the repository, like GitHub's zipball.
+  const zip = await buildZip({ "src/Main.java": TEXT_CONTENTS, "img/logo.png": PNG_BYTES }, "hw1-alex");
+  const { client, insertedFiles, storageUploads } = makeFakeSupabase();
+  let result: Awaited<ReturnType<typeof ingestSubmissionFilesFromRepo>> | undefined;
+  const urls = await withFetch(
+    () => new Response(new Uint8Array(zip), { status: 200 }),
+    async () => {
+      result = await ingestSubmissionFilesFromRepo({
+        // deno-lint-ignore no-explicit-any
+        adminSupabase: client as any,
+        submissionId: 9,
+        classId: 10,
+        profileId: "student-profile",
+        groupId: null,
+        repo: "cs101/hw1-alex",
+        sha: "d9eb975102fb245857b4b4f7165062854958d9bf",
+        gitProvider: "forgejo",
+        forgejo: FORGEJO
+      });
+    }
+  );
+  assertEquals(urls, [
+    "https://git.example.edu/api/v1/repos/cs101/hw1-alex/archive/d9eb975102fb245857b4b4f7165062854958d9bf.zip"
+  ]);
+  assertEquals(
+    insertedFiles.map((f) => [f.name, f.is_binary]),
+    [
+      ["src/Main.java", false],
+      ["img/logo.png", true]
+    ]
+  );
+  assertEquals(storageUploads.length, 1);
+  assertEquals(
+    result?.combinedHash,
+    combinedHash({
+      "src/Main.java": sha256Hex(Buffer.from(TEXT_CONTENTS, "utf-8")),
+      "img/logo.png": sha256Hex(PNG_BYTES)
+    })
+  );
+});
+
+Deno.test("ingestSubmissionFilesFromRepo: an oversized Forgejo archive is the usual too-large rejection", async () => {
+  // Past the 120 MB default without holding it: the same 1 MB chunk, over and over, until the reader stops.
+  const chunk = new Uint8Array(1024 * 1024);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled++;
+      controller.enqueue(chunk);
+    }
+  });
+  const { client, insertedFiles } = makeFakeSupabase();
+  await withFetch(
+    () => new Response(body, { status: 200 }),
+    async () => {
+      const error = await assertRejects(
+        () =>
+          ingestSubmissionFilesFromRepo({
+            // deno-lint-ignore no-explicit-any
+            adminSupabase: client as any,
+            submissionId: 9,
+            classId: 10,
+            profileId: "student-profile",
+            groupId: null,
+            repo: "cs101/hw1-alex",
+            sha: "d9eb975",
+            gitProvider: "forgejo",
+            forgejo: FORGEJO
+          }),
+        SubmissionTooLargeError
+      );
+      assertEquals(error.kind, "download");
+      assertEquals(error.limitMb, 120);
+      assert(error.observedMb > 120, String(error.observedMb));
+    }
+  );
+  assert(pulled < 130, `read ${pulled} chunks`);
+  assertEquals(insertedFiles, []);
+});
+
+Deno.test(
+  "ingestSubmissionFilesFromRepo: a Forgejo repository without Forgejo settings fails before any request",
+  async () => {
+    const { client } = makeFakeSupabase();
+    const urls = await withFetch(
+      () => new Response("unexpected", { status: 500 }),
+      async () => {
+        await assertRejects(
+          () =>
+            ingestSubmissionFilesFromRepo({
+              // deno-lint-ignore no-explicit-any
+              adminSupabase: client as any,
+              submissionId: 9,
+              classId: 10,
+              profileId: "student-profile",
+              groupId: null,
+              repo: "cs101/hw1-alex",
+              sha: "d9eb975",
+              gitProvider: "forgejo",
+              forgejo: null
+            }),
+          ForgejoIngestionNotConfiguredError
+        );
+      }
+    );
+    assertEquals(urls, []);
+  }
+);
+
+Deno.test("ingestSubmissionFilesFromRepo: an archive error status fails the ingestion", async () => {
+  const { client } = makeFakeSupabase();
+  await withFetch(
+    () => new Response("Not Found", { status: 404 }),
+    async () => {
+      await assertRejects(
+        () =>
+          ingestSubmissionFilesFromRepo({
+            // deno-lint-ignore no-explicit-any
+            adminSupabase: client as any,
+            submissionId: 9,
+            classId: 10,
+            profileId: "student-profile",
+            groupId: null,
+            repo: "cs101/hw1-alex",
+            sha: "d9eb975",
+            gitProvider: "forgejo",
+            forgejo: FORGEJO
+          }),
+        Error,
+        "archive download failed: 404"
+      );
+    }
+  );
 });

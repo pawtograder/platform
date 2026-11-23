@@ -292,7 +292,7 @@ const SQL_DELETE_PATHS: Record<string, { targets: Target[]; leaves?: string[] }>
  */
 const TS_DELETE_PATHS: Record<string, string> = {
   "supabase/functions/autograder-create-submission/index.ts": "safeCleanupRejectedSubmission",
-  "supabase/functions/github-repo-webhook/index.ts": "cleanupPushDirectSubmission"
+  "supabase/functions/_shared/PushDirectSubmission.ts": "cleanupPushDirectSubmission"
 };
 
 const SOURCE_DIRS = ["app", "components", "hooks", "lib", "utils", "scripts", "supabase/functions"];

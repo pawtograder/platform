@@ -101,7 +101,8 @@ export const FORGEJO_UNSUPPORTED_SUBMISSION_MODES: Readonly<Record<string, strin
 
 /**
  * Checkbox settings that Forgejo can't use yet. The form shows them off and disabled. The
- * autograder is not here: Forgejo grading (#1239) only grades assignments with has_autograder on.
+ * autograder is not here: with it on, Forgejo Actions grades (#1239); with it off,
+ * forgejo-repo-webhook makes each default-branch push a submission, as GitHub's webhook does.
  */
 export const FORGEJO_UNSUPPORTED_SETTINGS = {
   // Branch rules are applied by GitHub repository creation; nothing creates Forgejo repositories here.

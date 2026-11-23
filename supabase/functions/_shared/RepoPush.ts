@@ -8,8 +8,9 @@ import { Database } from "./SupabaseTypes.d.ts";
  * Push handling that both providers share (#1109). Each webhook converts its payload into a
  * `RepoPush`, then uses these steps: find the student repository on that provider, drop pushes that
  * are not to the default branch or that the assignment doesn't take, and record each commit in the
- * commit history. What happens after that (submissions, grading) is still GitHub's alone, in
- * github-repo-webhook; Forgejo grading is #1110.
+ * commit history. What happens after that is the webhook's own: GitHub dispatches grade.yml from
+ * github-repo-webhook, Forgejo Actions runs it on its own, and both create push-direct submissions
+ * for assignments without an autograder through _shared/PushDirectSubmission.ts.
  */
 
 /** The values of `repositories.git_provider` and `assignments.git_provider`. */
@@ -40,6 +41,10 @@ export type RepoPush = {
   /** How many commits the push had, when the payload says. `commits` can list fewer. */
   totalCommits?: number;
   pusherName: string;
+  /** The ref's previous head, all zeros when the push created it. Set for Forgejo pushes. */
+  before?: string;
+  /** When the host created the repository. Set for Forgejo pushes. */
+  repositoryCreatedAt?: string;
 };
 
 /** The parts of GitHub's push payload that `RepoPush` carries. */
