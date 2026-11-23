@@ -1,6 +1,6 @@
 /**
  * #1010: setting a group's mentor, renaming a group and Copy Groups follow manage_groups
- * (20261121200300_groups_by_capability.sql), and group memberships are visible only inside their
+ * (20261122210600_groups_by_capability.sql), and group memberships are visible only inside their
  * own class.
  *
  * - Updating assignment_groups (mentor, name) needs manage_groups in the group's class. A refused

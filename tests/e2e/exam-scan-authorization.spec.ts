@@ -1710,6 +1710,13 @@ test.describe("Exam scan pages: only matching changes which exam a page belongs 
     const { batchId, pages } = await graderUploads(examId, 1, [alice, bob]);
     await processAndConfirm(batchId, 2);
     await graderFinalizes(batchId);
+    // Process refuses a completed batch (#1329), but a finalize that fails partway leaves finalized
+    // exams in an errored batch, which staff can reprocess. That is the path matching must hold on.
+    const { error: errorBatch } = await supabase
+      .from("exam_scan_batches")
+      .update({ status: "error", error: "finalize failed partway" })
+      .eq("id", batchId);
+    expect(errorBatch).toBeNull();
     const before = await membership(batchId);
     const added = [await graderAddsPage(examId, batchId, -1, pages[1].path)];
     await graderSetsBatch(batchId, { total_pages: 3 });

@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261121200300_groups_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210600_groups_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -119,6 +119,15 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## A capability that also decides who can see something
+
+Most capabilities are actions, and any staff member can still see what they saw before. One
+exception: **`manage_gradebook` covers the whole staff gradebook**, seeing it as well as changing it.
+Without it, a staff member can't open the gradebook page, read other students' gradebook cells,
+override a score or use Convert Missing to 0, and the private grades on a student's profile page are
+hidden. It is instructor-only by default, so graders on the default grader role don't have the
+gradebook until an instructor gives it to their role. Students still see their own released grades.
+
 ## For the UI: useCapability
 
 ```tsx
@@ -146,5 +155,5 @@ Manage Groups uses two capabilities. Both are on the default instructor role onl
   the flag for a caller with `manage_groups`.
 
 Anyone enrolled in a class can read that class's group memberships (`assignment_groups_members`).
-Before `20261121200300` the policy compared a class to itself, so it let anyone enrolled in any
+Before `20261122210600` the policy compared a class to itself, so it let anyone enrolled in any
 class read every class's memberships.

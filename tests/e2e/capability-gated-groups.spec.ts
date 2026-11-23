@@ -1,5 +1,5 @@
 /**
- * #1010: Manage Groups uses two capabilities (20261121200300_groups_by_capability.sql).
+ * #1010: Manage Groups uses two capabilities (20261122210600_groups_by_capability.sql).
  *
  * - manage_groups: Copy Groups from Prior Assignment, and the mentor drop-down, which saves at once.
  *   Without it the mentor is shown as text.

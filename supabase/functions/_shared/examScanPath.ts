@@ -40,9 +40,14 @@ export function parseScanPath(path: string): ScanScope | null {
   return { classId: Number(classId), examId: Number(examId), batchId: Number(batchId) };
 }
 
+// A staff-written path as it appears in an error message: quoted, and cut short if long.
+function describePath(path: string): string {
+  return JSON.stringify(path.length > 200 ? `${path.slice(0, 200)}...` : path);
+}
+
 /** Throw unless `path` is a canonical scan key for exactly this class, exam and batch. */
 export function assertScanPathInScope(path: string, scope: ScanScope, what: string): void {
-  const shown = JSON.stringify(path.length > 200 ? `${path.slice(0, 200)}...` : path);
+  const shown = describePath(path);
   const parsed = parseScanPath(path);
   if (!parsed) {
     throw new ScanPathRejectedError(
@@ -53,6 +58,36 @@ export function assertScanPathInScope(path: string, scope: ScanScope, what: stri
     throw new ScanPathRejectedError(
       `${what}: image path ${shown} does not belong to class ${scope.classId}, exam ${scope.examId}, ` +
         `batch ${scope.batchId}; refusing to read it`
+    );
+  }
+}
+
+// Template pages are staff-written rows too, so the worker reads their images under the same rule
+// (#1292). The uploader's key, and the only shape accepted:
+//   classes/{classId}/exams/{examId}/template/page-{n}.png
+const TEMPLATE_FILE = /^page-[1-9][0-9]{0,4}\.png$/;
+
+/** Parse a canonical exam-templates page key into the ids it names, or null if it is not one. */
+export function parseTemplatePath(path: string): { classId: number; examId: number } | null {
+  const segments = path.split("/");
+  if (segments.length !== 6) return null;
+  const [classesLit, classId, examsLit, examId, templateLit, file] = segments;
+  if (classesLit !== "classes" || examsLit !== "exams" || templateLit !== "template") return null;
+  if (!ID.test(classId) || !ID.test(examId) || !TEMPLATE_FILE.test(file)) return null;
+  return { classId: Number(classId), examId: Number(examId) };
+}
+
+/** Throw unless `path` is a template page key for exactly this class and exam. */
+export function assertTemplatePathInScope(
+  path: string,
+  scope: { classId: number; examId: number },
+  what: string
+): void {
+  const parsed = parseTemplatePath(path);
+  if (!parsed || parsed.classId !== scope.classId || parsed.examId !== scope.examId) {
+    throw new ScanPathRejectedError(
+      `${what}: image path ${describePath(path)} is not a template page of class ${scope.classId}, ` +
+        `exam ${scope.examId}; refusing to read it`
     );
   }
 }
