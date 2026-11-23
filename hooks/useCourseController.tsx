@@ -2675,9 +2675,12 @@ export function useSurvey(surveyId: string | undefined) {
  */
 export function usePublishedSurveys() {
   const controller = useCourseController();
+  const { courseId } = controller;
+  // The controller's fetch by ID has no class filter, so it can hold a row from another of the student's courses.
   const predicate = useCallback(
-    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.status === "published" && !survey.deleted_at,
-    []
+    (survey: Database["public"]["Tables"]["surveys"]["Row"]) =>
+      survey.class_id === courseId && survey.status === "published" && !survey.deleted_at,
+    [courseId]
   );
   const surveys = useListTableControllerValues(controller.surveys, predicate);
   const isLoading = !controller.surveys.ready;

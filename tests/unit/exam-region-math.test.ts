@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 
-import { boxCenterInRegion, cropAspect, wordsInRegion } from "@/lib/exam/regionMath";
+import { boxCenterInRegion, cropAspect, padRegions, wordsInRegion, type NormRect } from "@/lib/exam/regionMath";
 import { wordsInRegion as sharedWordsInRegion } from "@/supabase/functions/_shared/examRegionText";
 
 describe("boxCenterInRegion", () => {
@@ -63,5 +63,112 @@ describe("cropAspect", () => {
   it("falls back to 4 for a degenerate region rather than collapsing the box", () => {
     expect(cropAspect({ x: 0, y: 0, width: 0.5, height: 0 }, LETTER)).toBe(4);
     expect(cropAspect({ x: 0, y: 0, width: 0, height: 0.5 }, LETTER)).toBe(4);
+  });
+});
+
+describe("padRegions", () => {
+  type PageRect = NormRect & { page_number: number; circled?: boolean };
+  const r = (x: number, y: number, width: number, height: number, page_number = 1, circled = false): PageRect => ({
+    x,
+    y,
+    width,
+    height,
+    page_number,
+    circled
+  });
+  const round = (n: number) => Math.round(n * 10000) / 10000;
+  const rects = (regions: PageRect[]) =>
+    padRegions(regions, (region) => !region.circled).map(({ x, y, width, height }) => ({
+      x: round(x),
+      y: round(y),
+      width: round(width),
+      height: round(height)
+    }));
+
+  it.each<[string, PageRect[], NormRect[]]>([
+    // The bug in #1371: a line answer came back as a 0.02 strip on the line, so the crop cut off
+    // the handwriting above it and OCR dropped the words whose center was above the strip.
+    [
+      "grows a line answer upward, with a margin",
+      [r(0.5, 0.38, 0.3, 0.02)],
+      [{ x: 0.49, y: 0.355, width: 0.32, height: 0.055 }]
+    ],
+    // Catches growing into the next row: line answers 0.035 apart would overlap, and one answer's
+    // handwriting would be read as part of the next. They meet halfway instead.
+    [
+      "stops halfway to the region above or below",
+      [r(0.5, 0.36, 0.3, 0.02), r(0.5, 0.395, 0.3, 0.02)],
+      [
+        { x: 0.49, y: 0.335, width: 0.32, height: 0.0525 },
+        { x: 0.49, y: 0.3875, width: 0.32, height: 0.0375 }
+      ]
+    ],
+    // Catches growing a circled true/false upward. On the #1371 quiz that put the heading's printed
+    // "True" inside 1(a), where OCR would read it as the answer.
+    [
+      "only adds a margin to a circled answer",
+      [r(0.1, 0.183, 0.057, 0.021, 1, true)],
+      [{ x: 0.09, y: 0.173, width: 0.077, height: 0.041 }]
+    ],
+    // Catches stopping at a region that isn't above or below: this one is in the other column.
+    [
+      "ignores a region in another column",
+      [r(0.5, 0.38, 0.3, 0.02), r(0.1, 0.3, 0.2, 0.02)],
+      [
+        { x: 0.49, y: 0.355, width: 0.32, height: 0.055 },
+        { x: 0.09, y: 0.275, width: 0.22, height: 0.055 }
+      ]
+    ],
+    // Catches comparing regions on different pages.
+    [
+      "ignores a region on another page",
+      [r(0.5, 0.36, 0.3, 0.02, 1), r(0.5, 0.395, 0.3, 0.02, 2)],
+      [
+        { x: 0.49, y: 0.335, width: 0.32, height: 0.055 },
+        { x: 0.49, y: 0.37, width: 0.32, height: 0.055 }
+      ]
+    ],
+    // Catches coordinates off the page, and resizing a drawn box on a boxed template, which only
+    // gets the margin.
+    [
+      "stays on the page and only adds a margin to a tall box",
+      [r(0, 0, 0.2, 0.02), r(0.5, 0.5, 0.3, 0.2)],
+      [
+        { x: 0, y: 0, width: 0.21, height: 0.03 },
+        { x: 0.49, y: 0.49, width: 0.32, height: 0.22 }
+      ]
+    ],
+    // Catches growing through a region that already overlaps: the halfway stop only applied with a
+    // gap between them, so the lower line grew up to 0.115 and took in most of the prompt above it.
+    [
+      "doesn't grow into a region it already overlaps",
+      [r(0.5, 0.1, 0.3, 0.06), r(0.5, 0.15, 0.3, 0.01)],
+      [
+        { x: 0.49, y: 0.09, width: 0.32, height: 0.08 },
+        { x: 0.49, y: 0.15, width: 0.32, height: 0.02 }
+      ]
+    ],
+    // Catches overlapping corners: regions with a small gap both across and down were neither side
+    // by side nor stacked, so nothing stopped their margins meeting at the corner.
+    [
+      "diagonal neighbors meet halfway across their side gap",
+      [r(0.1, 0.3, 0.2, 0.02, 1, true), r(0.305, 0.335, 0.2, 0.02, 1, true)],
+      [
+        { x: 0.09, y: 0.29, width: 0.2125, height: 0.04 },
+        { x: 0.3025, y: 0.325, width: 0.2125, height: 0.04 }
+      ]
+    ],
+    // Catches a negative height: stopping at the midpoint of a box this region sits inside puts the
+    // top below the bottom.
+    [
+      "a region inside a drawn box stays as drawn",
+      [r(0.4, 0.3, 0.4, 0.3), r(0.5, 0.4, 0.1, 0.01)],
+      [
+        { x: 0.39, y: 0.29, width: 0.42, height: 0.32 },
+        { x: 0.5, y: 0.4, width: 0.1, height: 0.01 }
+      ]
+    ]
+  ])("%s", (_name, regions, expected) => {
+    expect(rects(regions)).toEqual(expected);
   });
 });

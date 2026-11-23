@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 
 import {
   DialogBody,
@@ -154,10 +155,6 @@ function getMatchContext(
   return { snippet, lineNumber };
 }
 
-function getGitHubFileLink(repository: string, sha: string, fileName: string): string {
-  return `https://github.com/${repository}/blob/${sha}/${fileName}`;
-}
-
 // Helper to determine badge color for scores
 // Green: full score (but not 0/0), Red: partial/zero score, Gray: 0/0 edge case
 function getScoreBadgeColor(score: number | null, maxScore: number | null): "green" | "red" | "gray" {
@@ -180,6 +177,7 @@ function GraderOutputModal({
   courseId: string | string[] | undefined;
   assignmentId: string | string[] | undefined;
 }) {
+  const repoHost = useRepoWebHost(useAssignmentController().assignment.git_provider);
   if (!result) return null;
 
   const formatOutput = (output: string, format: string) => {
@@ -228,7 +226,7 @@ function GraderOutputModal({
             <HStack>
               <Text fontWeight="bold">File:</Text>
               <Link
-                href={getGitHubFileLink(result.repository, result.sha, result.file_name)}
+                href={repoWebUrl(repoHost, result.repository, `/blob/${result.sha}/${result.file_name}`)}
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -282,6 +280,7 @@ function GraderOutputModal({
 export default function SecurityAuditPage() {
   const { assignment_id, course_id } = useParams();
   const { assignment } = useAssignmentController();
+  const repoHost = useRepoWebHost(assignment.git_provider);
   const { classRealTimeController } = useCourseController();
   const isInstructor = useIsInstructor();
 
@@ -516,7 +515,7 @@ export default function SecurityAuditPage() {
         header: "File Name",
         cell: ({ row }) => (
           <Link
-            href={getGitHubFileLink(row.original.repository, row.original.sha, row.original.file_name)}
+            href={repoWebUrl(repoHost, row.original.repository, `/blob/${row.original.sha}/${row.original.file_name}`)}
             target="_blank"
             rel="noopener noreferrer"
             data-testid={`result-file-link-${row.index}`}
@@ -564,7 +563,7 @@ export default function SecurityAuditPage() {
         )
       }
     ],
-    [course_id, assignment_id]
+    [course_id, assignment_id, repoHost]
   );
 
   // Use TableControllerTable hook with transformed data
@@ -641,7 +640,7 @@ export default function SecurityAuditPage() {
       Score: result.score !== null ? `${result.score}/${result.max_score}` : "Not graded",
       "File Name": result.file_name,
       "Line Number": result.match_line_number,
-      "GitHub Link": getGitHubFileLink(result.repository, result.sha, result.file_name),
+      "GitHub Link": repoWebUrl(repoHost, result.repository, `/blob/${result.sha}/${result.file_name}`),
       "Matched Content": result.matched_content,
       "Search Term": activeSearchTerm
     }));
@@ -656,7 +655,7 @@ export default function SecurityAuditPage() {
     URL.revokeObjectURL(url);
 
     toaster.success({ title: "Export complete", description: "CSV file downloaded" });
-  }, [transformedData, activeSearchTerm, assignment, assignment_id]);
+  }, [transformedData, activeSearchTerm, assignment, assignment_id, repoHost]);
 
   if (!isInstructor) {
     return (
