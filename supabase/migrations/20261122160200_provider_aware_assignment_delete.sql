@@ -57,8 +57,9 @@ DECLARE
     v_syncs_in_flight integer := 0;
     v_syncs_cancelled integer := 0;
 BEGIN
-    -- Only service_role and postgres may call this (see the REVOKE below); authorization of
-    -- the human behind the request is the calling edge function's job.
+    -- Only service_role and postgres may call this (the grants set by
+    -- 20261016120000_assignment_delete_atomic_archive.sql, which CREATE OR REPLACE keeps); authorization
+    -- of the human behind the request is the calling edge function's job.
 
     -- Check if assignment exists and belongs to the specified class
     SELECT title, template_repo, git_provider INTO v_assignment_title, v_template_repo, v_git_provider

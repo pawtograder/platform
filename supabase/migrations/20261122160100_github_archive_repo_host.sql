@@ -9,7 +9,11 @@
 -- skipped. Any other provider queues nothing: Forgejo repos are archived through forgejo_repo_archives.
 -- NULL keeps the by-name guard for callers that don't know the host. The body is otherwise unchanged.
 
+-- Both signatures are dropped so the file re-runs: a database that already applied it (preview applied it
+-- under an earlier name) has the 5-argument function, and a plain CREATE would fail on it. Dropping loses
+-- the grants, so they are set again at the end.
 DROP FUNCTION IF EXISTS public.enqueue_github_archive_repo(bigint, text, text, text);
+DROP FUNCTION IF EXISTS public.enqueue_github_archive_repo(bigint, text, text, text, text);
 
 CREATE FUNCTION public.enqueue_github_archive_repo(p_class_id bigint, p_org text, p_repo text,
   p_debug_id text DEFAULT NULL, p_git_provider text DEFAULT NULL
