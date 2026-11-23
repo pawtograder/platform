@@ -3,12 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { useCapability, useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
-import {
-  useAssignments,
-  useCourseController,
-  useLabSections,
-  useUserRolesWithProfiles
-} from "@/hooks/useCourseController";
+import { useAssignments, useCourseController, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
 import { Assignment, LabSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
@@ -107,11 +102,14 @@ export default function LabRosterPage() {
   // Instructors hold every capability; isInstructor keeps their link if the lookup fails.
   const isInstructor = useIsInstructor();
   const canManageRoster = useCapability("manage_roster") || isInstructor;
-  const labSections = useLabSections();
+  // Read straight from the controller: if it already finished loading, the first render has the
+  // sections, so the page doesn't start with an empty list while labSectionsReady is true.
+  const labSections = useTableControllerTableValues(controller.labSections);
   const userRoles = useUserRolesWithProfiles();
   const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
   const profiles = useTableControllerTableValues(controller.profiles);
   const labSectionLeadersReady = useIsTableControllerReady(controller.labSectionLeaders);
+  const labSectionsReady = useIsTableControllerReady(controller.labSections);
   const allAssignments = useAssignments();
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
@@ -166,8 +164,9 @@ export default function LabRosterPage() {
 
   // Initialize selection to first section in list, and accordion state
   useEffect(() => {
-    // Wait for lab sections to be loaded, leader data to be ready, and controller to exist
-    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady && controller.labSectionLeaders != null) {
+    // Wait for lab sections and leaders to finish loading. A class can have no lab sections, so
+    // wait for the load itself, not for at least one section.
+    if (!isInitialized && labSectionsReady && labSectionLeadersReady && controller.labSectionLeaders != null) {
       // If user has no sections, expand other sections accordion by default
       if (mySections.length === 0) {
         setIsOtherSectionsOpen(true);
@@ -182,7 +181,14 @@ export default function LabRosterPage() {
 
       setIsInitialized(true);
     }
-  }, [labSections, labSectionLeadersReady, controller.labSectionLeaders, mySections, otherSections, isInitialized]);
+  }, [
+    labSectionsReady,
+    labSectionLeadersReady,
+    controller.labSectionLeaders,
+    mySections,
+    otherSections,
+    isInitialized
+  ]);
 
   // Create a map from section ID to section name
   const sectionIdToName = useMemo(() => {

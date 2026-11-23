@@ -8,6 +8,8 @@
  *   remove a grader.
  * - A default grader doesn't see Enrollments in the menu, sees no roster buttons, and is sent from
  *   the lab sections page back to the lab roster.
+ * - The class has no lab sections, so these tests also check that the lab roster page finishes
+ *   loading in an empty class.
  */
 import { expect, test, type Page } from "@playwright/test";
 import {
@@ -34,18 +36,7 @@ test.describe("Roster pages are gated by manage_roster", () => {
     grader = await createUserInClass({ role: "grader", class_id: course.id });
     headTa = await createUserInClass({ role: "grader", class_id: course.id });
     await createUserInClass({ role: "student", class_id: course.id });
-    // The lab roster page shows "Loading" until the class has a lab section.
-    expect(
-      (
-        await supabase.from("lab_sections").insert({
-          class_id: course.id,
-          name: "E2E Lab",
-          day_of_week: "monday",
-          start_time: "10:00",
-          end_time: "11:00"
-        })
-      ).error
-    ).toBeNull();
+    // No lab sections on purpose: the lab roster page must still finish loading.
 
     const { data: role, error: roleError } = await supabase
       .from("class_roles")
