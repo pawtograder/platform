@@ -11,20 +11,27 @@ rows instead of failing it.
 
 ## What is live and what is not
 
-| PR    | Status                            | What it changes                                                                                                                                          |
-| ----- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #1159 | merged                            | The refine data provider reports an `update` or `deleteOne` that RLS refused                                                                             |
-| #1296 | merged (`454de927`)               | `TableController` does the same for `update`, `delete` and `hardDelete`, and puts the row back in its cache                                              |
-| #1246 | merged (`3a9bbfe4`)               | One mapper for every role (`getUserFacingErrorMessage`), and `reportUnexpectedError` with its list of expected codes                                     |
-| #1247 | open                              | Toasts across the app use the mapper, staff screens pass the viewer's role, and two ESLint rules ban the old fallbacks                                   |
-| #1297 | open (migration `20261123150000`) | `publish_assignment_group_changes` refuses with 42501, the mapper keeps a function's own 42501 message, and Publish Changes needs an instructor or admin |
+| PR    | Status                            | What it changes                                                                                                                                                                                                                   |
+| ----- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #1159 | merged                            | The refine data provider reports an `update` or `deleteOne` that RLS refused                                                                                                                                                      |
+| #1296 | merged (`454de927`)               | `TableController` does the same for `update`, `delete` and `hardDelete`, and puts the row back in its cache                                                                                                                       |
+| #1246 | merged (`3a9bbfe4`)               | One mapper for every role (`getUserFacingErrorMessage`), and `reportUnexpectedError` with its list of expected codes                                                                                                              |
+| #1247 | open                              | Toasts across the app use the mapper, staff screens pass the viewer's role, the mapper keeps a database function's own 42501, 23505 and 23514 message and filters Postgres's own text, and two ESLint rules ban the old fallbacks |
+| #1297 | open (migration `20261123150000`) | `publish_assignment_group_changes` refuses with 42501, its publish handler expects that 42501, and Publish Changes needs an instructor or admin                                                                                   |
 
 Staging has #1246: the mapper takes a role, and `reportUnexpectedError` is there with its list of
-expected codes. No screen passes a role until #1247 merges, so everyone on staging still gets the
-student wording ("contact your instructor"), and the regrade requests fetch is the only caller of
-`reportUnexpectedError`. Until #1297 merges, every 42501 gets the generic permission sentence, and
-the publish function still raises P0001. The rest of this page describes the code with all five
-merged and says where staging differs today.
+expected codes. Until #1247 merges, staging differs from the rest of this page in these ways:
+
+- No screen passes a role, so everyone gets the student wording ("contact your instructor").
+- `getErrorMessage` returns the raw `message` (or `String(error)`) instead of calling the mapper, so
+  toasts that use it can show Postgres's own text.
+- Every 42501 gets the generic permission sentence, every 23505 and 23514 gets the generic text, and
+  every 23503 says "Something this action depends on is missing or was deleted", even on a delete.
+- The fallbacks filter less Postgres text (see below the table in What users see).
+- The regrade requests fetch is the only caller of `reportUnexpectedError`.
+
+Until #1297 merges, the publish function still raises P0001. The rest of this page describes the
+code with all five merged.
 
 ## Refused write requests
 
@@ -52,28 +59,41 @@ one for a row that is already gone.
 ## What users see
 
 `getUserFacingErrorMessage(error, context)` in `lib/studentFacingErrorMessages.ts` picks the
-message. `getErrorMessage` (`lib/errorMessage.ts`) and `getStudentFacingErrorMessage` call it, so
-all three give the same text.
+message. `getStudentFacingErrorMessage` calls it, and with #1247 so does `getErrorMessage`
+(`lib/errorMessage.ts`), so all three give the same text. "Raised by one of our functions" means a
+message from `raise exception '...'` that isn't Postgres's own text (defined below the table). "As a
+sentence" means the mapper capitalizes its first letter and adds a final period.
 
-| Error                                                                                                                                   | Message                                                                                                 |
-| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Refused write request                                                                                                                   | Its own message, above                                                                                  |
-| 42501 raised by one of our functions                                                                                                    | The function's message, then who to ask                                                                 |
-| 42501 written by Postgres ("permission denied for …", "… row-level security policy …", "must be owner of …"), or a bare "Access denied" | "You don't have permission to do that.", then who to ask                                                |
-| PGRST301                                                                                                                                | "Your session expired or is invalid. Refresh the page and sign in again."                               |
-| PGRST116                                                                                                                                | "Nothing was found for this request. It may have been removed or you may not have access."              |
-| 23505                                                                                                                                   | "This was already saved or conflicts with existing data. Refresh the page and try again."               |
-| 23503                                                                                                                                   | "Something this action depends on is missing or was deleted. Refresh the page and try again."           |
-| 23514                                                                                                                                   | "Some entered values are not allowed for this form." and a hint to check the input                      |
-| 57014                                                                                                                                   | "The request took too long and was canceled. Try again in a moment."                                    |
-| P0001                                                                                                                                   | The function's message, or "This action is not allowed right now." when it has none                     |
-| Anything else                                                                                                                           | The message, unless it looks internal; then `details` and `hint`, filtered the same way; then see below |
+| Error                                                                                                                                     | Message                                                                                                              |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Refused write request                                                                                                                     | Its own message, above                                                                                               |
+| 42501 raised by one of our functions                                                                                                      | The function's message as a sentence, then who to ask                                                                |
+| 42501 in Postgres's own text (RLS and GRANT refusals such as "permission denied for …"), or a bare "Access denied" or "Permission denied" | "You don't have permission to do that.", then who to ask                                                             |
+| PGRST301                                                                                                                                  | "Your session expired or is invalid. Refresh the page and sign in again."                                            |
+| PGRST116                                                                                                                                  | "Nothing was found for this request. It may have been removed or you may not have access."                           |
+| 23505 raised by one of our functions                                                                                                      | The function's message as a sentence                                                                                 |
+| 23505 from Postgres ("duplicate key value violates unique constraint …")                                                                  | "This was already saved or conflicts with existing data. Refresh the page and try again."                            |
+| 23503 on a delete (or a key update) of a row other rows still point at                                                                    | "Other data still uses this, so it can't be deleted. Remove or move what uses it first, then try again."             |
+| 23503 on an insert or update that points at a missing row                                                                                 | "Something this action depends on is missing or was deleted. Refresh the page and try again."                        |
+| 23514 raised by one of our functions                                                                                                      | The function's message as a sentence                                                                                 |
+| 23514 from Postgres ("… violates check constraint …")                                                                                     | "Some entered values are not allowed for this form." and a hint to check the input                                   |
+| 57014                                                                                                                                     | "The request took too long and was canceled. Try again in a moment."                                                 |
+| P0001                                                                                                                                     | The function's message as raised, or "This action is not allowed right now." when it has none                        |
+| Anything else with a code                                                                                                                 | The message, then `details` and `hint`, skipping Postgres's own text; then "Something went wrong. Please try again." |
+| No code (an `Error`, or an object without `code`)                                                                                         | `details` and `hint`, then the message, skipping Postgres's own text; then "Something went wrong. Please try again." |
 
-A message looks internal when it contains "relation ", "violates foreign key" or "duplicate key
-value violates unique constraint". The filter doesn't catch everything. When it rejects the message
-and `details` and `hint`, or when the error has no code at all, the mapper returns `details` and
-`hint`, then the message, without the filter, and the generic sentence only when all three are
-empty. So text such as "duplicate key value violates unique constraint …" can still reach the user.
+Postgres's own text is any text that contains "relation ", "violates foreign key", "duplicate key
+value violates unique constraint", "violates check constraint", "violates not-null constraint",
+"failing row contains" or "row-level security policy", or that starts with "permission denied for ",
+"permission denied to " or "must be owner of ". The mapper tells a 23503 on a delete from one on an
+insert or update by Postgres's text: the message starts "update or delete on table", or `details`
+says "is still referenced from table".
+
+Because every fallback skips Postgres's own text, a 23502 (a required value left empty), whose
+message names the column and table and whose `details` is "Failing row contains (…)", shows
+"Something went wrong. Please try again." On staging, before #1247, the filter has only the first
+three phrases, and the last fallbacks don't apply it. So Postgres's text can reach the user there:
+the same 23502 shows "Failing row contains (…)".
 
 "Who to ask" depends on `context.role`:
 
@@ -83,11 +103,13 @@ empty. So text such as "duplicate key value violates unique constraint …" can 
 | `instructor`, `admin` | "If you think you should, let the Pawtograder team know so we can look into it." |
 | `student`, or none    | "If you need access, contact your instructor."                                   |
 
-Staff screens get the role from `useStaffErrorRole` (`hooks/useStaffErrorRole.ts`), which returns
-`instructor` or `grader` from the effective role. An instructor viewing as a student therefore gets
-the grader wording. Screens any course member sees use `useViewerErrorRole`, which returns the
-effective course role and gives the student wording outside a course. Both read the role once, when
-the page loads, so a user whose role changes while the page is open still gets the old wording.
+Both hooks are in `hooks/useStaffErrorRole.ts` (#1247). Staff screens use `useStaffErrorRole`, which
+returns `instructor` for instructors and course admins and `grader` otherwise, from the effective
+role. An instructor viewing as a student therefore gets the grader wording. Screens any course
+member sees, such as the help request chat and video call controls, use `useViewerErrorRole`,
+which returns the effective course role and gives the student wording outside a course. Both read
+the role once, when the page loads, so a user whose role changes while the page is open still gets
+the old wording.
 
 Two contexts replace the message for a 42501 or a refused write request.
 `releasedReviewGraderBlocked` gives "This grading feedback has already been released to students…",
@@ -101,8 +123,9 @@ options)` sends the error to Sentry unless it is expected:
 
 - A refused write request is always expected.
 - PGRST301, 23505, 23514 and P0001 are expected by default.
-- 42501, PGRST116 and 23503 are not. When a page reads data they usually mean our bug, such as a
-  missing GRANT, and on a change they often mean the page offered an action the database refuses. A caller that expects one passes
+- 42501 (including one a database function raised on purpose), PGRST116 and 23503 are not. When a
+  page reads data they usually mean our bug, such as a missing GRANT, and on a change they often
+  mean the page offered an action the database refuses. A caller that expects one passes
   `{ expected: [...] }`. With #1297, Manage Groups' publish handler expects 42501. No caller on
   staging passes `expected` yet.
 
@@ -187,12 +210,22 @@ refuses anyone who isn't an instructor or admin with P0001. Once #1297 is deploy
 publish migration isn't applied. Run the checks in Checking it by hand.
 
 **The publish refusal shows only "You don't have permission to do that."** The database raised
-42501, but the client is from before #1297 (for example after an app rollback), and its mapper
+42501, but the client is from before #1247 (for example after an app rollback), and its mapper
 replaces every 42501 message with the generic sentence. Nothing is broken.
 
 **Staff see "contact your instructor".** Either #1247 isn't deployed (staging has #1246's roles, but
-no screen passes one yet), or that call site doesn't pass a role. Search the component for `getUserFacingErrorMessage(` and check for
-`{ role: errorRole }`.
+no screen passes one yet), or that call site doesn't pass a role. Search the component for
+`getUserFacingErrorMessage(` or `getErrorMessage(` and check for `{ role: errorRole }`.
+
+**A toast shows Postgres's own text, such as "Failing row contains (…)" or "duplicate key value
+violates unique constraint …".** Either #1247 isn't deployed (see What is live and what is not),
+or the call site shows `error.message` itself instead of calling the mapper.
+
+**A delete fails with "Something this action depends on is missing or was deleted".** On staging,
+before #1247, every 23503 gets that text, including a delete that other rows still block. With
+#1247 a blocked delete says "Other data still uses this, so it can't be deleted." The old text on a
+delete then means the error reached the mapper without Postgres's message and `details`, so the
+mapper couldn't tell which way the reference points.
 
 **Several Sentry events tagged `error_code:42501`.** A page offers an action that RLS or a function
 refuses. `error_context.operation` names the call. Compare the control's capability check on the
@@ -203,23 +236,26 @@ capabilities, so most fixes belong there.
 bug. The mapper isn't involved.
 
 **A toast says "Unknown error" or "[object Object]".** A call site the #1247 sweep missed. ESLint
-bans `x instanceof Error ? x.message : "Unknown error"` everywhere, and `... : String(x)` in `app/`
-(except `app/api/`), `components/` and `hooks/`. CI runs `next lint`, which checks `app/`,
-`components/` and `lib/` but not `hooks/`, so a hook can still slip through. The `String(...)` rule
-also catches a condition such as `err instanceof A || err instanceof Error`, but the
-`"Unknown error"` rule doesn't. Fix the call site with
-`getUserFacingErrorMessage(error)`.
+bans `x instanceof Error ? x.message : "Unknown error"` everywhere except the Deno edge functions in
+`supabase/functions/`, whose errors go to logs and HTTP responses, not toasts. It bans
+`... : String(x)` in `app/` (except `app/api/`), `components/` and `hooks/`. CI runs `next lint`,
+which checks `app/`, `components/` and `lib/` but not `hooks/`, so a hook can still slip through.
+The `String(...)` rule also catches a condition such as `err instanceof A || err instanceof Error`,
+but the `"Unknown error"` rule doesn't. Fix the call site with `getUserFacingErrorMessage(error)`,
+and pass `{ role: errorRole }` on a screen staff see.
 
 ## Rollback
 
 Migrations are forward-only (see [Rollback](./rollback.md)). To go back to the P0001 refusal, add a
 migration that re-creates `publish_assignment_group_changes` from
 `20261118140200_forgejo_group_repos.sql`, the definition `20261123150000` copied. The client handles
-both codes: P0001 shows the function's message, and 42501 shows it with the "who to ask" sentence.
+both codes: P0001 shows the function's message as raised, and 42501 shows it as a sentence with the
+"who to ask" sentence.
 
-Rolling the app back while the migration stays is safe. The older mapper turns every 42501 into "You
-don't have permission to do that." and the "who to ask" sentence for the role the screen passes, or
-"If you need access, contact your instructor." on a client from before #1247.
+Rolling the app back while the migration stays is safe. A client that has #1247 but not #1297 still
+shows the function's 42501 message, since the mapper change is in #1247. A client from before #1247
+turns every 42501 into "You don't have permission to do that. If you need access, contact your
+instructor."
 
 ## Suggested alert (not shipped)
 
