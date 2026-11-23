@@ -12,10 +12,11 @@ export function useStaffErrorRole(): Extract<ErrorAudienceRole, "instructor" | "
 
 /**
  * The `role` to pass to `getUserFacingErrorMessage` on screens any course member can see: the
- * viewer's effective course role. Outside a course (no `ClassProfileProvider`) it is `undefined`,
- * which gives the student wording. Staff-only screens can use `useStaffErrorRole` instead.
+ * viewer's effective course role. A course admin gets `"admin"`, which has the instructor wording.
+ * Outside a course (no `ClassProfileProvider`) it is `undefined`, which gives the student wording.
+ * Staff-only screens can use `useStaffErrorRole` instead.
  */
 export function useViewerErrorRole(): ErrorAudienceRole | undefined {
   const role = useOptionalCourseRole();
-  return role === "instructor" || role === "grader" || role === "student" ? role : undefined;
+  return role === "admin" || role === "instructor" || role === "grader" || role === "student" ? role : undefined;
 }
