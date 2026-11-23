@@ -587,6 +587,9 @@ test.describe("office hours controls gated by help_students and manage_office_ho
   let student: TestingUser;
   let queueId: number;
   let helpRequestId: number;
+  // In progress and assigned to that grader, so Escalate would show if help_students weren't checked.
+  let withoutHelpRequestId: number;
+  let plainGraderRequestId: number;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -674,6 +677,26 @@ test.describe("office hours controls gated by help_students and manage_office_ho
       help_queue_id: queueId
     });
     helpRequestId = helpRequest.id;
+    for (const [helper, assign] of [
+      [graderWithoutHelp, (id: number) => (withoutHelpRequestId = id)],
+      [plainGrader, (id: number) => (plainGraderRequestId = id)]
+    ] as const) {
+      const { id } = await insertHelpRequest({
+        class_id: course.id,
+        student_profile_id: student.private_profile_id,
+        request: `OH gate in progress for ${helper.private_profile_id} ${suffix}`,
+        help_queue_id: queueId
+      });
+      expect(
+        (
+          await supabase
+            .from("help_requests")
+            .update({ status: "in_progress", assignee: helper.private_profile_id })
+            .eq("id", id)
+        ).error
+      ).toBeNull();
+      assign(id);
+    }
 
     expect(
       (
@@ -689,11 +712,20 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     ).toBeNull();
   });
 
+  // Like the other describes: "hidden" only means something once a capability lookup for this class
+  // has succeeded and the provider has applied it.
+  async function gotoWithCapabilities(page: Page, url: string) {
+    const lookup = page.waitForResponse(
+      (r) => r.url().includes("/rpc/user_class_capabilities") && r.url().includes(`class_id=eq.${course.id}`) && r.ok()
+    );
+    await page.goto(url);
+    await lookup;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+  }
+
   test("a grader without help_students does not see Create New Queue", async ({ page }) => {
     await loginAsUser(page, graderWithoutHelp, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
-    await capabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/queues`);
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create New Queue", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Create Your First Queue", exact: true })).toHaveCount(0);
@@ -704,27 +736,17 @@ test.describe("office hours controls gated by help_students and manage_office_ho
   }) => {
     await loginAsUser(page, graderWithoutHelp, course);
 
-    const dashboardCapabilities = page.waitForResponse(
-      (r) => r.url().includes("/rpc/user_class_capabilities") && r.ok()
-    );
-    await page.goto(`/course/${course.id}/manage/office-hours`);
-    await dashboardCapabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours`);
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Start Working", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Stop Working", exact: true })).toHaveCount(0);
 
-    const assignmentCapabilities = page.waitForResponse(
-      (r) => r.url().includes("/rpc/user_class_capabilities") && r.ok()
-    );
-    await page.goto(`/course/${course.id}/manage/office-hours/settings/assignments`);
-    await assignmentCapabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/assignments`);
     await expect(page.getByRole("heading", { name: "Help Queue Assignment Management" })).toBeVisible();
     await expect(page.getByRole("button", { name: "End Assignment" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
 
-    const karmaCapabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await page.goto(`/course/${course.id}/manage/office-hours/settings/karma`);
-    await karmaCapabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/karma`);
     await expect(page.getByRole("heading", { name: "Student Karma Management" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Karma Entry", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Create First Karma Entry", exact: true })).toHaveCount(0);
@@ -734,19 +756,35 @@ test.describe("office hours controls gated by help_students and manage_office_ho
 
   test("a grader with only manage_office_hours sees Moderation in a request chat", async ({ page }) => {
     await loginAsUser(page, graderManageOnly, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await page.goto(`/course/${course.id}/manage/office-hours/request/${helpRequestId}`);
-    await capabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/request/${helpRequestId}`);
     await expect(page.getByText(`Request #${helpRequestId}`)).toBeVisible();
     await expect(page.getByRole("button", { name: "Moderation" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Karma" })).toHaveCount(0);
   });
 
+  test("a grader without help_students sees no Escalate, Resolve or End ticket in a request chat", async ({ page }) => {
+    await loginAsUser(page, graderWithoutHelp, course);
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/request/${withoutHelpRequestId}`);
+    await expect(page.getByText(`Request #${withoutHelpRequestId}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Escalate" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Resolve" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "End ticket" })).toHaveCount(0);
+  });
+
+  test("a default grader with help_students sees Escalate, Resolve and End ticket on their request", async ({
+    page
+  }) => {
+    await loginAsUser(page, plainGrader, course);
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/request/${plainGraderRequestId}`);
+    await expect(page.getByText(`Request #${plainGraderRequestId}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Escalate" }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Resolve" }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "End ticket" }).first()).toBeVisible();
+  });
+
   test("a default grader with help_students sees Create New Queue", async ({ page }) => {
     await loginAsUser(page, plainGrader, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await page.goto(`/course/${course.id}/manage/office-hours/settings/queues`);
-    await capabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/queues`);
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
     // Header create is always shown when capable; empty-state may also show before queues load.
     await expect(page.getByRole("button", { name: "Create New Queue", exact: true })).toBeVisible();
@@ -754,9 +792,7 @@ test.describe("office hours controls gated by help_students and manage_office_ho
 
   test("a grader without manage_office_hours can open templates settings but not create", async ({ page }) => {
     await loginAsUser(page, plainGrader, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
-    await capabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/templates`);
     await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create New Template", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Create Your First Template", exact: true })).toHaveCount(0);
@@ -764,9 +800,7 @@ test.describe("office hours controls gated by help_students and manage_office_ho
 
   test("an instructor with manage_office_hours can open templates settings", async ({ page }) => {
     await loginAsUser(page, instructor, course);
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await page.goto(`/course/${course.id}/manage/office-hours/settings/templates`);
-    await capabilities;
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/templates`);
     await expect(page.getByRole("heading", { name: "Help Request Templates" })).toBeVisible();
     // Header and empty-state both offer a create button; match the header by exact name.
     await expect(page.getByRole("button", { name: "Create New Template", exact: true })).toBeVisible();
