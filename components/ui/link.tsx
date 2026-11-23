@@ -3,7 +3,7 @@ import NextLink from "next/link";
 import { forwardRef } from "react";
 
 type LinkProps = {
-  href: string;
+  href?: string;
   children: React.ReactNode;
   variant?: "underline" | "plain";
   colorPalette?:
@@ -40,6 +40,13 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   { href, children, variant, colorPalette, prefetch, target, w, ...rest },
   ref
 ) {
+  if (!href)
+    return (
+      <ChakraLink as="span" color={colorPalette} variant={variant} style={{ width: w }} {...rest}>
+        {children}
+      </ChakraLink>
+    );
+
   // Chakra's asChild hands its props and ref to NextLink, which forwards the ref to the anchor.
   // This replaces the legacyBehavior pattern, which Next.js has deprecated.
   return (

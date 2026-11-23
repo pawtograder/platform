@@ -61,13 +61,15 @@ export default function GitHubHelpPage() {
             {githubUsername}:
           </Text>
           <List.Root as="ul" px={4}>
-            {repositories.map((repository) => (
-              <List.Item key={repository.id}>
-                <Link href={`https://github.com/${repository.repository}`} target="_blank" rel="noopener noreferrer">
-                  {repository.repository}
-                </Link>
-              </List.Item>
-            ))}
+            {repositories
+              .filter((repository) => repository.git_provider !== "forgejo")
+              .map((repository) => (
+                <List.Item key={repository.id}>
+                  <Link href={`https://github.com/${repository.repository}`} target="_blank" rel="noopener noreferrer">
+                    {repository.repository}
+                  </Link>
+                </List.Item>
+              ))}
           </List.Root>
         </Box>
         <Box>
