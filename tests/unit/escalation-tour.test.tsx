@@ -1,5 +1,6 @@
 /**
- * "What's new" walkthrough for ticket escalation (components/help-queue/escalation-tour.tsx).
+ * "What's new" walkthrough for ticket escalation (lib/whatsNew/entries/oh-escalation.tsx),
+ * shown by the generic <WhatsNew page="office-hours" /> (components/whats-new/whats-new.tsx).
  *
  * - Staff only: students get neither the automatic prompt nor the header button.
  * - The prompt opens on its own the first time staff visit, and not again once dismissed, whether
@@ -13,15 +14,19 @@
  */
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { EscalationTour, resetEscalationTourForTests } from "@/components/help-queue/escalation-tour";
+import { resetWhatsNewForTests, WhatsNew } from "@/components/whats-new/whats-new";
 
 let mockIsStaff = true;
-jest.mock("@/hooks/useClassProfiles", () => ({ useIsGraderOrInstructor: () => mockIsStaff }));
+jest.mock("@/hooks/useClassProfiles", () => ({
+  useIsGraderOrInstructor: () => mockIsStaff,
+  useIsStudent: () => !mockIsStaff
+}));
+jest.mock("@/hooks/useCourseController", () => ({ useCourse: () => ({ features: [] }) }));
 jest.mock("@sentry/nextjs", () => ({ captureException: jest.fn() }));
 
 /**
- * The signed-in user's rows in user_whats_new_seen. The component only reads its own row by item
- * (RLS limits it to the caller's rows) and upserts it on Close or Done.
+ * The signed-in user's rows in user_whats_new_seen. The component reads the rows for its page's
+ * walkthroughs in one query (RLS limits it to the caller's rows) and upserts one on Close or Done.
  */
 const mockSeen = new Set<string>();
 let mockReadError: { message: string } | null = null;
@@ -43,7 +48,7 @@ const STEP_TITLES = [
 function renderTour() {
   return render(
     <ChakraProvider value={defaultSystem}>
-      <EscalationTour />
+      <WhatsNew page="office-hours" />
     </ChakraProvider>
   );
 }
@@ -52,7 +57,7 @@ const dialogTitle = () =>
   screen.queryByRole("heading", { name: new RegExp(`^(${[PROMPT, ...STEP_TITLES].join("|")})$`) });
 
 beforeEach(() => {
-  resetEscalationTourForTests();
+  resetWhatsNewForTests();
   mockIsStaff = true;
   mockSeen.clear();
   mockReadError = null;
@@ -65,14 +70,12 @@ beforeEach(() => {
     expect(table).toBe("user_whats_new_seen");
     return {
       select: () => ({
-        eq: (column: string, item: string) => ({
-          maybeSingle: async () => {
-            expect(column).toBe("item");
-            if (mockReadGate) await mockReadGate;
-            if (mockReadError) return { data: null, error: mockReadError };
-            return { data: mockSeen.has(item) ? { item } : null, error: null };
-          }
-        })
+        in: async (column: string, items: string[]) => {
+          expect(column).toBe("item");
+          if (mockReadGate) await mockReadGate;
+          if (mockReadError) return { data: null, error: mockReadError };
+          return { data: items.filter((item) => mockSeen.has(item)).map((item) => ({ item })), error: null };
+        }
       }),
       upsert: mockUpsert
     };
@@ -82,7 +85,7 @@ beforeEach(() => {
 const expectSeenWritten = () =>
   expect(mockUpsert).toHaveBeenCalledWith({ item: ITEM }, { onConflict: "user_id,item", ignoreDuplicates: true });
 
-describe("EscalationTour", () => {
+describe("WhatsNew: escalation walkthrough", () => {
   it("renders nothing for students", () => {
     mockIsStaff = false;
     renderTour();

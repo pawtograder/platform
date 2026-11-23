@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { HelpRequestSearch } from "@/components/help-queue/help-request-search";
-import { EscalationTour } from "@/components/help-queue/escalation-tour";
+import { WhatsNew } from "@/components/whats-new/whats-new";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Box, Flex, HStack, Text, Badge } from "@chakra-ui/react";
 import NextLink from "next/link";
@@ -414,7 +414,7 @@ export function OfficeHoursHeader({
           </HStack>
 
           <HStack gap={2} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
-            <EscalationTour />
+            <WhatsNew page="office-hours" />
             <HelpRequestSearch isManageMode={true} />
             {workingQueues.length > 0 && (
               <Button
