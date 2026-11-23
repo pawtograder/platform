@@ -79,7 +79,7 @@ export default function StaffRolesPage() {
       controller.roleCapabilities.readyPromise,
       controller.userRolesWithProfiles.readyPromise
     ]).catch((error) => {
-      if (active) setLoadError(error.message ?? String(error));
+      if (active) setLoadError(error?.message ?? String(error));
     });
     return () => {
       active = false;
@@ -113,7 +113,7 @@ export default function StaffRolesPage() {
   const announce = useAnnouncer();
   const mountedRef = useRef(true);
   const [saving, setSaving] = useState<Set<string>>(new Set());
-  // Keep intended values until the controller confirms a successful save.
+  // Keep a saved value on screen until a fetch of that key succeeds or the controller shows it.
   const [pendingHeld, setPendingHeld] = useState<Map<string, boolean>>(new Map());
   const [movingUserRoleIds, setMovingUserRoleIds] = useState<Set<number>>(new Set());
   const [pendingMoves, setPendingMoves] = useState<Map<number, number>>(new Map());
@@ -145,14 +145,18 @@ export default function StaffRolesPage() {
     });
   }, [data, saving, movingUserRoleIds]);
 
+  // Returns whether the fetch succeeded. When it did, the controller holds the database's current
+  // value, which may differ from this page's write if another instructor changed it since.
   const refresh = useCallback(
     async (table: "classRoles" | "roleCapabilities" | "userRolesWithProfiles", key: number | string) => {
       // Broadcasts usually apply the change first. Fetch only this key if a note was missed.
       try {
         if (table === "roleCapabilities") await controller.roleCapabilities.invalidate(String(key));
         else await controller[table].invalidate(Number(key));
+        return true;
       } catch {
         toaster.error({ title: "Staff roles could not be refreshed", description: "Reload the page to try again." });
+        return false;
       }
     },
     [controller]
@@ -193,7 +197,7 @@ export default function StaffRolesPage() {
         return;
       }
 
-      await refresh("roleCapabilities", JSON.stringify([role.id, capability]));
+      const fetched = await refresh("roleCapabilities", JSON.stringify([role.id, capability]));
 
       // This request controls when the cell becomes usable again.
       setSaving((prev) => {
@@ -202,12 +206,14 @@ export default function StaffRolesPage() {
         return next;
       });
 
-      if (error || !written || written.length === 0) {
+      if (fetched || error || !written || written.length === 0) {
         setPendingHeld((prev) => {
           const next = new Map(prev);
           next.delete(key);
           return next;
         });
+      }
+      if (error || !written || written.length === 0) {
         const message = error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE;
         showRefused(message);
         announce(`${roleName}, ${capabilityLabel(capability)}: not saved. ${message}`, { priority: "assertive" });
@@ -228,15 +234,20 @@ export default function StaffRolesPage() {
         .single();
       if (error) return roleChangeErrorMessage(error);
       await refresh("classRoles", written!.id);
-      // The insert trigger copies the default grader's capabilities onto this role.
-      await Promise.all(
-        capabilityRows.map((cap) => refresh("roleCapabilities", JSON.stringify([written!.id, cap.name])))
-      );
+      // The insert trigger copies the default grader's capabilities onto this role. One fetch for
+      // all of them, so a network failure shows one toast.
+      try {
+        await controller.roleCapabilities.refetchByIds(
+          capabilityRows.map((cap) => JSON.stringify([written!.id, cap.name]))
+        );
+      } catch {
+        toaster.error({ title: "Staff roles could not be refreshed", description: "Reload the page to try again." });
+      }
       if (!mountedRef.current) return undefined;
       toaster.success({ title: `${name} created`, description: "It starts with everything a Grader can do." });
       return undefined;
     },
-    [classId, refresh, capabilityRows]
+    [classId, refresh, capabilityRows, controller]
   );
 
   const renameRole = useCallback(
@@ -287,7 +298,7 @@ export default function StaffRolesPage() {
       if (!mountedRef.current) {
         return;
       }
-      await refresh("userRolesWithProfiles", userRoleId);
+      const fetched = await refresh("userRolesWithProfiles", userRoleId);
       const writeOk = !error && written && written.length > 0;
       if (!writeOk) {
         const message = error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE;
@@ -302,7 +313,7 @@ export default function StaffRolesPage() {
         next.delete(userRoleId);
         return next;
       });
-      if (!writeOk) {
+      if (fetched || !writeOk) {
         setPendingMoves((prev) => {
           const next = new Map(prev);
           next.delete(userRoleId);
