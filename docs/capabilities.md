@@ -124,19 +124,13 @@ only change the grader role's capabilities.
 Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
 everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
 
-- **What each role can do:** one column for the default grader role and one per custom role, one
-  row per capability, a checkbox in each cell. A change is one insert or delete on
-  `role_capabilities`, saved at once. `manage_roles` has no row, because it can't go on these roles.
-- **New role, rename, delete:** inserts, renames and deletes on `class_roles`. A role with people on
-  it can't be deleted, and the dialog says to move them first. Disabled enrollments still hold the
-  role for the foreign key, so the dialog blocks delete and says to re-enable them under Enrollments
-  when that is the only membership left.
-- **People:** every active grader with a role drop-down, which updates `user_roles.class_role_id`.
-  This update requires an instructor in the database. Only instructors currently hold `manage_roles`,
-  which gates this page.
+The side menu has three pages:
 
-A row's label is the capability's name in sentence case, and the line under it is the capability's
-`description`. Write the description as the sentence an instructor reads next to the checkbox.
+- Create / Edit Role: create a copy of Grader, or pick a role to rename, delete, or edit its capabilities. The default Grader role cannot be renamed or deleted. Roles with active or disabled members cannot be deleted.
+- Staff & Roles: the Staff tab lists active graders with a role drop-down. Moving a grader requires an instructor. The Roles tab lists Grader and custom roles with active membership counts and any removed members.
+- Roles & Capabilities: pick a role, then toggle capabilities grouped by app area and section. Each info button explains the action and where to find it. Changes save immediately. The selected role is linkable with `?role=<id>`.
+
+The typed catalog in `capabilityCatalog.ts` includes pending capabilities, but shows only rows in the database. Unknown capabilities appear under Other with their database description. `manage_roles` is always hidden. Enrollments shows each grader's staff role using the same live controllers; its Edit Role dialog still changes the app role.
 
 The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
 creation, renames, deletions and capability changes arrive as row updates on the staff channel.
