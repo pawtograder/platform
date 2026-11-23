@@ -82,7 +82,7 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
   // Reading the source needs staff access; creating the copy needs manage_flashcards in the target.
   // Use the caller JWT for the capability lookup, as RLS does.
   await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
-  await assertUserHasClassCapability(ctx.supabase, ctx.userId, targetClass.id, "manage_flashcards");
+  await assertUserHasClassCapability(ctx.userId, targetClass.id, "manage_flashcards");
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");

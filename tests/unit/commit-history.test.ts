@@ -170,6 +170,31 @@ describe("commit history helpers", () => {
     expect(entries.map((entry) => entry.sha)).toEqual(["invalid-date", "valid-older"]);
   });
 
+  it("keeps a recorded Actions run URL only when it is http(s)", () => {
+    const entries = mergeCommitHistory({
+      checkRuns: [
+        checkRun({
+          id: 1,
+          sha: "forgejo",
+          status: {
+            completed_at: "2026-01-01T00:10:00.000Z",
+            conclusion: "failure",
+            workflow_run_url: "https://git.example.edu/cs101/hw1-alex/actions/runs/4"
+          }
+        }),
+        checkRun({ id: 2, sha: "script", status: { workflow_run_url: "javascript:alert(1)" } }),
+        checkRun({ id: 3, sha: "garbage", status: { workflow_run_url: "not a url" } })
+      ],
+      githubCommits: [],
+      submissions: []
+    });
+    const bySha = Object.fromEntries(entries.map((entry) => [entry.sha, entry.status]));
+    expect(bySha.forgejo.workflow_run_url).toBe("https://git.example.edu/cs101/hw1-alex/actions/runs/4");
+    expect(bySha.forgejo.conclusion).toBe("failure");
+    expect(bySha.script.workflow_run_url).toBeNull();
+    expect(bySha.garbage.workflow_run_url).toBeNull();
+  });
+
   it("formats source and submission status labels", () => {
     expect(getCommitHistorySourceLabel("github")).toBe("From GitHub");
     expect(getCommitHistorySourceLabel("database")).toBe("Recorded by webhook");

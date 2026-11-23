@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123160200_flashcards_manage_by_capability.sql`, `20261123160300_surveys_polls_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160200_flashcards_manage_by_capability.sql`, `20261123160300_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -89,10 +89,9 @@ Like `assertUserIsInstructorOrServiceRole`, which it replaces for an action a ca
 also lets through the service role and an admin of any course. Load the row's class from the database
 and filter by it, so a capability in one class can't reach another class's rows.
 
-CLI handlers that gate on a capability use `assertUserHasClassCapability` the same way: call
-`user_class_ids_with_capability()` on the caller-scoped client from `ctx.supabase` (the JWT minted
-for the token owner). Do not join `user_roles` to `role_capabilities` by hand, and do not ask the
-service-role client; without the caller's JWT the RPC has no `auth.uid()` and fails closed.
+A CLI command (`supabase/functions/cli/`) has no Authorization header: it runs on the service role
+with the caller's user id. Use `assertUserHasClassCapability(userId, class_id, "manage_rubrics")` from
+`cli/utils/auth.ts`, which asks the same function on a client minted for that user.
 
 ## Adding a capability
 
@@ -117,6 +116,10 @@ Write one migration that:
    ```
 
    For an instructor-only capability, use `WHERE cr.default_for = 'instructor'`.
+
+   Use the query above only if every grader could do the action before. If the old rule was
+   conditional (only in some classes, or only for some roles), add the capability only to the roles
+   that met it, so no one gains access the old rule denied.
 
 3. Updates `public.seed_default_class_roles()` if a default role other than instructor should get
    it in new classes too. It sets up the default roles when a class is created.
@@ -147,6 +150,14 @@ Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the c
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
 
+**Pages: hide the button, or send the person away.** A page whose only purpose is one capability's
+action sends people without it somewhere useful: its server `layout.tsx` checks
+`userHasClassCapability(course_id, "...")` (in `lib/ssrUtils.ts`) and calls `redirect`, as `/new` and
+`/edit` do for `manage_assignments` and `/rubric` does for `manage_rubrics`. A page that also shows
+things to look at stays open and only hides its action buttons with `useCapability`, as Manage
+Groups does for `publish_groups`. `RequireManageReviews` is an older client-side version of the
+redirect, used by Bulk Assign and Reassign.
+
 ## manage_flashcards
 
 `manage_flashcards` covers creating, editing, deleting and copying flashcard decks and cards
@@ -161,10 +172,9 @@ writing their own progress and interaction logs, and staff reading class-wide pr
 analytics.
 
 CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
-decks. It requires `manage_flashcards` only in the target class. The target check asks
-`user_class_ids_with_capability('manage_flashcards')` through the caller-scoped client
-(`ctx.supabase`), using the same capability lookup as RLS. Source read policies do not require
-`manage_flashcards`.
+decks. It requires `manage_flashcards` only in the target class, through
+`assertUserHasClassCapability(userId, targetClass.id, "manage_flashcards")`, the same capability
+lookup RLS uses. Source read policies do not require `manage_flashcards`.
 
 ## manage_surveys and run_polls
 

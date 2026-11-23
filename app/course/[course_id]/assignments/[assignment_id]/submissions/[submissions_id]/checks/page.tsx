@@ -2,6 +2,7 @@
 
 import Link from "@/components/ui/link";
 import { useSubmission } from "@/hooks/useSubmission";
+import { httpUrlOrNull } from "@/lib/commitHistory";
 import { createClient } from "@/utils/supabase/client";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Text, VStack } from "@chakra-ui/react";
@@ -53,8 +54,16 @@ function statusVisual(status: string | null, conclusion: string | null): { color
   return { color: "blue", icon: FaSpinner };
 }
 
-/** GitHub Actions run URL for a check, when we have enough to build one. */
+/** Forgejo run URLs use the per-repo run number, which we don't have, so the stored URL is used as sent. */
+function forgejoRunUrl(payload: unknown): string | null {
+  const p = payload as { provider?: unknown; run?: { html_url?: unknown } } | null;
+  return p?.provider === "forgejo" ? httpUrlOrNull(p.run?.html_url) : null;
+}
+
 function runUrl(check: WorkflowEvent): string | null {
+  if ((check.payload as { provider?: unknown } | null)?.provider === "forgejo") {
+    return forgejoRunUrl(check.payload);
+  }
   if (!check.repository_name || !check.workflow_run_id) {
     return null;
   }

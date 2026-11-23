@@ -39,7 +39,7 @@ async function handleSurveysCopy(ctx: MCPAuthContext, params: Record<string, unk
   const targetClass = await resolveClass(supabase, targetClassId);
   // Reading the source needs staff access; creating the copy needs manage_surveys in the target.
   await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
-  await assertUserHasClassCapability(ctx.supabase, ctx.userId, targetClass.id, "manage_surveys");
+  await assertUserHasClassCapability(ctx.userId, targetClass.id, "manage_surveys");
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");

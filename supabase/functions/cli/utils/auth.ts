@@ -17,6 +17,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import { pageAll } from "./paging.ts";
 import { CLICommandError } from "../errors.ts";
+import { createAuthenticatedSupabaseClient } from "../../_shared/MCPAuth.ts";
 
 /** Roles that grant a CLI caller access to a class's data. */
 const CLI_CLASS_ROLES = ["instructor", "grader"] as const;
@@ -111,30 +112,19 @@ export async function assertUserIsClassInstructor(
 }
 
 /**
- * Throws 403 unless the signed-in user holds `capability` in the class (#1010,
- * docs/capabilities.md). Asks `user_class_ids_with_capability()`, the same
- * function RLS uses, so a hand-rolled role join cannot disagree with the
- * policies (for example a grader on a custom role with the capability turned
- * off). Pass the caller-scoped client from `ctx.supabase` (the JWT minted for
- * the token owner in authenticateMCPRequest); the admin client has no
- * auth.uid() and would always fail closed. `userId` is kept for call-site
- * symmetry with the other helpers; identity comes from the JWT.
+ * Throws 403 unless `userId` holds `capability` in the class (#1010, docs/capabilities.md).
+ *
+ * The edge-function helper assertUserHasCapabilityOrServiceRole needs the caller's Authorization
+ * header, which a CLI request doesn't have, so this asks the same question as the caller:
+ * user_class_ids_with_capability() on a client minted for `userId`, the function every policy
+ * uses. The command and the database it writes to therefore give the same answer.
  */
-export async function assertUserHasClassCapability(
-  supabase: SupabaseClient<Database>,
-  userId: string,
-  classId: number,
-  capability: string
-): Promise<void> {
-  void userId;
-  const { data: classIds, error } = await supabase.rpc("user_class_ids_with_capability", {
-    p_capability: capability
-  });
-  // Fail closed on lookup errors (same posture as assertUserHasCapabilityOrServiceRole).
-  if (error) throw new CLICommandError(`Failed to verify ${capability}: ${error.message}`, 500);
-  // Number(): a body that sends class_id as a string still matches.
-  if (!(classIds ?? []).includes(Number(classId))) {
-    throw new CLICommandError(`You do not have ${capability} for this class`, 403);
+export async function assertUserHasClassCapability(userId: string, classId: number, capability: string): Promise<void> {
+  const userClient = await createAuthenticatedSupabaseClient(userId);
+  const { data, error } = await userClient.rpc("user_class_ids_with_capability", { p_capability: capability });
+  if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
+  if (!(data ?? []).includes(classId)) {
+    throw new CLICommandError(`This command requires the ${capability} capability in the class`, 403);
   }
 }
 
