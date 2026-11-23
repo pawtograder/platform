@@ -15,7 +15,13 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import {
+  useCapability,
+  useClassProfiles,
+  useHasCapability,
+  useIsGraderOrInstructor,
+  useIsInstructor
+} from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
@@ -286,8 +292,7 @@ export default function DynamicCourseNav() {
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const canManageGradebook = useCapability("manage_gradebook");
-  const canSendAnnouncements = useCapability("send_announcements");
-  const canManageRoster = useCapability("manage_roster");
+  const hasCapability = useHasCapability();
   /**
    * Which responsive twin carries the landmark ids. Only the ids move with the
    * breakpoint — the accessibility tree is left to the CSS `display` split (see
@@ -310,18 +315,14 @@ export default function DynamicCourseNav() {
     return <Skeleton height="40" width="100%" />;
   }
 
-  // A submenu item with a capability shows only when the viewer holds it. A capability this
-  // doesn't know hides the item rather than showing it to everyone. Instructors hold every
-  // capability; isInstructor keeps their item even if the capability lookup fails, since the
-  // provider stops retrying after a few failures.
+  // A submenu item with a capability shows only when the viewer holds it, looked up by the
+  // item's own capability name, so every capability-gated item uses this one check. Instructors
+  // hold every capability; isInstructor keeps their items even if the capability lookup fails,
+  // since the provider stops retrying after a few failures.
   const submenuCapabilityAllows = (submenu: object) => {
     const capability = "capability" in submenu ? submenu.capability : undefined;
-    if (!capability) return true;
-    const held: Record<string, boolean> = {
-      send_announcements: canSendAnnouncements,
-      manage_roster: canManageRoster
-    };
-    return typeof capability === "string" && capability in held && (held[capability] || isInstructor);
+    if (typeof capability !== "string") return true;
+    return hasCapability(capability) || isInstructor;
   };
 
   const filteredLinks = LinkItems(enrollment.class_id)
