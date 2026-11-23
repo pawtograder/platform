@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import CurrentRequest from "../currentRequest";
 import { useQueueData } from "@/hooks/useQueueData";
 import { useEffect, useMemo, useState } from "react";
@@ -13,6 +13,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { TurnAlertBanner, TurnAlertPrompt, useTurnAlert } from "@/hooks/useTurnAlert";
+import { CheckInAlertBanner, useCheckInAlert } from "@/hooks/useEscalationAlert";
 
 type LoadState = "pending" | "loaded" | "not_found" | "error";
 
@@ -97,20 +98,48 @@ export default function RequestDetailPage() {
   );
   const hiddenFromMasquerade = isMasking && rawRequest != null && !filterHelpRequest(rawRequest, memberProfileIds);
 
+  // A user who is enrolled in two courses can put a request id from the other course into this
+  // course's URL. useHelpRequest fetches the request by id only, and the invalidate() call above
+  // puts that row into this course's cache. If the URL also has the other course's queue id,
+  // queueRequests includes the row too, because useQueueData filters on help_queue only. So check
+  // the course on whichever row the page found, and treat a request from another course as not
+  // found.
+  const foundRequest = request ?? rawRequest;
+  const inOtherCourse = foundRequest != null && foundRequest.class_id !== Number(course_id);
+
+  // queueRequests leaves out resolved and closed requests, and userRequests only has requests
+  // this user is on. So a resolved or closed request can be in neither list, and the page used
+  // to spin forever (#1080). In that case, show the cached row instead. Don't show it if view-as
+  // hides it from this student.
+  const shownRequest = inOtherCourse
+    ? undefined
+    : (request ?? (hiddenFromMasquerade ? undefined : (rawRequest ?? undefined)));
+
+  // If the URL has the wrong queue id, for example from an old or hand-edited link, go to the
+  // same request under its own queue. Otherwise the sidebar and the queue position would use
+  // the wrong queue.
+  const router = useRouter();
+  const correctQueueId = shownRequest && shownRequest.help_queue !== Number(queue_id) ? shownRequest.help_queue : null;
+  useEffect(() => {
+    if (correctQueueId != null) {
+      router.replace(`/course/${course_id}/office-hours/${correctQueueId}/${requestIdNum}`);
+    }
+  }, [correctQueueId, course_id, requestIdNum, router]);
+
   // Calculate position in queue for active requests
   const position = useMemo(() => {
-    if (!request || (request.status !== "open" && request.status !== "in_progress")) {
+    if (!shownRequest || (shownRequest.status !== "open" && shownRequest.status !== "in_progress")) {
       return 0;
     }
-    return queueRequests.findIndex((r) => r.id === request.id) + 1;
-  }, [request, queueRequests]);
+    return queueRequests.findIndex((r) => r.id === shownRequest.id) + 1;
+  }, [shownRequest, queueRequests]);
 
   // The turn alert counts only waiting requests, so a request becomes position 1 as soon as it is first in line.
   const turnPosition = useMemo(() => {
-    if (!request || request.status !== "open") return 0;
+    if (!shownRequest || shownRequest.status !== "open") return 0;
     const waiting = queueRequests.filter((r) => r.status === "open");
-    return waiting.findIndex((r) => r.id === request.id) + 1;
-  }, [request, queueRequests]);
+    return waiting.findIndex((r) => r.id === shownRequest.id) + 1;
+  }, [shownRequest, queueRequests]);
 
   const { private_profile_id } = useClassProfiles();
   // Ask the database whether this student is on the request. The realtime membership list can lag behind
@@ -163,13 +192,25 @@ export default function RequestDetailPage() {
     // The help drawer moves between requests without remounting this page, so the alert needs to
     // know when it is looking at a different one.
     subject: `${private_profile_id ?? "unknown"}:${requestIdNum}`,
-    status: request?.status,
-    assignee: request?.assignee,
+    status: shownRequest?.status,
+    assignee: shownRequest?.assignee,
     position: turnPosition,
     enabled: turnAlertsOn && isRequestMember
   });
 
-  if (!request) {
+  // Same membership gate as the turn alert: only a student on the request hears about its check-in.
+  const escalationAlertsOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_ESCALATION_ALERT, false);
+  const checkInMessage = useCheckInAlert({
+    subject: `${private_profile_id ?? "unknown"}:${requestIdNum}`,
+    status: shownRequest?.status,
+    checkInExpiresAt: shownRequest?.check_in_expires_at,
+    enabled: escalationAlertsOn && isRequestMember
+  });
+
+  if (!shownRequest || correctQueueId != null) {
+    if (inOtherCourse) {
+      return <div>Request not found.</div>;
+    }
     if (hiddenFromMasquerade) {
       return (
         <Flex justify="center" align="center" py={12}>
@@ -213,7 +254,8 @@ export default function RequestDetailPage() {
       <Box flex={{ lg: 8 }} minW={0}>
         <TurnAlertPrompt enabled={turnAlertsOn} />
         <TurnAlertBanner message={turnMessage} />
-        <CurrentRequest request={request} position={position} />
+        <CheckInAlertBanner message={checkInMessage} />
+        <CurrentRequest request={shownRequest} position={position} />
       </Box>
     </Flex>
   );

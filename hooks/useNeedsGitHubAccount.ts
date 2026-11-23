@@ -1,6 +1,6 @@
 "use client";
 
-import { useAssignments } from "@/hooks/useCourseController";
+import { useAssignments, useCourse } from "@/hooks/useCourseController";
 import { needsGitHubPrompts } from "@/lib/gitProviderOptions";
 
 /**
@@ -9,5 +9,6 @@ import { needsGitHubPrompts } from "@/lib/gitProviderOptions";
  */
 export function useNeedsGitHubAccount(assignmentGitProvider?: string | null): boolean {
   const assignments = useAssignments();
-  return needsGitHubPrompts(assignments, assignmentGitProvider);
+  const course = useCourse();
+  return needsGitHubPrompts(course.github_org, assignments, assignmentGitProvider);
 }

@@ -110,5 +110,11 @@ export function ClassCapabilitiesProvider({ children }: { children: React.ReactN
 
   // An instructor viewing as a student sees the student's controls, as with useIsInstructor.
   const value = isReadOnly ? VIEWING_AS_STUDENT : state;
-  return <ClassCapabilitiesContext.Provider value={value}>{children}</ClassCapabilitiesContext.Provider>;
+  return (
+    <ClassCapabilitiesContext.Provider value={value}>
+      {/* Lets tests wait until hidden controls mean "not held" rather than "still loading". */}
+      {!value.isLoading && <span hidden data-capabilities-loaded="true" />}
+      {children}
+    </ClassCapabilitiesContext.Provider>
+  );
 }

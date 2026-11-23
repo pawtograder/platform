@@ -227,6 +227,8 @@ export type ListFilesRequest = {
   courseId: number;
   orgName: string;
   repoName: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type FileListing = {
   name: string;
@@ -246,6 +248,8 @@ export type GetFileRequest = {
    * spinning for 15-30s. Callers racing fresh repo creation should leave it unset.
    */
   skipRetryOnNotFound?: boolean;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileRequest = {
   courseId: number;
@@ -256,6 +260,8 @@ export type WriteFileRequest = {
   message: string;
   /** Blob sha of the file being replaced. Omit to create a new file. */
   sha?: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileResponse = {
   commit_sha?: string;
@@ -384,8 +390,20 @@ export type WorkspaceOpenResponse = {
    * being stopped; a status read starts it once the stop finishes, and it reads `starting` from then
    * on. Keep polling workspace-status while it reads `restarting`. `account_conflict`: the student's
    * Coder account can't be signed in to and staff have to remove it; `message` says so.
+   * `credentials_unavailable`: the workspace couldn't be given a token for the repository or the commit email, so it wasn't started; `message` says whether to wait or retry.
+   * `needs_org_invite`: the student hasn't accepted the course's GitHub organization invitation,
+   * so GitHub wouldn't let them read their own repository; nothing was started.
    */
-  status: "not_started" | "starting" | "restarting" | "ready" | "failed" | "needs_linking" | "account_conflict";
+  status:
+    | "not_started"
+    | "starting"
+    | "restarting"
+    | "ready"
+    | "failed"
+    | "needs_linking"
+    | "account_conflict"
+    | "credentials_unavailable"
+    | "needs_org_invite";
   step?: WorkspaceStep;
   message?: string;
   /** ready: VS Code. starting and failed: the workspace's Coder page. needs_linking: authenticate_url. */

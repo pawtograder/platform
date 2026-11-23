@@ -17,11 +17,12 @@ export const COURSE_FEATURES = {
   GRADEBOOK_COLUMN_GROUPS: "gradebook-column-groups",
   GRADEBOOK_TOPICS: "gradebook-topics",
   EXAMS: "exams",
-  // Off unless set, like the SQL side. Not manageable here yet; the toggle comes with #1091.
   CLOUD_WORKSPACES: "cloud-workspaces",
   OFFICE_HOURS_SHIFT_RELEASE: "office-hours-shift-release",
   OFFICE_HOURS_TURN_ALERT: "office-hours-turn-alert",
-  OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health"
+  OFFICE_HOURS_QUEUE_HEALTH: "office-hours-queue-health",
+  OFFICE_HOURS_ESCALATION_ALERT: "office-hours-escalation-alert",
+  OFFICE_HOURS_STUDENT_ONBOARDING: "office-hours-student-onboarding"
 } as const;
 
 export type CourseFeatureName = (typeof COURSE_FEATURES)[keyof typeof COURSE_FEATURES];
@@ -192,6 +193,19 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     ariaLabel: "Enable paper exams for this course"
   },
   {
+    name: COURSE_FEATURES.CLOUD_WORKSPACES,
+    title: "Cloud workspaces",
+    description:
+      "When on, code assignments can use Forgejo instead of GitHub as their repository host (chosen per assignment), everyone enrolled in the course gets a Forgejo account, and students get an Open in Coder button that opens their repository in a cloud workspace. Turning it on creates the Forgejo accounts right away. When off, Forgejo can't be chosen for new assignments, Open in Coder is hidden and workspaces can't be opened, and no new Forgejo accounts or student repositories are created. Nothing is deleted: Forgejo accounts and repositories are kept, assignments already on Forgejo stay on Forgejo, and pushes to their repositories are still graded.",
+    // Off unless a course opts in, the same default as the SQL side (cloud_workspaces_enabled and
+    // assignments_validate_git_provider). Defaulting on would create a Forgejo account for everyone
+    // enrolled in every course the moment this merged.
+    defaultWhenMissing: false,
+    navAffectsStaff: false,
+    switchLabel: "Enable Forgejo repositories and Coder cloud workspaces",
+    ariaLabel: "Enable cloud workspaces for this course"
+  },
+  {
     name: COURSE_FEATURES.OFFICE_HOURS_SHIFT_RELEASE,
     title: "Office hours: release requests at shift end",
     description:
@@ -217,6 +231,24 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
     defaultWhenMissing: false,
     switchLabel: "Show queue health on staff office hours cards",
     ariaLabel: "Show queue health on staff office hours cards"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_ESCALATION_ALERT,
+    title: "Office hours: escalation alerts",
+    description:
+      "Staff get a browser alert when a ticket is escalated, and a student gets one when staff resolve their ticket and the check-in is waiting. Both only interrupt while the tab is in the background. When off, escalation and check-in work as they do now, with no alerts.",
+    defaultWhenMissing: false,
+    switchLabel: "Alert staff and students about office hours escalations",
+    ariaLabel: "Alert staff and students about office hours escalations"
+  },
+  {
+    name: COURSE_FEATURES.OFFICE_HOURS_STUDENT_ONBOARDING,
+    title: "Office hours: hints for new students",
+    description:
+      "Students see hints on the office hours page, one at a time, until they first click an enabled New Request button. One asks them to read each queue's description when the course has two or more text queues. The other says whether staff are on duty, and if nobody is, when the next office hours on the calendar start. The new request form also gets longer helper text on the Help Queue, Template, and Description fields. When off, nothing changes.",
+    defaultWhenMissing: false,
+    switchLabel: "Show office hours hints to new students",
+    ariaLabel: "Show office hours hints to new students"
   }
 ];
 
