@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261123140100_discussion_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -141,3 +141,24 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Discussion: moderate_discussion
+
+`moderate_discussion` covers moderating the discussion board: pinning, editing other people's posts
+and replies, marking an answer, marking a duplicate, moving a post to another topic, revealing or
+hiding a poster, and changing who can see a thread. Every grader could do these before, so it is on
+the default instructor role, the default grader role and every custom role; an instructor can take
+it off a role.
+
+- The `discussion_threads` staff UPDATE policy and `set_discussion_thread_topic`,
+  `mark_discussion_thread_duplicate`, `toggle_discussion_thread_author_anonymity` and the staff part
+  of `set_discussion_thread_visibility` check it. Authors still edit their own posts and set their
+  own thread's visibility.
+- Not part of it: discussion topics (instructors only), error pins and AI Help (staff tools),
+  posting, likes, follows and read status.
+
+**The default grader role in new classes.** `seed_default_class_roles()` gives the default grader
+role every grader capability, listed by name and joined to `capabilities`, so a name that doesn't
+exist yet is skipped. When you add a capability graders hold today, add its name to that list,
+starting from the latest body of the function: each migration replaces the whole function, so an
+older copy would drop the others' names without any error.
