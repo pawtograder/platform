@@ -15444,7 +15444,7 @@ export type Database = {
           queue_name: string;
           resolved_today: number;
           staffed_tas: number;
-          unstaffed_seconds: number;
+          unstaffed_seconds: number | null;
           waiting: number;
         }[];
       };
