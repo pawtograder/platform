@@ -398,7 +398,7 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<Assi
   const forgejoMessage =
     forgejoTargets.length > 0
       ? ` Forgejo: ${forgejoCleanup.deleted} deleted immediately, ${forgejoCleanup.queued} queued for archiving` +
-        `${forgejoCleanup.skipped > 0 ? `, ${forgejoCleanup.skipped} already missing` : ""}.`
+        `${forgejoCleanup.skipped > 0 ? `, ${forgejoCleanup.skipped} skipped` : ""}.`
       : "";
 
   return {
