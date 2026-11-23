@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -103,6 +104,7 @@ export function RepositoryCommitHistoryDialog({
   trigger
 }: RepositoryCommitHistoryDialogProps) {
   const [open, setOpen] = useState(false);
+  const repoHost = useRepoWebHost(gitProvider);
   const [githubCommits, setGithubCommits] = useState<Awaited<ReturnType<typeof repositoryListCommits>>["commits"]>([]);
   const [githubPage, setGithubPage] = useState(0);
   const [hasMoreGitHubCommits, setHasMoreGitHubCommits] = useState(false);
@@ -281,8 +283,8 @@ export function RepositoryCommitHistoryDialog({
                   {entries.map((entry) => (
                     <Table.Row key={entry.sha}>
                       <Table.Cell>
-                        {entry.htmlUrl || gitProvider !== "forgejo" ? (
-                          <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                        {repoHost ? (
+                          <Link href={repoWebUrl(repoHost, repositoryFullName, `/commit/${entry.sha}`)}>
                             <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
                           </Link>
                         ) : (

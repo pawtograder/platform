@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122200000_flashcards_manage_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261123130100_flashcards_manage_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -165,3 +165,26 @@ decks. It requires `manage_flashcards` only in the target class. The target chec
 `user_class_ids_with_capability('manage_flashcards')` through the caller-scoped client
 (`ctx.supabase`), using the same capability lookup as RLS. Source read policies do not require
 `manage_flashcards`.
+
+## Roster: manage_roster
+
+`manage_roster` covers lab sections, class section names and students on the Enrollments page. It is
+on the default instructor role only.
+
+- **Lab sections:** creating, changing and deleting `lab_sections`, `lab_section_meetings` and
+  `lab_section_leaders`, and the lab sections page (without it, the page sends you to the lab
+  roster). A meeting's lab section, and a leader's profile and lab section, must be in the row's
+  class, for everyone.
+  A lab section's `sis_crn` stays instructor-only (`guard_lab_section_sis_crn`): SIS sync enrolls
+  that SIS section's roster with their SIS roles, so whoever sets it could make people staff. The
+  same trigger stops anyone moving a lab section to another class from the API.
+- **Class sections:** `update_class_section_name()`. It still changes only the name.
+- **Enrollments, students only:** someone with `manage_roster` who isn't an instructor of the class
+  can remove a student, change a student's SIS sync override, cancel a pending student invitation,
+  and add a student who isn't in the class yet (`enrollments-add`). They can never touch a grader or
+  instructor row, change anyone's role or `class_role_id` (their own included), or add or invite a
+  grader or instructor. The `guard_roster_manager_update` trigger limits them to `disabled` and
+  `sis_sync_opt_out` on a student's `user_roles` row, and to `status` on a student invitation.
+- **Instructor-only for now:** creating invitations (the auto-accept trigger can re-enable an
+  existing grader or instructor), Edit role, Edit profile, CSV import, Canvas/SIS/LTI sync and admin
+  import. Tags are unchanged (any staff).

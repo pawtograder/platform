@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1278,6 +1279,7 @@ function PrDiffNotice({
    */
   children?: ReactNode;
 }) {
+  const repoHost = useRepoWebHost(useAssignmentController().assignment.git_provider);
   const base = submission.base_sha;
   const head = submission.head_sha;
   const submissionId = submission.id;
@@ -1330,7 +1332,7 @@ function PrDiffNotice({
   const baseShort = base!.substring(0, 7);
   const headShort = head!.substring(0, 7);
   const compareUrl = submission.repository
-    ? `https://github.com/${submission.repository}/compare/${base}...${head}`
+    ? repoWebUrl(repoHost, submission.repository, `/compare/${base}...${head}`)
     : null;
   // No diff to show inline: either the base fetch failed, returned nothing
   // (e.g. the upstream isn't fetchable / E2E mock), or there are simply no text
