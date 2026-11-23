@@ -11,7 +11,6 @@ import {
   isKnownMethod,
   isTransitionOutcome,
   MATCHING_FROM,
-  PAGES_CHANGED_ERROR_FROM,
   REJECTED_SCAN_ERROR_FROM,
   REVIEW_FROM,
   type BatchStatus,
@@ -116,10 +115,11 @@ async function setBatchStatus(
 
 /**
  * The batch's pages changed between this match reading them and linking them (staff added a page or
- * changed pages-per-exam), and no other match message for the batch is left to match them
- * (exam_worker_link_scan_groups, 'pages_changed'). Matching again from here could need OCR that
- * nothing has queued, so the message gives up at once: the batch goes to error, only from
- * 'matching', and Process re-queues OCR and matching for the current pages.
+ * changed pages-per-exam), and no other match message for the batch was left to match them.
+ * exam_worker_link_scan_groups has already given up on the message ('pages_changed'), in the same
+ * transaction as that decision: the batch is in error (only from 'matching') and recorded on the
+ * DLQ, and Process re-queues OCR and matching for the current pages. Thrown only so the dispatcher
+ * reports it, like any give-up; it does not dispose of the message again.
  */
 class PagesChangedError extends Error {
   constructor(message: string) {
@@ -159,8 +159,11 @@ function log(message: string): void {
 // early return), or replace it with a re-queued copy (match waiting for OCR).
 type Disposition =
   | { kind: "ack" }
-  | { kind: "requeue"; message: ExamAsyncEnvelope; delaySeconds: number; countWait: boolean };
+  | { kind: "requeue"; message: ExamAsyncEnvelope; delaySeconds: number; countWait: boolean }
+  // Already disposed of by the fenced function that made the decision (a superseded link).
+  | { kind: "disposed" };
 const ACK: Disposition = { kind: "ack" };
+const DISPOSED: Disposition = { kind: "disposed" };
 
 // Acknowledge or re-queue the held message, only while this reader still holds it
 // (exam_worker_ack / exam_worker_requeue). A reader that was taken over leaves the message to the
@@ -171,6 +174,7 @@ const ACK: Disposition = { kind: "ack" };
 // the handler runs again, which every handler here tolerates (at-least-once). A re-queue that
 // fails throws, so nothing is archived without its replacement; the original comes back instead.
 async function dispose(admin: Admin, fence: Fence, env: ExamAsyncEnvelope, next: Disposition): Promise<void> {
+  if (next.kind === "disposed") return;
   if (next.kind === "ack") {
     let outcome: "acked" | "not_owner";
     try {
@@ -441,9 +445,10 @@ async function doMatch(
   // the grouping the batch's current pages give, and a suggestion only lands on an exam that still
   // holds the pages it was read from. A refusal returns state_changed and this match stops; the run
   // whose link is current suggests for every exam (exam_worker_link_scan_groups,
-  // exam_worker_set_match_suggestion). A refused link from the last match message left for the
-  // batch is pages_changed instead: no other run will finish it, so it gives up (PagesChangedError)
-  // and staff restart the batch with Process.
+  // exam_worker_set_match_suggestion). A link refused for stale pages is disposed of with the
+  // decision, under the batch lock: superseded (archived; another match message remains) or, for the
+  // last match message left, pages_changed (given up; the batch is in error and staff restart it
+  // with Process).
   const toMatching = await setBatchStatus(admin, fence, batch.id, "matching", MATCHING_FROM);
   if (toMatching === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
   if (toMatching === "state_changed") return ACK;
@@ -570,6 +575,8 @@ async function doMatch(
   }
   if (linked.outcome === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
   if (linked.outcome === "state_changed") return ACK;
+  // A stale grouping: the function has disposed of the message with its decision (see LinkOutcome).
+  if (linked.outcome === "superseded") return DISPOSED;
   if (linked.outcome === "pages_changed") {
     throw new PagesChangedError(
       `batch ${batch.id}: its pages changed while it was being matched; process the batch again`
@@ -976,9 +983,10 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       return;
     }
     if (error instanceof PagesChangedError) {
-      // Retrying would group pages that may still need OCR; staff restart it with Process instead.
+      // A give-up, already committed with the decision in exam_worker_link_scan_groups (the batch is
+      // in error and the message on the DLQ); reported here like the others. Retrying would group
+      // pages that may still need OCR; staff restart the batch with Process instead.
       Sentry.captureException(error, scope);
-      await giveUp(error, PAGES_CHANGED_ERROR_FROM);
       return;
     }
     if (error instanceof ScanPathRejectedError) {

@@ -135,7 +135,7 @@ returns integer
 language sql
 immutable
 set search_path to ''
-as $function$ select 3 $function$;
+as $function$ select 4 $function$;
 
 revoke all on function public.exam_worker_contract_version() from public, anon, authenticated;
 grant execute on function public.exam_worker_contract_version() to service_role;
@@ -309,26 +309,36 @@ grant execute on function public.exam_worker_give_up(bigint, integer, bigint, te
   to service_role;
 
 -- Link a batch's page groups (exam_link_scan_groups), only while the caller holds its match
--- message and the batch is still 'matching'. The batch row is share-locked for the transaction, so
--- a status write moving it to review waits for this, or this sees review and changes nothing.
+-- message and the batch is still 'matching'. The batch row is locked FOR NO KEY UPDATE for the
+-- transaction: a status write moving it to review waits for this, or this sees review and changes
+-- nothing; and two links for the same batch run one after the other (below). Staff inserting a page
+-- (a foreign-key KEY SHARE on the batch) is not blocked by it.
 --
 -- And only the grouping the batch's pages and pages_per_exam give now: the pages in page_index order,
 -- pages_per_exam to an exam, as doMatch groups them. Holding a match message is not enough. A match
 -- left over from an earlier Process run holds its own message validly, beside the newer run's. If
 -- staff changed those inputs in between (a page added, pages_per_exam), the leftover's grouping
 -- describes pages as they were, and linking it over the newer run's put two exams' pages on one row.
--- Which answer the caller gets depends on whether another match message for the batch is still in
--- the queue (read or not). If one is, it is 'state_changed': that match links from the pages as they
--- are when it gets there, and finishes or fails the batch. If none is, this message is the batch's
--- only way to finish matching, so the answer is 'pages_changed', and the worker gives up on it: the
--- batch goes to error, which staff clear with Process (it re-queues OCR for any page added without
--- it, then matches again). Acknowledging it instead left the batch in 'matching' with no work and
--- no way to process it again. No new match message can appear meanwhile: Process refuses a batch in
--- matching, and a re-queue replaces its message in one transaction.
--- pages_per_exam cannot change under this (the batch row is share-locked). A page inserted while
--- this runs is not linked, as before.
--- Returns {"outcome": "not_owner" | "state_changed" | "pages_changed"} or
--- {"outcome": "applied", "rows": [...]}.
+--
+-- A stale grouping is refused, and the caller's message is disposed of here, in the same
+-- transaction as the decision, never left for a later acknowledgment:
+--   - 'superseded': another match message for the batch is still in the queue (read or not), so
+--     the caller's message is archived; that match links from the pages as they are when it gets
+--     there, and finishes or fails the batch.
+--   - 'pages_changed': no other match message is left, so this one gives up (exam_worker_give_up):
+--     the batch goes to error, from 'matching' only, and is recorded on the DLQ. Staff clear it with
+--     Process, which re-queues OCR for every page (the added one included) and matches again.
+-- Deciding first and acknowledging in a later transaction let two stale matches each see the other,
+-- both stand down, and leave the batch in 'matching' with no work and Process refusing it. Here the
+-- decision and the disposition commit together, and the batch lock serializes them: a second link
+-- waits for the first to commit, then sees the first message already archived and gives up itself.
+-- No new match message can appear meanwhile: Process locks the batch and refuses 'matching', and a
+-- re-queue replaces its message in one transaction. Lock order is unchanged: the caller's message,
+-- then the batch, then (applied links only) the scanned exams and pages.
+-- pages_per_exam cannot change under this. A page inserted while this runs is not linked, as before.
+-- Returns {"outcome": "not_owner" | "state_changed" | "superseded" | "pages_changed"} or
+-- {"outcome": "applied", "rows": [...]}. Only 'applied' and 'state_changed' leave the message to the
+-- caller to dispose of.
 -- exam_link_scan_groups's own errors (EX409: it would regroup a decided exam) propagate.
 create or replace function public.exam_worker_link_scan_groups(
   p_msg_id bigint,
@@ -342,17 +352,19 @@ set search_path to ''
 as $function$
 declare
   v_status text;
+  v_message jsonb;
+  v_given_up text;
 begin
   if p_msg_id is null or p_read_ct is null or p_batch_id is null or p_groups is null then
     raise exception 'exam_worker_link_scan_groups: every argument is required';
   end if;
-  perform 1 from pgmq.q_exam_processing q
+  select q.message into v_message from pgmq.q_exam_processing q
    where q.msg_id = p_msg_id and q.read_ct = p_read_ct
    for update;
   if not found then
     return jsonb_build_object('outcome', 'not_owner');
   end if;
-  select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for share;
+  select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for no key update;
   if v_status is distinct from 'matching' then
     return jsonb_build_object('outcome', 'state_changed');
   end if;
@@ -381,9 +393,14 @@ begin
          and q.message->>'method' = 'match'
          and q.message->>'batch_id' = p_batch_id::text
     ) then
-      return jsonb_build_object('outcome', 'state_changed');
+      perform pgmq.archive('exam_processing', p_msg_id);
+      return jsonb_build_object('outcome', 'superseded');
     end if;
-    return jsonb_build_object('outcome', 'pages_changed');
+    v_given_up := public.exam_worker_give_up(
+      p_msg_id, p_read_ct, p_batch_id, array['matching'],
+      format('batch %s: its pages changed while it was being matched; process the batch again', p_batch_id),
+      'PagesChangedError', v_message);
+    return jsonb_build_object('outcome', 'pages_changed', 'given_up', v_given_up);
   end if;
   return jsonb_build_object('outcome', 'applied', 'rows', public.exam_link_scan_groups(p_batch_id, p_groups));
 end;

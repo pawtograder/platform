@@ -16,7 +16,7 @@
  */
 
 /** The version of the SQL functions this worker needs. Matches exam_worker_contract_version(). */
-export const CONTRACT_VERSION = 3;
+export const CONTRACT_VERSION = 4;
 
 /** A message as this reader claimed it: pgmq's id and the read_ct its read produced. */
 export type Claim = { msgId: number; readCt: number };
@@ -164,8 +164,11 @@ export type LinkOutcome =
   | { outcome: "applied"; rows: unknown }
   | { outcome: "not_owner" }
   | { outcome: "state_changed" }
-  // The batch's pages changed since this reader grouped them, and no other match message for the
-  // batch is queued: this message is the only way the batch finishes matching.
+  // The batch's pages changed since this reader grouped them. The function has already disposed of
+  // the message, in the same transaction as the decision: archived it because another match message
+  // for the batch is queued ('superseded'), or given up on it, erroring the batch from 'matching'
+  // ('pages_changed'). Either way the caller must not acknowledge or re-queue it.
+  | { outcome: "superseded" }
   | { outcome: "pages_changed" };
 
 export const linkArgs = (claim: Claim, batchId: number, groups: { exam_index: number; page_ids: number[] }[]) => ({
@@ -187,6 +190,7 @@ export async function linkScanGroups(
   if (outcome === "applied") return { outcome, rows: (data as { rows?: unknown }).rows ?? [] };
   if (outcome === "not_owner") return { outcome };
   if (outcome === "state_changed") return { outcome };
+  if (outcome === "superseded") return { outcome };
   if (outcome === "pages_changed") return { outcome };
   return unexpected("exam_worker_link_scan_groups", data);
 }

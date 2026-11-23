@@ -25,7 +25,6 @@ import {
   requeueArgs,
   suggestionArgs
 } from "../../supabase/functions/_shared/examWorkerFence";
-import { PAGES_CHANGED_ERROR_FROM } from "../../supabase/functions/exam-async-worker/batchTransitions";
 
 type Claim = { msgId: number; readCt: number; tag: string };
 
@@ -1471,11 +1470,14 @@ test.describe("a match from an earlier run cannot write over a newer run's group
       expect(linked.map((e) => e.pages)).toEqual([[added], [b.pages[0]], [b.pages[1]]]);
 
       // Linked, this put page 0 back on exam 0 beside the added page and left exam 2 with none. The
-      // newer run's message is still queued, so the older one is told to stop, not to give up.
+      // newer run's message is still queued, so the older one is archived with the refusal, not
+      // given up, and the batch stays matching for the newer run.
       expect(await holds(client, older)).toBe(true);
       expect(await callFn("exam_worker_link_scan_groups", linkArgs(older, b.batchId, olderGroups))).toEqual({
-        outcome: "state_changed"
+        outcome: "superseded"
       });
+      expect(await holds(client, older)).toBe(false);
+      expect(await queuedFor(client, b.batchId)).toEqual([{ msgId: newer.msgId, method: "match" }]);
       expect(await exams(b.batchId)).toEqual(linked);
       expect((await batchRow(b.batchId))?.status).toBe("matching");
       await newerRunFinishes(
@@ -1489,47 +1491,50 @@ test.describe("a match from an earlier run cannot write over a newer run's group
     }
   });
 
-  test("when the last match message left finds the pages changed, it gives up and Process restarts the batch", async () => {
+  const pagesChangedError = (batchId: number) =>
+    `batch ${batchId}: its pages changed while it was being matched; process the batch again`;
+  /** The durable state when two stale matches have both been dealt with: a visible, restartable error. */
+  async function expectGivenUpOnce(client: Client, b: Batch, gaveUp: Claim, superseded: Claim) {
+    expect(await batchRow(b.batchId)).toEqual({ status: "error", error: pagesChangedError(b.batchId) });
+    expect(await queuedFor(client, b.batchId)).toEqual([]);
+    const { rows: archived } = await client.query<{ msg_id: string }>(
+      "SELECT msg_id FROM pgmq.a_exam_processing WHERE msg_id = ANY($1::bigint[]) ORDER BY msg_id",
+      [[gaveUp.msgId, superseded.msgId]]
+    );
+    expect(archived.map((r) => Number(r.msg_id))).toEqual([gaveUp.msgId, superseded.msgId].sort((x, y) => x - y));
+    const gaveUpDlq = await dlqRecords(client, gaveUp.tag);
+    expect(gaveUpDlq.queue).toBe(1);
+    expect(gaveUpDlq.audit.map((a) => [a.method, a.error_message])).toEqual([["match", pagesChangedError(b.batchId)]]);
+    const supersededDlq = await dlqRecords(client, superseded.tag);
+    expect([supersededDlq.queue, supersededDlq.audit.length]).toEqual([0, 0]);
+    expect(await exams(b.batchId)).toEqual([]);
+  }
+
+  // The exact ordering that used to strand the batch: A's link refused, then B's, and only then the
+  // worker's dispositions. Each refusal now disposes of its own message with the decision, so the
+  // second one finds the first already gone and gives up.
+  test("two stale matches, A's link then B's before either is acknowledged: the batch errors, it is not left matching", async () => {
     const client = await privilegedClient();
     try {
       const b = await matchingBatch(2);
-      const [older, newer] = await twoMatchClaims(client, b);
-      // Both grouped the pages before the grader changed them.
+      const [a, bb] = await twoMatchClaims(client, b);
       const stale = groupsOf(b.pages);
       const added = await addPageFirst(b);
-
-      // The older one: another match message (the newer) is queued, so it stops.
-      expect(await callFn("exam_worker_link_scan_groups", linkArgs(older, b.batchId, stale))).toEqual({
-        outcome: "state_changed"
+      expect(await callFn("exam_worker_link_scan_groups", linkArgs(a, b.batchId, stale))).toEqual({
+        outcome: "superseded"
       });
-      expect(await callFn("exam_worker_ack", { p_msg_id: older.msgId, p_read_ct: older.readCt })).toBe("acked");
-      expect(await queuedFor(client, b.batchId)).toEqual([{ msgId: newer.msgId, method: "match" }]);
-
-      // The newer one is now the only match message: its refusal says so.
-      expect(await callFn("exam_worker_link_scan_groups", linkArgs(newer, b.batchId, stale))).toEqual({
-        outcome: "pages_changed"
+      expect(await callFn("exam_worker_link_scan_groups", linkArgs(bb, b.batchId, stale))).toEqual({
+        outcome: "pages_changed",
+        given_up: "given_up"
       });
-      expect(await exams(b.batchId)).toEqual([]);
-      // What the worker then does (PagesChangedError): give up from 'matching' only.
-      expect(
-        await callFn(
-          "exam_worker_give_up",
-          giveUpArgs(newer, {
-            batchId: b.batchId,
-            from: PAGES_CHANGED_ERROR_FROM,
-            error: "its pages changed while it was being matched; process the batch again",
-            errorType: "PagesChangedError",
-            envelope: { method: "match", batch_id: b.batchId }
-          })
-        )
-      ).toBe("given_up");
-      expect(await batchRow(b.batchId)).toEqual({
-        status: "error",
-        error: "its pages changed while it was being matched; process the batch again"
-      });
-      expect(await queuedFor(client, b.batchId)).toEqual([]);
+      // What doMatch does next: nothing for either (both already disposed of). An acknowledgment
+      // anyway finds neither message.
+      for (const claim of [a, bb]) {
+        expect(await callFn("exam_worker_ack", { p_msg_id: claim.msgId, p_read_ct: claim.readCt })).toBe("not_owner");
+      }
+      await expectGivenUpOnce(client, b, bb, a);
 
-      // Staff can restart it: Process (as the grader, rolled back so no worker runs it) queues OCR for
+      // Staff restart it: Process (as the grader, rolled back so no worker runs it) queues OCR for
       // every page, the added one included, and one match.
       await beginAsUser(client, b.grader.user_id);
       try {
@@ -1556,6 +1561,51 @@ test.describe("a match from an earlier run cannot write over a newer run's group
       await client.end();
     }
   });
+
+  // The two refusals from independent sessions, overlapping: the first holds its transaction open
+  // after deciding; the second must wait on the batch row (FOR NO KEY UPDATE in both), and once the
+  // first commits it sees the first message archived and gives up. Both orders.
+  for (const first of ["older", "newer"] as const) {
+    test(`two stale links in overlapping transactions (${first} first): one is archived, the other gives up`, async () => {
+      const client = await privilegedClient();
+      const s1 = await privilegedClient();
+      const s2 = await privilegedClient();
+      let s1Open = false;
+      try {
+        const b = await matchingBatch(2);
+        const [older, newer] = await twoMatchClaims(client, b);
+        const [x, y] = first === "older" ? [older, newer] : [newer, older];
+        const stale = groupsOf(b.pages);
+        await addPageFirst(b);
+        const link = (c: Client, claim: Claim) =>
+          c.query<{ r: Record<string, unknown> }>(
+            "SELECT public.exam_worker_link_scan_groups($1, $2, $3, $4::jsonb) AS r",
+            [claim.msgId, claim.readCt, b.batchId, JSON.stringify(stale)]
+          );
+        // Each session's backend id, before either is busy (a busy session can't answer).
+        const s1Pid = await backendPid(s1);
+        const s2Pid = await backendPid(s2);
+        await s1.query("BEGIN");
+        s1Open = true;
+        expect((await link(s1, x)).rows[0].r).toEqual({ outcome: "superseded" });
+        const pending = blockedQuery(link(s2, y));
+        const blocked = await waitUntilBlocked(client, s2Pid, s1Pid, 1500);
+        expect(blocked.observed, "the second link did not wait for the first").toBe(true);
+        // Still uncommitted: the batch is matching and both messages are in the queue.
+        expect((await batchRow(b.batchId))?.status).toBe("matching");
+        expect((await queuedFor(client, b.batchId)).map((m) => m.msgId)).toEqual([older.msgId, newer.msgId]);
+        await s1.query("COMMIT");
+        s1Open = false;
+        expect((await pending).rows[0].r).toEqual({ outcome: "pages_changed", given_up: "given_up" });
+        await expectGivenUpOnce(client, b, y, x);
+      } finally {
+        if (s1Open) await s1.query("ROLLBACK").catch(() => {});
+        await s1.end();
+        await s2.end();
+        await client.end();
+      }
+    });
+  }
 });
 
 /** Create cannot queue a batch's finalize messages while earlier ones are still queued (#1158 review; N4). */
