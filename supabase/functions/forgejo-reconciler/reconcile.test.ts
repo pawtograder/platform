@@ -7,14 +7,18 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";
 import {
+  CLASS_PAGE_SIZE,
   MAX_ACCOUNTS_PER_PASS,
+  MAX_ORG_HOOKS_PER_PASS,
   MAX_REPOS_PER_PASS,
   MAX_REVOCATIONS_PER_PASS,
   MAX_STAFF_TEAMS_PER_PASS,
-  RECONCILE_STEPS,
+  PASS_STEPS,
   reconcileForgejo,
   reconcileForgejoAccounts,
+  orgHookWindow,
   reconcileForgejoGroupRepos,
+  reconcileForgejoOrgHooks,
   reconcileForgejoRepos,
   reconcileForgejoStaffTeams,
   reconcileForgejoWorkflowHashes,
@@ -1147,6 +1151,141 @@ for (const first of ["student", "group"] as const) {
   );
 }
 
+function fakeOrgSupabase(classes: { slug: string; forgejo_org: string | null }[], error: unknown = null) {
+  const calls: string[] = [];
+  const query = {
+    select: (columns: string) => (calls.push(`select ${columns}`), query),
+    eq: (column: string, value: unknown) => (calls.push(`eq ${column} ${value}`), query),
+    limit: (count: number, options: { referencedTable: string }) => (
+      calls.push(`limit ${count} ${options.referencedTable}`), query
+    ),
+    order: (column: string) => (calls.push(`order ${column}`), query),
+    range: (from: number, to: number) => {
+      calls.push(`range ${from} ${to}`);
+      const page = classes.slice(from, to + 1).map((c) => ({ ...c, repositories: [{ id: 1 }] }));
+      return Promise.resolve({ data: error ? null : page, error });
+    }
+  };
+  const client = {
+    from(table: string) {
+      assertEquals(table, "classes");
+      return query;
+    }
+  } as unknown as Parameters<typeof reconcileForgejoOrgHooks>[0];
+  return { client, calls };
+}
+
+const hookConfig: ForgejoConfig = { ...config, pushHook: { url: "https://fn.example.edu/hook", secret: "s" } };
+
+Deno.test("org hooks: every org holding Forgejo repos gets ensureOrg, named as the repo backlog names it", async () => {
+  const { client, calls } = fakeOrgSupabase([
+    { slug: "CS4535", forgejo_org: null },
+    { slug: "cs4535-sec2", forgejo_org: "CS4535" },
+    { slug: "cs3500", forgejo_org: "" }
+  ]);
+  const ensured: string[] = [];
+  const result = await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) => {
+    ensured.push(org);
+    return Promise.resolve();
+  });
+  assertEquals(ensured, ["cs3500", "cs4535"]);
+  assertEquals(result, { checked: 2, failures: [] });
+  assertEquals(calls, [
+    "select slug, forgejo_org, repositories!inner(id)",
+    "eq repositories.git_provider forgejo",
+    "limit 1 repositories",
+    "order id",
+    `range 0 ${CLASS_PAGE_SIZE - 1}`
+  ]);
+});
+
+Deno.test("org hooks: classes past the API's row cap are read too, so their orgs are not skipped", async () => {
+  const classes = Array.from({ length: CLASS_PAGE_SIZE }, () => ({ slug: "shared", forgejo_org: null }));
+  classes.push({ slug: "past-the-cap", forgejo_org: null });
+  const { client, calls } = fakeOrgSupabase(classes);
+  const ensured: string[] = [];
+  await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) => (ensured.push(org), Promise.resolve()));
+  assertEquals(ensured, ["past-the-cap", "shared"]);
+  assertEquals(
+    calls.filter((c) => c.startsWith("range")),
+    [`range 0 ${CLASS_PAGE_SIZE - 1}`, `range ${CLASS_PAGE_SIZE} ${2 * CLASS_PAGE_SIZE - 1}`]
+  );
+});
+
+Deno.test("org hooks: one org's failure is recorded and the others are still checked", async () => {
+  const { client } = fakeOrgSupabase([
+    { slug: "a", forgejo_org: null },
+    { slug: "b", forgejo_org: null }
+  ]);
+  const boom = new Error("org has another owner");
+  const result = await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) =>
+    org === "a" ? Promise.reject(boom) : Promise.resolve()
+  );
+  assertEquals(result, { checked: 1, failures: [{ org: "a", error: boom }] });
+});
+
+Deno.test("org hooks: without a configured hook, nothing is queried or called", async () => {
+  const { client, calls } = fakeOrgSupabase([{ slug: "a", forgejo_org: null }]);
+  const result = await reconcileForgejoOrgHooks(client, config, () => {
+    throw new Error("must not be called");
+  });
+  assertEquals(result, { checked: 0, failures: [] });
+  assertEquals(calls, []);
+});
+
+Deno.test("org hooks: a failed class query fails the step", async () => {
+  const { client } = fakeOrgSupabase([], { message: "boom" });
+  await assertRejects(() => reconcileForgejoOrgHooks(client, hookConfig, () => Promise.resolve()));
+});
+
+Deno.test("org hooks: with many orgs, each pass checks a bounded window and the hours cover every org", () => {
+  const orgs = Array.from({ length: 45 }, (_, i) => `org${String(i).padStart(2, "0")}`);
+  const seen = new Set<string>();
+  for (let hour = 0; hour < 3; hour++) {
+    const window = orgHookWindow(orgs, hour * 3_600_000 + 1234);
+    assertEquals(window.length, MAX_ORG_HOOKS_PER_PASS);
+    assertEquals(orgHookWindow(orgs, hour * 3_600_000 + 3_000_000), window);
+    window.forEach((o) => seen.add(o));
+  }
+  assertEquals(seen.size, orgs.length);
+  assertEquals(orgHookWindow(["b", "a", "b"], 0), ["a", "b"]);
+});
+
+function recordingSteps(fail: Partial<Record<keyof typeof PASS_STEPS, Error>> = {}) {
+  const ran: string[] = [];
+  const step = (name: keyof typeof PASS_STEPS) => () => {
+    ran.push(name);
+    return fail[name] ? Promise.reject(fail[name]) : Promise.resolve({} as never);
+  };
+  const steps = Object.fromEntries(
+    (Object.keys(PASS_STEPS) as (keyof typeof PASS_STEPS)[]).map((name) => [name, step(name)])
+  ) as unknown as typeof PASS_STEPS;
+  return { ran, steps };
+}
+
+const passClient = {} as Parameters<typeof reconcileForgejo>[0];
+
+Deno.test("pass: revocation runs first, so a slow later step can't time the pass out before it", async () => {
+  const { ran, steps } = recordingSteps();
+  await reconcileForgejo(passClient, config, steps);
+  assertEquals(ran, ["revoke", "accounts", "repos", "groupRepos", "hashes", "orgHooks", "staffTeams", "groupLeavers"]);
+});
+
+Deno.test("pass: a failed revocation list still lets the backlogs run, then fails the pass", async () => {
+  const { ran, steps } = recordingSteps({ revoke: new Error("rpc down") });
+  await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "rpc down");
+  assertEquals(ran, ["revoke", "accounts", "repos", "groupRepos", "hashes", "orgHooks", "staffTeams", "groupLeavers"]);
+});
+
+Deno.test(
+  "pass: a failed backlog step skips the rest of the backlog, but staff teams and group leavers still run",
+  async () => {
+    const { ran, steps } = recordingSteps({ repos: new Error("PostgREST 502") });
+    await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "PostgREST 502");
+    assertEquals(ran, ["revoke", "accounts", "repos", "staffTeams", "groupLeavers"]);
+  }
+);
+
 type StaffClass = { class_id: number; org: string; team: string; logins: string[]; repositories: string[] };
 
 function fakeStaffSupabase(
@@ -1348,48 +1487,8 @@ Deno.test("staff teams: a failed backlog query is an error", async () => {
   await assertRejects(() => reconcileForgejoStaffTeams(client, config, stubStaffOps().ops), Error, "permission denied");
 });
 
-Deno.test("reconcileForgejo: a failed earlier step still runs staff-team sync and both revocations", async () => {
-  const ran: string[] = [];
-  const boom = new Error("repository backlog query failed");
-  const step =
-    (name: string, fail = false) =>
-    () => {
-      ran.push(name);
-      return fail ? Promise.reject(boom) : Promise.resolve({} as never);
-    };
-  const steps = {
-    reconcileForgejoAccounts: step("accounts"),
-    reconcileForgejoRepos: step("repos", true),
-    reconcileForgejoGroupRepos: step("groupRepos"),
-    reconcileForgejoWorkflowHashes: step("hashes"),
-    reconcileForgejoStaffTeams: step("staffTeams"),
-    revokeGroupLeavers: step("groupLeavers"),
-    revokeDroppedTokens: step("tokens")
-  } as unknown as typeof RECONCILE_STEPS;
-  const error = await assertRejects(() => reconcileForgejo({} as never, config, steps));
-  assertEquals(error, boom);
-  assertEquals(ran, ["accounts", "repos", "staffTeams", "groupLeavers", "tokens"]);
-});
-
-Deno.test("reconcileForgejo: a failed staff-team sync still runs both revocations, and is reported", async () => {
-  const ran: string[] = [];
-  const boom = new Error("staff backlog query failed");
-  const step =
-    (name: string, fail = false) =>
-    () => {
-      ran.push(name);
-      return fail ? Promise.reject(boom) : Promise.resolve({} as never);
-    };
-  const steps = {
-    reconcileForgejoAccounts: step("accounts"),
-    reconcileForgejoRepos: step("repos"),
-    reconcileForgejoGroupRepos: step("groupRepos"),
-    reconcileForgejoWorkflowHashes: step("hashes"),
-    reconcileForgejoStaffTeams: step("staffTeams", true),
-    revokeGroupLeavers: step("groupLeavers"),
-    revokeDroppedTokens: step("tokens")
-  } as unknown as typeof RECONCILE_STEPS;
-  const error = await assertRejects(() => reconcileForgejo({} as never, config, steps));
-  assertEquals(error, boom);
-  assertEquals(ran, ["accounts", "repos", "groupRepos", "hashes", "staffTeams", "groupLeavers", "tokens"]);
+Deno.test("pass: a failed staff-team sync still runs the group revocation, and fails the pass", async () => {
+  const { ran, steps } = recordingSteps({ staffTeams: new Error("staff backlog query failed") });
+  await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "staff backlog query failed");
+  assertEquals(ran, ["revoke", "accounts", "repos", "groupRepos", "hashes", "orgHooks", "staffTeams", "groupLeavers"]);
 });

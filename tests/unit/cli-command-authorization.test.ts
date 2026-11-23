@@ -186,9 +186,7 @@ describe("CLI command authorization audit", () => {
       const body = entry!.mod.functions.get(entry!.handler)!;
       expect(body).toMatch(/assertUserCanAccessClass\(supabase, ctx\.userId, sourceClass\.id\)/);
       if (commandName === "flashcards.copy") {
-        expect(body).toMatch(
-          /assertUserHasClassCapability\(ctx\.supabase, ctx\.userId, targetClass\.id, "manage_flashcards"\)/
-        );
+        expect(body).toMatch(/assertUserHasClassCapability\(ctx\.userId, targetClass\.id, "manage_flashcards"\)/);
         expect(body).not.toMatch(/assertUserHasClassCapability\([^;]*sourceClass\.id/);
       } else {
         const targetHelper =
