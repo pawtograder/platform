@@ -1,5 +1,5 @@
 /**
- * #1010: editing rubrics follows manage_rubrics (20261121200100_rubrics_by_capability.sql).
+ * #1010: editing rubrics follows manage_rubrics (20261122210800_rubrics_by_capability.sql).
  *
  * Writing rubrics, rubric_parts, rubric_criteria, rubric_checks and rubric_check_references, and
  * saving through update_rubric_full, need manage_rubrics in the class. The default instructor role
