@@ -3,6 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useErrorPinsForPattern } from "@/hooks/useTestInsights";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Button, Card, Dialog, Field, HStack, Icon, Input, Spinner, Text, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
@@ -66,7 +67,7 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to search threads: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to search threads: ${getUserFacingErrorMessage(error)}`
       });
     } finally {
       setIsSearching(false);
@@ -145,7 +146,7 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create error pin: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to create error pin: ${getUserFacingErrorMessage(error)}`
       });
     } finally {
       setIsCreating(false);
