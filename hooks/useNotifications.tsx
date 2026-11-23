@@ -1,12 +1,12 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { useUpdate, useDelete, useDataProvider, useInvalidate } from "@refinedev/core";
+import { useUpdate, useDelete, useInvalidate } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import { getErrorMessage } from "@/lib/errorMessage";
-import { isMissingRowError, isRefusedWriteError } from "@/lib/refineDataProvider";
+import { isRefusedWriteError } from "@/lib/refineDataProvider";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -41,7 +41,6 @@ export function useNotifications(resource?: string, id?: number) {
     resource: "notifications"
   });
   const { mutateAsync: delete_notification } = useDelete<Notification>();
-  const dataProvider = useDataProvider();
   const invalidate = useInvalidate();
 
   // Always declare state hooks at the top level
@@ -119,14 +118,20 @@ export function useNotifications(resource?: string, id?: number) {
           restore(error);
           return;
         }
+        // Ask the database, not a cache: the controller's notifications TableController still holds
+        // the row after a delete whose response was lost, so it can't tell us whether it is gone.
         let stillExists: boolean | undefined;
         try {
-          await dataProvider().getOne({ resource: "notifications", id: notification.id, meta: { select: "id" } });
-          stillExists = true;
-        } catch (checkError) {
-          // Not visible: deleted, or hidden by RLS. Notifications are only readable by their
-          // owner, so a row this session can't see would not be in its inbox either.
-          stillExists = isMissingRowError(checkError) ? false : undefined;
+          const { data, error: checkError } = await controller.client
+            .from("notifications")
+            .select("id")
+            .eq("id", notification.id)
+            .maybeSingle();
+          // No row: deleted, or hidden by RLS. Notifications are only readable by their owner, so a
+          // row this session can't see would not be in its inbox either. An error leaves it open.
+          stillExists = checkError ? undefined : data !== null;
+        } catch {
+          stillExists = undefined;
         }
         if (stillExists === true) {
           restore(error);
@@ -142,7 +147,7 @@ export function useNotifications(resource?: string, id?: number) {
         }
       }
     },
-    [delete_notification, dataProvider, invalidate, controller, isReadOnly, errorRole]
+    [delete_notification, invalidate, controller, isReadOnly, errorRole]
   );
 
   const mark_all_read = useCallback(
