@@ -138,9 +138,10 @@ everything above. It needs `manage_roles`, so graders see an explanation instead
 A row's label is the capability's name in sentence case, and the line under it is the capability's
 `description`. Write the description as the sentence an instructor reads next to the checkbox.
 
-Capability changes and people moving between roles arrive live on the staff channel. A role another
-instructor creates, renames or deletes is not broadcast, so it appears on the next reload of the
-page (including when the staff channel rejoins after a gap).
+The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
+creation, renames, deletions and capability changes arrive as row updates on the staff channel.
+Enrollments share the course controller's `userRolesWithProfiles` cache. Controllers page through
+all rows and catch up when the staff channel reconnects.
 
 Updates and deletes ask for the rows they changed, because a policy can refuse those without an
 error; the page then reports the change as not saved and puts the control back. A refused insert

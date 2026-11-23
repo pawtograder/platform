@@ -85,6 +85,81 @@ test.describe("Staff Roles page", () => {
     await expect(page.getByRole("combobox", { name: `Role for ${otherGrader.private_profile_name}` })).toBeVisible();
   });
 
+  test("another instructor's role changes appear without reloading", async ({ page, browser }) => {
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    const context = await browser.newContext();
+    const writer = await context.newPage();
+    const name = `Live role ${Date.now()}`;
+    const renamed = `${name} renamed`;
+    try {
+      await loginAsUser(page, instructor, course);
+      await openRolesPage(page);
+      await expect(page.getByRole("columnheader", { name: /^Grader Default/ })).toBeVisible();
+      await loginAsUser(writer, otherInstructor, course);
+      await openRolesPage(writer);
+      await writer.getByRole("button", { name: "New role" }).click();
+      await writer.getByRole("dialog").getByLabel("Role name").fill(name);
+      await writer.getByRole("dialog").getByRole("button", { name: "Create role" }).click();
+      await expect(page.getByRole("button", { name: `Rename ${name}`, exact: true })).toBeVisible();
+      await writer.getByRole("button", { name: `Rename ${name}`, exact: true }).click();
+      await writer.getByRole("dialog").getByLabel("Role name").fill(renamed);
+      await writer.getByRole("dialog").getByRole("button", { name: "Rename", exact: true }).click();
+      await expect(page.getByRole("button", { name: `Rename ${renamed}`, exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: `Rename ${name}`, exact: true })).toHaveCount(0);
+      await writer.getByRole("button", { name: `Delete ${renamed}`, exact: true }).click();
+      await writer.getByRole("alertdialog").getByRole("button", { name: "Delete role", exact: true }).click();
+      await expect(page.getByRole("button", { name: `Rename ${renamed}`, exact: true })).toHaveCount(0);
+    } finally {
+      await context.close();
+      const { error } = await supabase
+        .from("class_roles")
+        .delete()
+        .eq("class_id", course.id)
+        .in("name", [name, renamed]);
+      expect(error).toBeNull();
+    }
+  });
+
+  for (const operation of ["create", "delete"] as const) {
+    test(`${operation} dialog stays open during a pending write`, async ({ page }) => {
+      const name = `Pending ${operation} ${Date.now()}`;
+      await loginAsUser(page, instructor, course);
+      await openRolesPage(page);
+      if (operation === "delete") {
+        expect((await supabase.from("class_roles").insert({ class_id: course.id, name })).error).toBeNull();
+        await page.getByRole("button", { name: `Delete ${name}` }).click();
+      } else {
+        await page.getByRole("button", { name: "New role" }).click();
+        await page.getByRole("dialog").getByLabel("Role name").fill(name);
+      }
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const method = operation === "create" ? "POST" : "DELETE";
+      await page.route("**/rest/v1/class_roles*", async (route) => {
+        if (route.request().method() === method) await gate;
+        await route.continue();
+      });
+      const dialog = page.getByRole(operation === "create" ? "dialog" : "alertdialog");
+      try {
+        const pending = page.waitForRequest((r) => r.url().includes("/rest/v1/class_roles") && r.method() === method);
+        await dialog
+          .getByRole("button", { name: operation === "create" ? "Create role" : "Delete role", exact: true })
+          .click();
+        await pending;
+        await page.keyboard.press("Escape");
+        await expect(dialog).toBeVisible();
+        await page.mouse.click(5, 5);
+        await expect(dialog).toBeVisible();
+      } finally {
+        release();
+      }
+      await expect(dialog).toHaveCount(0);
+      expect((await supabase.from("class_roles").delete().eq("class_id", course.id).eq("name", name)).error).toBeNull();
+    });
+  }
+
   test("a new role needs a name that isn't taken", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await openRolesPage(page);

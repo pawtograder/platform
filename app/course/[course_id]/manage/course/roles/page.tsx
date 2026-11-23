@@ -15,6 +15,8 @@ import {
   roleDisplayName,
   type RoleMembershipCounts
 } from "@/lib/classRoles";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   Box,
@@ -32,7 +34,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiEdit2, FiPlus, FiTrash2 } from "react-icons/fi";
 import { DeleteRoleDialog, RoleNameDialog } from "./roleDialogs";
-import { heldKey, useClassRolesData, type ClassRole, type ClassRolesData } from "./useClassRolesData";
+import { heldKey, type ClassRole } from "./roleTypes";
 
 type OpenDialog = { kind: "create" } | { kind: "rename"; role: ClassRole } | { kind: "delete"; role: ClassRole };
 
@@ -59,7 +61,55 @@ export default function StaffRolesPage() {
   const { course_id } = useParams();
   const classId = Number.parseInt(course_id as string, 10);
   const canManageRoles = useCapabilityOnceLoaded("manage_roles");
-  const { data, setData, loadError, reload, invalidateInFlightReloads } = useClassRolesData(classId);
+  const controller = useCourseController();
+  const roleRows = useTableControllerTableValues(controller.classRoles);
+  const capabilityRows = useTableControllerTableValues(controller.capabilities);
+  const heldRows = useTableControllerTableValues(controller.roleCapabilities);
+  const enrollments = useTableControllerTableValues(controller.userRolesWithProfiles);
+  const rolesReady = useIsTableControllerReady(controller.classRoles);
+  const capabilitiesReady = useIsTableControllerReady(controller.capabilities);
+  const heldReady = useIsTableControllerReady(controller.roleCapabilities);
+  const peopleReady = useIsTableControllerReady(controller.userRolesWithProfiles);
+  const [loadError, setLoadError] = useState<string>();
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      controller.classRoles.readyPromise,
+      controller.capabilities.readyPromise,
+      controller.roleCapabilities.readyPromise,
+      controller.userRolesWithProfiles.readyPromise
+    ]).catch((error) => {
+      if (active) setLoadError(String(error));
+    });
+    return () => {
+      active = false;
+    };
+  }, [controller]);
+  const data = useMemo(
+    () =>
+      rolesReady && capabilitiesReady && heldReady && peopleReady
+        ? {
+            roles: roleRows,
+            capabilities: [...capabilityRows].sort((a, b) => a.name.localeCompare(b.name)),
+            held: new Set(heldRows.map((row) => heldKey(row.role_id, row.capability))),
+            graders: enrollments
+              .filter((row) => row.role === "grader" && !row.disabled)
+              .map((row) => ({
+                userRoleId: row.id,
+                classRoleId: row.class_role_id!,
+                name: row.profiles?.name ?? "Unnamed grader"
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+            roleEnrollments: enrollments
+              .filter((row) => row.class_role_id != null)
+              .map((row) => ({
+                classRoleId: row.class_role_id!,
+                disabled: row.disabled
+              }))
+          }
+        : undefined,
+    [rolesReady, capabilitiesReady, heldReady, peopleReady, roleRows, capabilityRows, heldRows, enrollments]
+  );
   const announce = useAnnouncer();
   const mountedRef = useRef(true);
   const [saving, setSaving] = useState<Set<string>>(new Set());
@@ -77,11 +127,17 @@ export default function StaffRolesPage() {
     };
   }, []);
 
-  /** Drop in-flight reloads that may have read pre-write data, then fetch again. */
-  const reloadAfterWrite = useCallback(async () => {
-    invalidateInFlightReloads();
-    await reload();
-  }, [invalidateInFlightReloads, reload]);
+  const refresh = useCallback(
+    async (table: "classRoles" | "roleCapabilities" | "userRolesWithProfiles") => {
+      // The controller reports refresh failures through its error toast. Keep controls usable.
+      await controller[table].refetchAll({ force: true }).catch(() => {
+        if (table === "userRolesWithProfiles") {
+          toaster.error({ title: "Staff roles could not be refreshed", description: "Reload the page to try again." });
+        }
+      });
+    },
+    [controller]
+  );
 
   const roles = useMemo(() => editableRoles(data?.roles ?? []), [data]);
   const capabilities = useMemo(
@@ -95,19 +151,6 @@ export default function StaffRolesPage() {
     }
     return counts;
   }, [data]);
-
-  const setHeld = useCallback(
-    (roleId: number, capability: string, isHeld: boolean) => {
-      setData((prev: ClassRolesData | undefined) => {
-        if (!prev) return prev;
-        const held = new Set(prev.held);
-        if (isHeld) held.add(heldKey(roleId, capability));
-        else held.delete(heldKey(roleId, capability));
-        return { ...prev, held };
-      });
-    },
-    [setData]
-  );
 
   const toggleCapability = useCallback(
     async (role: ClassRole, capability: string, turnOn: boolean) => {
@@ -129,9 +172,10 @@ export default function StaffRolesPage() {
             .select("role_id");
 
       if (!mountedRef.current) {
-        invalidateInFlightReloads();
         return;
       }
+
+      await refresh("roleCapabilities");
 
       // Pending/saving for this cell clear only here — not when some other reload finishes.
       setSaving((prev) => {
@@ -150,20 +194,17 @@ export default function StaffRolesPage() {
         showRefused(message);
         announce(`${roleName}, ${capabilityLabel(capability)}: not saved. ${message}`, { priority: "assertive" });
         // The page may be out of date (another instructor changed the same role).
-        void reloadAfterWrite();
         return;
       }
-      // Commit locally, then drop any reload that may have started before this write finished.
-      setHeld(role.id, capability, turnOn);
+      // Clear the optimistic value after the controller has the saved rows.
       setPendingHeld((prev) => {
         const next = new Map(prev);
         next.delete(key);
         return next;
       });
       announce(`${roleName}: ${capabilityLabel(capability)} turned ${turnOn ? "on" : "off"}. Saved.`);
-      void reloadAfterWrite();
     },
-    [announce, invalidateInFlightReloads, reloadAfterWrite, setHeld]
+    [announce, refresh]
   );
 
   const createRole = useCallback(
@@ -172,12 +213,12 @@ export default function StaffRolesPage() {
       // .select() is unnecessary (and would need a broader grant).
       const { error } = await createClient().from("class_roles").insert({ class_id: classId, name });
       if (error) return roleChangeErrorMessage(error);
-      await reloadAfterWrite();
+      await refresh("classRoles");
       if (!mountedRef.current) return undefined;
       toaster.success({ title: `${name} created`, description: "It starts with everything a Grader can do." });
       return undefined;
     },
-    [classId, reloadAfterWrite]
+    [classId, refresh]
   );
 
   const renameRole = useCallback(
@@ -189,12 +230,12 @@ export default function StaffRolesPage() {
         .select("id");
       if (error) return roleChangeErrorMessage(error);
       if (!written || written.length === 0) return ROLE_CHANGE_REFUSED_MESSAGE;
-      await reloadAfterWrite();
+      await refresh("classRoles");
       if (!mountedRef.current) return undefined;
       toaster.success({ title: `Renamed to ${name}` });
       return undefined;
     },
-    [reloadAfterWrite]
+    [refresh]
   );
 
   const deleteRole = useCallback(
@@ -207,9 +248,9 @@ export default function StaffRolesPage() {
           toaster.success({ title: `${role.name} deleted` });
         }
       }
-      await reloadAfterWrite();
+      await refresh("classRoles");
     },
-    [reloadAfterWrite]
+    [refresh]
   );
 
   const moveGrader = useCallback(
@@ -226,25 +267,15 @@ export default function StaffRolesPage() {
         .eq("id", userRoleId)
         .select("id");
       if (!mountedRef.current) {
-        invalidateInFlightReloads();
         return;
       }
+      await refresh("userRolesWithProfiles");
       const writeOk = !error && written && written.length > 0;
       if (!writeOk) {
         const message = error ? roleChangeErrorMessage(error) : ROLE_CHANGE_REFUSED_MESSAGE;
         showRefused(message);
         announce(`${graderName}'s role was not changed. ${message}`, { priority: "assertive" });
       } else {
-        // Keep the People row on the chosen role once pending clears (before the fresh reload lands).
-        setData((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            graders: prev.graders.map((grader) =>
-              grader.userRoleId === userRoleId ? { ...grader, classRoleId } : grader
-            )
-          };
-        });
         announce(`${graderName} is now on ${roleDisplayName(target)}. Saved.`);
       }
       // Clear this control's pending from its own write path (not from whichever reload finishes).
@@ -258,9 +289,8 @@ export default function StaffRolesPage() {
         next.delete(userRoleId);
         return next;
       });
-      await reloadAfterWrite();
     },
-    [announce, invalidateInFlightReloads, reloadAfterWrite, roles, setData]
+    [announce, refresh, roles]
   );
 
   if (canManageRoles === undefined || (!data && !loadError)) {
@@ -294,7 +324,7 @@ export default function StaffRolesPage() {
         <Text role="alert" mb={3}>
           The roles for this class couldn&apos;t be loaded: {loadError}
         </Text>
-        <Button onClick={() => reload()}>Try again</Button>
+        <Button onClick={() => window.location.reload()}>Try again</Button>
       </Container>
     );
   }

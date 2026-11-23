@@ -5,7 +5,7 @@ import { Field } from "@/components/ui/field";
 import { ROLE_NAME_MAX_LENGTH, roleNameProblem } from "@/lib/classRoles";
 import { Dialog, HStack, Input, Portal } from "@chakra-ui/react";
 import { useState } from "react";
-import type { ClassRole } from "./useClassRolesData";
+import type { ClassRole } from "./roleTypes";
 
 /**
  * Names a new role, or renames one. `onSave` returns an error sentence to show under the field, or
@@ -46,7 +46,12 @@ export function RoleNameDialog({
   };
 
   return (
-    <Dialog.Root open onOpenChange={(details) => !details.open && onClose()}>
+    <Dialog.Root
+      open
+      closeOnEscape={!isSaving}
+      closeOnInteractOutside={!isSaving}
+      onOpenChange={(details) => !details.open && !isSaving && onClose()}
+    >
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
@@ -112,7 +117,13 @@ export function DeleteRoleDialog({
   const { blocked, description } = copy;
 
   return (
-    <Dialog.Root open onOpenChange={(details) => !details.open && onClose()} role="alertdialog">
+    <Dialog.Root
+      open
+      closeOnEscape={!isDeleting}
+      closeOnInteractOutside={!isDeleting}
+      onOpenChange={(details) => !details.open && !isDeleting && onClose()}
+      role="alertdialog"
+    >
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
