@@ -1,6 +1,6 @@
 -- CW-P6: delete Forgejo assignments, cleaning up their repos the way GitHub's are.
 --
--- Depends on 20261121170100_forgejo_repo_archives.sql (forgejo_repo_archives, the repositories
+-- Depends on 20261122160000_forgejo_repo_archives.sql (forgejo_repo_archives, the repositories
 -- AFTER DELETE trigger that queues a deleted Forgejo row, and the lifted repositories DELETE guard).
 --
 -- On GitHub, delete_assignment_with_all_data queues archive_repo_and_lock for every student repo,
@@ -357,7 +357,7 @@ BEGIN
 
         -- Delete repositories, keeping exactly what was removed: these are the cleanup targets,
         -- split by host. The Forgejo rows are also queued in forgejo_repo_archives by the
-        -- repositories AFTER DELETE trigger (20261121170100_forgejo_repo_archives.sql).
+        -- repositories AFTER DELETE trigger (20261122160000_forgejo_repo_archives.sql).
         WITH deleted AS (
             DELETE FROM public.repositories WHERE assignment_id = p_assignment_id
             RETURNING id, repository, git_provider
