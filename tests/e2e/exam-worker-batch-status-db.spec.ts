@@ -757,6 +757,62 @@ test.describe("queue disposition: only the message's current holder acks, re-que
 });
 
 /**
+ * A message the worker can't use leaves the queue the first time it is read, through the real worker
+ * (CodeRabbit on #1308). Every producer is a SQL function that writes an integer batch_id; this is the
+ * body a bug or a hand-sent message could leave. Give-up passes batch_id to a bigint parameter, so a
+ * batch_id that isn't an integer used to make the give-up itself fail and the message came back forever.
+ */
+test.describe("a message with no usable envelope is dead-lettered on its first read (#1158)", () => {
+  test("a batch_id that isn't an integer: recorded and archived at once, and its content stays out of the error", async () => {
+    const client = await privilegedClient();
+    const tag = `malformed-${randomUUID()}`;
+    const secret = `content-${randomUUID()}`;
+    try {
+      // retry_count 5: had the handler run, its first failure would go straight to give-up.
+      const { rows } = await client.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
+        JSON.stringify({
+          method: "finalize",
+          class_id: 1,
+          batch_id: "not-a-batch",
+          args: { scanned_submission_id: 0 },
+          retry_count: 5,
+          note: secret,
+          test_tag: tag
+        })
+      ]);
+      const msgId = Number(rows[0].id);
+      await expect
+        .poll(
+          async () => {
+            await runExamWorker();
+            return (await tagged(client, tag)).archived;
+          },
+          { timeout: 30_000, intervals: [1000, 2000, 3000] }
+        )
+        .toEqual([msgId]);
+      expect((await tagged(client, tag)).queued).toEqual([]);
+      const { rows: archived } = await client.query<{ read_ct: number }>(
+        "SELECT read_ct FROM pgmq.a_exam_processing WHERE msg_id = $1",
+        [msgId]
+      );
+      expect(archived[0].read_ct).toBe(1);
+      const dlq = await dlqRecords(client, tag);
+      expect(dlq.queue).toBe(1);
+      expect(dlq.audit).toHaveLength(1);
+      // The DLQ record keeps the body for whoever investigates; the error, which is also what goes
+      // to Sentry, names the problem and not the content.
+      expect(dlq.audit[0].envelope).toMatchObject({ note: secret, test_tag: tag });
+      expect(dlq.audit[0].error_message).toMatch(/batch_id/);
+      expect(dlq.audit[0].error_message).not.toContain(secret);
+      expect(dlq.audit[0].error_message).not.toContain("not-a-batch");
+      await cleanupTag(client, tag);
+    } finally {
+      await client.end();
+    }
+  });
+});
+
+/**
  * Match results (links and suggestions) are written only while the worker holds its match message
  * and the batch is still 'matching', and never over a human decision (#1158 review).
  */

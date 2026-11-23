@@ -1042,10 +1042,18 @@ let contractReady = false;
 // starts several invocations a minute), as well as logged on every invocation.
 let contractGapReported = false;
 
-// A message body that is not an envelope object. Such a body made every attempt throw before the
-// poison-pill guard could see it, so it came back every READ_VISIBILITY_SECONDS forever.
-function isEnvelope(body: unknown): body is ExamAsyncEnvelope {
-  return typeof body === "object" && body !== null && !Array.isArray(body);
+// Why a message body can't be handled, or null if it can. Checks only what every later path relies
+// on: an object (else every attempt threw before the poison-pill guard could see it), whose batch_id
+// is an integer (give-up passes it to a bigint parameter, so anything else made the give-up itself
+// fail and the message came back every READ_VISIBILITY_SECONDS forever). Every producer is a SQL
+// function that writes an integer batch_id. A bad method or args still fails into give-up as
+// before. The reason names types only, never content: it goes to Sentry and the DLQ record.
+function envelopeProblem(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return `body is ${body === null ? "null" : Array.isArray(body) ? "an array" : `a ${typeof body}`}`;
+  }
+  const batchId = (body as { batch_id?: unknown }).batch_id;
+  return Number.isSafeInteger(batchId) ? null : `batch_id is not an integer (${typeof batchId})`;
 }
 
 async function runBatch(): Promise<number> {
@@ -1132,9 +1140,11 @@ async function runBatch(): Promise<number> {
           `exam-async-worker redelivery: msg ${msg.msg_id} read_ct=${msg.read_ct} method=${msg.message?.method} batch=${msg.message?.batch_id}`
         );
       }
-      if (!isEnvelope(msg.message)) {
+      const problem = envelopeProblem(msg.message);
+      if (problem !== null) {
         log(`handling malformed msg_id=${msg.msg_id} read_ct=${msg.read_ct}`);
-        const err = new Error(`msg ${msg.msg_id} has no envelope (body ${JSON.stringify(msg.message)}) — DLQ`);
+        // The DLQ record keeps the body; the error, which also goes to Sentry, does not.
+        const err = new Error(`msg ${msg.msg_id} has no usable envelope (${problem}) — DLQ`);
         Sentry.captureException(err, scope.clone());
         await giveUpMessage(admin, { msgId: msg.msg_id, readCt: msg.read_ct }, msg.message, null, [], err);
         processed++;
