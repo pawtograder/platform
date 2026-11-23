@@ -107,10 +107,10 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
                   </Text>
                   <Box as="ul" fontSize="sm" color="fg.muted" ml={4}>
                     <Box as="li">
-                      • GitHub repositories: small batches are deleted immediately; larger batches are queued for
-                      background archival and locking
+                      • GitHub and Forgejo repositories: small batches are deleted immediately; larger batches are
+                      queued for background archival and locking
                     </Box>
-                    <Box as="li">• Handout repository (template) GitHub cleanup</Box>
+                    <Box as="li">• Handout repository (template) cleanup on its host</Box>
                     <Box as="li">• Solution repository (grader) GitHub cleanup</Box>
                     <Box as="li">• All submissions and grading results</Box>
                     <Box as="li">• All assignment groups, invitations, and join requests</Box>
@@ -128,8 +128,8 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
                     fontSize="lg"
                     fontWeight="bold"
                   >
-                    This action is not undoable. Assignment data is deleted permanently, and associated GitHub
-                    repositories are either deleted immediately or archived in the background.
+                    This action is not undoable. Assignment data is deleted permanently, and associated GitHub and
+                    Forgejo repositories are either deleted immediately or archived in the background.
                   </Box>
                 </VStack>
               </Dialog.Body>
