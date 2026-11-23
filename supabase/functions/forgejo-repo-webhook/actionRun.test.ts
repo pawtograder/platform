@@ -4,7 +4,7 @@ import { fakeSupabase as baseFakeSupabase, repositoryRow } from "../_shared/Repo
 import { attributeRunAttempt, compareWithRecordedRun, forgejoTime, handleForgejoActionRun } from "./actionRun.ts";
 import { actionRunPayload, RUN_SHA } from "./actionRunFixture.ts";
 
-// Mirrors workflow_events_forgejo_completion_key (20261122120000), which is NULLS NOT DISTINCT.
+// Mirrors workflow_events_forgejo_completion_key (20261122150000), which is NULLS NOT DISTINCT.
 const forgejoCompletionKey = (row: Record<string, unknown>) =>
   row.event_type === "completed" && (row.payload as { provider?: string } | null)?.provider === "forgejo"
     ? `${row.workflow_run_id}|${row.run_updated_at ?? null}`
