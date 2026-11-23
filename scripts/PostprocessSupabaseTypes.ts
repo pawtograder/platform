@@ -82,6 +82,50 @@ function makeTriggerFilledColumnsOptional(content: string) {
   return updated.join("\n");
 }
 
+// Columns of a set-returning function that can be NULL. The generator marks every column a
+// function returns as non-null, whatever the SQL does.
+const NULLABLE_FUNCTION_RETURN_COLUMNS: Record<string, string[]> = {
+  forgejo_group_repo_revocations_needed: ["repository_id"], // returns the nullable table column
+  office_hours_queue_health: ["unstaffed_seconds"] // NULL while a shift is running (CASE ... ELSE NULL)
+};
+
+const RETURNS_KEY_PATTERN = /^\s{8}Returns:\s\{$/;
+const RETURNS_END_PATTERN = /^\s{8}\}/;
+
+function makeFunctionReturnColumnsNullable(content: string) {
+  const lines = content.split("\n");
+  let columns: string[] | undefined;
+  let inReturns = false;
+
+  const updated = lines.map((line) => {
+    const functionMatch = line.match(TABLE_KEY_PATTERN);
+    if (functionMatch) {
+      columns = NULLABLE_FUNCTION_RETURN_COLUMNS[functionMatch[1]];
+      inReturns = false;
+      return line;
+    }
+    if (RETURNS_KEY_PATTERN.test(line)) {
+      inReturns = true;
+      return line;
+    }
+    if (RETURNS_END_PATTERN.test(line)) {
+      inReturns = false;
+      return line;
+    }
+
+    const columnMatch = inReturns && columns ? line.match(COLUMN_PATTERN) : null;
+    if (columnMatch && columns?.includes(columnMatch[2])) {
+      const [, indent, name, rest] = columnMatch;
+      const type = rest.replace(/;$/, "");
+      if (/\|\s*null$/.test(type)) return line;
+      return `${indent}${name}: ${type} | null${rest.endsWith(";") ? ";" : ""}`;
+    }
+    return line;
+  });
+
+  return updated.join("\n");
+}
+
 async function run() {
   const targets = process.argv.slice(2);
   if (targets.length === 0) {
@@ -104,6 +148,13 @@ async function run() {
     if (updated !== stripped) {
       // eslint-disable-next-line no-console
       console.log(`Marked trigger-filled Insert columns optional in ${target}`);
+    }
+
+    const beforeNullable = updated;
+    updated = makeFunctionReturnColumnsNullable(updated);
+    if (updated !== beforeNullable) {
+      // eslint-disable-next-line no-console
+      console.log(`Marked nullable function return columns in ${target}`);
     }
 
     // Brand classified Row columns as Pii<kind, T> for the pii-render lint rule (bug reporter, package 4b).
