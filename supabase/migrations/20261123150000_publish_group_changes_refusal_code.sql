@@ -12,11 +12,12 @@
 -- Only that one statement changes. The body below is the latest definition, from
 -- 20261118140200_forgejo_group_repos.sql (CW-13), copied verbatim otherwise. This migration was
 -- 20261115120000 until CW-13 landed: CW-13 re-creates the function after it, so at the old
--- timestamp the 42501 was silently undone. It was then 20261118180000, 20261122120100 and
--- 20261122124100. On 2026-11-22 it moved to 20261122160000, after
--- 20261122140500_forgejo_staff_team_recorded_identity.sql, then the newest migration on staging.
--- None of the migrations it now follows re-creates this function. It never ran on a shared
--- database (fork PR, no preview). To check the body:
+-- timestamp the 42501 was silently undone. It was then 20261118180000, 20261122120100,
+-- 20261122124100 and 20261122160000. That last one collided with #1398's
+-- 20261122160000_forgejo_repo_archives.sql, so on 2026-11-23 it moved to 20261123150000, after
+-- every migration on staging and in the open PRs (the newest was #1429's
+-- 20261123140100_discussion_by_capability.sql). None of the migrations it now follows re-creates
+-- this function. It never ran on a shared database (fork PR, no preview). To check the body:
 --   diff <(sed -n '363,780p' supabase/migrations/20261118140200_forgejo_group_repos.sql) \
 --        <(sed -n '/^create or replace function/,$p' <this file>)
 --
