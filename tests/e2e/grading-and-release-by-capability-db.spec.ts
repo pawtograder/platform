@@ -350,6 +350,134 @@ test.describe("grading and releasing grades follow grade_submissions and release
     expect((await review(sub.grading_review_id)).tweak).toBe(0);
   });
 
+  test("a default grader can't release one comment before its review: insert, flip, move, or as an assignee", async () => {
+    const sub = await newSubmission();
+    const released = async (table: "submission_comments" | "submission_file_comments", id: number) => {
+      const { data, error } = await supabase.from(table).select("released").eq("id", id).single();
+      expect(error).toBeNull();
+      return data!.released;
+    };
+    const fileRow = (author: TestingUser, isReleased: boolean) => ({
+      submission_id: sub.submission_id,
+      submission_file_id: sub.file_id,
+      submission_review_id: sub.grading_review_id,
+      class_id: classA.id,
+      author: author.private_profile_id,
+      comment: "Line comment",
+      line: 1,
+      released: isReleased,
+      eventually_visible: true
+    });
+
+    // Before: the grade_submissions branch only checked the review, so a grader could insert a
+    // released comment on an unreleased review and the student would see it.
+    expectRefused(
+      await graderClient.from("submission_comments").insert({ ...rubricCheckRow(sub, plainGrader), released: true }),
+      "a grader inserting a released rubric check on an unreleased review"
+    );
+    expectRefused(
+      await graderClient.from("submission_file_comments").insert(fileRow(plainGrader, true)),
+      "a grader inserting a released line comment on an unreleased review"
+    );
+
+    // Their own unreleased comments, as the screens write them, still work.
+    const { data: ownCheck, error: ownCheckError } = await graderClient
+      .from("submission_comments")
+      .insert(rubricCheckRow(sub, plainGrader))
+      .select("id")
+      .single();
+    expect(ownCheckError).toBeNull();
+    const { data: ownLine, error: ownLineError } = await graderClient
+      .from("submission_file_comments")
+      .insert(fileRow(plainGrader, false))
+      .select("id")
+      .single();
+    expect(ownLineError).toBeNull();
+
+    // Before: the UPDATE policy let them flip their own comment to released.
+    expectRefused(
+      await graderClient.from("submission_comments").update({ released: true }).eq("id", ownCheck!.id),
+      "a grader flipping their own rubric check to released"
+    );
+    expectRefused(
+      await graderClient.from("submission_file_comments").update({ released: true }).eq("id", ownLine!.id),
+      "a grader flipping their own line comment to released"
+    );
+    // Editing it without touching released still works.
+    const { data: edited, error: editError } = await graderClient
+      .from("submission_comments")
+      .update({ comment: "Edited", released: false })
+      .eq("id", ownCheck!.id)
+      .select("id");
+    expect(editError).toBeNull();
+    expect(edited).toHaveLength(1);
+
+    // A comment with no review is released as before, but can't be moved onto the unreleased review.
+    const { data: loose, error: looseError } = await graderClient
+      .from("submission_comments")
+      .insert({
+        submission_id: sub.submission_id,
+        class_id: classA.id,
+        author: plainGrader.private_profile_id,
+        comment: "A note with no review",
+        released: true,
+        eventually_visible: true
+      })
+      .select("id")
+      .single();
+    expect(looseError).toBeNull();
+    expectRefused(
+      await graderClient
+        .from("submission_comments")
+        .update({ submission_review_id: sub.grading_review_id })
+        .eq("id", loose!.id),
+      "a grader moving a released comment onto an unreleased review"
+    );
+
+    // Assigned to the review, the grader also passes the assignee branch; that doesn't help either.
+    expect(
+      (
+        await supabase.from("review_assignments").insert({
+          assignee_profile_id: plainGrader.private_profile_id,
+          class_id: classA.id,
+          assignment_id: assignment.id,
+          submission_id: sub.submission_id,
+          submission_review_id: sub.grading_review_id,
+          rubric_id: assignment.grading_rubric_id!,
+          due_date: addDays(new Date(), 3).toISOString()
+        })
+      ).error
+    ).toBeNull();
+    expectRefused(
+      await graderClient.from("submission_comments").insert({ ...rubricCheckRow(sub, plainGrader), released: true }),
+      "an assigned grader inserting a released rubric check"
+    );
+
+    expect(await released("submission_comments", ownCheck!.id)).toBe(false);
+    expect(await released("submission_file_comments", ownLine!.id)).toBe(false);
+    const { data: releasedRows, error: releasedError } = await supabase
+      .from("submission_comments")
+      .select("id")
+      .eq("submission_review_id", sub.grading_review_id)
+      .eq("released", true);
+    expect(releasedError).toBeNull();
+    expect(releasedRows).toHaveLength(0);
+
+    // An instructor can do both.
+    const { error: instructorInsertError } = await instructorClient
+      .from("submission_file_comments")
+      .insert(fileRow(instructor, true));
+    expect(instructorInsertError).toBeNull();
+    const { data: flipped, error: flipError } = await instructorClient
+      .from("submission_comments")
+      .update({ released: true })
+      .eq("id", ownCheck!.id)
+      .select("id");
+    expect(flipError).toBeNull();
+    expect(flipped).toHaveLength(1);
+    expect(await released("submission_comments", ownCheck!.id)).toBe(true);
+  });
+
   test("#1353: a TA with release_grades edits an already released grade", async () => {
     const sub = await newSubmission();
     // The original grader's check, released to the student.
@@ -607,13 +735,14 @@ test.describe("grading and releasing grades follow grade_submissions and release
     expect(selfEditError).toBeNull();
     expect(selfEdited).toHaveLength(1);
 
-    // The non-review branch: a comment on their own submission with no review.
+    // The non-review branch: a comment on their own submission with no review, released as the
+    // screens write it.
     const { error: ownError } = await studentClient.from("submission_comments").insert({
       submission_id: sub.submission_id,
       class_id: classA.id,
       author: sub.student.private_profile_id,
       comment: "A question about my submission",
-      released: false,
+      released: true,
       eventually_visible: true
     });
     expect(ownError).toBeNull();

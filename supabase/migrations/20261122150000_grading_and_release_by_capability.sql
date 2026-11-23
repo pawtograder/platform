@@ -23,7 +23,11 @@
 --      either keep the grader release path open or break #843 (a grader completing a released,
 --      incomplete review). The trigger only checks statements run as the `authenticated` role:
 --      SECURITY DEFINER functions (the quiz autograder, the release cascade) and the service role
---      are not affected, while the SECURITY INVOKER release RPCs are.
+--      are not affected, while the SECURITY INVOKER release RPCs are. A second trigger on
+--      submission_comments, submission_file_comments and submission_artifact_comments refuses
+--      released = true on a comment whose review isn't released, by insert or update, for a
+--      signed-in user without release_grades: a student sees any released comment on their own
+--      submission, so this would release one comment early.
 --   4. Comment INSERT on submission_comments, submission_file_comments and
 --      submission_artifact_comments: the role branch becomes "release_grades, or grade_submissions
 --      on no review or an unreleased review of the same class". The non-review branch
@@ -39,8 +43,9 @@
 -- Who gains or loses:
 --   * Instructors hold both capabilities, so nothing changes for them.
 --   * Default graders and Head TAs keep grading as before, but can no longer release or unrelease
---     (through a direct update or the release RPCs), and can no longer add a comment or rubric
---     check to a released review. The screens already hid both from graders.
+--     (through a direct update or the release RPCs), can no longer add a comment or rubric
+--     check to a released review, and can no longer mark one comment released before its review
+--     is. The screens already hid all three from graders.
 --   * A grader on a custom role with release_grades turned on can release and unrelease grades
 --     (including Release all and Unrelease all) and change a released grade the way an instructor
 --     can: edit any review, and add, edit or delete any comment or rubric check.
@@ -180,6 +185,64 @@ DROP TRIGGER IF EXISTS submission_reviews_release_needs_capability ON public.sub
 CREATE TRIGGER submission_reviews_release_needs_capability
 BEFORE UPDATE OF released ON public.submission_reviews
 FOR EACH ROW EXECUTE FUNCTION public.submission_reviews_release_needs_capability();
+
+-- Each comment has its own `released` flag, and a student sees a released comment on their own
+-- submission whatever its review says. So a signed-in user without release_grades can't make a
+-- comment released while its review isn't: not by inserting it released, not by flipping it, and
+-- not by moving a released comment onto such a review. A trigger covers every INSERT and UPDATE
+-- branch at once (a grader assigned to the review passes the assignee branch, too). Comments with
+-- no review and comments on a released review are not affected, and the screens always write the
+-- review's own flag.
+CREATE OR REPLACE FUNCTION public.submission_comment_release_needs_capability()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $$
+DECLARE
+  v_review_released boolean;
+  v_review_class_id bigint;
+BEGIN
+  IF current_user <> 'authenticated' OR NOT NEW.released OR NEW.submission_review_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    IF OLD.released AND OLD.submission_review_id IS NOT DISTINCT FROM NEW.submission_review_id THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  SELECT sr.released, sr.class_id INTO v_review_released, v_review_class_id
+  FROM public.submission_reviews sr
+  WHERE sr.id = NEW.submission_review_id;
+
+  IF v_review_released IS NOT TRUE
+     AND (
+       v_review_class_id IS NULL
+       OR v_review_class_id NOT IN (SELECT public.user_class_ids_with_capability('release_grades'))
+     ) THEN
+    RAISE EXCEPTION 'Releasing a comment before its review is released needs the release_grades capability in this class'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.submission_comment_release_needs_capability() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS submission_comments_release_needs_capability ON public.submission_comments;
+CREATE TRIGGER submission_comments_release_needs_capability
+BEFORE INSERT OR UPDATE OF released, submission_review_id ON public.submission_comments
+FOR EACH ROW EXECUTE FUNCTION public.submission_comment_release_needs_capability();
+
+DROP TRIGGER IF EXISTS submission_file_comments_release_needs_capability ON public.submission_file_comments;
+CREATE TRIGGER submission_file_comments_release_needs_capability
+BEFORE INSERT OR UPDATE OF released, submission_review_id ON public.submission_file_comments
+FOR EACH ROW EXECUTE FUNCTION public.submission_comment_release_needs_capability();
+
+DROP TRIGGER IF EXISTS submission_artifact_comments_release_needs_capability ON public.submission_artifact_comments;
+CREATE TRIGGER submission_artifact_comments_release_needs_capability
+BEFORE INSERT OR UPDATE OF released, submission_review_id ON public.submission_artifact_comments
+FOR EACH ROW EXECUTE FUNCTION public.submission_comment_release_needs_capability();
 
 -- ---------------------------------------------------------------------------
 -- 4. Comment INSERT

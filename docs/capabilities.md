@@ -180,6 +180,13 @@ a release from any other edit. A `BEFORE UPDATE OF released` trigger
 `release_grades`. It checks only statements run as `authenticated`, so SECURITY DEFINER functions and
 the service role are not affected, while the SECURITY INVOKER release RPCs are.
 
+Each comment also has its own `released` flag, and a student sees any released comment on their own
+submission. So `submission_comment_release_needs_capability`, a trigger on `submission_comments`,
+`submission_file_comments` and `submission_artifact_comments`, refuses `released = true` on a comment
+whose review isn't released (by insert, by update, or by moving it onto such a review) for a signed-in
+user without `release_grades`. Comments with no review, and comments on a released review, are not
+affected.
+
 On screen, `useGradingPermissions()` (in `hooks/useGradingPermissions.ts`) gives
 `canGradeSubmissions`, `canReleaseGrades` and `isLockedByRelease(released)`; the rubric sidebar, the
 annotation menus and popups, and the comment forms use it. `useWritableSubmissionReviews()` decides
