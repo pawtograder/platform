@@ -10,6 +10,7 @@ export type CommitStatusForHistory = {
   requested_at?: string | null;
   workflow_triggered_at?: string | null;
   check_run_marked_in_progress_at?: string | null;
+  workflow_run_url?: string | null;
 };
 
 export type RepositoryCheckRunForHistory = {
@@ -94,8 +95,20 @@ export function normalizeCommitStatus(status: unknown): CommitStatusForHistory {
     requested_at: typeof status.requested_at === "string" ? status.requested_at : null,
     workflow_triggered_at: typeof status.workflow_triggered_at === "string" ? status.workflow_triggered_at : null,
     check_run_marked_in_progress_at:
-      typeof status.check_run_marked_in_progress_at === "string" ? status.check_run_marked_in_progress_at : null
+      typeof status.check_run_marked_in_progress_at === "string" ? status.check_run_marked_in_progress_at : null,
+    workflow_run_url: httpUrlOrNull(status.workflow_run_url)
   };
+}
+
+/** The value when it is an http(s) URL, else null: a stored link is only rendered as one when it is. */
+export function httpUrlOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseTime(value: string | null | undefined): number {
