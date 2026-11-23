@@ -19,15 +19,6 @@ DECLARE
     v_assignment_provider text;
     v_repo_provider text;
 BEGIN
-    v_org := nullif(trim(p_org), '');
-    IF v_org IS NULL THEN
-        SELECT c.github_org INTO v_org FROM public.classes c WHERE c.id = p_class_id;
-        v_org := nullif(trim(v_org), '');
-    END IF;
-    IF v_org IS NULL THEN
-        RAISE EXCEPTION 'Class % has no GitHub org configured; cannot enqueue repo analytics fetch', p_class_id;
-    END IF;
-
     IF auth.role() = 'anon' THEN
         RAISE EXCEPTION 'Access denied: authentication required';
     ELSIF auth.uid() IS NOT NULL
@@ -50,6 +41,16 @@ BEGIN
             RAISE EXCEPTION 'Repository analytics are only collected from GitHub (assignment % uses %)', p_assignment_id, v_assignment_provider;
         END IF;
         RETURN 0;
+    END IF;
+
+    -- After the provider check: a Forgejo assignment in a course without a GitHub org returns 0, not an error.
+    v_org := nullif(trim(p_org), '');
+    IF v_org IS NULL THEN
+        SELECT c.github_org INTO v_org FROM public.classes c WHERE c.id = p_class_id;
+        v_org := nullif(trim(v_org), '');
+    END IF;
+    IF v_org IS NULL THEN
+        RAISE EXCEPTION 'Class % has no GitHub org configured; cannot enqueue repo analytics fetch', p_class_id;
     END IF;
 
     IF p_repository_id IS NOT NULL THEN
