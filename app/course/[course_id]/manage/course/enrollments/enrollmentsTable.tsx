@@ -1,5 +1,7 @@
 "use client";
 
+import { useTableControllerTableValues } from "@/lib/TableController";
+import { roleDisplayName } from "@/lib/classRoles";
 import { Button } from "@/components/ui/button";
 import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
 import InlineRemoveTag from "@/components/ui/inline-remove-tag";
@@ -7,7 +9,13 @@ import PersonTags from "@/components/ui/person-tags";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import { useClassSections, useCourse, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import {
+  useClassSections,
+  useCourse,
+  useCourseController,
+  useLabSections,
+  useUserRolesWithProfiles
+} from "@/hooks/useCourseController";
 import { useDiscordMembershipStatus, type DiscordMembershipState } from "@/hooks/useDiscordMembershipStatus";
 import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
@@ -167,6 +175,16 @@ export default function EnrollmentsTable() {
   const labSections = useLabSections();
   const classSections = useClassSections();
   const course = useCourse();
+  const controller = useCourseController();
+  const classRoles = useTableControllerTableValues(controller.classRoles);
+  const staffRoleName = useCallback(
+    (row: EnrollmentTableRow) => {
+      if (row.type !== "enrollment" || row.role !== "grader") return row.role;
+      const role = classRoles.find((role) => role.id === row.class_role_id);
+      return role ? roleDisplayName(role) : "Grader";
+    },
+    [classRoles]
+  );
   const discordServerConfigured = !!course?.discord_server_id;
   const cloudWorkspacesEnabled = courseFeatureEffectiveEnabled(
     (course as CourseWithFeatures | undefined)?.features,
@@ -489,7 +507,7 @@ export default function EnrollmentsTable() {
         header: "Role",
         accessorKey: "role",
         cell: ({ row }) => {
-          return row.original.role;
+          return staffRoleName(row.original);
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
@@ -1017,6 +1035,7 @@ export default function EnrollmentsTable() {
       openEditUserRoleModal,
       openGitHubDiagnosticsModal,
       openRemoveStudentModal,
+      staffRoleName,
       tagData,
       handleSingleCheckboxChange,
       cancelInvitation,
