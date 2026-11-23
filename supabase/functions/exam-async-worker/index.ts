@@ -1045,15 +1045,18 @@ let contractGapReported = false;
 // Why a message body can't be handled, or null if it can. Checks only what every later path relies
 // on: an object (else every attempt threw before the poison-pill guard could see it), whose batch_id
 // is an integer (give-up passes it to a bigint parameter, so anything else made the give-up itself
-// fail and the message came back every READ_VISIBILITY_SECONDS forever). Every producer is a SQL
-// function that writes an integer batch_id. A bad method or args still fails into give-up as
-// before. The reason names types only, never content: it goes to Sentry and the DLQ record.
+// fail and the message came back every READ_VISIBILITY_SECONDS forever), and whose method is a
+// string (the logs, the Sentry tag and the dispatch all print it, and an object that can't be
+// printed threw there before the message could reach give-up). Every producer is a SQL function
+// that writes a string method and an integer batch_id. An unknown method or bad args still fail
+// into give-up as before. The reason names types only, never content: it goes to Sentry and the DLQ.
 function envelopeProblem(body: unknown): string | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return `body is ${body === null ? "null" : Array.isArray(body) ? "an array" : `a ${typeof body}`}`;
   }
-  const batchId = (body as { batch_id?: unknown }).batch_id;
-  return Number.isSafeInteger(batchId) ? null : `batch_id is not an integer (${typeof batchId})`;
+  const { batch_id: batchId, method } = body as { batch_id?: unknown; method?: unknown };
+  if (!Number.isSafeInteger(batchId)) return `batch_id is not an integer (${typeof batchId})`;
+  return typeof method === "string" ? null : `method is not a string (${typeof method})`;
 }
 
 async function runBatch(): Promise<number> {
@@ -1135,12 +1138,15 @@ async function runBatch(): Promise<number> {
       // that reader died, its lease lapsed while it may still be running (see holdLease), it threw
       // on the way out (see the catch below), or its ack failed. A log line only, not a Sentry
       // event; the poison-pill guard in processMessage reports repeat cases.
+      // Checked before anything prints the body's fields: a field that can't be printed would throw
+      // in the log line, before the message could reach give-up.
+      const problem = envelopeProblem(msg.message);
       if (msg.read_ct > 1) {
         console.warn(
-          `exam-async-worker redelivery: msg ${msg.msg_id} read_ct=${msg.read_ct} method=${msg.message?.method} batch=${msg.message?.batch_id}`
+          `exam-async-worker redelivery: msg ${msg.msg_id} read_ct=${msg.read_ct}` +
+            (problem === null ? ` method=${msg.message.method} batch=${msg.message.batch_id}` : "")
         );
       }
-      const problem = envelopeProblem(msg.message);
       if (problem !== null) {
         log(`handling malformed msg_id=${msg.msg_id} read_ct=${msg.read_ct}`);
         // The DLQ record keeps the body; the error, which also goes to Sentry, does not.
@@ -1166,7 +1172,7 @@ async function runBatch(): Promise<number> {
         const env = msg.message;
         log(
           `handling ${env.method} msg_id=${msg.msg_id} batch=${env.batch_id} read_ct=${msg.read_ct}` +
-            (env.debug_id ? ` debug_id=${env.debug_id}` : "")
+            (typeof env.debug_id === "string" ? ` debug_id=${env.debug_id}` : "")
         );
         await processMessage(admin, msg, scope.clone());
       } catch (error) {

@@ -841,9 +841,65 @@ test.describe("a message with no usable envelope is dead-lettered on its first r
       expect(dlq.audit[0].error_message).toMatch(/batch_id/);
       expect(dlq.audit[0].error_message).not.toContain(secret);
       expect(dlq.audit[0].error_message).not.toContain("not-a-batch");
-      await cleanupTag(client, tag);
     } finally {
-      await client.end();
+      try {
+        await cleanupTag(client, tag);
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
+  // An object with its own toString set to null throws when a log line interpolates it, so a body
+  // like this could stop every read in a log line before it reached give-up (CodeRabbit on #1308).
+  test("a field that can't be printed doesn't stop the message in a log line, on a first read or a redelivery", async () => {
+    const client = await privilegedClient();
+    const tag = `unprintable-${randomUUID()}`;
+    const unprintable = { toString: null };
+    try {
+      const send = async (body: Record<string, unknown>) =>
+        Number(
+          (
+            await client.query<{ id: string }>("SELECT pgmq.send('exam_processing', $1::jsonb) AS id", [
+              JSON.stringify({ class_id: 1, args: {}, test_tag: tag, ...body })
+            ])
+          ).rows[0].id
+        );
+      // First read: a method the handling log would print.
+      const badMethod = await send({ method: unprintable, batch_id: 0 });
+      // A redelivery (an earlier read ended without a disposition): a batch_id the redelivery log
+      // would print before the envelope is checked.
+      const badBatch = await send({ method: "finalize", batch_id: unprintable });
+      await client.query("UPDATE pgmq.q_exam_processing SET read_ct = 1 WHERE msg_id = $1", [badBatch]);
+
+      await expect
+        .poll(
+          async () => {
+            await runExamWorker();
+            return (await tagged(client, tag)).archived;
+          },
+          { timeout: 30_000, intervals: [1000, 2000, 3000] }
+        )
+        .toEqual([badMethod, badBatch]);
+      const { rows: reads } = await client.query<{ msg_id: string; read_ct: number }>(
+        "SELECT msg_id, read_ct FROM pgmq.a_exam_processing WHERE msg_id = ANY($1::bigint[]) ORDER BY msg_id",
+        [[badMethod, badBatch]]
+      );
+      expect(reads.map((r) => r.read_ct)).toEqual([1, 2]);
+      const errors = (await dlqRecords(client, tag)).audit.map((a) => a.error_message);
+      expect(errors).toHaveLength(2);
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(new RegExp(`msg ${badMethod} .*method is not a string \\(object\\)`)),
+          expect.stringMatching(new RegExp(`msg ${badBatch} .*batch_id is not an integer \\(object\\)`))
+        ])
+      );
+    } finally {
+      try {
+        await cleanupTag(client, tag);
+      } finally {
+        await client.end();
+      }
     }
   });
 });
