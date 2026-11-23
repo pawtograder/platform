@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1819,6 +1820,7 @@ type ExportRow = {
 };
 
 async function exportGrades({
+  repoHost,
   assignment_id,
   supabase,
   class_id,
@@ -1830,6 +1832,7 @@ async function exportGrades({
   mode
 }: {
   assignment_id: number;
+  repoHost?: string;
   class_id: number;
   supabase: SupabaseClient<Database>;
   include_score_breakdown: boolean;
@@ -1956,7 +1959,7 @@ async function exportGrades({
         grader_sha: submission.grader_sha || "",
         grader_action_sha: submission.grader_action_sha || "",
         github_link: submission.repository
-          ? `https://github.com/${submission.repository}/commit/${submission.sha}`
+          ? repoWebUrl(repoHost, submission.repository, `/commit/${submission.sha}`)
           : undefined
       },
       rubricCheckIdToScore: submission.activesubmissionid
@@ -2067,6 +2070,7 @@ async function exportGrades({
 }
 
 function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
+  const repoHost = useRepoWebHost(useAssignmentController().assignment.git_provider);
   const supabase = useMemo(() => createClient(), []);
   const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);
   const [includeRubricChecks, setIncludeRubricChecks] = useState(true);
@@ -2081,6 +2085,7 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
       setIsExporting(mode);
       try {
         await exportGrades({
+          repoHost,
           assignment_id,
           class_id,
           supabase,
@@ -2105,6 +2110,7 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
     [
       assignment_id,
       class_id,
+      repoHost,
       includeAutograderTestResults,
       includeRepoMetadata,
       includeRubricChecks,

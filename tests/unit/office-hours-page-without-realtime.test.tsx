@@ -43,8 +43,11 @@ jest.mock("@/hooks/useOfficeHoursRealtime", () => ({
 }));
 
 jest.mock("@/hooks/useClassProfiles", () => ({
-  useClassProfiles: () => ({ private_profile_id: "priv-1", public_profile_id: "pub-1" })
+  useClassProfiles: () => ({ private_profile_id: "priv-1", public_profile_id: "pub-1" }),
+  useIsStudent: () => false
 }));
+
+jest.mock("@/hooks/useCourseFeatures", () => ({ useFeatureEnabled: () => false }));
 
 jest.mock("@/hooks/useCalendarEvents", () => ({ useOfficeHoursSchedule: () => [] }));
 

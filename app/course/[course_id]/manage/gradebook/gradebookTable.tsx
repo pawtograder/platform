@@ -6,9 +6,10 @@ import { Label } from "@/components/ui/label";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAllStudentRoles,
   useCanShowGradeFor,
@@ -1178,9 +1179,23 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
                       loading={isDeleting}
                       onClick={async () => {
                         setIsDeleting(true);
-                        await supabase.from("gradebook_column_students").delete().eq("gradebook_column_id", columnId);
-                        await gradebookController.gradebook_columns.hardDelete(columnId);
-                        onClose();
+                        try {
+                          const { error: studentsError } = await supabase
+                            .from("gradebook_column_students")
+                            .delete()
+                            .eq("gradebook_column_id", columnId);
+                          if (studentsError) throw studentsError;
+                          // Rejects with a refused-write error when RLS refuses the delete.
+                          await gradebookController.gradebook_columns.hardDelete(columnId);
+                          onClose();
+                        } catch (error) {
+                          toaster.error({
+                            title: "Error deleting gradebook column",
+                            description: getErrorMessage(error)
+                          });
+                        } finally {
+                          setIsDeleting(false);
+                        }
                       }}
                     >
                       Delete Column
@@ -1795,6 +1810,11 @@ function GradebookColumnHeader({
   const columnGroupActions = useColumnGroupActions();
   const [isReleasing, setIsReleasing] = useState(false);
   const [isUnreleasing, setIsUnreleasing] = useState(false);
+  // Editing, moving, releasing and deleting a column need manage_gradebook (#1010).
+  const canManageGradebook = useCapability("manage_gradebook");
+  // Convert Missing to 0 writes cells, which also needs manage_gradebook (hidden if it's turned off mid-session).
+  const showConvertMissing =
+    canManageGradebook && (!column.score_expression || column.score_expression.startsWith("assignments("));
   const supabase = useMemo(() => createClient(), []);
   const headerRef = useRef<HTMLDivElement>(null);
   const isMovingRef = useRef(false);
@@ -2119,42 +2139,46 @@ function GradebookColumnHeader({
                   Clear Sort
                 </MenuItem>
               )}
-              <MenuSeparator />
-              <MenuItem value="edit" onClick={() => setIsEditing(true)}>
-                <Icon as={LuPencil} boxSize={3} mr={2} />
-                Edit Column
-              </MenuItem>
-              {topicsEnabled && (
-                <MenuItem value="topic" onClick={() => setIsChoosingTopic(true)}>
-                  <Icon as={LuLayers} boxSize={3} mr={2} />
-                  Topic…
-                </MenuItem>
+              {canManageGradebook && (
+                <>
+                  <MenuSeparator />
+                  <MenuItem value="edit" onClick={() => setIsEditing(true)}>
+                    <Icon as={LuPencil} boxSize={3} mr={2} />
+                    Edit Column
+                  </MenuItem>
+                  {topicsEnabled && (
+                    <MenuItem value="topic" onClick={() => setIsChoosingTopic(true)}>
+                      <Icon as={LuLayers} boxSize={3} mr={2} />
+                      Topic…
+                    </MenuItem>
+                  )}
+                  {groupAwareMove.enabled && (
+                    <MenuItem value="group" onClick={() => setIsChoosingGroup(true)}>
+                      <Icon as={LuGroup} boxSize={3} mr={2} />
+                      Group…
+                    </MenuItem>
+                  )}
+                  <MenuItem
+                    value="moveLeft"
+                    onClick={moveLeft}
+                    disabled={isMovingLeft || isMovingRight || (groupAwareMove.enabled && !groupAwareMove.left)}
+                    _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                  >
+                    {isMovingLeft ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowLeft} boxSize={3} mr={2} />}
+                    Move Left
+                  </MenuItem>
+                  <MenuItem
+                    value="moveRight"
+                    onClick={moveRight}
+                    disabled={isMovingLeft || isMovingRight || (groupAwareMove.enabled && !groupAwareMove.right)}
+                    _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                  >
+                    {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
+                    Move Right
+                  </MenuItem>
+                </>
               )}
-              {groupAwareMove.enabled && (
-                <MenuItem value="group" onClick={() => setIsChoosingGroup(true)}>
-                  <Icon as={LuGroup} boxSize={3} mr={2} />
-                  Group…
-                </MenuItem>
-              )}
-              <MenuItem
-                value="moveLeft"
-                onClick={moveLeft}
-                disabled={isMovingLeft || isMovingRight || (groupAwareMove.enabled && !groupAwareMove.left)}
-                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-              >
-                {isMovingLeft ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowLeft} boxSize={3} mr={2} />}
-                Move Left
-              </MenuItem>
-              <MenuItem
-                value="moveRight"
-                onClick={moveRight}
-                disabled={isMovingLeft || isMovingRight || (groupAwareMove.enabled && !groupAwareMove.right)}
-                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-              >
-                {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
-                Move Right
-              </MenuItem>
-              {(!column.score_expression || column.instructor_only) && (
+              {canManageGradebook && (!column.score_expression || column.instructor_only) && (
                 <>
                   <MenuSeparator />
                   <MenuItem
@@ -2177,9 +2201,8 @@ function GradebookColumnHeader({
                   </MenuItem>
                 </>
               )}
-              <MenuSeparator />
-              {(!column.score_expression ||
-                (column.score_expression && column.score_expression.startsWith("assignments("))) && (
+              {canManageGradebook && <MenuSeparator />}
+              {showConvertMissing && (
                 <MenuItem
                   value="convertMissing"
                   onClick={() => setIsConvertingMissing(true)}
@@ -2190,15 +2213,17 @@ function GradebookColumnHeader({
                   Convert Missing to 0
                 </MenuItem>
               )}
-              <MenuItem
-                value="delete"
-                onClick={() => setIsDeleting(true)}
-                color="fg.error"
-                _hover={{ bg: "bg.error", color: "fg.error" }}
-              >
-                <Icon as={LuTrash} boxSize={3} mr={2} />
-                Delete Column
-              </MenuItem>
+              {canManageGradebook && (
+                <MenuItem
+                  value="delete"
+                  onClick={() => setIsDeleting(true)}
+                  color="fg.error"
+                  _hover={{ bg: "bg.error", color: "fg.error" }}
+                >
+                  <Icon as={LuTrash} boxSize={3} mr={2} />
+                  Delete Column
+                </MenuItem>
+              )}
             </MenuContent>
           </MenuRoot>
         </HStack>
@@ -2646,6 +2671,9 @@ export default function GradebookTable() {
   scoreMapsRef.current = scoreMaps;
 
   const isInstructor = useIsInstructor();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  // Adding, importing, arranging, grouping and topic changes need manage_gradebook (#1010).
+  const canManageGradebook = useCapability("manage_gradebook");
   const isRefetching = useGradebookRefetchStatus();
   const isGradebookDataReady = useIsGradebookDataReady();
 
@@ -3209,7 +3237,7 @@ export default function GradebookTable() {
       const { active, over } = event;
       setActiveDragColumnId(null);
       setActiveDropGapIndex(null);
-      if (!isInstructor) return;
+      if (!canManageGradebook) return;
       if (topicView) {
         // Topic units mix columns from different groups, so a drop position here has no single
         // meaning for column order.
@@ -3254,7 +3282,14 @@ export default function GradebookTable() {
         setIsReorderingColumns(false);
       }
     },
-    [isInstructor, topicView, visibleReorderUnits, fullGradeColumnIdsOrdered, supabaseForGradebook, gradebookController]
+    [
+      canManageGradebook,
+      topicView,
+      visibleReorderUnits,
+      fullGradeColumnIdsOrdered,
+      supabaseForGradebook,
+      gradebookController
+    ]
   );
 
   const dragOverlayColumn = useMemo(() => {
@@ -3811,19 +3846,21 @@ export default function GradebookTable() {
                                 </IconButton>
                               </WrappedTooltip>
                             )}
-                            <WrappedTooltip content="Auto-layout columns">
-                              <IconButton
-                                variant="ghost"
-                                size="sm"
-                                onClick={autoLayout}
-                                colorPalette="blue"
-                                aria-label="Auto-layout columns"
-                                disabled={isAutoLayouting}
-                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-                              >
-                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
-                              </IconButton>
-                            </WrappedTooltip>
+                            {canManageGradebook && (
+                              <WrappedTooltip content="Auto-layout columns">
+                                <IconButton
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={autoLayout}
+                                  colorPalette="blue"
+                                  aria-label="Auto-layout columns"
+                                  disabled={isAutoLayouting}
+                                  _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                                >
+                                  {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                                </IconButton>
+                              </WrappedTooltip>
+                            )}
 
                             <WrappedTooltip content="Expand all groups">
                               <IconButton
@@ -3903,10 +3940,10 @@ export default function GradebookTable() {
                                       : pluralize(seg.groupName.charAt(0).toUpperCase() + seg.groupName.slice(1))
                                   }...`}
                             </Text>
-                            {seg.groupId != null && isInstructor && (
+                            {seg.groupId != null && canManageGradebook && (
                               <GroupHeaderMenu groupKey={seg.groupKey} groupId={seg.groupId} name={seg.groupName} />
                             )}
-                            {seg.topicId != null && isInstructor && topicsById.get(seg.topicId) && (
+                            {seg.topicId != null && canManageGradebook && topicsById.get(seg.topicId) && (
                               <TopicHeaderMenu topic={topicsById.get(seg.topicId)!} />
                             )}
                           </HStack>
@@ -3989,7 +4026,10 @@ export default function GradebookTable() {
                           backgroundColor: "var(--chakra-colors-bg-subtle)"
                         }}
                       >
-                        {isInstructor && scrollableLeafColumns.length > 0 ? (
+                        {/* Staff always get the draggable header, chosen by role and not by manage_gradebook, so a
+                            capability that loads or changes doesn't remount it (an open column dialog would close).
+                            Without manage_gradebook the drag handle is hidden and dragging is off. */}
+                        {isGraderOrInstructor && scrollableLeafColumns.length > 0 ? (
                           <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
                             {Array.from({ length: visibleReorderUnits.length + 1 }, (_, gapIndex) => {
                               let boundary = 0;
@@ -4019,8 +4059,8 @@ export default function GradebookTable() {
                                   coreRowModel={coreRowModel}
                                   classSections={classSections?.data}
                                   labSections={labSections}
-                                  showDragHandle
-                                  reorderDisabled={isReorderingColumns}
+                                  showDragHandle={canManageGradebook}
+                                  reorderDisabled={isReorderingColumns || !canManageGradebook}
                                   isDraggingThis={activeDragColumnId === header.column.id}
                                   anyColumnDragging={Boolean(activeDragColumnId)}
                                   liveWidthsRef={liveWidthsRef}
@@ -4126,42 +4166,48 @@ export default function GradebookTable() {
         <Text fontSize="sm" color="fg.muted">
           Showing {rowModel.rows.length} {pluralize("student", rowModel.rows.length)}
         </Text>
-        {isInstructor && (
+        {(isInstructor || canManageGradebook) && (
           <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
-            <PopoverRoot positioning={{ placement: "top-end" }}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Icon as={FiDownload} mr={2} /> Download Gradebook
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent maxW="300px">
-                <PopoverBody p={3}>
-                  <VStack align="start" gap={3}>
-                    <Checkbox
-                      checked={exportWithRenderExpressions}
-                      onCheckedChange={(details) => setExportWithRenderExpressions(details.checked === true)}
-                    >
-                      Use render expressions in CSV
-                    </Checkbox>
-                    <Button size="sm" variant="subtle" colorPalette="green" onClick={downloadGradebookCsv}>
-                      Download CSV
-                    </Button>
-                  </VStack>
-                </PopoverBody>
-              </PopoverContent>
-            </PopoverRoot>
-            {columnGroupsEnabled && (
-              <Button variant="outline" size="sm" onClick={() => setIsAutoGroupOpen(true)}>
-                <Icon as={LuGroup} mr={2} /> Auto-group Columns
-              </Button>
+            {isInstructor && (
+              <PopoverRoot positioning={{ placement: "top-end" }}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Icon as={FiDownload} mr={2} /> Download Gradebook
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent maxW="300px">
+                  <PopoverBody p={3}>
+                    <VStack align="start" gap={3}>
+                      <Checkbox
+                        checked={exportWithRenderExpressions}
+                        onCheckedChange={(details) => setExportWithRenderExpressions(details.checked === true)}
+                      >
+                        Use render expressions in CSV
+                      </Checkbox>
+                      <Button size="sm" variant="subtle" colorPalette="green" onClick={downloadGradebookCsv}>
+                        Download CSV
+                      </Button>
+                    </VStack>
+                  </PopoverBody>
+                </PopoverContent>
+              </PopoverRoot>
             )}
-            {topicsEnabled && (
-              <Button variant="outline" size="sm" onClick={() => setIsSuggestTopicsOpen(true)}>
-                <Icon as={LuSparkles} mr={2} /> Suggest Topics
-              </Button>
+            {canManageGradebook && (
+              <>
+                {columnGroupsEnabled && (
+                  <Button variant="outline" size="sm" onClick={() => setIsAutoGroupOpen(true)}>
+                    <Icon as={LuGroup} mr={2} /> Auto-group Columns
+                  </Button>
+                )}
+                {topicsEnabled && (
+                  <Button variant="outline" size="sm" onClick={() => setIsSuggestTopicsOpen(true)}>
+                    <Icon as={LuSparkles} mr={2} /> Suggest Topics
+                  </Button>
+                )}
+                <ImportGradebookColumn />
+                <AddColumnDialog />
+              </>
             )}
-            <ImportGradebookColumn />
-            <AddColumnDialog />
           </HStack>
         )}
       </HStack>

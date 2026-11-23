@@ -4,6 +4,7 @@ import { AutoGroupPreviewDialog } from "@/components/gradebook/AutoGroupPreviewD
 import { Switch } from "@/components/ui/switch";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
 import {
   COURSE_FEATURES,
   courseFeatureEffectiveEnabled,
@@ -30,8 +31,13 @@ export default function CourseFeatureFlagsPage() {
   const { course_id } = useParams();
   const router = useRouter();
   const { role } = useClassProfiles();
+  // The flags come from the live course row, not from role.classes. role.classes is the snapshot
+  // taken when the role was loaded, so another instructor's change never reached this page and the
+  // switches stayed on the old values until a manual refresh (#1062). useCourse() is backed by
+  // CourseProvider's classes_update subscription, which is why Enrollments already updates live.
+  const course = useCourse();
   const courseIdNum = Number.parseInt(course_id as string, 10);
-  const features = (role.classes as CourseWithFeatures).features;
+  const features = (course as CourseWithFeatures).features;
   const featuresSnapshot = useMemo(() => JSON.stringify(features ?? null), [features]);
 
   const derivedFlags = useMemo(() => {
@@ -45,7 +51,7 @@ export default function CourseFeatureFlagsPage() {
   const [savingName, setSavingName] = useState<CourseFeatureName | null>(null);
   // Turning column groups on goes through a preview of the groups it would create.
   const [isPreviewingGroups, setIsPreviewingGroups] = useState(false);
-  const gradebookId = (role.classes as CourseWithFeatures).gradebook_id ?? null;
+  const gradebookId = (course as CourseWithFeatures).gradebook_id ?? null;
 
   const enableColumnGroups = useCallback(async () => {
     const supabase = createClient();

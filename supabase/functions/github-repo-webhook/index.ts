@@ -2759,8 +2759,9 @@ eventHandler.on("push", async ({ name, payload }: { name: "push"; payload: PushE
       scope.setTag("repo_type", "grader_solution");
       const { data: graderSolution, error: graderSolutionError } = await adminSupabase
         .from("autograder")
-        .select("*, assignments!inner(git_provider)")
-        .eq("assignments.git_provider", "github")
+        // Every provider: a Forgejo assignment's grader repo stays on GitHub (D6). The handler's handout
+        // reseed reads only GitHub handouts.
+        .select("*")
         .eq("grader_repo", repoName);
       if (graderSolutionError) {
         console.error(graderSolutionError);

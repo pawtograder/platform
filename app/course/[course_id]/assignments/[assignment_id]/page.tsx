@@ -1,4 +1,6 @@
 "use client";
+import RepoLink from "@/components/ui/link";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
@@ -37,7 +39,12 @@ import ManageGroupWidget from "./manageGroupWidget";
 import PrSubmissionPanel from "./prSubmissionPanel";
 import { graderResultIndicatesFailure } from "@/lib/graderResultStatus";
 import { WorkspaceStatus } from "@/components/workspace/WorkspaceStatus";
-import { cloudWorkspacesEnabled, createWorkspaceClient } from "@/lib/workspaceStatus";
+import {
+  createWorkspaceClient,
+  isWorkspaceGitProvider,
+  shouldShowWorkspace,
+  workspaceRepoKey
+} from "@/lib/workspaceStatus";
 
 /**
  * Autograder-score label for one row of the submission history.
@@ -100,6 +107,7 @@ export default function AssignmentPage() {
   const { private_profile_id, isReadOnly } = useClassProfiles();
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
+  const repoHost = useRepoWebHost(assignment.git_provider);
   const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
   const autograderData = useRef<Database["public"]["Functions"]["get_submissions_limits"]["Returns"] | null>(null);
   type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
@@ -173,25 +181,21 @@ export default function AssignmentPage() {
   const submissions = submissionsData?.data;
   const autograder = autograderData.current;
 
-  // Open in Coder (#1095): a student's Forgejo repository, in a course with Cloud Workspaces on.
-  // workspace-open checks enrollment and the repository on the server; this only decides whether to
-  // offer it. Not while staff view as a student: the requests would carry the staff session and act
-  // on the staff member's own repository, not the student's.
+  // Open in Coder (#1095): a student's Forgejo or GitHub repository, in a course with Cloud
+  // Workspaces on. workspace-open checks enrollment and the repository on the server; this only
+  // decides whether to offer it. Not while staff view as a student: the requests would carry the
+  // staff session and act on the staff member's own repository, not the student's.
   const workspaceClient = useMemo(() => createWorkspaceClient(createClient()), []);
   // useCourse(), not the controller's course: it re-renders when the flag changes.
   const liveCourse = useCourse() as CourseWithFeatures;
-  // Wait for Forgejo to finish creating the repo, or the clone step fails. The IDs key the card, so
-  // a student who joins or leaves a group gets a fresh card instead of the old repo's state.
-  const workspaceRepoKey = (repositories ?? [])
-    .filter((r) => r.git_provider === "forgejo" && r.is_github_ready)
-    .map((r) => r.id)
-    .join(",");
-  const showWorkspace =
-    !isReadOnly &&
-    enrollment?.role === "student" &&
-    assignment?.git_provider === "forgejo" &&
-    cloudWorkspacesEnabled(liveCourse.features) &&
-    workspaceRepoKey !== "";
+  const repoKey = workspaceRepoKey(repositories);
+  const showWorkspace = shouldShowWorkspace({
+    isReadOnly,
+    role: enrollment?.role,
+    assignmentGitProvider: assignment?.git_provider,
+    features: liveCourse.features,
+    repoKey
+  });
 
   const review_settings = assignment.assignment_self_review_settings;
   const timeZone = course?.time_zone || "America/New_York";
@@ -231,13 +235,14 @@ export default function AssignmentPage() {
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
       >
-        <GridItem>
+        {/* minWidth 0 lets the title and due date wrap at 320px instead of widening the page. */}
+        <GridItem minWidth={0}>
           <Flex width="100%" alignItems={"center"}>
-            <Box>
+            <Box minWidth={0}>
               <Heading as="h1" size="lg">
                 {assignment.title}
               </Heading>
-              <HStack>
+              <HStack minWidth={0} flexWrap="wrap">
                 <AssignmentDueDate
                   assignment={assignment}
                   showLateTokenButton={true}
@@ -300,7 +305,12 @@ export default function AssignmentPage() {
           </Box>
           {showWorkspace && (
             <Box m={4}>
-              <WorkspaceStatus key={workspaceRepoKey} assignmentId={Number(assignment_id)} client={workspaceClient} />
+              <WorkspaceStatus
+                key={repoKey}
+                assignmentId={Number(assignment_id)}
+                client={workspaceClient}
+                gitProvider={isWorkspaceGitProvider(assignment.git_provider) ? assignment.git_provider : undefined}
+              />
             </Box>
           )}
           <SelfReviewNotice
@@ -402,10 +412,10 @@ export default function AssignmentPage() {
                   </Table.Cell>
                   <Table.Cell>
                     {submission.submitted_via === "pr" && submission.repository && submission.pr_number ? (
-                      <Link href={`https://github.com/${submission.repository}/pull/${submission.pr_number}`}>
+                      <RepoLink href={repoWebUrl(repoHost, submission.repository, `/pull/${submission.pr_number}`)}>
                         #{submission.pr_number}
                         {submission.sha ? ` (${submission.sha.slice(0, 7)})` : ""}
-                      </Link>
+                      </RepoLink>
                     ) : submission.submitted_via !== "manual" &&
                       submission.submitted_via !== "upload" &&
                       submission.sha &&
@@ -416,9 +426,9 @@ export default function AssignmentPage() {
                       // link that 404s. Excluding the known non-git channels rather than
                       // requiring via === "git" keeps legacy rows -- real pushes recorded before
                       // submitted_via existed, so NULL with a genuine sha -- still linking.
-                      <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
+                      <RepoLink href={repoWebUrl(repoHost, submission.repository, `/commit/${submission.sha}`)}>
                         {submission.sha.slice(0, 7)}
-                      </Link>
+                      </RepoLink>
                     ) : submission.submitted_via === "manual" ? (
                       <span>Manual</span>
                     ) : (

@@ -24,7 +24,7 @@ import {
   RepositoryUnreadableError,
   getCreateContentLimiter
 } from "../_shared/GitHubWrapper.ts";
-import { getGitProvider } from "../_shared/GitProvider.ts";
+import { getGitProvider, startGradingOn } from "../_shared/GitProvider.ts";
 import { beginWorkerRun } from "../_shared/workerRun.ts";
 import { resolveAsyncWorkerTuning } from "../_shared/asyncWorkerTuning.ts";
 import {
@@ -1785,8 +1785,16 @@ export async function processEnvelope(
           throw new Error(`Failed to update repository check run: ${updateError.message}`);
         }
 
-        // Trigger the workflow
-        await getGitProvider().startGrading(repository, sha, scope);
+        // Trigger the workflow, on Forgejo for a Forgejo repository: the bulk rerun page enqueues both.
+        const { data: repoRow, error: repoError } = await adminSupabase
+          .from("repositories")
+          .select("git_provider")
+          .eq("id", repository_id)
+          .single();
+        if (repoError) {
+          throw new Error(`Failed to load repository ${repository_id}: ${repoError.message}`);
+        }
+        await startGradingOn(repoRow.git_provider, repository, sha, scope);
 
         // Clear the rerun_queued_at flag on the repository after successful trigger
         const { error: clearError } = await adminSupabase
@@ -1867,7 +1875,7 @@ export async function processEnvelope(
           const { data: currentRepo, error: currentRepoError } = await adminSupabase
             .from("repositories")
             .select(
-              "synced_handout_sha, synced_repo_sha, desired_handout_sha, sync_data, assignments(latest_template_sha)"
+              "synced_handout_sha, synced_repo_sha, desired_handout_sha, sync_data, git_provider, assignments(latest_template_sha)"
             )
             .eq("id", repository_id)
             .maybeSingle();
@@ -1885,6 +1893,19 @@ export async function processEnvelope(
             });
             console.log(
               `Dropping sync_repo_to_handout for deleted repository ${repository_id} (${repository_full_name})`
+            );
+            return true;
+          }
+          // Handout sync only speaks GitHub, so a Forgejo repository would send every call below to
+          // GitHub under a name that exists only on Forgejo. queue_repository_syncs no longer queues
+          // these; this catches a message queued before that change, or by anything that bypasses it.
+          // Dropped without writing sync_data: the Repository Status page already shows Forgejo rows
+          // as unavailable, and a retry could never succeed.
+          if (currentRepo.git_provider === "forgejo") {
+            Sentry.captureMessage(
+              `Refusing sync_repo_to_handout for Forgejo repository ${repository_id} (${repository_full_name}): ` +
+                "handout sync isn't available for Forgejo repositories yet",
+              scope
             );
             return true;
           }

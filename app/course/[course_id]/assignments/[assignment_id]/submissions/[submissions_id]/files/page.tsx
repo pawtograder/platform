@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 
 import { Alert } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -62,7 +63,7 @@ import {
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
-import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import { useActiveReviewAssignmentId, useActiveRubricId, useScrollToExamQuestion } from "@/hooks/useSubmissionReview";
 import { useStableDesktop } from "@/hooks/useStableDesktop";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { getPrBaseFiles } from "@/lib/edgeFunctions";
@@ -929,6 +930,28 @@ function ArtifactWithComments({
     </Box>
   );
 }
+/**
+ * A paper exam's answer crops, each with a way to bring its rubric check into view in the grading
+ * sidebar (#1268), which scrolls on its own. Only questions the grading rubric has a check for get
+ * one: an auto-scored question has nothing to show.
+ */
+function ExamArtifact({ artifact }: { artifact: SubmissionArtifact }) {
+  const { assignment } = useAssignmentController();
+  const checks = useRubricChecksByRubric(assignment.grading_rubric_id);
+  const { setScrollToExamQuestionId } = useScrollToExamQuestion();
+  const checkedQuestionIds = useMemo(
+    () => new Set(checks.flatMap((c) => (c.exam_question_id == null ? [] : [c.exam_question_id]))),
+    [checks]
+  );
+  return (
+    <ExamSubmissionRenderer
+      artifact={artifact}
+      checkedQuestionIds={checkedQuestionIds}
+      onShowRubricCheck={setScrollToExamQuestionId}
+    />
+  );
+}
+
 function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtifact; artifactKey: string }) {
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
@@ -1086,7 +1109,7 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     }
     return <Spinner />;
   } else if (artifact.data.format === "exam_v1") {
-    return <ExamSubmissionRenderer artifact={artifact} />;
+    return <ExamArtifact artifact={artifact} />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }
@@ -1256,6 +1279,7 @@ function PrDiffNotice({
    */
   children?: ReactNode;
 }) {
+  const repoHost = useRepoWebHost(useAssignmentController().assignment.git_provider);
   const base = submission.base_sha;
   const head = submission.head_sha;
   const submissionId = submission.id;
@@ -1308,7 +1332,7 @@ function PrDiffNotice({
   const baseShort = base!.substring(0, 7);
   const headShort = head!.substring(0, 7);
   const compareUrl = submission.repository
-    ? `https://github.com/${submission.repository}/compare/${base}...${head}`
+    ? repoWebUrl(repoHost, submission.repository, `/compare/${base}...${head}`)
     : null;
   // No diff to show inline: either the base fetch failed, returned nothing
   // (e.g. the upstream isn't fetchable / E2E mock), or there are simply no text

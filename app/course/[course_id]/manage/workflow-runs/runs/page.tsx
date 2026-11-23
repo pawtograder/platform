@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 
 import {
   Box,
@@ -24,7 +25,8 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import TableController from "@/lib/TableController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { useCourseController } from "@/hooks/useCourseController";
+import RepoLink from "@/components/ui/link";
+import { useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { LuRefreshCw } from "react-icons/lu";
@@ -53,14 +55,12 @@ type WorkflowRunRow = Database["public"]["Tables"]["workflow_runs"]["Row"] & {
 function WorkflowRunTable() {
   const { course_id } = useParams();
   const supabase = useMemo(() => createClient(), []);
-  const {
-    classRealTimeController,
-    assignments: assignmentsController,
-    profiles: profilesController
-  } = useCourseController();
+  const { classRealTimeController, profiles: profilesController } = useCourseController();
 
   // Get data from TableControllers
-  const assignmentsData = assignmentsController.rows;
+  // Subscribed, so a Forgejo row's host is right even when assignments load after the runs.
+  const assignmentsData = useAssignments();
+  const forgejoHost = useForgejoInstanceUrl(assignmentsData.some((a) => a.git_provider === "forgejo"));
   const profilesData = profilesController.rows;
 
   // Create maps for quick lookups
@@ -198,9 +198,13 @@ function WorkflowRunTable() {
               </Text>
             );
           }
+          // An assignment that hasn't loaded yet gets no host, so the SHA shows as text rather than a github.com guess.
+          const gitProvider = assignmentsData.find((a) => a.id === row.original.assignment_id)?.git_provider;
+          const repoHost =
+            gitProvider === undefined ? undefined : gitProvider === "forgejo" ? forgejoHost : "https://github.com";
           return (
-            <Link
-              href={`https://github.com/${repoName}/commit/${sha}`}
+            <RepoLink
+              href={repoWebUrl(repoHost, repoName, `/commit/${sha}`)}
               target="_blank"
               rel="noopener noreferrer"
               color="blue.600"
@@ -214,7 +218,7 @@ function WorkflowRunTable() {
                   <LuExternalLink />
                 </Icon>
               </HStack>
-            </Link>
+            </RepoLink>
           );
         },
         filterFn: (row, id, filterValue) => {
@@ -414,7 +418,7 @@ function WorkflowRunTable() {
       }
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [assignments, profiles]
+    [assignments, profiles, assignmentsData, forgejoHost]
   );
 
   const [tableController, setTableController] = useState<TableController<"workflow_runs"> | undefined>(undefined);

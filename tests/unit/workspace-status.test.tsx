@@ -5,9 +5,13 @@ import { POLL_MIN_MS } from "@/hooks/useWorkspaceStatus";
 import {
   cloudWorkspacesEnabled,
   createWorkspaceClient,
+  gitProviderLabel,
+  shouldShowWorkspace,
   toWorkspaceState,
   WORKSPACE_STEPS,
   WorkspaceClient,
+  WorkspaceGitProvider,
+  workspaceRepoKey,
   WorkspaceState,
   workspaceStepLabel
 } from "@/lib/workspaceStatus";
@@ -40,6 +44,14 @@ describe("toWorkspaceState", () => {
     [
       { status: "account_conflict", message: "Ask staff." },
       { status: "account_conflict", message: "Ask staff." }
+    ],
+    [
+      { status: "credentials_unavailable", message: "Try again in a few minutes." },
+      { status: "failed", step: "build", message: "Try again in a few minutes." }
+    ],
+    [
+      { status: "needs_org_invite", message: "Accept the invitation." },
+      { status: "failed", step: "build", message: "Accept the invitation." }
     ]
   ] as [WorkspaceOpenResponse, WorkspaceState][])("maps %j", (res, expected) => {
     expect(toWorkspaceState(res)).toEqual(expected);
@@ -103,6 +115,45 @@ describe("cloudWorkspacesEnabled", () => {
 
 type Settle = { resolve: (s: WorkspaceState) => void; reject: (e: Error) => void };
 
+describe("workspaceRepoKey", () => {
+  it("keeps ready Forgejo and GitHub repositories, and drops unready ones", () => {
+    expect(
+      workspaceRepoKey([
+        { id: 1, git_provider: "forgejo", is_github_ready: true },
+        { id: 2, git_provider: "github", is_github_ready: true },
+        { id: 3, git_provider: "github", is_github_ready: false },
+        { id: 4, git_provider: "gitlab", is_github_ready: true }
+      ])
+    ).toBe("1,2");
+    expect(workspaceRepoKey(undefined)).toBe("");
+    expect(workspaceRepoKey([{ id: 3, git_provider: "github", is_github_ready: false }])).toBe("");
+  });
+});
+
+describe("shouldShowWorkspace", () => {
+  const on = [{ name: "cloud-workspaces", enabled: true }];
+  const base = { isReadOnly: false, role: "student", assignmentGitProvider: "github", features: on, repoKey: "2" };
+
+  it.each(["forgejo", "github"])("offers the card on a %s assignment", (assignmentGitProvider) => {
+    expect(shouldShowWorkspace({ ...base, assignmentGitProvider })).toBe(true);
+  });
+
+  it("hides the card without the flag, a ready repo, a student, or with staff viewing as a student", () => {
+    expect(shouldShowWorkspace({ ...base, features: [{ name: "cloud-workspaces", enabled: false }] })).toBe(false);
+    expect(shouldShowWorkspace({ ...base, features: [] })).toBe(false);
+    expect(shouldShowWorkspace({ ...base, repoKey: "" })).toBe(false);
+    expect(shouldShowWorkspace({ ...base, role: "instructor" })).toBe(false);
+    expect(shouldShowWorkspace({ ...base, isReadOnly: true })).toBe(false);
+    expect(shouldShowWorkspace({ ...base, assignmentGitProvider: "gitlab" })).toBe(false);
+    expect(shouldShowWorkspace({ ...base, assignmentGitProvider: null })).toBe(false);
+  });
+
+  it("labels each provider", () => {
+    expect(gitProviderLabel("github")).toBe("GitHub");
+    expect(gitProviderLabel("forgejo")).toBe("Forgejo");
+  });
+});
+
 describe("WorkspaceStatus", () => {
   function stubClient(states: { initial: WorkspaceState; polls?: WorkspaceState[]; opened?: WorkspaceState }) {
     const polls = [...(states.polls ?? [])];
@@ -125,10 +176,10 @@ describe("WorkspaceStatus", () => {
     return client;
   }
 
-  function renderCard(client: WorkspaceClient) {
+  function renderCard(client: WorkspaceClient, gitProvider?: WorkspaceGitProvider) {
     return render(
       <ChakraProvider value={defaultSystem}>
-        <WorkspaceStatus assignmentId={7} client={client} />
+        <WorkspaceStatus assignmentId={7} client={client} gitProvider={gitProvider} />
       </ChakraProvider>
     );
   }
@@ -498,6 +549,23 @@ describe("WorkspaceStatus", () => {
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
     expect(screen.queryByRole("link", { name: /Open in VS Code/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("names GitHub on the link step for a GitHub assignment", async () => {
+    renderCard(
+      stubClient({
+        initial: {
+          status: "needs_linking",
+          url: "https://coder.example/external-auth/github/callback",
+          message: "Link your GitHub account in Coder, then open the workspace again."
+        }
+      }),
+      "github"
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Link your GitHub account to open your workspace.");
+    const link = screen.getByRole("link", { name: "Link GitHub account (opens in a new tab)" });
+    expect(link).toHaveAttribute("href", "https://coder.example/external-auth/github/callback");
+    expect(screen.queryByText(/Forgejo/)).not.toBeInTheDocument();
   });
 
   it("checks again when the student comes back from linking Forgejo", async () => {

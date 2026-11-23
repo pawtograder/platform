@@ -2,7 +2,7 @@
 
 import { SubmissionArtifact } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import { cropAspect } from "@/lib/exam/regionMath";
+import { cropAspect, cropDisplayWidth } from "@/lib/exam/regionMath";
 import { Box, Button, Flex, Heading, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -10,6 +10,8 @@ type NormRect = { x: number; y: number; width: number; height: number };
 type ExamPageRef = { page_number: number; storage_key: string; width: number; height: number };
 type ExamQuestionResult = {
   exam_question_id: number;
+  /** The instructor's name for the question. Absent in artifacts finalized before #1072. */
+  label?: string | null;
   page_number: number;
   region: NormRect;
   ocr_text: string;
@@ -18,26 +20,41 @@ type ExamQuestionResult = {
 type ExamArtifactData = { format: "exam_v1"; pages: ExamPageRef[]; questions: ExamQuestionResult[] };
 
 /**
+ * What to call a question in the grader view (#1072).
+ *
+ * The heading used to be `Question ${exam_question_id}`, which is a database id: an exam whose
+ * questions the instructor named Q1, Q2, Q3 showed up as "Question 38", "Question 39", "Question
+ * 40". The artifact now carries the label, so use it.
+ *
+ * Falls back to the id for two cases that both still happen. `exam_questions.label` is nullable,
+ * so an instructor can leave a question unnamed; and artifacts finalized before #1072 have no
+ * label at all. Those render exactly as they do today rather than being backfilled, because
+ * rewriting a finalized artifact is a decision about what "finalized" means (#1074), not a
+ * rename.
+ */
+export function questionHeading(q: ExamQuestionResult): string {
+  const label = q.label?.trim();
+  return label ? label : `Question ${q.exam_question_id}`;
+}
+
+/**
  * CSS sprite-style crop: show only `region` of the page image.
  *
- * `height` is a target, not a guarantee. The box is sized by width plus aspectRatio with
- * `maxWidth: 100%`, so when the flex row clamps a wide crop it scales down whole and ends up
- * shorter than `height`. That is deliberate: setting width and height independently is what let a
- * clamped crop distort again, which is half of #1073. Preserving the shape matters more than
- * hitting an exact height, since the point is reading handwriting.
+ * Sized from the region's share of the page width (#1263), so a crop's scale no longer follows how
+ * tall a box the instructor drew. `maxWidth: 100%` below still clamps a crop wider than its row,
+ * which is the one case where two crops end up at different zooms; `cropDisplayWidth` records why
+ * that bound stands.
+ *
+ * There is no height target any more: the old `height = 120` default fixed the rendered height and
+ * let width follow the aspect ratio, which made the zoom a function of how tall a box the
+ * instructor happened to draw. This supersedes the note #1138 added about height being a
+ * target rather than a guarantee; the prop it described is gone.
+ *
+ * Width plus aspectRatio is still one driver, not two. Setting width and height independently is
+ * what let a clamped crop distort again, which was half of #1073, so a crop the flex row has to
+ * clamp still scales down whole and keeps its shape.
  */
-function RegionCrop({
-  url,
-  region,
-  page,
-  /** Target height in px. See above: a clamped crop renders shorter than this. */
-  height = 120
-}: {
-  url: string;
-  region: NormRect;
-  page?: ExamPageRef;
-  height?: number;
-}) {
+function RegionCrop({ url, region, page }: { url: string; region: NormRect; page?: ExamPageRef }) {
   // background-position as a percentage relative to the un-shown remainder
   const posX = region.width < 1 ? (region.x / (1 - region.width)) * 100 : 0;
   const posY = region.height < 1 ? (region.y / (1 - region.height)) * 100 : 0;
@@ -49,7 +66,7 @@ function RegionCrop({
       style={{
         // One driver, not two. width + aspectRatio keeps the shape when the flex row clamps
         // the box; an independent width/height pair re-introduces the distortion at that point.
-        width: `${Math.round(height * aspect)}px`,
+        width: `${cropDisplayWidth(region)}px`,
         aspectRatio: `${aspect}`,
         maxWidth: "100%",
         backgroundImage: `url("${url}")`,
@@ -64,7 +81,17 @@ function RegionCrop({
   );
 }
 
-export default function ExamSubmissionRenderer({ artifact }: { artifact: SubmissionArtifact }) {
+export default function ExamSubmissionRenderer({
+  artifact,
+  checkedQuestionIds,
+  onShowRubricCheck
+}: {
+  artifact: SubmissionArtifact;
+  /** Questions that have a rubric check to grade them by. An auto-scored question has none. */
+  checkedQuestionIds?: ReadonlySet<number>;
+  /** Brings a question's rubric check into view in the grading sidebar (#1268). */
+  onShowRubricCheck?: (examQuestionId: number) => void;
+}) {
   const data = artifact.data as unknown as ExamArtifactData;
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
@@ -134,10 +161,22 @@ export default function ExamSubmissionRenderer({ artifact }: { artifact: Submiss
             p={3}
           >
             <HStack justify="space-between" mb={2}>
-              <Heading size="sm">Question {q.exam_question_id}</Heading>
-              <Button size="xs" variant="outline" onClick={() => setShowOriginal((s) => ({ ...s, [idx]: !s[idx] }))}>
-                {showOriginal[idx] ? "Hide original page" : "View original page"}
-              </Button>
+              <Heading size="sm">{questionHeading(q)}</Heading>
+              <HStack gap={2}>
+                {onShowRubricCheck && checkedQuestionIds?.has(q.exam_question_id) && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    aria-label={`Show rubric check for ${questionHeading(q)}`}
+                    onClick={() => onShowRubricCheck(q.exam_question_id)}
+                  >
+                    Show rubric check
+                  </Button>
+                )}
+                <Button size="xs" variant="outline" onClick={() => setShowOriginal((s) => ({ ...s, [idx]: !s[idx] }))}>
+                  {showOriginal[idx] ? "Hide original page" : "View original page"}
+                </Button>
+              </HStack>
             </HStack>
             <Flex gap={4} wrap="wrap" align="flex-start">
               {url ? (

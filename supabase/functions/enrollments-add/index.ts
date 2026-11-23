@@ -3,7 +3,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
 import type { AddEnrollmentRequest } from "../_shared/FunctionTypes.d.ts";
-import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import {
+  assertRoleLookupSucceeded,
+  assertUserHasCapabilityOrServiceRole,
+  SecurityError,
+  UserVisibleError,
+  wrapRequestHandler
+} from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
@@ -23,15 +29,44 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // caller's role (set below); the role being granted is `enrollment_role`.
   scope?.setTag("enrollment_role", role);
   scope?.setTag("courseId", courseId.toString());
-  //Validate that the user is an instructor for this course
-  const { enrollment: instructorEnrollment } = await assertUserIsInstructor(
+  // Adding someone needs manage_roster (#1010). Instructors and platform admins can add any role;
+  // anyone else with manage_roster, such as a Head TA, can add students only.
+  const authHeader = req.headers.get("Authorization");
+  const { supabase: callerSupabase, isServiceRole } = await assertUserHasCapabilityOrServiceRole(
     courseId,
-    req.headers.get("Authorization")!
+    "manage_roster",
+    authHeader
   );
-  // The caller by ID, and their actual role: assertUserIsInstructor also admits platform admins,
-  // and returns their admin row.
-  scope?.setUser({ id: instructorEnrollment.user_id });
-  scope?.setTag("role", instructorEnrollment.role);
+  let callerUserId: string | undefined;
+  let callerRole = "service_role";
+  let canAddAnyRole = isServiceRole;
+  if (!isServiceRole) {
+    const {
+      data: { user },
+      error: userError
+    } = await callerSupabase.auth.getUser(authHeader!.replace("Bearer ", ""));
+    if (userError || !user) {
+      throw new SecurityError("User not found");
+    }
+    callerUserId = user.id;
+    const { data: callerRoles, error: callerRolesError } = await callerSupabase
+      .from("user_roles")
+      .select("role, class_id")
+      .eq("user_id", user.id);
+    assertRoleLookupSucceeded(callerRolesError, "Role lookup");
+    const isAdmin = (callerRoles ?? []).some((r) => r.role === "admin");
+    const roleInCourse = (callerRoles ?? []).find((r) => r.class_id === Number(courseId))?.role;
+    callerRole = isAdmin ? "admin" : (roleInCourse ?? "none");
+    canAddAnyRole = isAdmin || roleInCourse === "instructor";
+  }
+  if (!canAddAnyRole && role !== "student") {
+    throw new UserVisibleError("Only an instructor can add graders or instructors", 403);
+  }
+  // The caller by ID, and their actual role in the course (or admin).
+  if (callerUserId) {
+    scope?.setUser({ id: callerUserId });
+  }
+  scope?.setTag("role", callerRole);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -42,6 +77,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       email: email
     })
     .single();
+  // createUserInClass would rename an existing person's profile, and their row may be a grader's or
+  // an instructor's. Only an instructor can change an enrollment that already exists, so anyone else
+  // is refused inside createUserInClass, right after the read its profile writes are based on.
   await createUserInClass(
     adminSupabase,
     courseId,
@@ -50,7 +88,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       name: name,
       existing_user_id: existingUser?.id
     },
-    role
+    role,
+    { refuseExistingEnrollment: !canAddAnyRole }
   );
 
   if (notify) {
@@ -68,17 +107,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     let inviterName = "Course Administrator";
     let inviterEmail = "";
 
-    if (instructorEnrollment?.user_id) {
+    if (callerUserId) {
       const { data: inviterData } = await adminSupabase
         .from("users")
         .select("email")
-        .eq("user_id", instructorEnrollment.user_id)
+        .eq("user_id", callerUserId)
         .single();
 
       const { data: inviterProfile } = await adminSupabase
         .from("user_roles")
         .select("profiles!private_profile_id(name)")
-        .eq("user_id", instructorEnrollment.user_id)
+        .eq("user_id", callerUserId)
         .eq("class_id", courseId)
         .single();
 

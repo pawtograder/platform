@@ -39,7 +39,10 @@ export default function SurveyTakingPage() {
   const { private_profile_id, isReadOnly: isViewingAsStudent } = useClassProfiles();
 
   // Use the survey hook to get the survey with realtime updates
-  const survey = useSurvey(survey_id as string);
+  const surveyInController = useSurvey(survey_id as string);
+  // The controller's fetch by ID has no class filter, so a student in two courses could get the other
+  // course's survey here, and this course's profile can't write a response to it.
+  const survey = surveyInController?.class_id === controller.courseId ? surveyInController : undefined;
   const surveysReady = useIsTableControllerReady(controller.surveys);
 
   const [existingResponse, setExistingResponse] = useState<SurveyResponse | null>(null);
@@ -86,10 +89,54 @@ export default function SurveyTakingPage() {
   // refetch. Keying the loader effect on the object re-ran the fetch and handed
   // <SurveyComponent> a fresh `initialData` object mid-edit (issue #881).
   const surveyId = survey?.id;
-  // The table controller yields `undefined` both while it is still loading and
-  // for a row that does not exist, so a miss is only knowable once its initial
-  // fetch has completed.
-  const surveyMissing = surveysReady && survey == null;
+  // The table controller yields `undefined` both while it is still loading and for a row that does
+  // not exist, so a miss is only knowable once its initial fetch has completed. Even then it can be
+  // wrong: students get no realtime for surveys, so a survey created after that fetch is one the
+  // controller hasn't seen, and the dashboard's refresh links to it. The controller fetches such a
+  // row by ID but doesn't say when it finds none, so ask directly before calling it missing. It also
+  // never asks again for an ID that failed or found nothing once, so a row found here is fetched again.
+  // A controller whose first fetch failed never becomes ready and never retries, so it counts as a miss
+  // too. Otherwise every survey in it would sit on the loading text until a reload.
+  const [surveysFailed, setSurveysFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    controller.surveys.readyPromise.catch(() => {
+      if (!cancelled) setSurveysFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [controller]);
+  const [missingSurveyId, setMissingSurveyId] = useState<string | null>(null);
+  // A failed request says nothing about whether the survey exists, so it isn't a miss.
+  const [failedLookupId, setFailedLookupId] = useState<string | null>(null);
+  const [lookupAttempt, setLookupAttempt] = useState(0);
+  const notInController = (surveysReady || surveysFailed) && survey == null;
+  useEffect(() => {
+    if (!notInController) return;
+    let cancelled = false;
+    const lookupFailed = () => {
+      if (!cancelled) setFailedLookupId(survey_id as string);
+    };
+    void controller.client
+      .from("surveys")
+      .select("id")
+      .eq("id", survey_id as string)
+      .eq("class_id", controller.courseId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        // 22P02 is an ID that isn't a UUID, which no retry can turn into a survey.
+        if (error && error.code !== "22P02") return lookupFailed();
+        if (!data) return setMissingSurveyId(survey_id as string);
+        return controller.surveys.invalidate(survey_id as string).catch(lookupFailed);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [notInController, controller, survey_id, lookupAttempt]);
+  const surveyMissing = notInController && missingSurveyId === survey_id;
+  const surveyLookupFailed = notInController && failedLookupId === survey_id;
   const allowResponseEditing = survey?.allow_response_editing ?? false;
 
   // Load existing response for this user
@@ -327,6 +374,30 @@ export default function SurveyTakingPage() {
   const handleBackToSurveys = useCallback(() => {
     router.push(`/course/${course_id}/surveys`);
   }, [router, course_id]);
+
+  if (surveyLookupFailed) {
+    return (
+      <Box py={8} maxW="1200px" my={2} mx="auto">
+        <VStack align="center" gap={4} p={8}>
+          <Heading size="xl" color="fg" textAlign="center">
+            Couldn&apos;t load this survey
+          </Heading>
+          <Text color="fg" textAlign="center">
+            Check your connection and try again.
+          </Text>
+          <Button
+            colorPalette="blue"
+            onClick={() => {
+              setFailedLookupId(null);
+              setLookupAttempt((attempt) => attempt + 1);
+            }}
+          >
+            Try again
+          </Button>
+        </VStack>
+      </Box>
+    );
+  }
 
   // Show loading while survey is being fetched
   if (isLoading || (survey === undefined && !surveyMissing)) {
