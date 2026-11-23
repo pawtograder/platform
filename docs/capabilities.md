@@ -226,7 +226,9 @@ Like `handle_regrades`, **`grant_extensions`** is on the default grader role and
 role, because any grader could grant an extension before it existed.
 It covers adding, editing and deleting a student's extension on one assignment
 (`assignment_due_date_exceptions`) and a student's class-wide extension
-(`student_deadline_extensions`). Gifting late tokens and setting the class's late token allocation
+(`student_deadline_extensions`). A staff member's extension must have its assignment, student and
+group in the row's class, so holding `grant_extensions` in one class doesn't reach another class's
+extensions. Gifting late tokens and setting the class's late token allocation
 stay instructor-only. Every grader and instructor of the class can read its extensions with or without
 the capability, and students still use their own late tokens.
 

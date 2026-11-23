@@ -14,11 +14,13 @@
 --   2. assignment_due_date_exceptions:
 --      - INSERT: the staff branch checks grant_extensions in the row's class instead of the
 --        grader/instructor role, and still requires creator_id to be the caller's own profile in
---        that class. The student branch (late tokens, authorize_to_create_own_due_date_extension)
+--        that class. It also checks that the assignment, the student and the group are in that
+--        class, so grant_extensions in one class can't write another class's extension under its
+--        own class_id. The student branch (late tokens, authorize_to_create_own_due_date_extension)
 --        is unchanged.
 --      - UPDATE: only staff with grant_extensions in the row's class can update an extension, and
---        only one they created, as before. No screen updates these rows: the app creates and
---        deletes them.
+--        only one they created, as before, with the same class checks before and after. No screen
+--        updates these rows: the app creates and deletes them.
 --      - DELETE: needs grant_extensions in the row's class.
 --   3. student_deadline_extensions: writing needs grant_extensions in the row's class. Reading stays
 --      with every grader and instructor of the class, and students still read their own.
@@ -120,6 +122,10 @@ DROP POLICY IF EXISTS "Extension granters and students using late tokens can add
 DROP POLICY IF EXISTS "Extension granters can edit extensions they created" ON public.assignment_due_date_exceptions;
 DROP POLICY IF EXISTS "Extension granters can delete extensions" ON public.assignment_due_date_exceptions;
 
+-- The staff branches check grant_extensions in the row's class_id, so they also check that the
+-- assignment, the student and the group are in that class. Otherwise grant_extensions in class A
+-- would let someone write an extension for a class B assignment or student by labelling it class A
+-- (and the review due date trigger would then move class B's review assignments).
 CREATE POLICY "Extension granters and students using late tokens can add" ON public.assignment_due_date_exceptions
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -131,6 +137,27 @@ CREATE POLICY "Extension granters and students using late tokens can add" ON pub
           AND up.class_id = assignment_due_date_exceptions.class_id
           AND (up.public_profile_id = assignment_due_date_exceptions.creator_id
                OR up.private_profile_id = assignment_due_date_exceptions.creator_id)
+      )
+      AND EXISTS (
+        SELECT 1 FROM public.assignments a
+        WHERE a.id = assignment_due_date_exceptions.assignment_id
+          AND a.class_id = assignment_due_date_exceptions.class_id
+      )
+      AND (
+        student_id IS NULL
+        OR EXISTS (
+          SELECT 1 FROM public.profiles p
+          WHERE p.id = assignment_due_date_exceptions.student_id
+            AND p.class_id = assignment_due_date_exceptions.class_id
+        )
+      )
+      AND (
+        assignment_group_id IS NULL
+        OR EXISTS (
+          SELECT 1 FROM public.assignment_groups ag
+          WHERE ag.id = assignment_due_date_exceptions.assignment_group_id
+            AND ag.class_id = assignment_due_date_exceptions.class_id
+        )
       )
     )
     OR public.authorize_to_create_own_due_date_extension(
@@ -149,6 +176,27 @@ CREATE POLICY "Extension granters can edit extensions they created" ON public.as
         AND (up.public_profile_id = assignment_due_date_exceptions.creator_id
              OR up.private_profile_id = assignment_due_date_exceptions.creator_id)
     )
+    AND EXISTS (
+      SELECT 1 FROM public.assignments a
+      WHERE a.id = assignment_due_date_exceptions.assignment_id
+        AND a.class_id = assignment_due_date_exceptions.class_id
+    )
+    AND (
+      student_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM public.profiles p
+        WHERE p.id = assignment_due_date_exceptions.student_id
+          AND p.class_id = assignment_due_date_exceptions.class_id
+      )
+    )
+    AND (
+      assignment_group_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM public.assignment_groups ag
+        WHERE ag.id = assignment_due_date_exceptions.assignment_group_id
+          AND ag.class_id = assignment_due_date_exceptions.class_id
+      )
+    )
   )
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions'))
@@ -158,6 +206,27 @@ CREATE POLICY "Extension granters can edit extensions they created" ON public.as
         AND up.class_id = assignment_due_date_exceptions.class_id
         AND (up.public_profile_id = assignment_due_date_exceptions.creator_id
              OR up.private_profile_id = assignment_due_date_exceptions.creator_id)
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.assignments a
+      WHERE a.id = assignment_due_date_exceptions.assignment_id
+        AND a.class_id = assignment_due_date_exceptions.class_id
+    )
+    AND (
+      student_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM public.profiles p
+        WHERE p.id = assignment_due_date_exceptions.student_id
+          AND p.class_id = assignment_due_date_exceptions.class_id
+      )
+    )
+    AND (
+      assignment_group_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM public.assignment_groups ag
+        WHERE ag.id = assignment_due_date_exceptions.assignment_group_id
+          AND ag.class_id = assignment_due_date_exceptions.class_id
+      )
     )
   );
 

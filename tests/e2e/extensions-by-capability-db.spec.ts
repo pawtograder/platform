@@ -6,7 +6,8 @@
  * and a student's class-wide extension (student_deadline_extensions) need grant_extensions in the row's
  * class. The default instructor and grader roles and every custom role hold it, so nothing changes for
  * them; a custom role that turns it off loses all three. Staff still edit only extensions they created,
- * and only staff with grant_extensions can update an extension. Every grader and instructor of the
+ * and only staff with grant_extensions can update an extension. Its assignment, student and group must
+ * be in the row's class, so the capability in one class can't reach another. Every grader and instructor of the
  * class can still read extensions, students still use late tokens, and gifting tokens stays
  * instructor-only. Whoever grants an extension, the student's review assignment due dates move with
  * it (#1411).
@@ -392,6 +393,104 @@ test.describe("due date extensions follow grant_extensions", () => {
       expect(error, who).toBeNull();
       expect((await reviewDueDate(reviewAssignment.id)) - before, who).toBe(FIVE_HOURS_MS);
     }
+  });
+
+  test("grant_extensions in class A can't write an extension for a class B assignment, student or group under class A", async () => {
+    // Class B's assignment, a class B student with a review assignment on it, and a class B group.
+    const assignmentB = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: classB.id,
+      name: "Extensions by capability, class B"
+    });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const submissionB = await insertPreBakedSubmission({
+      student_profile_id: studentB.private_profile_id,
+      assignment_id: assignmentB.id,
+      class_id: classB.id
+    });
+    const { data: reviewAssignmentB, error: reviewAssignmentError } = await supabase
+      .from("review_assignments")
+      .insert({
+        assignee_profile_id: studentB.private_profile_id,
+        class_id: classB.id,
+        assignment_id: assignmentB.id,
+        submission_id: submissionB.submission_id,
+        submission_review_id: submissionB.grading_review_id,
+        rubric_id: assignmentB.grading_rubric_id!,
+        due_date: addDays(new Date(), 3).toISOString()
+      })
+      .select("id, due_date")
+      .single();
+    expect(reviewAssignmentError).toBeNull();
+    const { data: groupB, error: groupError } = await supabase
+      .from("assignment_groups")
+      .insert({ class_id: classB.id, assignment_id: assignmentB.id, name: `extensions-b-${Date.now()}` })
+      .select("id")
+      .single();
+    expect(groupError).toBeNull();
+
+    const grader = await createAuthenticatedClient(graderA);
+    for (const [row, who] of [
+      [{ assignment_id: assignmentB.id }, "a class B assignment"],
+      [{ student_id: studentB.private_profile_id }, "a class B student"],
+      [{ assignment_id: assignmentB.id, student_id: studentB.private_profile_id }, "a class B assignment and student"],
+      [{ student_id: null, assignment_group_id: groupB!.id }, "a class B group"]
+    ] as const) {
+      const { error } = await grader.from("assignment_due_date_exceptions").insert({ ...extensionBy(graderA), ...row });
+      expect(error?.code, `a class A grader adding an extension for ${who}`).toBe("42501");
+    }
+    const { data: written, error: writtenError } = await supabase
+      .from("assignment_due_date_exceptions")
+      .select("id")
+      .or(
+        `assignment_id.eq.${assignmentB.id},student_id.eq.${studentB.private_profile_id},assignment_group_id.eq.${groupB!.id}`
+      );
+    expect(writtenError).toBeNull();
+    expect(written, "no extension reaches class B").toEqual([]);
+    // Before: the review due date trigger moved class B's review assignment.
+    expect(await reviewDueDate(reviewAssignmentB!.id)).toBe(new Date(reviewAssignmentB!.due_date).getTime());
+
+    // Their own class A extension can't be pointed at class B either.
+    const own = await seedExtension(graderA, 4);
+    for (const [change, who] of [
+      [{ assignment_id: assignmentB.id }, "a class B assignment"],
+      [{ student_id: studentB.private_profile_id }, "a class B student"]
+    ] as const) {
+      const { error } = await grader.from("assignment_due_date_exceptions").update(change).eq("id", own);
+      expect(error?.code, `a class A grader moving their extension to ${who}`).toBe("42501");
+    }
+    const { data: unchanged, error: unchangedError } = await supabase
+      .from("assignment_due_date_exceptions")
+      .select("assignment_id, student_id")
+      .eq("id", own)
+      .single();
+    expect(unchangedError).toBeNull();
+    expect(unchanged).toEqual({ assignment_id: assignmentId, student_id: studentA.private_profile_id });
+
+    // A mislabelled row that already exists can't be edited through class A either.
+    const { data: mislabelled, error: mislabelledError } = await supabase
+      .from("assignment_due_date_exceptions")
+      .insert({ ...extensionBy(graderA, 2), assignment_id: assignmentB.id, student_id: studentB.private_profile_id })
+      .select("id")
+      .single();
+    expect(mislabelledError).toBeNull();
+    const { data: edited, error: editError } = await grader
+      .from("assignment_due_date_exceptions")
+      .update({ hours: 40 })
+      .eq("id", mislabelled!.id)
+      .select("id");
+    expect(editError).toBeNull();
+    expect(edited, "editing a class A-labelled extension on a class B assignment").toEqual([]);
+    expect(await extension(mislabelled!.id)).toEqual({ hours: 2, tokens_consumed: 0 });
+
+    // The in-class paths still work: they edit their own extension.
+    const { data: ownEdit, error: ownEditError } = await grader
+      .from("assignment_due_date_exceptions")
+      .update({ hours: 6 })
+      .eq("id", own)
+      .select("hours");
+    expect(ownEditError).toBeNull();
+    expect(ownEdit).toEqual([{ hours: 6 }]);
   });
 
   test("a student with an unfinished review assignment can spend a late token, and the review's due date moves", async () => {
