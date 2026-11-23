@@ -85,13 +85,19 @@ export async function assertGitHubCourseRepo(
       .select("id")
       .ilike("github_org", ilikeLiteral(org))
       .neq("id", courseId)
-      .limit(1);
+      .limit(20);
     if (ownerError) {
       throw new UserVisibleError(`Could not check who owns the GitHub org ${orgName}: ${ownerError.message}`, 500);
     }
     if (owners.length === 0) return;
+    // A grader shared with a GitHub section of the same course lives in that section's org; its
+    // instructors may read it from both.
+    for (const owner of owners) {
+      const { data: isInstructor } = await supabase.rpc("authorizeforclassinstructor", { class__id: owner.id });
+      if (isInstructor === true) return;
+    }
     throw new UserVisibleError(
-      `Requested ${orgName}/${repoName} on GitHub, but ${orgName} is another course's GitHub org, so it can't be this course's grader repo`,
+      `Requested ${orgName}/${repoName} on GitHub, but ${orgName} is another course's GitHub org, and you aren't an instructor there`,
       403
     );
   }

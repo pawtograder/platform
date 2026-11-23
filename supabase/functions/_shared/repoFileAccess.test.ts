@@ -62,7 +62,7 @@ Deno.test("assertForgejoCourseOrg: a failed class lookup is a 500, not a refusal
 });
 
 /** Course 1 has no GitHub org unless given one; course 2 is another course with its own grader. */
-function githubCourseClient(githubOrg: string | null) {
+function githubCourseClient(githubOrg: string | null, instructorOf: number[] = []) {
   const assignments = [
     { class_id: 1, autograder: { grader_repo: "pawtograder-playground/test-e2e-java-solution" } },
     { class_id: 1, autograder: null },
@@ -71,6 +71,8 @@ function githubCourseClient(githubOrg: string | null) {
     { class_id: 2, autograder: { grader_repo: "other-org/cs3500-hw1-solution" } }
   ];
   return {
+    rpc: (_fn: string, args: { class__id: number }) =>
+      Promise.resolve({ data: instructorOf.includes(args.class__id), error: null }),
     from: (table: string) => {
       const filters: Record<string, unknown> = {};
       const query = {
@@ -150,6 +152,20 @@ Deno.test("assertGitHubCourseRepo: the course's own grader repo outside its org 
   );
   assertEquals(refused.status, 403);
 });
+
+Deno.test(
+  "assertGitHubCourseRepo: a grader in another course's org passes for an instructor of that course",
+  async () => {
+    await assertGitHubCourseRepo(
+      githubCourseClient(null, [2]),
+      1,
+      "neu-cs3500",
+      "hw1-private",
+      { write: false },
+      otherCoursesClient()
+    );
+  }
+);
 
 Deno.test("assertGitHubCourseRepo: a grader saved in another course's org is a 403", async () => {
   const refused = await assertRejects(
