@@ -141,7 +141,9 @@ const LinkItems = (courseID: number) => [
       {
         name: "Enrollments",
         icon: FiUsers,
-        instructors_only: true,
+        // Shown from the capability tables (#1010), so a Head TA with manage_roster can reach the
+        // student actions the database lets them use.
+        capability: "manage_roster",
         target: `/course/${courseID}/manage/course/enrollments`
       },
       {
@@ -282,6 +284,7 @@ export default function DynamicCourseNav() {
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const canManageGradebook = useCapability("manage_gradebook");
+  const canManageRoster = useCapability("manage_roster");
   /**
    * Which responsive twin carries the landmark ids. Only the ids move with the
    * breakpoint — the accessibility tree is left to the CSS `display` split (see
@@ -303,6 +306,16 @@ export default function DynamicCourseNav() {
   if (!enrollment) {
     return <Skeleton height="40" width="100%" />;
   }
+
+  // A submenu item with a capability shows only when the viewer holds it. A capability this
+  // doesn't know hides the item rather than showing it to everyone. Instructors hold every
+  // capability; isInstructor keeps their item even if the capability lookup fails, since the
+  // provider stops retrying after a few failures.
+  const submenuCapabilityAllows = (submenu: object) => {
+    const capability = "capability" in submenu ? submenu.capability : undefined;
+    if (!capability) return true;
+    return capability === "manage_roster" && (canManageRoster || isInstructor);
+  };
 
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter(
@@ -411,6 +424,7 @@ export default function DynamicCourseNav() {
                                     (!submenu.instructors_only || isInstructor) &&
                                     (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
+                                .filter(submenuCapabilityAllows)
                                 .filter((submenu) => {
                                   const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
                                   if (!featureFlag) return true;
@@ -542,6 +556,7 @@ export default function DynamicCourseNav() {
                                   (!submenu.instructors_only || isInstructor) &&
                                   (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                               )
+                              .filter(submenuCapabilityAllows)
                               .filter((submenu) => {
                                 const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
                                 if (!featureFlag) return true;
