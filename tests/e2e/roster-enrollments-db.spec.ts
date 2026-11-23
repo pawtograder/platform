@@ -266,6 +266,13 @@ test.describe("Enrollments follow manage_roster, students only (#1010)", () => {
     expect((await addMemberAs(headTa, "instructor")).status).toBe(403);
     expect((await addMemberAs(headTa, "student", otherGrader.email)).status).toBe(403);
     expect((await userRole(otherGrader, classA.id)).role).toBe("grader");
+    // Refused before any profile write: the existing person's name is unchanged.
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("name")
+      .eq("id", otherGrader.private_profile_id)
+      .single();
+    expect(profile!.name).toBe(otherGrader.private_profile_name);
   });
 
   test("a default grader is refused every Enrollments action", async () => {

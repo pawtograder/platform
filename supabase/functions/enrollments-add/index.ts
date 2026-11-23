@@ -77,22 +77,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       email: email
     })
     .single();
-  if (!canAddAnyRole && existingUser?.id) {
-    // createUserInClass would rename an existing person's profile, and their row may be a grader's
-    // or an instructor's. Only an instructor can change an enrollment that already exists.
-    const { data: existingRoles, error: existingRolesError } = await adminSupabase
-      .from("user_roles")
-      .select("id")
-      .eq("user_id", existingUser.id)
-      .eq("class_id", courseId);
-    assertRoleLookupSucceeded(existingRolesError, "Enrollment lookup");
-    if ((existingRoles ?? []).length > 0) {
-      throw new UserVisibleError(
-        "This person is already in the course. Only an instructor can change an existing enrollment.",
-        403
-      );
-    }
-  }
+  // createUserInClass would rename an existing person's profile, and their row may be a grader's or
+  // an instructor's. Only an instructor can change an enrollment that already exists, so anyone else
+  // is refused inside createUserInClass, right after the read its profile writes are based on.
   await createUserInClass(
     adminSupabase,
     courseId,
@@ -101,7 +88,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       name: name,
       existing_user_id: existingUser?.id
     },
-    role
+    role,
+    { refuseExistingEnrollment: !canAddAnyRole }
   );
 
   if (notify) {
