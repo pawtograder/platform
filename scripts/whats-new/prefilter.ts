@@ -14,8 +14,12 @@ export type PrefilterResult =
   | { send: true; matchedFiles: string[] }
   | { send: false; reason: string; matchedFiles: string[] };
 
-/** Conventional-commit types whose PRs don't add something users run into. */
-const SKIPPED_TITLE_TYPES = ["fix", "chore", "test", "docs", "ci", "refactor", "build", "perf"];
+/**
+ * Conventional-commit types whose PRs don't add something users run into. `fix` is not one of them:
+ * a fix can make a feature visible for the first time, such as the office hours OP badge, which a
+ * new request only showed after a reload until #1166.
+ */
+const SKIPPED_TITLE_TYPES = ["chore", "test", "docs", "ci", "refactor", "build", "perf"];
 const SKIPPED_TITLE = new RegExp(`^(${SKIPPED_TITLE_TYPES.join("|")})(\\([^)]*\\))?!?:`, "i");
 
 /** Paths whose changes can change what users see. lib/courseFeatures.ts adds Feature flags toggles (#1351). */

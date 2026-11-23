@@ -16,14 +16,27 @@ describe("prefilter", () => {
     });
   });
 
-  it.each(["fix", "chore", "test", "docs", "ci", "refactor", "build", "perf"])("skips a %s title", (type) => {
+  it.each(["chore", "test", "docs", "ci", "refactor", "build", "perf"])("skips a %s title", (type) => {
     for (const title of [`${type}: x`, `${type}(scope): x`, `${type.toUpperCase()}!: x`]) {
       expect(prefilter({ title, labels: [], files: ui })).toMatchObject({ send: false });
     }
   });
 
+  it("sends a fix that changes UI files, since it can show users something new (#1166)", () => {
+    const files = ["app/course/[course_id]/office-hours/[queue_id]/new/newRequestForm.tsx"];
+    const title = "fix(office-hours): load the roster for a new request and show resolved requests";
+    expect(prefilter({ title, labels: [], files }).send).toBe(true);
+  });
+
+  it("still skips a fix that changes no UI files (#1275)", () => {
+    const files = ["supabase/migrations/1_x.sql"];
+    expect(prefilter({ title: "fix(office-hours): send roster changes", labels: [], files })).toMatchObject({
+      send: false
+    });
+  });
+
   it("doesn't skip a title that only starts with a skipped word", () => {
-    expect(prefilter({ title: "fixtures page for staff", labels: [], files: ui }).send).toBe(true);
+    expect(prefilter({ title: "chores page for staff", labels: [], files: ui }).send).toBe(true);
     expect(prefilter({ title: "Show the queues when realtime can't connect", labels: [], files: ui }).send).toBe(true);
   });
 

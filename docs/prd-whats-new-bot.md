@@ -39,7 +39,7 @@ The bot fills in a template, so the template has to exist first. This is a refac
 
 A script decides without a model call whether the PR could need a walkthrough. It skips the PR when any of these hold:
 
-- The title starts with `fix`, `chore`, `test`, `docs`, `ci`, `refactor`, `build` or `perf`.
+- The title starts with `chore`, `test`, `docs`, `ci`, `refactor`, `build` or `perf`. A `fix` title is not skipped: a fix can make a feature visible for the first time. Until #1166, the office hours OP badge only showed on a new request after a reload, so many students had never seen it.
 - No changed file matches `app/`, `components/`, `hooks/` or `lib/courseFeatures.ts` (test files excluded).
 - The PR has the `no-whats-new` label.
 - The PR already adds or changes a file under `lib/whatsNew/entries/`.
@@ -64,7 +64,8 @@ A script decides without a model call whether the PR could need a walkthrough. I
 Rubric for `significant`:
 
 - Yes: a new button, page, dialog or workflow that existing users will run into, or a change to how an existing action behaves that would surprise someone used to the old behavior. #1261's change to Resolve is the reference case.
-- No: bug fixes that restore expected behavior, wording and layout tweaks, performance, infrastructure, and changes visible only to admins.
+- Yes, also: a fix that makes something visible to users for the first time, such as the OP badge after #1166. The PR body usually says what users will now see.
+- No: bug fixes that restore behavior users already knew, wording and layout tweaks, performance, infrastructure, and changes visible only to admins.
 
 When the answer is no, the bot posts nothing.
 
@@ -91,17 +92,18 @@ Example comment:
 
 ## Dry run of the pre-filter
 
-The step 1 rules were run on the last 40 PRs merged into `staging` (#1243 to #1352). The `lib/courseFeatures.ts` path was not in the first version of the rules. It was added after this run, which is how #1351 was missed.
+The step 1 rules were run with `scripts/whats-new/prefilter.ts` on the 47 PRs merged into `staging` from #1243 to #1352.
 
-| Outcome                | Count | Examples                                                                   |
-| ---------------------- | ----- | -------------------------------------------------------------------------- |
-| Sent to the model      | 8     | #1334 escalation alerts, #1287 queue health cards, #1313 host picker       |
-| Skipped, title prefix  | 22    | #1342, #1322, #1352                                                        |
-| Skipped, no UI files   | 8     | #1335 metrics, #1328 CLI, #1314 backups                                    |
-| Missed, now fixed      | 1     | #1351 added a Feature flags toggle by editing only `lib/courseFeatures.ts` |
-| Missed, still possible | 1     | #1286 changed what instructors can edit, through a migration only          |
+| Outcome                | Count | Examples                                                                      |
+| ---------------------- | ----- | ----------------------------------------------------------------------------- |
+| Sent to the model      | 22    | #1334 escalation alerts, #1287 queue health cards, #1351 Feature flags toggle |
+| Skipped, title prefix  | 5     | #1352 (`test`), #1327 (`docs`)                                                |
+| Skipped, no UI files   | 20    | #1335 metrics, #1328 CLI, #1314 backups                                       |
+| Missed, still possible | 2     | #1286 and #1275, both changes made only in the database                       |
 
-With the fixed rules the model would see 9 of the 40 merged PRs, so the bot makes one model call for about one PR in five. #1286 shows the limit of a path-based filter. A change made only in the database can still change what users see. Rerunning the bot by hand covers those cases.
+Sending `fix` titles to the model (suggested in review) accounts for 10 of the 22, such as #1342 and #1322. With `fix` skipped, 12 would reach the model. So the bot makes a model call for about one PR in two, up from one in four. #1351 reaches the model only because `lib/courseFeatures.ts` is on the path list: it added a Feature flags toggle by editing that file alone.
+
+#1286 and #1275 show the limit of a path-based filter. #1286 changed what instructors can edit, and #1275 made a new request's students show up for staff, both through migrations only. A change made only in the database can still change what users see. Rerunning the bot by hand covers those cases.
 
 ## Security
 
@@ -122,7 +124,7 @@ With the fixed rules the model would see 9 of the 40 merged PRs, so the bot make
 
 ## Questions for reviewers
 
-1. After merge or before? Running when a PR is marked ready for review would put the walkthrough in the same PR, at the cost of running on code that has not been reviewed. The fork trust gate in `_trust-gate.yml` would then apply.
-2. Is 60 days right for `showUntil`? After it passes, the walkthrough stops opening on its own and stays in the What's new list.
+1. After merge or before? Decided in review: after merge. Before a PR merges, its features can still change and the PR can be closed, so a bot that ran earlier would spend tokens on code that may never ship. The follow-up PR links back to the merged one, so the two are easy to review together.
+2. Is 60 days right for `showUntil`? After it passes, the walkthrough stops opening on its own, and the header button still opens it while it is the newest one for its page.
 3. Should anyone besides the author be able to rerun the bot with a `/whats-new` comment, for cases such as #1286?
 4. Who checks `whats-new-pending` before a production merge?

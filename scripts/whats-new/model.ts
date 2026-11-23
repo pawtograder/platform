@@ -53,8 +53,12 @@ into, or changes how an existing action behaves in a way that would surprise som
 behavior. The reference case is #1261: Resolve stopped being final and started a 10-minute student
 check-in, and a new End ticket button appeared.
 
-significant = false for bug fixes that restore expected behavior, wording and layout tweaks,
-performance, infrastructure, and changes only admins see. When in doubt, answer false: an
+A fix counts too when it makes something visible to users for the first time. For example, until
+#1166 the office hours OP badge only showed on a new request after a reload, so many students had
+never seen it. Read the PR body for what users will now see.
+
+significant = false for bug fixes that restore behavior users already knew, wording and layout
+tweaks, performance, infrastructure, and changes only admins see. When in doubt, answer false: an
 unnecessary walkthrough costs every user a click.
 
 When significant is false, still fill every field: reason explains the decision, and the other
