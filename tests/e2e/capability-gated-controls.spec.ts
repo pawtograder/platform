@@ -4,9 +4,11 @@
  *
  * - Manage Review Assignments: its actions, and the Bulk Assign and Reassign pages, need
  *   manage_review_assignments. Without it those two pages send you back to the reviews page.
- * - Manage Groups: every change needs publish_groups; without it the page is read-only.
+ * - Manage Groups: staging changes and publishing need publish_groups; Copy Groups and the mentor
+ *   drop-down need manage_groups. Without either the page is read-only. capability-gated-groups.spec.ts
+ *   covers a role with only one of the two.
  *
- * Default roles only: the instructor role holds both capabilities, the grader role holds neither,
+ * Default roles only: the instructor role holds every capability, the grader role none of these,
  * until the last test gives the default grader role manage_review_assignments (instructors can edit
  * it since 20261119120000_custom_roles_copy_grader_role.sql).
  */
