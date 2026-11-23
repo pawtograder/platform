@@ -17,8 +17,8 @@ the RPC directly, can still queue worker jobs and spend the shared Gemini budget
 cancel work already queued, which drains on its own.
 
 To actually stop work, turn the flag off **and** confirm the queue is empty (see
-[Checking it by hand](#checking-it-by-hand)). Pushing the check down into the two RPCs is in the gap
-list below.
+[Checking it by hand](#checking-it-by-hand)). Pushing the check down into the two RPCs is #1422.
+Until that lands, the two-step above is the rollback.
 
 Scanning is asynchronous. Staff upload a PDF, press Process, and everything after that happens in
 the `exam-async-worker` edge function reading a PGMQ queue. Nothing about that is visible in the
@@ -246,10 +246,11 @@ Stating these plainly so January inherits the list rather than discovering it.
 - **No alert, and no column to build one on.** Nothing pages or posts when a batch sits in `error`,
   so the first person to know is whichever staff member reloads the Scans page. `exam_scan_batches`
   also records no stage-entry time, only `created_at`, so "this batch has been stuck for two hours"
-  cannot be expressed in SQL today. See [Suggested alert](#suggested-alert-not-shipped).
+  cannot be expressed in SQL today. #1423 covers the missing column, and is the blocker for
+  [Suggested alert](#suggested-alert-not-shipped).
 - **The `exams` flag is not enforced where the work is queued.** `enqueue_exam_process_batch` and
   `enqueue_exam_finalize` check staff role and not the course feature, so turning the flag off does
-  not reliably stop new worker jobs or new spend. Raised by CodeRabbit on this PR.
+  not reliably stop new worker jobs or new spend. Raised by CodeRabbit on this PR, tracked as #1422.
 - **No load test at the size we claim to support.** The largest real run is 4 students
   (staging, 2026-11-11) and the seeder caps at 60 papers and bypasses the worker entirely. #1337
   covers running 200 through the real pipeline, and the per-stage timings it produces should replace
@@ -276,8 +277,8 @@ where status in ('uploaded', 'ocr', 'matching', 'finalizing')
 has `created_at` and nothing else: no column records when a batch entered its current status. A
 batch that sat in `review` for three days and then started finalize normally has a `created_at`
 three days old, so this fires immediately on a healthy finalize. Measuring time in the active stage
-needs a stage-entry timestamp that does not exist yet, which is the first thing to add before
-anyone ships this alert.
+needs a stage-entry timestamp that does not exist yet. That column is #1423, and it is the first
+thing to add before anyone ships this alert.
 
 Two hours rather than thirty minutes because a 200-paper Process legitimately takes about 35
 minutes, and an alert that fires on a large exam running normally is an alert people learn to
