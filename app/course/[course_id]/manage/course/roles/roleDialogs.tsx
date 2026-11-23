@@ -36,8 +36,13 @@ export function RoleNameDialog({
       return;
     }
     setIsSaving(true);
-    const saveError = await onSave(name.trim());
-    setIsSaving(false);
+    let saveError: string | undefined;
+    try {
+      saveError = await onSave(name.trim());
+    } finally {
+      // The dialog can't be dismissed while saving, so the flag must clear even if onSave throws.
+      setIsSaving(false);
+    }
     if (saveError) {
       setProblem(saveError);
       return;
@@ -145,8 +150,11 @@ export function DeleteRoleDialog({
                     loading={isDeleting}
                     onClick={async () => {
                       setIsDeleting(true);
-                      await onDelete();
-                      setIsDeleting(false);
+                      try {
+                        await onDelete();
+                      } finally {
+                        setIsDeleting(false);
+                      }
                       onClose();
                     }}
                   >

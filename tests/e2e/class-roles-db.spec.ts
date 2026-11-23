@@ -1067,11 +1067,23 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
         ).error
       ).toBeNull();
       await expect.poll(() => roleNotes("UPDATE").length).toBe(1);
+      // Make sure the role holds at least one capability, so the loop below checks a DELETE note.
+      expect(
+        (
+          await instructor
+            .from("role_capabilities")
+            .upsert(
+              { role_id: role!.id, capability: "manage_assignments" },
+              { onConflict: "role_id,capability", ignoreDuplicates: true }
+            )
+        ).error
+      ).toBeNull();
       const { data: copied, error: copiedError } = await instructor
         .from("role_capabilities")
         .select("capability")
         .eq("role_id", role!.id);
       expect(copiedError).toBeNull();
+      expect(copied?.length ?? 0).toBeGreaterThan(0);
       expect((await instructor.from("class_roles").delete().eq("id", role!.id)).error).toBeNull();
       for (const row of copied ?? []) {
         await expect
