@@ -6,7 +6,7 @@ import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
@@ -190,6 +190,8 @@ const DiscussionThreadContent = memo(
 
     const [replyVisible, setReplyVisible] = useState(false);
     const isGraderOrInstructor = useIsGraderOrInstructor();
+    // Editing others' replies and marking an answer need moderate_discussion (#1010).
+    const canModerate = useCapability("moderate_discussion");
     const isReadOnly = useIsReadOnly();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
@@ -200,8 +202,8 @@ const DiscussionThreadContent = memo(
     // the OP's reply because that comparison is between the reply's author and the
     // thread's OP — both populated for every row, regardless of viewer.
     const canEdit = useMemo(() => {
-      return thread.author === private_profile_id || thread.author === public_profile_id || isGraderOrInstructor;
-    }, [thread.author, private_profile_id, public_profile_id, isGraderOrInstructor]);
+      return thread.author === private_profile_id || thread.author === public_profile_id || canModerate;
+    }, [thread.author, private_profile_id, public_profile_id, canModerate]);
 
     // Like functionality
     const likeStatus = useDiscussionThreadLikes(thread.id);
@@ -285,6 +287,11 @@ const DiscussionThreadContent = memo(
     }, [is_answer, updateThread, thread, root_thread]);
 
     const isAnswered = root_thread?.answer !== undefined && root_thread?.answer !== null;
+    // Marking an answer changes the question, so it's for the question's author and moderators,
+    // as the database allows (#1010); a reply's own author can't.
+    const canMarkAnswer =
+      !!root_thread &&
+      (root_thread.author === private_profile_id || root_thread.author === public_profile_id || canModerate);
     const descendant = thread.children.length > 0;
 
     return (
@@ -447,12 +454,12 @@ const DiscussionThreadContent = memo(
                           Edit
                         </Link>
                       )}
-                      {root_thread?.is_question && canEdit && !isAnswered && (
+                      {root_thread?.is_question && canMarkAnswer && !isAnswered && (
                         <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
                           Mark as Answer
                         </Button>
                       )}
-                      {canEdit && root_thread?.answer === thread.id && (
+                      {canMarkAnswer && root_thread?.answer === thread.id && (
                         <Link onClick={toggleAnswered} color="fg.muted">
                           Unmark as answer
                         </Link>
