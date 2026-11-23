@@ -444,7 +444,7 @@ export function isValidRepoFullName(repo: unknown): repo is string {
 export async function getOctoKitAndInstallationID(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   const octokit = await getOctoKit(repoOrOrgName, scope);
-  const installationId = installations.find((i) => i.orgName === org)?.id;
+  const installationId = installations.find((i) => i.orgName.toLowerCase() === org.toLowerCase())?.id;
   return { octokit, installationId };
 }
 export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
@@ -494,7 +494,7 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
       });
     });
   }
-  const ret = installations.find((i) => i.orgName === org)?.octokit;
+  const ret = installations.find((i) => i.orgName.toLowerCase() === org.toLowerCase())?.octokit;
   if (ret) {
     return ret;
   }

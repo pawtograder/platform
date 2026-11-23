@@ -101,8 +101,7 @@ export const FORGEJO_UNSUPPORTED_SUBMISSION_MODES: Readonly<Record<string, strin
 
 /**
  * Checkbox settings that Forgejo can't use yet. The form shows them off and disabled. The
- * autograder is not here: with it on, Forgejo Actions grades (#1239); with it off,
- * forgejo-repo-webhook makes each default-branch push a submission, as GitHub's webhook does.
+ * autograder is the opposite case, see forgejoAutograderLockedOn.
  */
 export const FORGEJO_UNSUPPORTED_SETTINGS = {
   // Branch rules are applied by GitHub repository creation; nothing creates Forgejo repositories here.
@@ -119,11 +118,9 @@ export const FORGEJO_DETACH_REASON = "Removing a Forgejo handout from an assignm
 
 /**
  * A Forgejo assignment's grader repository stays on GitHub (D6), so the Autograder page sets it up.
- * Turning the autograder on or off syncs grade.yml through assignment-sync-autograder-workflow,
- * which rejects Forgejo, so that stays on Edit Assignment.
  */
 export const FORGEJO_GRADER_SETUP_REASON =
-  "The grader repository for a Forgejo assignment stays on GitHub. Turn the autograder on or off from Edit Assignment.";
+  "The grader repository for a Forgejo assignment stays on GitHub. Enter it below.";
 
 /** The saved row an edit form was loaded with, or undefined on the create form. */
 export type SavedHostValues = {
@@ -131,7 +128,16 @@ export type SavedHostValues = {
   repo_mode?: string | null;
   submission_mode?: string | null;
   template_repo?: string | null;
+  has_autograder?: boolean | null;
 };
+
+/**
+ * Why a Forgejo assignment keeps its autograder on. Forgejo has no push-direct submissions yet
+ * (handleForgejoPush records checks only), so a push becomes a submission only through a grading
+ * run. assignment-sync-autograder-workflow refuses the disable with the same reason.
+ */
+export const FORGEJO_AUTOGRADER_REQUIRED_REASON =
+  "On Forgejo a push only becomes a submission through a grading run, so the autograder can't be turned off yet.";
 
 /**
  * True when an unsupported value should be shown as saved rather than overridden: the assignment
@@ -139,6 +145,15 @@ export type SavedHostValues = {
  */
 export function keepsSavedForgejoValue(saved: SavedHostValues | undefined): boolean {
   return saved?.git_provider === "forgejo";
+}
+
+/**
+ * Whether the autograder control is held on (FORGEJO_AUTOGRADER_REQUIRED_REASON). A Forgejo
+ * assignment saved with it off, from before this rule, can still be turned on.
+ */
+export function forgejoAutograderLockedOn(provider: string, saved: SavedHostValues | undefined): boolean {
+  if (provider !== "forgejo") return false;
+  return !(keepsSavedForgejoValue(saved) && saved?.has_autograder === false);
 }
 
 /** Why `mode` is disabled in the Repository configuration select, or null when it is offered. */

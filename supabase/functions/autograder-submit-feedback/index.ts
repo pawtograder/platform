@@ -559,14 +559,38 @@ export async function handleRequest(req: Request, scope: Sentry.Scope): Promise<
     if (!submission_id || isRegressionRerun || isE2ERun || !checkRun) {
       return;
     }
-    const newStatus: CheckRunStatus = {
-      ...(checkRun.status as CheckRunStatus),
-      completed_at: new Date().toISOString()
-    };
-    const { error: checkRunError } = await adminSupabase
-      .from("repository_check_runs")
-      .update({ status: newStatus })
-      .eq("id", checkRun.id);
+    // The status loaded with the submission may be stale: the Forgejo webhook records the run's
+    // id, URL and conclusion in it while grading runs. So merge completed_at into the row as it is
+    // now, written as a compare-and-swap on the status that was read.
+    const completedAt = new Date().toISOString();
+    let checkRunError: unknown = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const { data: current, error: readError } = await adminSupabase
+        .from("repository_check_runs")
+        .select("status")
+        .eq("id", checkRun.id)
+        .maybeSingle();
+      if (readError || !current) {
+        checkRunError = readError ?? new Error(`check run ${checkRun.id} not found`);
+        break;
+      }
+      const newStatus: CheckRunStatus = { ...((current.status ?? {}) as CheckRunStatus), completed_at: completedAt };
+      const { data: written, error: updateError } = await adminSupabase
+        .from("repository_check_runs")
+        .update({ status: newStatus })
+        .eq("id", checkRun.id)
+        .eq("status", JSON.stringify(current.status))
+        .select("id");
+      if (updateError) {
+        checkRunError = updateError;
+        break;
+      }
+      if ((written ?? []).length > 0) {
+        checkRunError = null;
+        break;
+      }
+      checkRunError = new Error(`check run ${checkRun.id} status kept changing; completed_at not written`);
+    }
     // Reported, not discarded: a dropped update leaves completed_at null and the GitHub check
     // spinning for the rest of the run's life, which is precisely the state this helper exists to
     // avoid. Not fatal -- the feedback itself is already written -- so report and carry on.

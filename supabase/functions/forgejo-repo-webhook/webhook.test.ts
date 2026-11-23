@@ -10,6 +10,8 @@ import type { RepoPush } from "../_shared/RepoPush.ts";
 import { fakeSupabase, repositoryRow } from "../_shared/RepoPushFakeClient.ts";
 import type { ForgejoPushDeps, ForgejoPushPayload } from "./webhook.ts";
 import type { PushDirectPush } from "../_shared/PushDirectSubmission.ts";
+import type { ForgejoActionRun } from "./actionRun.ts";
+import { actionRunPayload } from "./actionRunFixture.ts";
 
 // webhook.ts reaches GitHubWrapper (through the push-direct submission code), which builds a GitHub
 // App at import time and needs a non-empty private key.
@@ -157,9 +159,9 @@ Deno.test("fromForgejoPush handles a push with no commits, such as a branch dele
   assertEquals(push.pusherName, "alex");
 });
 
-/** Calls handleForgejoWebhook with a spy push handler. */
 async function deliver(init: { body?: string; headers?: Record<string, string>; method?: string }, config = {}) {
   const pushes: RepoPush[] = [];
+  const runs: ForgejoActionRun[] = [];
   const response = await handleForgejoWebhook(
     new Request("http://localhost/functions/v1/forgejo-repo-webhook", {
       method: init.method ?? "POST",
@@ -173,10 +175,14 @@ async function deliver(init: { body?: string; headers?: Record<string, string>; 
         pushes.push(push);
         return Promise.resolve();
       },
+      handleActionRun: (run) => {
+        runs.push(run);
+        return Promise.resolve();
+      },
       ...config
     }
   );
-  return { status: response.status, body: await response.json(), pushes };
+  return { status: response.status, body: await response.json(), pushes, runs };
 }
 
 async function signedHeaders(body: string, event = "push", secret = SECRET) {
@@ -223,6 +229,50 @@ Deno.test("handleForgejoWebhook acknowledges other events without handling them"
     const result = await deliver({ body, headers: await signedHeaders(body, event) });
     assertEquals([event, result.status, result.pushes.length], [event, 200, 0]);
   }
+});
+
+Deno.test("handleForgejoWebhook passes a finished run to the action run handler", async () => {
+  for (const [event, action] of [
+    ["action_run_failure", "failure"],
+    ["action_run_success", "success"]
+  ]) {
+    const payload = actionRunPayload(FORGEJO_URL, { action, status: action });
+    const body = JSON.stringify(payload);
+    const result = await deliver({ body, headers: await signedHeaders(body, event) });
+    assertEquals([event, result.status, result.pushes.length], [event, 200, 0]);
+    assertEquals(result.runs, [payload.run]);
+  }
+});
+
+Deno.test("handleForgejoWebhook acknowledges action_run_recover, which repeats the success delivery", async () => {
+  const body = JSON.stringify(actionRunPayload(FORGEJO_URL, { action: "recover", status: "success" }));
+  const result = await deliver({ body, headers: await signedHeaders(body, "action_run_recover") });
+  assertEquals([result.status, result.runs.length], [200, 0]);
+});
+
+Deno.test("handleForgejoWebhook refuses an action run that isn't one, or whose links leave the instance", async () => {
+  const notRun = JSON.stringify({ action: "failure", run: { id: "4" } });
+  const bad = await deliver({ body: notRun, headers: await signedHeaders(notRun, "action_run_failure") });
+  assertEquals([bad.status, bad.runs.length], [400, 0]);
+
+  const otherRepo = actionRunPayload(FORGEJO_URL);
+  otherRepo.run.repository.html_url = "https://git.example.com/cs101/hw1-alex";
+  const otherLink = actionRunPayload(FORGEJO_URL);
+  otherLink.run.html_url = "https://evil.example.com/cs101/hw1-alex/actions/runs/3";
+  for (const payload of [otherRepo, otherLink]) {
+    const body = JSON.stringify(payload);
+    const result = await deliver({ body, headers: await signedHeaders(body, "action_run_failure") });
+    assertEquals([result.status, result.runs.length], [403, 0]);
+  }
+});
+
+Deno.test("handleForgejoWebhook answers 500 when recording the run fails, so Forgejo can redeliver", async () => {
+  const body = JSON.stringify(actionRunPayload(FORGEJO_URL));
+  const result = await deliver(
+    { body, headers: await signedHeaders(body, "action_run_failure") },
+    { handleActionRun: () => Promise.reject(new Error("database down")) }
+  );
+  assertEquals(result.status, 500);
 });
 
 Deno.test("handleForgejoWebhook rejects what it can't handle without calling the push handler", async () => {

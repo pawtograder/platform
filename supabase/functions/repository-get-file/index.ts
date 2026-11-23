@@ -1,5 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { assertForgejoCourseOrg, parseGitProvider, repoFilesFor } from "../_shared/repoFileAccess.ts";
+import {
+  assertForgejoCourseOrg,
+  assertGitHubCourseRepo,
+  parseGitProvider,
+  repoFilesFor
+} from "../_shared/repoFileAccess.ts";
 import { assertUserIsInstructor, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
@@ -61,17 +66,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (provider === "forgejo") {
     await assertForgejoCourseOrg(supabase, courseId, orgName);
   } else {
-    const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
-    // Surface a real (retryable) lookup failure instead of a misleading "...associated with
-    // undefined" error when `data` is null.
-    if (courseOrgName.error) {
-      throw new Error(`Could not look up the GitHub org for course ${courseId}: ${courseOrgName.error.message}`);
-    }
-    if (courseOrgName.data?.github_org != orgName && orgName != "pawtograder") {
-      throw new Error(
-        `Requested a file from ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`
-      );
-    }
+    await assertGitHubCourseRepo(supabase, courseId, orgName, repoName, { write: false });
   }
   const files = repoFilesFor(provider);
 

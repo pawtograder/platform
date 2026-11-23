@@ -25,6 +25,7 @@ import {
   repoHasFileAtRef
 } from "../_shared/GitHubWrapper.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
+import { recordMissingGraderResult } from "../_shared/missingGraderResult.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
   computeHandoutFileHashesForCommit,
@@ -1865,108 +1866,34 @@ async function handleWorkflowCompletionErrors(
     if (submissions && submissions.length > 0) {
       // We have submissions for this workflow run - check if they have grader results
       for (const submission of submissions) {
-        const { data: graderResult, error: graderResultError } = await adminSupabase
-          .from("grader_results")
-          .select("id")
-          .eq("submission_id", submission.id)
-          .maybeSingle();
-
-        if (graderResultError) {
-          Sentry.captureException(graderResultError, scope);
-          continue;
-        }
-
-        const hasGraderResult = graderResult !== null;
-        scope.setTag(`submission_${submission.id}_has_grader_result`, hasGraderResult.toString());
-
-        if (!hasGraderResult) {
-          const { data: userVisibleErrRows, error: userVisibleErrLookupError } = await adminSupabase
-            .from("workflow_run_error")
-            .select("id")
-            .eq("repository_id", repositoryId)
-            .eq("run_number", workflowRun.id)
-            .eq("run_attempt", workflowRun.run_attempt)
-            .eq("data->>type", "user_visible_error")
-            .limit(1);
-          if (userVisibleErrLookupError) {
-            Sentry.captureException(userVisibleErrLookupError, scope);
-          }
-          if (userVisibleErrRows && userVisibleErrRows.length > 0) {
-            scope.setTag("missing_grader_result_skipped", "user_visible_error_present");
-            continue;
-          }
-
-          const sentryMessage = "Workflow terminated without creating a grader result.";
-          const userErrorMessage =
-            "The grading container failed to terminate cleanly. This may indicate that the grading script ran out of memory or encountered an unexpected error. Please contact your instructor for assistance.";
-
-          scope.setTag("error_type", "missing_grader_result");
-          scope.setTag("workflow_run_id", workflowRun.id.toString());
-          scope.setTag("submission_id", submission.id.toString());
-          scope.setTag(
-            "github_actions_run_url",
-            `https://github.com/${repository.owner.login}/${repository.name}/actions/runs/${workflowRun.id}`
-          );
-          if (submission.repository_check_runs?.check_run_id) {
-            scope.setTag("check_run_id", submission.repository_check_runs.check_run_id.toString());
-          }
-
-          // Create workflow_run_error record
-          const { error: insertError } = await adminSupabase.from("workflow_run_error").upsert(
-            {
-              repository_id: repositoryId,
-              class_id: classId,
-              submission_id: submission.id,
-              run_number: workflowRun.id,
-              run_attempt: workflowRun.run_attempt,
-              name: userErrorMessage,
-              data: {
-                workflow_run_id: workflowRun.id,
-                workflow_conclusion: workflowRun.conclusion,
-                workflow_status: workflowRun.status,
-                check_run_id: submission.repository_check_runs?.check_run_id,
-                repository_name: repository.full_name,
-                sha: workflowRun.head_sha,
-                error_type: "missing_grader_result",
-                detected_at: new Date().toISOString(),
-                technical_details: sentryMessage
-              }
+        await recordMissingGraderResult(
+          adminSupabase,
+          {
+            repositoryId,
+            classId,
+            runNumber: workflowRun.id,
+            runAttempt: workflowRun.run_attempt,
+            submission,
+            errorData: {
+              workflow_run_id: workflowRun.id,
+              workflow_conclusion: workflowRun.conclusion,
+              workflow_status: workflowRun.status,
+              check_run_id: submission.repository_check_runs?.check_run_id,
+              repository_name: repository.full_name,
+              sha: workflowRun.head_sha
             },
-            { onConflict: "repository_id,run_number,run_attempt,name" }
-          );
-
-          if (insertError) {
-            Sentry.captureException(insertError, scope);
-          } else {
-            scope.setTag("workflow_run_error_created", "true");
-          }
-
-          const graderResultError: Json = {
-            error: userErrorMessage
-          };
-
-          // Insert a grader result with the error message
-          const { error: insertGraderResultError } = await adminSupabase.from("grader_results").insert({
-            submission_id: submission.id,
-            errors: graderResultError,
-            score: 0,
-            ret_code: 137,
-            lint_output: "",
-            lint_output_format: "text",
-            lint_passed: false,
-            profile_id: submission.profile_id,
-            assignment_group_id: submission.assignment_group_id,
-            class_id: classId
-          });
-          if (insertGraderResultError) {
-            Sentry.captureException(insertGraderResultError, scope);
-          } else {
-            scope.setTag("grader_result_created", "true");
-          }
-
-          // Log to Sentry
-          Sentry.captureMessage(sentryMessage, scope);
-        }
+            tagScope: (s) => {
+              s.setTag(
+                "github_actions_run_url",
+                `https://github.com/${repository.owner.login}/${repository.name}/actions/runs/${workflowRun.id}`
+              );
+              if (submission.repository_check_runs?.check_run_id) {
+                s.setTag("check_run_id", submission.repository_check_runs.check_run_id.toString());
+              }
+            }
+          },
+          scope
+        );
       }
     }
   } catch (error) {
