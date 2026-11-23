@@ -336,9 +336,11 @@ function SyncButton({
 
 function RetryRepoCreationButton({
   repoId,
+  isForgejo,
   tableController
 }: {
   repoId: number;
+  isForgejo: boolean;
   tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
 }) {
   const [isRetrying, setIsRetrying] = useState(false);
@@ -351,10 +353,18 @@ function RetryRepoCreationButton({
         p_repository_id: repoId
       });
       if (error) throw error;
-      toaster.success({
-        title: "Creation Re-queued",
-        description: "Repository creation has been re-queued. This page will automatically update."
-      });
+      toaster.success(
+        isForgejo
+          ? {
+              title: "Retry Requested",
+              description:
+                "Pawtograder will try to create this repository on Forgejo again within the hour. This page will automatically update."
+            }
+          : {
+              title: "Creation Re-queued",
+              description: "Repository creation has been re-queued. This page will automatically update."
+            }
+      );
       await tableController?.invalidate(repoId);
     } catch (error) {
       console.error(error);
@@ -867,7 +877,11 @@ export default function RepositoriesPage() {
                   </Text>
                 </ReportBlock>
                 {canManageStudentRepositories && (
-                  <RetryRepoCreationButton repoId={row.original.id} tableController={repositories} />
+                  <RetryRepoCreationButton
+                    repoId={row.original.id}
+                    isForgejo={isForgejo}
+                    tableController={repositories}
+                  />
                 )}
               </VStack>
             ) : row.original.assignment_group_id != null ? (
@@ -1159,11 +1173,17 @@ export default function RepositoriesPage() {
                   tableController={repositories}
                   individualRepoCount={individualRepoCount}
                 />
-                <FixRepoPermissionsButton
-                  courseId={Number(course_id)}
-                  assignmentId={Number(assignment_id)}
-                  tableController={repositories}
-                />
+                {isForgejo ? (
+                  <Text fontSize="xs" color="fg.muted" maxW="280px">
+                    Fix Permissions is for GitHub repositories only. Forgejo access is managed separately.
+                  </Text>
+                ) : (
+                  <FixRepoPermissionsButton
+                    courseId={Number(course_id)}
+                    assignmentId={Number(assignment_id)}
+                    tableController={repositories}
+                  />
+                )}
               </HStack>
             )}
           </HStack>
