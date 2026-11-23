@@ -13,14 +13,20 @@
 --      lab_section_leaders become INSERT, UPDATE and DELETE policies on manage_roster. The SELECT
 --      policies (anyone in the class reads) are unchanged.
 --   3. Same-class checks, for everyone: a meeting's lab section must be in the meeting's class, and
---      a leader's profile must be in the leader row's class. Before, an instructor could attach a
---      meeting to another class's lab section, or make someone from another class a leader.
---      (sync_lab_section_leaders_class_id already sets a leader row's class from its lab section.)
+--      a leader's profile and lab section must be in the leader row's class. Before, an instructor
+--      could attach a meeting to another class's lab section, make someone from another class a
+--      leader, or change a leader row's class_id away from its lab section's class
+--      (sync_lab_section_leaders_class_id only runs when lab_section_id changes). Point 5 stops a lab
+--      section moving to another class, which would leave its meetings and leaders behind.
 --   4. A lab section's sis_crn stays instructor-only. SIS sync (course-import-sis) reads every lab
 --      section's sis_crn and enrolls that SIS section's roster with their SIS roles, instructors and
 --      TAs included. If a Head TA could set it, they could point a lab section at another course and
 --      have the next sync make people staff here. A BEFORE trigger lets someone who isn't an
 --      instructor create lab sections without a sis_crn and edit them while keeping it unchanged.
+--   5. The same trigger refuses any change to a lab section's class_id from the API, instructors
+--      included. The app never moves a section between classes, and a move would leave its meetings
+--      and leaders in the old class and could carry a sis_crn into a class whose instructor never
+--      linked it.
 --
 -- Safe to run again: every policy and trigger is dropped before it is created, the function is
 -- CREATE OR REPLACE, and the inserts skip rows that exist.
@@ -96,7 +102,7 @@ CREATE POLICY "Roster managers can delete lab_section_meetings" ON public.lab_se
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_roster')));
 
 -- ---------------------------------------------------------------------------
--- 4. lab_section_leaders: the leader's profile must be in the row's class
+-- 4. lab_section_leaders: the leader's profile and lab section must be in the row's class
 -- ---------------------------------------------------------------------------
 
 DROP POLICY IF EXISTS "instructors_manage_lab_section_leaders" ON public.lab_section_leaders;
@@ -109,6 +115,9 @@ CREATE POLICY "Roster managers can create lab_section_leaders" ON public.lab_sec
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_roster'))
     AND profile_id IN (SELECT p.id FROM public.profiles p WHERE p.class_id = lab_section_leaders.class_id)
+    AND lab_section_id IN (
+      SELECT ls.id FROM public.lab_sections ls WHERE ls.class_id = lab_section_leaders.class_id
+    )
   );
 
 CREATE POLICY "Roster managers can update lab_section_leaders" ON public.lab_section_leaders
@@ -117,6 +126,9 @@ CREATE POLICY "Roster managers can update lab_section_leaders" ON public.lab_sec
   WITH CHECK (
     class_id IN (SELECT public.user_class_ids_with_capability('manage_roster'))
     AND profile_id IN (SELECT p.id FROM public.profiles p WHERE p.class_id = lab_section_leaders.class_id)
+    AND lab_section_id IN (
+      SELECT ls.id FROM public.lab_sections ls WHERE ls.class_id = lab_section_leaders.class_id
+    )
   );
 
 CREATE POLICY "Roster managers can delete lab_section_leaders" ON public.lab_section_leaders
@@ -124,7 +136,7 @@ CREATE POLICY "Roster managers can delete lab_section_leaders" ON public.lab_sec
   USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_roster')));
 
 -- ---------------------------------------------------------------------------
--- 5. lab_sections.sis_crn: instructors only
+-- 5. lab_sections.sis_crn: instructors only; class_id: never changed from the API
 -- ---------------------------------------------------------------------------
 
 -- SECURITY INVOKER on purpose, like guard_roster_manager_update: an update straight from the API
@@ -136,8 +148,17 @@ LANGUAGE plpgsql
 SET search_path = ''
 AS $$
 BEGIN
-  IF current_user <> 'authenticated'
-     OR public.authorizeforclassinstructor(NEW.class_id)
+  IF current_user <> 'authenticated' THEN
+    RETURN NEW;
+  END IF;
+
+  -- Checked before the instructor pass below: nobody moves a lab section to another class.
+  IF TG_OP = 'UPDATE' AND NEW.class_id IS DISTINCT FROM OLD.class_id THEN
+    RAISE EXCEPTION 'A lab section can''t be moved to another class'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF public.authorizeforclassinstructor(NEW.class_id)
      OR public.authorize_for_admin() THEN
     RETURN NEW;
   END IF;
@@ -152,7 +173,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.guard_lab_section_sis_crn() IS
-'BEFORE INSERT OR UPDATE trigger on lab_sections: only an instructor of the class (or a platform admin) may set or change sis_crn, which SIS sync uses to enroll people with their SIS roles.';
+'BEFORE INSERT OR UPDATE trigger on lab_sections: from the API, class_id can never change, and only an instructor of the class (or a platform admin) may set or change sis_crn, which SIS sync uses to enroll people with their SIS roles.';
 
 DROP TRIGGER IF EXISTS guard_lab_section_sis_crn ON public.lab_sections;
 CREATE TRIGGER guard_lab_section_sis_crn

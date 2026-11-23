@@ -8,9 +8,12 @@
  * - A meeting's lab section and a leader's profile must be in the row's class, for everyone.
  * - Only an instructor can set or change a lab section's sis_crn, because SIS sync enrolls that
  *   SIS section's roster with their SIS roles (instructors and TAs included).
+ * - Nobody can move a lab section to another class from the API, an instructor of both included,
+ *   and a leader row's class must stay its lab section's class.
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
+import { randomInt } from "node:crypto";
 import { test, expect } from "../global-setup";
 import { supabase, createClass, createUserInClass, createAuthenticatedClient, type TestingUser } from "./TestingUtils";
 
@@ -27,6 +30,7 @@ test.describe("Lab sections follow manage_roster (#1010)", () => {
   let plainGrader: TestingUser;
   let headTa: TestingUser;
   let graderB: TestingUser;
+  let rosterRoleA: number;
   let unique = 0;
 
   const sectionValues = (class_id: number) => ({
@@ -36,6 +40,50 @@ test.describe("Lab sections follow manage_roster (#1010)", () => {
     start_time: "10:00",
     end_time: "11:00"
   });
+
+  /** A custom role in `class_id` with manage_roster turned on, and nothing else. */
+  async function rosterRole(class_id: number) {
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id, name: "Roster TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: role!.id, capability: "manage_roster" })).error
+    ).toBeNull();
+    return role!.id;
+  }
+
+  async function putOnRole(user: TestingUser, class_id: number, role_id: number) {
+    expect(
+      (
+        await supabase
+          .from("user_roles")
+          .update({ class_role_id: role_id })
+          .eq("user_id", user.user_id)
+          .eq("class_id", class_id)
+      ).error
+    ).toBeNull();
+  }
+
+  /**
+   * Class C, a Head TA with manage_roster in classes A and C, and the instructor added to C. Made once,
+   * for the tests about moving rows between classes.
+   */
+  let twoClasses: Promise<{ classC: { id: number }; ta: TestingUser; taInC: TestingUser }> | undefined;
+  function setUpTwoClasses() {
+    twoClasses ??= (async () => {
+      const classC = await createClass({ name: "E2E Lab Sections By Capability C" });
+      const ta = await createUserInClass({ role: "grader", class_id: classA.id });
+      const taInC = await createUserInClass({ role: "grader", class_id: classC.id, email: ta.email });
+      await putOnRole(ta, classA.id, rosterRoleA);
+      await putOnRole(ta, classC.id, await rosterRole(classC.id));
+      await createUserInClass({ role: "instructor", class_id: classC.id, email: instructor.email });
+      return { classC, ta, taInC };
+    })();
+    return twoClasses;
+  }
 
   /** A lab section written as the service role. */
   async function serviceSection(class_id: number) {
@@ -82,24 +130,8 @@ test.describe("Lab sections follow manage_roster (#1010)", () => {
     graderB = await createUserInClass({ role: "grader", class_id: classB.id });
 
     // A Head TA: a custom role with manage_roster turned on, and nothing else.
-    const { data: role, error: roleError } = await supabase
-      .from("class_roles")
-      .insert({ class_id: classA.id, name: "Roster TA" })
-      .select("id")
-      .single();
-    expect(roleError).toBeNull();
-    expect(
-      (await supabase.from("role_capabilities").insert({ role_id: role!.id, capability: "manage_roster" })).error
-    ).toBeNull();
-    expect(
-      (
-        await supabase
-          .from("user_roles")
-          .update({ class_role_id: role!.id })
-          .eq("user_id", headTa.user_id)
-          .eq("class_id", classA.id)
-      ).error
-    ).toBeNull();
+    rosterRoleA = await rosterRole(classA.id);
+    await putOnRole(headTa, classA.id, rosterRoleA);
   });
 
   test("the default instructor role holds manage_roster and the default grader role doesn't", async () => {
@@ -146,7 +178,7 @@ test.describe("Lab sections follow manage_roster (#1010)", () => {
   test("only an instructor can set or change a lab section's sis_crn", async () => {
     const headTaClient = await createAuthenticatedClient(headTa);
     const instructorClient = await createAuthenticatedClient(instructor);
-    const crn = 90000 + Math.floor(Math.random() * 9000);
+    const crn = randomInt(90000, 99000);
 
     // A Head TA can't create a lab section linked to an SIS section.
     expectRefused(
@@ -193,6 +225,68 @@ test.describe("Lab sections follow manage_roster (#1010)", () => {
       .select("sis_crn");
     expect(byInstructor.error).toBeNull();
     expect(byInstructor.data).toEqual([{ sis_crn: crn + 2 }]);
+  });
+
+  test("nobody can move a lab section to another class, even with manage_roster or as instructor in both", async () => {
+    const { classC, ta: twoClassTa } = await setUpTwoClasses();
+    const sectionId = await serviceSection(classA.id);
+    for (const [user, who] of [
+      [twoClassTa, "a Head TA with manage_roster in both classes"],
+      [instructor, "an instructor of both classes"]
+    ] as const) {
+      const client = await createAuthenticatedClient(user);
+      // They can change lab sections in class C, so a refused move is the move rule, not RLS.
+      const sectionC = await serviceSection(classC.id);
+      const renameC = await client
+        .from("lab_sections")
+        .update({ name: `in C ${++unique}` })
+        .eq("id", sectionC)
+        .select("id");
+      expect(renameC.error, `${who} renaming a section in class C`).toBeNull();
+      expect(renameC.data).toHaveLength(1);
+
+      const move = await client.from("lab_sections").update({ class_id: classC.id }).eq("id", sectionId);
+      expectRefused(move, `${who} moving a lab section to another class`);
+      expect(move.error?.message).toContain("can't be moved to another class");
+    }
+    const { data } = await supabase.from("lab_sections").select("class_id").eq("id", sectionId).single();
+    expect(data!.class_id).toBe(classA.id);
+  });
+
+  test("a leader row can't be pointed at another class than its lab section's", async () => {
+    const { classC, ta, taInC } = await setUpTwoClasses();
+    const client = await createAuthenticatedClient(ta);
+    const sectionId = await serviceSection(classA.id);
+    const { data: leader, error } = await supabase
+      .from("lab_section_leaders")
+      .insert({ lab_section_id: sectionId, profile_id: plainGrader.private_profile_id, class_id: classA.id })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+
+    // class_id and profile_id both in class C, so only the lab section's class doesn't match.
+    expectRefused(
+      await client
+        .from("lab_section_leaders")
+        .update({ class_id: classC.id, profile_id: taInC.private_profile_id })
+        .eq("id", leader!.id),
+      "pointing a leader row at another class"
+    );
+    const { data: after } = await supabase
+      .from("lab_section_leaders")
+      .select("class_id, profile_id")
+      .eq("id", leader!.id)
+      .single();
+    expect(after).toEqual({ class_id: classA.id, profile_id: plainGrader.private_profile_id });
+
+    // Changing a leader within the class still works.
+    const swap = await client
+      .from("lab_section_leaders")
+      .update({ profile_id: headTa.private_profile_id })
+      .eq("id", leader!.id)
+      .select("id");
+    expect(swap.error).toBeNull();
+    expect(swap.data).toHaveLength(1);
   });
 
   test("a default grader is refused every lab section change", async () => {
