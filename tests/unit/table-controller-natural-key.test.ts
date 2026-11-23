@@ -95,7 +95,7 @@ test("natural keys page all rows, distinguish capabilities on one role, and appl
     expect(requests[2].searchParams.get("role_id")).toBe("eq.7");
     expect(requests[2].searchParams.has("id")).toBe(false);
     fail = true;
-    await expect(controller.refetchAll({ force: true })).rejects.toMatchObject({ message: "Unavailable" });
+    await controller.refetchAll();
     expect(onError).toHaveBeenCalledTimes(1);
     expect(controller.rowCount).toBe(1001);
   } finally {

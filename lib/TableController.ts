@@ -1398,7 +1398,7 @@ export default class TableController<
   /**
    * Refetch all data and notify subscribers of changes (full refresh)
    */
-  private async _refetchAllDataFull(throwOnError = false): Promise<void> {
+  private async _refetchAllDataFull(): Promise<void> {
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -1491,7 +1491,6 @@ export default class TableController<
     } catch (error) {
       Sentry.captureException(error);
       this._onError?.(error);
-      if (throwOnError) throw error;
     } finally {
       // Set refetch state to false and notify listeners
       this._isRefetching = false;
@@ -1520,7 +1519,7 @@ export default class TableController<
    * Useful when entries may have been created after the initial fetch but before
    * realtime subscriptions were established by the consumer.
    */
-  async refetchAll(options?: { force?: boolean }): Promise<void> {
+  async refetchAll(): Promise<void> {
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call refetchAll(). This indicates a stale reference is being used.`
@@ -1536,15 +1535,14 @@ export default class TableController<
     // tests/UI flicker between empty and populated states.
     if (this._isRefetching) {
       await this.waitForRefetchToComplete();
-      if (!options?.force) return;
+      return;
     }
-    if (!options?.force && Date.now() - this._lastRefetchAllTime < 3000) {
+    if (Date.now() - this._lastRefetchAllTime < 3000) {
       throw new Error("Refetch all called too frequently");
     }
     this._lastRefetchAllTime = Date.now();
 
-    if (options?.force) await this._refetchAllDataFull(true);
-    else await this._refetchAllData();
+    await this._refetchAllData();
   }
 
   /**
@@ -1594,7 +1592,11 @@ export default class TableController<
       return;
     }
 
-    const refetchedRows = await this._refetchRowsByIds(ids);
+    const queriedIds = new Set<IDType>();
+    const refetchedRows = await this._refetchRowsByIds(ids, queriedIds);
+    for (const id of queriedIds) {
+      if (!refetchedRows.has(id)) this._removeRow(id);
+    }
 
     // Mirror the matchesFilter handling in _handleUpdate so that a row whose
     // refetched state no longer matches the realtime filter is evicted from
@@ -3274,23 +3276,13 @@ export default class TableController<
         `TableController for table '${this._table}' is closed. Cannot call invalidate(${id}). This indicates a stale reference is being used.`
       );
     }
-    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
-    const { data, error } = await this._filterKey(this._client.from(this._table).select(selectClause), id).single();
-    if (error) {
-      throw error;
-    }
-    if (!data) {
-      return;
-    }
-    const typedData = this._keyedRow(data) as unknown as ResultOne;
-    const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
-    if (existingRow) {
-      this._updateRow(id as IDType, typedData as ResultOne & { id: IDType }, false);
+    const row = await this._fetchRow(id);
+    if (!row || !this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
+      this._removeRow(id);
+    } else if (this._rowsById.has(id)) {
+      this._updateRow(id, row as ResultOne & { id: IDType }, false);
     } else {
-      this._addRow({
-        ...(typedData as ResultOne),
-        __db_pending: false
-      } as PossiblyTentativeResult<ResultOne>);
+      this._addRow({ ...row, __db_pending: false });
     }
   }
 
@@ -3396,7 +3388,8 @@ export default class TableController<
   }
 
   async create(row: Database["public"]["Tables"][RelationName]["Insert"]): Promise<ResultOne> {
-    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call create(). This indicates a stale reference is being used.`
@@ -3441,7 +3434,8 @@ export default class TableController<
   }
 
   async hardDelete(id: ExtractIdType<RelationName>): Promise<void> {
-    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
@@ -3471,7 +3465,8 @@ export default class TableController<
    * @returns
    */
   async delete(id: ExtractIdType<RelationName>): Promise<void> {
-    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
@@ -3496,7 +3491,8 @@ export default class TableController<
     return;
   }
   async update(id: IDType, row: Partial<ResultOne>): Promise<ResultOne> {
-    if (this._keyColumns) throw new Error("Natural-key controllers require explicit writes followed by refetchAll().");
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call update(${id}). This indicates a stale reference is being used.`

@@ -14,11 +14,7 @@ type TablesThatHaveAnIDField =
   | "capabilities";
 
 // Extend known broadcast tables to include row-level recalculation state
-type KnownBroadcastTables =
-  | TablesThatHaveAnIDField
-  | "role_capabilities"
-  | "capabilities"
-  | "gradebook_row_recalc_state";
+type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
 
 export type GradebookRowRecalcStateBroadcastMessage = {
   type: "gradebook_row_recalc_state";

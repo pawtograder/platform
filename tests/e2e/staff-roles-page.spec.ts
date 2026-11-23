@@ -173,6 +173,57 @@ test.describe("Staff Roles page", () => {
     expect(await customRoleId("INSTRUCTOR")).toBeUndefined();
   });
 
+  test("saved capability values survive missed broadcasts and a failed key fetch", async ({ page }) => {
+    const name = `Missed broadcasts ${Date.now()}`;
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect((await supabase.from("role_capabilities").delete().eq("role_id", role!.id)).error).toBeNull();
+    try {
+      // Do not forward the websocket connection, so this page receives no broadcasts.
+      await page.routeWebSocket("**/realtime/v1/websocket*", () => {});
+      await loginAsUser(page, instructor, course);
+      await openRolesPage(page);
+      const labels = ["Manage assignments", "Publish groups", "Manage review assignments"];
+      const boxes = labels.map((label) => page.getByRole("checkbox", { name: `${name}: ${label}`, exact: true }));
+      for (const box of boxes) await expect(box).not.toBeChecked();
+      const reads: URL[] = [];
+      await page.route("**/rest/v1/role_capabilities*", async (route) => {
+        if (route.request().method() === "GET") {
+          const url = new URL(route.request().url());
+          reads.push(url);
+          // Keep one saved value pending; the other two must reach the cache independently.
+          if (url.searchParams.get("capability") === "eq.manage_assignments") {
+            await route.fulfill({ status: 400, contentType: "application/json", body: '{"message":"Unavailable"}' });
+            return;
+          }
+        }
+        await route.continue();
+      });
+      await page.locator("label").filter({ has: boxes[0] }).click();
+      await expect(page.getByText(`${name}: Manage assignments turned on. Saved.`, { exact: true })).toBeAttached();
+      await expect(boxes[0]).toBeEnabled();
+      for (const box of boxes.slice(1)) await page.locator("label").filter({ has: box }).click();
+      for (const box of boxes) {
+        await expect(box).toBeChecked();
+        await expect(box).toBeEnabled();
+      }
+      await expect.poll(async () => (await roleCapabilities(role!.id)).length).toBe(3);
+      expect(reads.length).toBeGreaterThanOrEqual(3);
+      for (const url of reads) {
+        expect(url.searchParams.get("role_id")).toBe(`eq.${role!.id}`);
+        expect(url.searchParams.has("capability")).toBe(true);
+      }
+      // A later unrelated save must not clear the value whose fetch failed.
+      await expect(boxes[0]).toBeChecked();
+    } finally {
+      expect((await supabase.from("class_roles").delete().eq("id", role!.id)).error).toBeNull();
+    }
+  });
+
   test("an instructor creates a role, turns a capability on, and it is saved", async ({ page }) => {
     await loginAsUser(page, instructor, course);
     await openRolesPage(page);
@@ -212,6 +263,11 @@ test.describe("Staff Roles page", () => {
   }) => {
     await loginAsUser(page, instructor, course);
     await openRolesPage(page);
+    const enrollmentReads: URL[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (request.method() === "GET" && url.pathname.endsWith("/rest/v1/user_roles")) enrollmentReads.push(url);
+    });
     const select = page.getByRole("combobox", { name: `Role for ${grader.private_profile_name}` });
     await select.selectOption({ label: roleName });
     const roleId = await customRoleId(roleName);
@@ -227,6 +283,9 @@ test.describe("Staff Roles page", () => {
       })
       .toBe(roleId);
     await expect(page.getByRole("columnheader", { name: new RegExp(roleName) })).toContainText("1 person");
+    await expect(select).toBeEnabled();
+    expect(enrollmentReads.length).toBeGreaterThan(0);
+    for (const url of enrollmentReads) expect(url.searchParams.has("id")).toBe(true);
 
     const graderContext = await browser.newContext();
     const graderPage = await graderContext.newPage();
