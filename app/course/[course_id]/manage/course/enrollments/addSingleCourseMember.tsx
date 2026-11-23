@@ -17,7 +17,11 @@ type FormData = {
   notify?: boolean;
 };
 
-export default function AddSingleCourseMember() {
+/**
+ * Adds one person by email. `studentsOnly` offers only Student, for someone with manage_roster who
+ * isn't an instructor (#1010); enrollments-add refuses any other role from them.
+ */
+export default function AddSingleCourseMember({ studentsOnly = false }: { studentsOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { course_id } = useParams();
@@ -90,8 +94,8 @@ export default function AddSingleCourseMember() {
                 <NativeSelect.Root>
                   <NativeSelect.Field {...register("role", { required: true })}>
                     <option value="student">Student</option>
-                    <option value="grader">Grader</option>
-                    <option value="instructor">Instructor</option>
+                    {!studentsOnly && <option value="grader">Grader</option>}
+                    {!studentsOnly && <option value="instructor">Instructor</option>}
                   </NativeSelect.Field>
                 </NativeSelect.Root>
                 <Field.ErrorText>{errors.role?.message}</Field.ErrorText>

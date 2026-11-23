@@ -141,7 +141,9 @@ const LinkItems = (courseID: number) => [
       {
         name: "Enrollments",
         icon: FiUsers,
-        instructors_only: true,
+        // Shown from the capability tables (#1010), so a Head TA with manage_roster can reach the
+        // student actions the database lets them use.
+        capability: "manage_roster",
         target: `/course/${courseID}/manage/course/enrollments`
       },
       {
@@ -285,6 +287,7 @@ export default function DynamicCourseNav() {
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const canManageGradebook = useCapability("manage_gradebook");
   const canSendAnnouncements = useCapability("send_announcements");
+  const canManageRoster = useCapability("manage_roster");
   /**
    * Which responsive twin carries the landmark ids. Only the ids move with the
    * breakpoint — the accessibility tree is left to the CSS `display` split (see
@@ -314,7 +317,11 @@ export default function DynamicCourseNav() {
   const submenuCapabilityAllows = (submenu: object) => {
     const capability = "capability" in submenu ? submenu.capability : undefined;
     if (!capability) return true;
-    return capability === "send_announcements" && (canSendAnnouncements || isInstructor);
+    const held: Record<string, boolean> = {
+      send_announcements: canSendAnnouncements,
+      manage_roster: canManageRoster
+    };
+    return typeof capability === "string" && capability in held && (held[capability] || isInstructor);
   };
 
   const filteredLinks = LinkItems(enrollment.class_id)
