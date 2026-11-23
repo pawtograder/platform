@@ -420,8 +420,12 @@ async function doMatch(
   // another reader took over, finds the batch in review/finalizing/completed (or not its message
   // any more) and stops here, before it rewrites any row.
   // The fence is per message, not per attempt: a match left over from a run that Process restarted
-  // (the batch back in 'ocr') cannot be told from the new run's match. That would need an attempt
-  // id on the message.
+  // (the batch back in 'ocr') holds its own message validly, beside the new run's match. Its link and
+  // its suggestions are refused if they no longer describe the batch's pages: the link only applies
+  // the grouping the batch's current pages give, and a suggestion only lands on an exam that still
+  // holds the pages it was read from. A refusal returns state_changed and this match stops; the run
+  // whose link is current suggests for every exam (exam_worker_link_scan_groups,
+  // exam_worker_set_match_suggestion).
   const toMatching = await setBatchStatus(admin, fence, batch.id, "matching", MATCHING_FROM);
   if (toMatching === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
   if (toMatching === "state_changed") return ACK;
@@ -594,12 +598,14 @@ async function doMatch(
     // take a while: in that time this reader's lease can lapse and another reader finish the batch,
     // staff can confirm, skip or pick a student for this row, and the batch can move to review. A
     // write that only re-checked the row's status in its WHERE clause still replaced a pick (stored
-    // as 'suggested' with no confidence) and could land after review opened.
+    // as 'suggested' with no confidence) and could land after review opened. It also carries the
+    // pages the identity was read from, and is refused if a newer run re-linked this exam since.
     const written = await setMatchSuggestion(admin, fence, batch.id, scannedId, {
       detectedName: detectedName ?? null,
       detectedSisId: detectedSisId ?? null,
       matchedProfileId: match.profile_id,
-      confidence: match.confidence
+      confidence: match.confidence,
+      pageIds: groupPages.map((p) => p.id)
     });
     if (written === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
     if (written === "state_changed") return ACK;
@@ -1047,16 +1053,27 @@ let contractGapReported = false;
 // is an integer (give-up passes it to a bigint parameter, so anything else made the give-up itself
 // fail and the message came back every READ_VISIBILITY_SECONDS forever), and whose method is a
 // string (the logs, the Sentry tag and the dispatch all print it, and an object that can't be
-// printed threw there before the message could reach give-up). Every producer is a SQL function
-// that writes a string method and an integer batch_id. An unknown method or bad args still fail
-// into give-up as before. The reason names types only, never content: it goes to Sentry and the DLQ.
+// printed threw there before the message could reach give-up), and whose retry_count, if present,
+// is a nonnegative integer (it bounds the retries: the attempt tag adds to it before the poison-pill
+// guard, and a string or object there never reached the retry limit, while each re-queue started a
+// fresh read count). Every producer is a SQL function that writes a string method and an integer
+// batch_id, and only this worker writes retry_count. An unknown method or bad args still fail into
+// give-up as before. The reason names types only, never content: it goes to Sentry and the DLQ.
 function envelopeProblem(body: unknown): string | null {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return `body is ${body === null ? "null" : Array.isArray(body) ? "an array" : `a ${typeof body}`}`;
   }
-  const { batch_id: batchId, method } = body as { batch_id?: unknown; method?: unknown };
+  const {
+    batch_id: batchId,
+    method,
+    retry_count: retryCount
+  } = body as { batch_id?: unknown; method?: unknown; retry_count?: unknown };
   if (!Number.isSafeInteger(batchId)) return `batch_id is not an integer (${typeof batchId})`;
-  return typeof method === "string" ? null : `method is not a string (${typeof method})`;
+  if (typeof method !== "string") return `method is not a string (${typeof method})`;
+  if (retryCount !== undefined && !(Number.isSafeInteger(retryCount) && (retryCount as number) >= 0)) {
+    return `retry_count is not a nonnegative integer (${typeof retryCount})`;
+  }
+  return null;
 }
 
 async function runBatch(): Promise<number> {

@@ -135,7 +135,7 @@ returns integer
 language sql
 immutable
 set search_path to ''
-as $function$ select 1 $function$;
+as $function$ select 2 $function$;
 
 revoke all on function public.exam_worker_contract_version() from public, anon, authenticated;
 grant execute on function public.exam_worker_contract_version() to service_role;
@@ -311,6 +311,15 @@ grant execute on function public.exam_worker_give_up(bigint, integer, bigint, te
 -- Link a batch's page groups (exam_link_scan_groups), only while the caller holds its match
 -- message and the batch is still 'matching'. The batch row is share-locked for the transaction, so
 -- a status write moving it to review waits for this, or this sees review and changes nothing.
+--
+-- And only the grouping the batch's pages and pages_per_exam give now: the pages in page_index order,
+-- pages_per_exam to an exam, as doMatch groups them. Holding a match message is not enough. A match
+-- left over from an earlier Process run holds its own message validly, beside the newer run's. If
+-- staff changed those inputs in between (a page added, pages_per_exam), the leftover's grouping
+-- describes pages as they were, and linking it over the newer run's put two exams' pages on one row.
+-- That case is 'state_changed' too: the newer run's match links and suggests from the current pages.
+-- pages_per_exam cannot change under this (the batch row is share-locked). A page inserted while
+-- this runs is not linked, as before.
 -- Returns {"outcome": "not_owner" | "state_changed"} or {"outcome": "applied", "rows": [...]}.
 -- exam_link_scan_groups's own errors (EX409: it would regroup a decided exam) propagate.
 create or replace function public.exam_worker_link_scan_groups(
@@ -339,6 +348,27 @@ begin
   if v_status is distinct from 'matching' then
     return jsonb_build_object('outcome', 'state_changed');
   end if;
+  if exists (
+    (select p.id, (row_number() over (order by p.page_index) - 1) / greatest(1, b.pages_per_exam) as exam_index
+       from public.exam_scan_pages p
+       join public.exam_scan_batches b on b.id = p.batch_id
+      where p.batch_id = p_batch_id
+     except
+     select pid::bigint, (g->>'exam_index')::bigint
+       from jsonb_array_elements(p_groups) g
+      cross join lateral jsonb_array_elements_text(g->'page_ids') pid)
+    union all
+    (select pid::bigint, (g->>'exam_index')::bigint
+       from jsonb_array_elements(p_groups) g
+      cross join lateral jsonb_array_elements_text(g->'page_ids') pid
+     except
+     select p.id, (row_number() over (order by p.page_index) - 1) / greatest(1, b.pages_per_exam)
+       from public.exam_scan_pages p
+       join public.exam_scan_batches b on b.id = p.batch_id
+      where p.batch_id = p_batch_id)
+  ) then
+    return jsonb_build_object('outcome', 'state_changed');
+  end if;
   return jsonb_build_object('outcome', 'applied', 'rows', public.exam_link_scan_groups(p_batch_id, p_groups));
 end;
 $function$;
@@ -352,8 +382,15 @@ grant execute on function public.exam_worker_link_scan_groups(bigint, integer, b
 -- decision: a confirmed or skipped exam is not undecided, and an unconfirmed pick made in review is
 -- stored as 'suggested' with a null confidence, which the worker never writes (matchProfile always
 -- gives a confidence). A pick whose pages a re-link changed was already cleared to 'unmatched' by
--- exam_link_scan_groups, so the worker re-detects it. Returns 'not_owner', 'state_changed',
--- 'applied' or 'skipped' (the row is decided, picked, or not in this batch).
+-- exam_link_scan_groups, so the worker re-detects it.
+--
+-- And only while the exam still holds exactly the pages the identity was read from (p_page_ids),
+-- checked under the exam row's lock, which exam_link_scan_groups takes before it moves a page. A
+-- match left over from an earlier Process run holds its own message validly; if a newer run re-linked
+-- this exam to other pages since, the suggestion describes other paper and is refused as
+-- 'state_changed'. The newer run's match suggests for the new pages.
+-- Returns 'not_owner', 'state_changed', 'applied' or 'skipped' (the row is decided, picked, or not in
+-- this batch).
 create or replace function public.exam_worker_set_match_suggestion(
   p_msg_id bigint,
   p_read_ct integer,
@@ -362,7 +399,8 @@ create or replace function public.exam_worker_set_match_suggestion(
   p_detected_name text,
   p_detected_sis_id text,
   p_matched_profile_id uuid,
-  p_match_confidence numeric
+  p_match_confidence numeric,
+  p_page_ids bigint[]
 )
 returns text
 language plpgsql
@@ -373,8 +411,8 @@ declare
   v_rows integer;
 begin
   if p_msg_id is null or p_read_ct is null or p_batch_id is null or p_scanned_id is null
-     or p_match_confidence is null then
-    raise exception 'exam_worker_set_match_suggestion: the claim, batch, scanned exam and confidence are required';
+     or p_match_confidence is null or coalesce(cardinality(p_page_ids), 0) = 0 then
+    raise exception 'exam_worker_set_match_suggestion: the claim, batch, scanned exam, confidence and pages are required';
   end if;
   perform 1 from pgmq.q_exam_processing q
    where q.msg_id = p_msg_id and q.read_ct = p_read_ct
@@ -384,6 +422,18 @@ begin
   end if;
   select b.status into v_status from public.exam_scan_batches b where b.id = p_batch_id for share;
   if v_status is distinct from 'matching' then
+    return 'state_changed';
+  end if;
+  perform 1 from public.exam_scanned_submissions s
+   where s.id = p_scanned_id and s.batch_id = p_batch_id
+   for update;
+  if not found then
+    return 'skipped';
+  end if;
+  if (select coalesce(array_agg(p.id order by p.id), '{}') from public.exam_scan_pages p
+       where p.scanned_submission_id = p_scanned_id)
+     is distinct from
+     (select array_agg(distinct x order by x) from unnest(p_page_ids) x) then
     return 'state_changed';
   end if;
   update public.exam_scanned_submissions s
@@ -401,9 +451,9 @@ begin
 end;
 $function$;
 
-revoke all on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric)
+revoke all on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric, bigint[])
   from public, anon, authenticated;
-grant execute on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric)
+grant execute on function public.exam_worker_set_match_suggestion(bigint, integer, bigint, bigint, text, text, uuid, numeric, bigint[])
   to service_role;
 
 -- Create (enqueue_exam_finalize) refuses a batch while finalize messages for it are still queued. The

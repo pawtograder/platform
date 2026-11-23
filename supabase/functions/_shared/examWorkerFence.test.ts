@@ -115,7 +115,8 @@ Deno.test("match writes call their functions with the claim and map the reply", 
       detectedName: "Ada",
       detectedSisId: null,
       matchedProfileId: null,
-      confidence: 0
+      confidence: 0,
+      pageIds: [1, 2]
     }),
     "skipped"
   );
@@ -127,7 +128,8 @@ Deno.test("match writes call their functions with the claim and map the reply", 
     p_detected_name: "Ada",
     p_detected_sis_id: null,
     p_matched_profile_id: null,
-    p_match_confidence: 0
+    p_match_confidence: 0,
+    p_page_ids: [1, 2]
   });
   for (const outcome of ["not_owner", "state_changed"] as const) {
     const f = fakeClient({ exam_worker_link_scan_groups: ok({ outcome }) });
@@ -151,7 +153,8 @@ Deno.test("no fallback: a missing function, or any error, is thrown with its cod
           detectedName: null,
           detectedSisId: null,
           matchedProfileId: null,
-          confidence: 0
+          confidence: 0,
+          pageIds: [1]
         })
     ]
   ] as const) {
@@ -200,7 +203,13 @@ Deno.test("every argument builder uses exactly the parameter names of its SQL fu
   assertEquals(keys(linkArgs(claim, 7, [])), params("exam_worker_link_scan_groups"));
   assertEquals(
     keys(
-      suggestionArgs(claim, 7, 9, { detectedName: null, detectedSisId: null, matchedProfileId: null, confidence: 0 })
+      suggestionArgs(claim, 7, 9, {
+        detectedName: null,
+        detectedSisId: null,
+        matchedProfileId: null,
+        confidence: 0,
+        pageIds: [1]
+      })
     ),
     params("exam_worker_set_match_suggestion")
   );

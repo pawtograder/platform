@@ -14414,6 +14414,7 @@ export type Database = {
           p_match_confidence: number;
           p_matched_profile_id: string;
           p_msg_id: number;
+          p_page_ids: number[];
           p_read_ct: number;
           p_scanned_id: number;
         };

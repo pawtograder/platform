@@ -16,7 +16,7 @@
  */
 
 /** The version of the SQL functions this worker needs. Matches exam_worker_contract_version(). */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 /** A message as this reader claimed it: pgmq's id and the read_ct its read produced. */
 export type Claim = { msgId: number; readCt: number };
@@ -192,6 +192,8 @@ export type Suggestion = {
   detectedSisId: string | null;
   matchedProfileId: string | null;
   confidence: number;
+  /** The pages the identity was read from: the write is refused unless the exam still holds exactly these. */
+  pageIds: number[];
 };
 
 export const suggestionArgs = (claim: Claim, batchId: number, scannedId: number, s: Suggestion) => ({
@@ -202,7 +204,8 @@ export const suggestionArgs = (claim: Claim, batchId: number, scannedId: number,
   p_detected_name: s.detectedName,
   p_detected_sis_id: s.detectedSisId,
   p_matched_profile_id: s.matchedProfileId,
-  p_match_confidence: s.confidence
+  p_match_confidence: s.confidence,
+  p_page_ids: s.pageIds
 });
 
 /**

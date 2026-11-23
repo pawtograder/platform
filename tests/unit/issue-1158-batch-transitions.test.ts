@@ -158,6 +158,10 @@ describe("issue #1158: worker batch status transitions", () => {
       expect(ocrWaitBoundaryMs(4, "not a date", 777)).toBe(777);
     });
 
+    // The helpers below give the time of the read that finds the OCR wait exhausted. That read throws
+    // into the dispatcher, whose five transient retries (about 5 minutes) come before give-up errors
+    // the batch, the same before #1158 and now; so these bound exhaustion, not when staff see the error.
+    //
     // A schedule: when readers reach the waiting message if it is visible, how long a read takes to
     // reach its re-queue's send, any extra wait for the claim lock (new rule only), and how long the
     // re-queue's transaction stays uncommitted. `sendLatency` is staging's; `newSendLatency`, when
@@ -187,7 +191,7 @@ describe("issue #1158: worker batch status transitions", () => {
       return (t) => times.find((r) => r >= t)!;
     };
     /** Before #1158: every read counts; the replacement is visible 30s after its send, once committed. */
-    const stagingErrorsAt = ({ readers, sendLatency, commitDelay = 0 }: Schedule) => {
+    const stagingExhaustedAt = ({ readers, sendLatency, commitDelay = 0 }: Schedule) => {
       let t = readers(0);
       for (let waits = 0; waits < MAX_OCR_WAITS; waits++) {
         const sentAt = t + sendLatency;
@@ -196,7 +200,7 @@ describe("issue #1158: worker batch status transitions", () => {
       return t;
     };
     /** Now: 5s re-queues; a counted one is stamped with its own send instant (after the claim lock). */
-    const nowErrorsAt = ({
+    const nowExhaustedAt = ({
       readers,
       sendLatency,
       newSendLatency = sendLatency,
@@ -217,7 +221,7 @@ describe("issue #1158: worker batch status transitions", () => {
       throw new Error("never gave up");
     };
     /** The rule this replaces: counted from the worker's read time (b86af546). */
-    const readTimeRuleErrorsAt = ({ readers, sendLatency, commitDelay = 0 }: Schedule) => {
+    const readTimeRuleExhaustedAt = ({ readers, sendLatency, commitDelay = 0 }: Schedule) => {
       let t = readers(0);
       let waits = 0;
       let counted: number | undefined;
@@ -255,7 +259,7 @@ describe("issue #1158: worker batch status transitions", () => {
     }
 
     test.each(schedules)("%s: never sooner than before #1158", (_name, schedule) => {
-      expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
+      expect(nowExhaustedAt(schedule)).toBeGreaterThanOrEqual(stagingExhaustedAt(schedule));
     });
 
     // The comparison with staging assumes this re-queue's stamp falls no sooner after its read than
@@ -270,7 +274,7 @@ describe("issue #1158: worker batch status transitions", () => {
         ])
     );
     test.each(unequal)("%s: never sooner than before #1158 (within the guard)", (_name, schedule) => {
-      expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
+      expect(nowExhaustedAt(schedule)).toBeGreaterThanOrEqual(stagingExhaustedAt(schedule));
     });
 
     // Past the guard the comparison with staging is not guaranteed: with a reader every 31.5s and this
@@ -278,30 +282,30 @@ describe("issue #1158: worker batch status transitions", () => {
     // 30 waits of 31s below still hold there.
     test("past the guard, still never before 30 waits of 31s", () => {
       const schedule: Schedule = { readers: every(31.5 * S), sendLatency: 2 * S, newSendLatency: 0.5 * S };
-      expect(nowErrorsAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
+      expect(nowExhaustedAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
     });
 
-    // What the rule guarantees by itself, whatever the readers and send times: the batch errors only
-    // after 30 counted waits, each at least 31s of database time after the previous counted re-queue.
+    // What the rule guarantees by itself, whatever the readers and send times: the wait is exhausted
+    // only after 30 counted waits, each at least 31s of database time after the previous counted re-queue.
     test.each([...schedules, ...unequal])("%s: not before 30 waits of 31s after the first read", (_name, schedule) => {
-      expect(nowErrorsAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
+      expect(nowExhaustedAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
     });
 
     test("CodeRabbit's case fails the read-time rule and passes this one", () => {
       const schedule: Schedule = { readers: every(31 * S), sendLatency: 2 * S };
       // The old worker missed every other reader: the replacement was visible 30s after a send 2s
       // after the read, so a reader 31s after the read found it invisible.
-      expect(stagingErrorsAt(schedule)).toBe(30 * 62 * S); // 31 minutes
-      // Counting from the read time counted every reader, erroring in half the time.
-      expect(readTimeRuleErrorsAt(schedule)).toBe(30 * 31 * S); // 15.5 minutes
-      expect(readTimeRuleErrorsAt(schedule)).toBeLessThan(stagingErrorsAt(schedule));
-      expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
+      expect(stagingExhaustedAt(schedule)).toBe(30 * 62 * S); // 31 minutes
+      // Counting from the read time counted every reader, exhausting the wait in half the time.
+      expect(readTimeRuleExhaustedAt(schedule)).toBe(30 * 31 * S); // 15.5 minutes
+      expect(readTimeRuleExhaustedAt(schedule)).toBeLessThan(stagingExhaustedAt(schedule));
+      expect(nowExhaustedAt(schedule)).toBeGreaterThanOrEqual(stagingExhaustedAt(schedule));
     });
 
-    test("with idle readers it still gives up in about 15.5 minutes, not later than 18", () => {
+    test("with idle readers the wait is still exhausted in about 15.5 minutes, not later than 18", () => {
       const idle: Schedule = { readers: every(1 * S), sendLatency: 0 };
-      expect(nowErrorsAt(idle)).toBeGreaterThanOrEqual(15 * MIN);
-      expect(nowErrorsAt(idle)).toBeLessThanOrEqual(18 * MIN);
+      expect(nowExhaustedAt(idle)).toBeGreaterThanOrEqual(15 * MIN);
+      expect(nowExhaustedAt(idle)).toBeLessThanOrEqual(18 * MIN);
     });
 
     test("the limits are the old count and delay, and doMatch reads both times from the database", () => {
