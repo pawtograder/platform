@@ -12,8 +12,8 @@ import { type GitHubRepoTarget, hasOnlyHandoutCommits, modifiedRepositoryMessage
 export type ForgejoRepositoryRow = { repository: string | null; synced_handout_sha: string | null };
 
 /**
- * The Forgejo side of assertRepositoriesHaveOnlyTemplateCommits, with the same rule (hasOnlyHandoutCommits). A
- * repo generated from the handout starts with one commit of its own.
+ * Forgejo preflight. An unknown single commit is not evidence of an untouched generated repo:
+ * a student can replace its history. Without a recorded baseline, refuse deletion.
  *
  * One difference: GitHub lets the delete go ahead when it can't read a repo. Here only a repo that is gone
  * (or still empty) passes; any other failure refuses, because the repos are deleted next and nothing was checked.
@@ -24,7 +24,13 @@ export async function assertForgejoRepositoriesHaveOnlyTemplateCommits(
   templateRepo: string | null,
   list: typeof listRecentCommitShas = listRecentCommitShas
 ): Promise<void> {
-  if (repositories.length === 0 || !templateRepo) return;
+  if (!repositories.some((repo) => repo.repository)) return;
+  if (!templateRepo) {
+    throw new UserVisibleError(
+      "Cannot delete assignment: no Forgejo handout is configured to check student work.",
+      400
+    );
+  }
   let templateShas: string[] | null;
   try {
     templateShas = await list(config, templateRepo);
@@ -36,8 +42,9 @@ export async function assertForgejoRepositoriesHaveOnlyTemplateCommits(
     );
   }
   const templateOldest = templateShas?.[templateShas.length - 1];
-  for (const repo of repositories) {
-    if (!repo.repository) continue;
+  // Bound host load while avoiding one network round trip per student in sequence.
+  const check = async (repo: ForgejoRepositoryRow) => {
+    if (!repo.repository) return;
     let shas: string[] | null;
     try {
       shas = await list(config, repo.repository);
@@ -48,9 +55,17 @@ export async function assertForgejoRepositoriesHaveOnlyTemplateCommits(
         503
       );
     }
-    if (shas && !hasOnlyHandoutCommits(shas, templateOldest, repo.synced_handout_sha)) {
+    const onlyKnownCommit =
+      shas?.length === 1 && (templateShas?.includes(shas[0]) || shas[0] === repo.synced_handout_sha);
+    if (
+      shas &&
+      (shas.length === 1 ? !onlyKnownCommit : !hasOnlyHandoutCommits(shas, templateOldest, repo.synced_handout_sha))
+    ) {
       throw new UserVisibleError(modifiedRepositoryMessage(repo.repository), 400);
     }
+  };
+  for (let start = 0; start < repositories.length; start += 5) {
+    await Promise.all(repositories.slice(start, start + 5).map(check));
   }
 }
 

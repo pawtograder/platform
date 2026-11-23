@@ -59,10 +59,10 @@ function commits(map: Record<string, string[] | null | Error>) {
   };
 }
 
-Deno.test("Forgejo safety check: only the generated commit, or history from the handout, passes", async () => {
+Deno.test("Forgejo safety check: only a known commit, or history from the handout, passes", async () => {
   const list = commits({
     "org/handout": ["h2", "h1"],
-    "org/fresh": ["g1"],
+    "org/fresh": ["h2"],
     "org/empty": [],
     "org/synced": ["s3", "s2", "synced"],
     "org/same-root": ["x", "h1"]
@@ -114,14 +114,19 @@ Deno.test("Forgejo safety check: a repo or handout it can't read refuses rather 
   }
 });
 
-Deno.test("Forgejo safety check: nothing to check without repos or a handout", async () => {
+Deno.test("Forgejo safety check: no repos skips checks, but missing handout refuses", async () => {
   const list = () => Promise.reject(new Error("must not be called"));
   await assertForgejoRepositoriesHaveOnlyTemplateCommits(config, [], "org/handout", list);
-  await assertForgejoRepositoriesHaveOnlyTemplateCommits(
-    config,
-    [{ repository: "org/a", synced_handout_sha: null }],
-    null,
-    list
+  await assertRejects(
+    () =>
+      assertForgejoRepositoriesHaveOnlyTemplateCommits(
+        config,
+        [{ repository: "org/a", synced_handout_sha: null }],
+        null,
+        list
+      ),
+    UserVisibleError,
+    "no Forgejo handout"
   );
 });
 
@@ -242,9 +247,12 @@ Deno.test(
 
 Deno.test("small batch: a repo with a recorded archive destination is left to the reconciler", async () => {
   const { client, log } = fakeSupabase([{ id: 1, repository: "org/a", archived_as: "archived-a" }]);
-  const counts = await deleteForgejoRepositoriesSynchronously(client, config, [target("org/a")], () =>
-    Promise.resolve(false)
-  );
+  const removed: string[] = [];
+  const counts = await deleteForgejoRepositoriesSynchronously(client, config, [target("org/a")], (_config, name) => {
+    removed.push(name);
+    return Promise.resolve(false);
+  });
+  assertEquals(removed, []);
   assertEquals(counts, { deleted: 0, queued: 1, skipped: 0 });
   assertEquals(log, ["find org/a"]);
 });
@@ -266,4 +274,39 @@ Deno.test("small batch: failing to mark a deleted repo done still counts it dele
     Promise.resolve(true)
   );
   assertEquals(counts, { deleted: 1, queued: 0, skipped: 0 });
+});
+
+Deno.test("Forgejo safety check: unknown single commit fails closed", async () => {
+  await assertRejects(
+    () =>
+      assertForgejoRepositoriesHaveOnlyTemplateCommits(
+        config,
+        [{ repository: "org/student", synced_handout_sha: null }],
+        "org/handout",
+        commits({ "org/handout": ["h1"], "org/student": ["rewritten"] })
+      ),
+    UserVisibleError
+  );
+});
+
+Deno.test("Forgejo safety check: preflight runs concurrently with a five-request bound", async () => {
+  let active = 0;
+  let peak = 0;
+  let checked = 0;
+  await assertForgejoRepositoriesHaveOnlyTemplateCommits(
+    config,
+    Array.from({ length: 13 }, (_, i) => ({ repository: `org/r${i}`, synced_handout_sha: null })),
+    "org/handout",
+    async (_config, name) => {
+      if (name === "org/handout") return ["h1"];
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active--;
+      checked++;
+      return ["h1"];
+    }
+  );
+  assertEquals(peak, 5);
+  assertEquals(checked, 13);
 });
