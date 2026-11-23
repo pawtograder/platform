@@ -38,6 +38,18 @@ async function hasSeenTour(): Promise<boolean> {
   return data !== null;
 }
 
+/**
+ * Walkthroughs dismissed since the page loaded. Staff can leave the office hours layout and come
+ * back before markTourSeen's upsert commits. The new instance's read then finds no row, so the
+ * automatic open also checks this set. It lives at module level so it outlasts a remount.
+ */
+const dismissedThisPageLoad = new Set<string>();
+
+/** Clears dismissedThisPageLoad. Only tests call it, to start each case from a fresh page load. */
+export function resetEscalationTourForTests() {
+  dismissedThisPageLoad.clear();
+}
+
 async function markTourSeen() {
   // user_id defaults to auth.uid(), and RLS only accepts the caller's own row.
   const { error } = await createClient()
@@ -334,7 +346,7 @@ export function EscalationTour() {
     if (!isStaff) return;
     let cancelled = false;
     void hasSeenTour().then((seen) => {
-      if (cancelled || seen || handledRef.current) return;
+      if (cancelled || seen || handledRef.current || dismissedThisPageLoad.has(ESCALATION_TOUR_ITEM)) return;
       setStep(-1);
       setOpen(true);
     });
@@ -345,6 +357,7 @@ export function EscalationTour() {
 
   const close = useCallback(() => {
     handledRef.current = true;
+    dismissedThisPageLoad.add(ESCALATION_TOUR_ITEM);
     void markTourSeen();
     setOpen(false);
   }, []);
