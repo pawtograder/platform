@@ -389,6 +389,8 @@ jobs:
       # whats-new pins the generic <WhatsNew> component with several walkthroughs (page, audience,
       # feature flag, showUntil, which one the header button opens). whats-new-registry checks that
       # lib/whatsNew/ids.ts, which e2e marks seen, lists every registered walkthrough.
+      # whats-new-suggest pins the suggestion bot's pre-filter rules and checks that the entry
+      # file it renders parses whatever text the model returns.
       # The office hours alert suites are pure-logic hook tests with no database. They go here
       # by name because neither lane picked them up otherwise: this list does not glob, and
       # deploy.yml matches `tests/unit/issue` only. useTurnAlert and queue-health-alerts shipped
@@ -419,6 +421,7 @@ jobs:
             tests/unit/escalation-tour.test.tsx \
             tests/unit/whats-new.test.tsx \
             tests/unit/whats-new-registry.test.ts \
+            tests/unit/whats-new-suggest.test.ts \
             tests/unit/useTurnAlert.test.tsx \
             tests/unit/queue-health-alerts.test.ts \
             tests/unit/escalation-alerts.test.tsx \

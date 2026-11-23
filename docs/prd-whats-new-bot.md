@@ -1,10 +1,10 @@
 # PRD: What's New suggestion bot
 
-Status: proposal, open for feedback. Nothing here is built yet. Owner: Rishi Dilip.
+Status: build steps 1 and 2 are built (see Build plan). Steps 3 and 4 are open for feedback. Owner: Rishi Dilip.
 
 ## Problem
 
-Features reach users with no in-app explanation. When a merged PR changes what staff or students see, the only record is the PR description, which users never read. #1261 adds the first "What's new" walkthrough (ticket escalation in Office Hours, not yet merged), but it is hand-written for one feature, and nothing reminds the next author to write one.
+Features reach users with no in-app explanation. When a merged PR changes what staff or students see, the only record is the PR description, which users never read. #1261 added the first "What's new" walkthrough (ticket escalation in Office Hours), but it was hand-written for one feature, and nothing reminds the next author to write one.
 
 ## Goals
 
@@ -57,7 +57,7 @@ A script decides without a model call whether the PR could need a walkthrough. I
   feature: string | null,               // COURSE_FEATURES key when the change is behind a flag
   title: string,
   intro: string,
-  steps: { title: string, points: string[], previewOf?: string }[]
+  steps: { title: string, points: string[], previewOf: string | null }[]
 }
 ```
 
@@ -112,8 +112,11 @@ With the fixed rules the model would see 9 of the 40 merged PRs, so the bot make
 
 ## Build plan
 
-1. The registry and generic component, moving the escalation tour over with no change in behavior. Its existing unit tests keep passing.
-2. `scripts/whats-new/suggest.ts` with `--pr <n> --dry-run`, printing the decision and the generated file without posting. Tune the rubric on the 8 PRs above until #1334 and #1287 come back significant and #1245 does not.
+1. The registry and generic component, moving the escalation tour over with no change in behavior. Its existing unit tests keep passing. Built:
+   - Each entry's `id` comes from `WHATS_NEW_IDS` in `lib/whatsNew/ids.ts`, which has no React imports, so `tests/e2e/TestingUtils.ts` can mark every id seen. `tests/unit/whats-new-registry.test.ts` fails when that list and `lib/whatsNew/registry.ts` disagree. `loginAsUser(..., { showWhatsNew })` takes `true` or a list of ids to leave unseen.
+   - A step is `{ title, body }`, where `body` is any React node. `Preview` and `Points` from `lib/whatsNew/define.tsx` give the usual layout.
+   - The first unseen entry for the page opens on its own until its `showUntil` date. The header button opens the newest entry for the page. A list of older walkthroughs is not built.
+2. `scripts/whats-new/suggest.ts` with `--pr <n> --dry-run`, printing the decision and the generated file without posting. Tune the rubric on the 8 PRs above until #1334 and #1287 come back significant and #1245 does not. Built, except the tuning: the pre-filter (`scripts/whats-new/prefilter.ts`) and the entry renderer (`scripts/whats-new/render.ts`, which builds step 3's file from the JSON) have unit tests, and the model call (`scripts/whats-new/model.ts`) was checked only against a local stub of the API, because no API key was available. It falls back to `claude-sonnet-5` when `claude-sonnet-5-5` declines a request.
 3. The workflow, posting comments only.
 4. The draft follow-up PR and the `whats-new-pending` label.
 
