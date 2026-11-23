@@ -227,6 +227,8 @@ export type ListFilesRequest = {
   courseId: number;
   orgName: string;
   repoName: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type FileListing = {
   name: string;
@@ -246,6 +248,8 @@ export type GetFileRequest = {
    * spinning for 15-30s. Callers racing fresh repo creation should leave it unset.
    */
   skipRetryOnNotFound?: boolean;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileRequest = {
   courseId: number;
@@ -256,6 +260,8 @@ export type WriteFileRequest = {
   message: string;
   /** Blob sha of the file being replaced. Omit to create a new file. */
   sha?: string;
+  /** The repository's host. Omitted means GitHub. A Forgejo `orgName` must be the class's Forgejo org. */
+  gitProvider?: "github" | "forgejo";
 };
 export type WriteFileResponse = {
   commit_sha?: string;
@@ -445,6 +451,9 @@ export type CheckRunStatus = {
   requested_at?: string;
   workflow_triggered_at?: string;
   check_run_marked_in_progress_at?: string;
+  workflow_run_id?: number;
+  workflow_run_url?: string;
+  workflow_run_stopped_at?: string;
   /**
    * Records which workflow run was allowed through the "dispatched before the autograder
    * was disabled" exception in autograder-create-submission. The exception is a property of
@@ -559,6 +568,14 @@ export type AssignmentSyncAutograderWorkflowResponse = {
    * assignment's forks keep a workflow that reports failing checks.
    */
   reconcile_blocked_by?: { id: number; title: string }[];
+  /** Forgejo only: existing student repos that keep their old grade.yml; callers must warn the instructor. */
+  forgejo_existing_repositories_unchanged?: number;
+  /**
+   * Forgejo only: the handout holds the requested workflow state, so `has_autograder` must stay as
+   * saved, but its workflow hash or revision was not recorded. Callers must offer a re-sync, which
+   * repairs both.
+   */
+  forgejo_workflow_record_failed?: string;
 };
 
 export type AutograderCreateReposForStudentRequest = {

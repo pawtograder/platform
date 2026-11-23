@@ -76,7 +76,7 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     label: "Configure Rubric",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`,
     icon: FaPen,
-    instructorsOnly: true
+    capability: "manage_rubrics"
   },
   {
     label: "Test Assignment",
@@ -96,7 +96,7 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     label: "Repository Status",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/repositories`,
     icon: FaCode,
-    instructorsOnly: true,
+    capability: "manage_student_repositories",
     types: ["code"],
     repoOnly: true
   },
@@ -166,6 +166,17 @@ export function ManageAssignmentNav({
   const isInstructor = useIsInstructor();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const canManageAssignments = useCapability("manage_assignments");
+  const canManageRubrics = useCapability("manage_rubrics");
+  const canManageStudentRepositories = useCapability("manage_student_repositories");
+  // The capabilities nav items can name. One that isn't here hides its item.
+  const heldCapabilities: Record<string, boolean> = React.useMemo(
+    () => ({
+      manage_assignments: canManageAssignments,
+      manage_rubrics: canManageRubrics,
+      manage_student_repositories: canManageStudentRepositories
+    }),
+    [canManageAssignments, canManageRubrics, canManageStudentRepositories]
+  );
   const pathname = usePathname();
   const router = useRouter();
   const { assignment } = useAssignmentController();
@@ -181,13 +192,13 @@ export function ManageAssignmentNav({
         .filter((item) => !item.types || item.types.includes(assignmentType))
         .filter((item) => {
           // A capability the filter doesn't know hides the item rather than showing it to everyone.
-          if (item.capability) return item.capability === "manage_assignments" && canManageAssignments;
+          if (item.capability) return heldCapabilities[item.capability] ?? false;
           if (!item.instructorsOnly) return true;
           if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
           return isInstructor;
         })
         .filter((item) => !item.feature || courseFeatureEnabled(courseFeatures, item.feature)),
-    [course_id, assignment_id, isGraderOrInstructor, isInstructor, canManageAssignments, assignmentType, courseFeatures]
+    [course_id, assignment_id, isGraderOrInstructor, isInstructor, heldCapabilities, assignmentType, courseFeatures]
   );
   // Mobile <Select> can't show disabled options, so omit repo-only items there.
   const selectOptions = React.useMemo(

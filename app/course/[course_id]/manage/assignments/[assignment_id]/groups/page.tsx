@@ -248,8 +248,10 @@ function CopyGroupsFromAssignmentDialog({
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
   const courseController = useCourseController();
-  // Every change here needs publish_groups (#1010); without it the page is read-only.
+  // Staging group changes and publishing them need publish_groups (#1010).
   const canEditGroups = useCapability("publish_groups");
+  // Copy Groups writes the groups at once, without staging, so it needs manage_groups.
+  const canManageGroups = useCapability("manage_groups");
   // The (Edit) link opens the assignment form, which needs manage_assignments.
   const canManageAssignments = useCapability("manage_assignments");
   const { assignmentGroupsWithMembers, assignments, userRolesWithProfiles } = courseController;
@@ -435,7 +437,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             </>
           )}
         </Text>
-        {canEditGroups && (
+        {canManageGroups && (
           <CopyGroupsFromAssignmentDialog
             assignment={assignment}
             course_id={course_id}
@@ -691,8 +693,10 @@ function TableByGroups({
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
   const graders = useGradersAndInstructors();
-  // Without publish_groups the mentor is shown as text and Edit Group is hidden (#1010).
+  // Edit Group stages a change, so it needs publish_groups (#1010). The mentor drop-down saves
+  // the group at once and needs manage_groups; without it the mentor is shown as text.
   const canEditGroups = useCapability("publish_groups");
+  const canManageGroups = useCapability("manage_groups");
   const { assignmentGroupsWithMembers } = useCourseController();
   const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
 
@@ -861,7 +865,7 @@ function TableByGroups({
                   {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
-                  {canEditGroups ? (
+                  {canManageGroups ? (
                     <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
                       <NativeSelect.Field
                         value={group.mentor_profile_id ?? ""}

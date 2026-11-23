@@ -400,6 +400,14 @@ export async function downloadArchive(
 }
 
 /**
+ * The class's Forgejo org: forgejo_org, else the slug, lowercased like every Forgejo name Pawtograder stores. The
+ * same rule as the migrations' lower(coalesce(nullif(c.forgejo_org, ''), c.slug)).
+ */
+export function classForgejoOrg(cls: { forgejo_org?: string | null; slug?: string | null }): string {
+  return (cls.forgejo_org || cls.slug || "").toLowerCase();
+}
+
+/**
  * The repository's API path, for a plain owner/name only. The admin can call every endpoint, so a name with
  * "..", "?" or another slash, as an instructor could type into template_repo, must never reach the URL.
  */
@@ -414,37 +422,54 @@ export function repoPath(repository: string): string {
 /**
  * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
  * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
- * created there would belong to them. Then gives the org its push hook, so student pushes reach Commit History.
+ * created there would belong to them. Then gives the org its hook.
  */
 export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
   await claimOrg(config, org);
   if (config.pushHook) await ensurePushHook(config, org, config.pushHook);
 }
 
+/** Forgejo (15.0.9) has no webhook event for a run being requested or starting. */
+export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failure"] as const;
+
 /**
  * An org hook, not a system one: classes can share an instance, and an org's hook covers every repo in it,
  * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
  * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
  * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
+ * Forgejo 15.0.9's hook PATCH ignores action_run events, so a hook missing them is replaced, not patched.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
   const hooks = await forgejo(config, "GET", `${path}?limit=50`);
   if (!hooks.ok) throw await failure(hooks, "org hooks read");
-  const existing = ((await hooks.json()) as { id: number; config?: { url?: string } }[]).find(
-    (h) => h.config?.url === hook.url
-  );
+  const matching = (
+    (await hooks.json()) as { id: number; events?: string[] | null; config?: { url?: string } }[]
+  ).filter((h) => h.config?.url === hook.url);
   const settings = {
     active: true,
-    events: ["push"],
+    events: [...ORG_HOOK_EVENTS],
     branch_filter: "*",
     config: { url: hook.url, content_type: "json", secret: hook.secret }
   };
-  const res = existing
-    ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
-    : await forgejo(config, "POST", path, { type: "forgejo", ...settings });
-  if (!res.ok) throw await failure(res, existing ? "org hook update" : "org hook create");
-  await res.body?.cancel();
+  const subscribed = matching.find((h) => ORG_HOOK_EVENTS.every((e) => h.events?.includes(e)));
+  const keep = subscribed ?? null;
+  if (keep) {
+    const res = await forgejo(config, "PATCH", `${path}/${keep.id}`, settings);
+    if (!res.ok) throw await failure(res, "org hook update");
+    await res.body?.cancel();
+  } else {
+    const created = await forgejo(config, "POST", path, { type: "forgejo", ...settings });
+    if (!created.ok) throw await failure(created, "org hook create");
+    await created.body?.cancel();
+  }
+  // Delete stale hooks only after a subscribed one exists: deleting first lost pushes when the create failed.
+  for (const stale of matching) {
+    if (keep && stale.id === keep.id) continue;
+    const removed = await forgejo(config, "DELETE", `${path}/${stale.id}`);
+    if (!removed.ok && removed.status !== 404) throw await failure(removed, "org hook replace");
+    await removed.body?.cancel();
+  }
 }
 
 async function claimOrg(config: ForgejoConfig, org: string): Promise<void> {
@@ -583,13 +608,63 @@ export async function readFile(
   path: string,
   ref?: string
 ): Promise<string | null> {
+  return (await readFileEntry(config, repository, path, ref))?.content ?? null;
+}
+
+export async function readFileEntry(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  ref?: string
+): Promise<{ content: string; sha: string } | null> {
   const file = path.split("/").map(encodeURIComponent).join("/");
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}${query}`);
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
   if (!res.ok) throw await failure(res, "file read");
-  const { content } = (await res.json()) as { content: string };
-  return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+  const { content, sha } = (await res.json()) as { content: string; sha: string };
+  return {
+    content: new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0))),
+    sha
+  };
+}
+
+export type ForgejoFileChange =
+  | { operation: "create"; path: string; content: string }
+  | { operation: "update"; path: string; content: string; sha: string; fromPath?: string }
+  | { operation: "delete"; path: string; sha: string };
+
+function base64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export async function changeFiles(
+  config: ForgejoConfig,
+  repository: string,
+  changes: ForgejoFileChange[],
+  message: string,
+  branch = "main"
+): Promise<string> {
+  const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/contents`, {
+    branch,
+    message,
+    files: changes.map((c) => ({
+      operation: c.operation,
+      path: c.path,
+      ...(c.operation === "delete" ? {} : { content: base64(c.content) }),
+      ...(c.operation === "create" ? {} : { sha: c.sha }),
+      ...(c.operation === "update" && c.fromPath ? { from_path: c.fromPath } : {})
+    }))
+  });
+  if (!res.ok) throw await failure(res, "file change");
+  const body = (await res.json()) as { commit?: { sha?: string } };
+  if (!body.commit?.sha) throw new Error("Forgejo file change returned no commit");
+  return body.commit.sha;
 }
 
 /** The same fields of a commit that GitHub's commit API gives. */
@@ -607,6 +682,118 @@ export async function getCommit(config: ForgejoConfig, repository: string, ref: 
   const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/git/commits/${encodeURIComponent(ref)}`);
   if (!res.ok) throw await failure(res, "commit lookup");
   return (await res.json()) as ForgejoCommit;
+}
+
+/** A Forgejo call that failed with a status the caller acts on: a missing file, or a stale or racing write. */
+export class ForgejoStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ForgejoStatusError";
+  }
+}
+
+async function statusFailure(res: Response, what: string): Promise<ForgejoStatusError> {
+  return new ForgejoStatusError(`Forgejo ${what} failed: ${res.status} ${reason(await res.text())}`, res.status);
+}
+
+/** A path inside a repo, for the contents API. A "." or ".." segment, or an empty one, never reaches the URL. */
+function filePath(path: string): string {
+  const parts = path.split("/");
+  if (parts.some((p) => p === "" || p === "." || p === "..")) throw new Error("Not a file path in the repository");
+  return parts.map(encodeURIComponent).join("/");
+}
+
+function toBase64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
+ * A file on the default branch with its blob sha, the same shape as GitHub's getFileFromRepo. A missing file
+ * throws a ForgejoStatusError with status 404.
+ */
+export async function getRepoFile(
+  config: ForgejoConfig,
+  repository: string,
+  path: string
+): Promise<{ content: string; sha: string }> {
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${filePath(path)}`);
+  if (!res.ok) throw await statusFailure(res, "file read");
+  const body = (await res.json()) as { type?: string; content?: string | null; sha: string } | unknown[];
+  if (Array.isArray(body) || body.type !== "file" || typeof body.content !== "string") {
+    throw new Error("File is not a file");
+  }
+  const bytes = Uint8Array.from(atob(body.content.replace(/\s/g, "")), (c) => c.charCodeAt(0));
+  return { content: new TextDecoder().decode(bytes), sha: body.sha };
+}
+
+/** Tree entries per page; Forgejo's default cap on a git tree page. */
+const TREE_PAGE_SIZE = 1000;
+
+/**
+ * Every file on the default branch, recursively, the same shape as GitHub's listFilesInRepo. An empty repo
+ * has no branch yet, so it lists nothing.
+ */
+export async function listRepoFiles(
+  config: ForgejoConfig,
+  repository: string
+): Promise<{ name: string; path: string; size: number; sha: string }[]> {
+  const path = repoPath(repository);
+  const repo = await forgejo(config, "GET", `/repos/${path}`);
+  if (!repo.ok) throw await statusFailure(repo, "repo lookup");
+  const { empty, default_branch } = (await repo.json()) as { empty?: boolean; default_branch: string };
+  if (empty) return [];
+  // The tree API takes a commit or tree sha, so the branch is resolved first.
+  const branch = await forgejo(config, "GET", `/repos/${path}/branches/${encodeURIComponent(default_branch)}`);
+  if (!branch.ok) throw await statusFailure(branch, "branch lookup");
+  const { commit } = (await branch.json()) as { commit: { id: string } };
+  const files: { name: string; path: string; size: number; sha: string }[] = [];
+  for (let page = 1; ; page++) {
+    const res = await forgejo(
+      config,
+      "GET",
+      `/repos/${path}/git/trees/${encodeURIComponent(commit.id)}?recursive=true&per_page=${TREE_PAGE_SIZE}&page=${page}`
+    );
+    if (!res.ok) throw await statusFailure(res, "tree read");
+    const tree = (await res.json()) as {
+      tree?: { path: string; type: string; size?: number; sha: string }[] | null;
+      truncated?: boolean;
+    };
+    const entries = tree.tree ?? [];
+    for (const entry of entries) {
+      if (entry.type !== "blob") continue;
+      files.push({ name: entry.path.split("/").pop()!, path: entry.path, size: entry.size ?? 0, sha: entry.sha });
+    }
+    // Forgejo marks every page but the last as truncated.
+    if (!tree.truncated || entries.length === 0) return files;
+  }
+}
+
+/**
+ * Creates the file on the default branch, or replaces it when `sha` names the blob being replaced, the same
+ * contract as GitHub's writeFileToRepo. A stale sha or a create that races an existing file throws a
+ * ForgejoStatusError with Forgejo's status (409 or 422, or 404 when the file was deleted since it was read).
+ */
+export async function writeRepoFile(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  content: string,
+  message: string,
+  sha?: string
+): Promise<{ commit_sha?: string; content_sha?: string }> {
+  const res = await forgejo(config, sha ? "PUT" : "POST", `/repos/${repoPath(repository)}/contents/${filePath(path)}`, {
+    content: toBase64(content),
+    message,
+    ...(sha ? { sha } : {})
+  });
+  if (!res.ok) throw await statusFailure(res, sha ? "file update" : "file create");
+  const body = (await res.json()) as { commit?: { sha?: string } | null; content?: { sha?: string } | null };
+  return { commit_sha: body.commit?.sha, content_sha: body.content?.sha };
 }
 
 /**
@@ -658,4 +845,173 @@ export async function grantWrite(config: ForgejoConfig, repository: string, logi
   if (!res.ok) throw await failure(res, "collaborator permission read");
   const { permission } = (await res.json()) as { permission: string };
   return permission === "write" || permission === "admin";
+}
+
+// Forgejo has no "maintain", which GitHub gives the staff team. Write is the closest: staff can push, review
+// and run Actions on every repo, but can't delete one, change its collaborators or edit its settings.
+const STAFF_TEAM_UNITS: Record<string, "read" | "write"> = {
+  "repo.code": "write",
+  "repo.issues": "write",
+  "repo.pulls": "write",
+  "repo.releases": "write",
+  "repo.wiki": "write",
+  "repo.projects": "write",
+  "repo.packages": "write",
+  "repo.actions": "write",
+  "repo.ext_issues": "read",
+  "repo.ext_wiki": "read"
+};
+
+type ForgejoTeam = {
+  id: number;
+  name: string;
+  permission: string;
+  includes_all_repositories: boolean;
+  can_create_org_repo?: boolean;
+};
+
+/**
+ * Every item of a list endpoint. A short page doesn't end the list: Forgejo caps `limit` at
+ * [api].MAX_RESPONSE_ITEMS, which an operator may set below 50. So the list ends at X-Total-Count, or at an
+ * empty page when Forgejo doesn't send the count.
+ */
+async function listAll<T>(config: ForgejoConfig, path: string, what: string): Promise<T[]> {
+  const items: T[] = [];
+  const separator = path.includes("?") ? "&" : "?";
+  for (let page = 1; page <= 1000; page++) {
+    const res = await forgejo(config, "GET", `${path}${separator}page=${page}&limit=50`);
+    if (!res.ok) throw await failure(res, what);
+    const total = res.headers.get("X-Total-Count");
+    const batch = (await res.json()) as T[];
+    items.push(...batch);
+    if (batch.length === 0 || (total !== null && items.length >= Number(total))) return items;
+  }
+  throw new Error(`Forgejo ${what} failed: the list didn't end`);
+}
+
+/**
+ * The id of the class's staff team in org, created if it doesn't exist. Its permission is write, and it holds
+ * only the repos it's given, never every repo in the org: two classes can share an org. An existing team with
+ * other settings (someone edited it by hand) is set back.
+ */
+export async function ensureStaffTeam(config: ForgejoConfig, org: string, name: string): Promise<number> {
+  const orgPath = `/orgs/${encodeURIComponent(org)}`;
+  const settings = {
+    name,
+    description: "Course staff. Managed by Pawtograder.",
+    permission: "write",
+    includes_all_repositories: false,
+    can_create_org_repo: false,
+    units: Object.keys(STAFF_TEAM_UNITS),
+    units_map: STAFF_TEAM_UNITS
+  };
+  const teams = await listAll<ForgejoTeam>(config, `${orgPath}/teams`, "org teams read");
+  const existing = teams.find((t) => t.name.toLowerCase() === name.toLowerCase());
+  if (!existing) {
+    const res = await forgejo(config, "POST", `${orgPath}/teams`, settings);
+    if (!res.ok) throw await failure(res, "staff team create");
+    return ((await res.json()) as ForgejoTeam).id;
+  }
+  // An owner team is the org's Owners, whose members own every repo in it; never repurpose it.
+  if (existing.permission === "owner") throw new Error("The Forgejo staff team name belongs to the org's owners");
+  if (existing.permission !== "write" || existing.includes_all_repositories || existing.can_create_org_repo) {
+    const res = await forgejo(config, "PATCH", `/teams/${existing.id}`, settings);
+    if (!res.ok) throw await failure(res, "staff team update");
+    await res.body?.cancel();
+  }
+  return existing.id;
+}
+
+/**
+ * Makes the team's members exactly `logins`: removes the departed ones, then adds the missing ones. Removals
+ * go first so a failing addition can't keep a departed member on the team; the addition is retried on the
+ * next pass. Names are compared case-insensitively, as Forgejo does. A login Forgejo no longer knows is
+ * skipped, not fatal, so one deleted account can't keep the rest of the staff out.
+ */
+export async function syncTeamMembers(
+  config: ForgejoConfig,
+  teamId: number,
+  logins: string[]
+): Promise<{ added: number; removed: number }> {
+  const path = `/teams/${teamId}/members`;
+  const current = new Map(
+    (await listAll<{ login: string }>(config, path, "team members read")).map((m) => [m.login.toLowerCase(), m.login])
+  );
+  const wanted = new Set(logins.map((l) => l.toLowerCase()));
+  let added = 0;
+  let removed = 0;
+  for (const [lower, login] of current) {
+    if (wanted.has(lower)) continue;
+    const res = await forgejo(config, "DELETE", `${path}/${encodeURIComponent(login)}`);
+    if (!res.ok && res.status !== 404) throw await failure(res, "team member remove");
+    await res.body?.cancel();
+    removed++;
+  }
+  for (const login of wanted) {
+    if (current.has(login)) continue;
+    const res = await forgejo(config, "PUT", `${path}/${encodeURIComponent(login)}`);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      continue;
+    }
+    if (!res.ok) throw await failure(res, "team member add");
+    await res.body?.cancel();
+    added++;
+  }
+  return { added, removed };
+}
+
+/**
+ * Adds each of `repositories` to the team, if it isn't already there. Every one must be in `org`, the team's
+ * own org. A repo that doesn't exist (a handout deleted by hand) is skipped. Repos are only ever added: like
+ * GitHub, staff keep access to a repo that is no longer linked to a student.
+ */
+export async function grantTeamRepos(
+  config: ForgejoConfig,
+  teamId: number,
+  org: string,
+  repositories: string[]
+): Promise<number> {
+  const current = new Set(
+    (await listAll<{ full_name: string }>(config, `/teams/${teamId}/repos`, "team repos read")).map((r) =>
+      r.full_name.toLowerCase()
+    )
+  );
+  let added = 0;
+  for (const repository of repositories) {
+    if (current.has(repository.toLowerCase())) continue;
+    const path = repoPath(repository);
+    if (repository.split("/")[0].toLowerCase() !== org.toLowerCase()) {
+      throw new Error("A staff repo isn't in the class's Forgejo org");
+    }
+    const res = await forgejo(config, "PUT", `/teams/${teamId}/repos/${path}`);
+    if (res.status === 404) {
+      await res.body?.cancel();
+      continue;
+    }
+    if (!res.ok) throw await failure(res, "team repo add");
+    await res.body?.cancel();
+    current.add(repository.toLowerCase());
+    added++;
+  }
+  return added;
+}
+
+/**
+ * Takes login off the repo's collaborators. Already gone is success: Forgejo answers 204 when they weren't one,
+ * 404 when the repo is gone and 422 "user does not exist" when the account is.
+ */
+export async function removeCollaborator(config: ForgejoConfig, repository: string, login: string): Promise<void> {
+  const res = await forgejo(
+    config,
+    "DELETE",
+    `/repos/${repoPath(repository)}/collaborators/${encodeURIComponent(login)}`
+  );
+  if (res.ok || res.status === 404) {
+    await res.body?.cancel();
+    return;
+  }
+  const text = await res.text();
+  if (res.status === 422 && reason(text) === "user does not exist") return;
+  throw new Error(`Forgejo collaborator remove failed: ${res.status} ${reason(text)}`);
 }

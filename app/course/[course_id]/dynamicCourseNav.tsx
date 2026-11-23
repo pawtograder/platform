@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
@@ -92,7 +92,9 @@ const LinkItems = (courseID: number) => [
   {
     name: "Gradebook",
     icon: FiBookOpen,
-    instructor_only: true,
+    // Shown from the capability tables rather than the app role (#1010), so a Head TA with
+    // manage_gradebook can reach the gradebook controls the database lets them use.
+    capability: "manage_gradebook",
     target: `/course/${courseID}/manage/gradebook`,
     feature_flag: COURSE_FEATURES.GRADEBOOK
   },
@@ -139,7 +141,9 @@ const LinkItems = (courseID: number) => [
       {
         name: "Enrollments",
         icon: FiUsers,
-        instructors_only: true,
+        // Shown from the capability tables (#1010), so a Head TA with manage_roster can reach the
+        // student actions the database lets them use.
+        capability: "manage_roster",
         target: `/course/${courseID}/manage/course/enrollments`
       },
       {
@@ -279,6 +283,8 @@ export default function DynamicCourseNav() {
 
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  const canManageGradebook = useCapability("manage_gradebook");
+  const canManageRoster = useCapability("manage_roster");
   /**
    * Which responsive twin carries the landmark ids. Only the ids move with the
    * breakpoint — the accessibility tree is left to the CSS `display` split (see
@@ -301,13 +307,31 @@ export default function DynamicCourseNav() {
     return <Skeleton height="40" width="100%" />;
   }
 
+  // A submenu item with a capability shows only when the viewer holds it. A capability this
+  // doesn't know hides the item rather than showing it to everyone. Instructors hold every
+  // capability; isInstructor keeps their item even if the capability lookup fails, since the
+  // provider stops retrying after a few failures.
+  const submenuCapabilityAllows = (submenu: object) => {
+    const capability = "capability" in submenu ? submenu.capability : undefined;
+    if (!capability) return true;
+    return capability === "manage_roster" && (canManageRoster || isInstructor);
+  };
+
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter(
       (link) =>
         (!link.instructors_or_graders_only || isInstructorOrGrader) &&
         (!link.student_only || !isInstructorOrGrader) &&
-        (!link.instructor_only || isInstructor)
+        (!("instructor_only" in link && link.instructor_only) || isInstructor)
     )
+    .filter((link) => {
+      // A capability this filter doesn't know hides the link rather than showing it to everyone.
+      const capability = "capability" in link ? link.capability : undefined;
+      if (!capability) return true;
+      // Instructors hold every capability. isInstructor keeps their link even if the capability
+      // lookup fails, since the provider stops retrying after a few failures.
+      return capability === "manage_gradebook" && (canManageGradebook || isInstructor);
+    })
     .filter((link) => {
       const featureFlag = "feature_flag" in link ? link.feature_flag : undefined;
       if (!featureFlag) return true;
@@ -400,6 +424,7 @@ export default function DynamicCourseNav() {
                                     (!submenu.instructors_only || isInstructor) &&
                                     (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
+                                .filter(submenuCapabilityAllows)
                                 .filter((submenu) => {
                                   const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
                                   if (!featureFlag) return true;
@@ -531,6 +556,7 @@ export default function DynamicCourseNav() {
                                   (!submenu.instructors_only || isInstructor) &&
                                   (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                               )
+                              .filter(submenuCapabilityAllows)
                               .filter((submenu) => {
                                 const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
                                 if (!featureFlag) return true;

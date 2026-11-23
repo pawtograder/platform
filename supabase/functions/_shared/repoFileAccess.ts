@@ -1,0 +1,132 @@
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { ilikeLiteral } from "./RepoPush.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
+import { UserVisibleError } from "./HandlerUtils.ts";
+import { ForgejoNotConfiguredError, type RepoFiles, repoFilesOn } from "./GitProvider.ts";
+
+/** repoFilesOn, with a deployment that has no Forgejo settings reported to the caller as 503. */
+export function repoFilesFor(gitProvider: "github" | "forgejo"): RepoFiles {
+  try {
+    return repoFilesOn(gitProvider);
+  } catch (error) {
+    if (error instanceof ForgejoNotConfiguredError) throw new UserVisibleError(error.message, 503);
+    throw error;
+  }
+}
+
+/**
+ * The host a repository-get-file / -list-files / -write-file request names. Omitted means GitHub, which is
+ * what every caller meant before Forgejo existed.
+ */
+export function parseGitProvider(value: unknown): "github" | "forgejo" {
+  if (value === undefined || value === null || value === "github") return "github";
+  if (value === "forgejo") return "forgejo";
+  throw new UserVisibleError("gitProvider must be github or forgejo", 400);
+}
+
+/** The class's Forgejo org, lowercased: forgejo_org, else the slug, as forgejo_repos_needed names it. */
+export function forgejoOrgForClass(cls: { slug: string | null; forgejo_org: string | null }): string | null {
+  const org = cls.forgejo_org?.trim() || cls.slug;
+  return org ? org.toLowerCase() : null;
+}
+
+/**
+ * Refuses a GitHub repo outside the course's github_org, except a read of one of the course's own grader repos
+ * whose org a course the caller teaches claims. Forgejo assignments keep their grader repo on GitHub (D6), and a
+ * Forgejo-only course has no github_org, so its grader usually lives in the org of a GitHub section the same
+ * instructors teach. Any instructor can save any name as grader_repo, so the name alone proves nothing: the
+ * owner org must be claimed by a course the caller is an instructor of, which keeps a saved name from reaching
+ * an org no course vouches for or another course's private repos. GitHub matches names case-insensitively.
+ */
+export async function assertGitHubCourseRepo(
+  supabase: SupabaseClient<Database>,
+  courseId: number,
+  orgName: string,
+  repoName: string,
+  { write }: { write: boolean },
+  // Other courses' rows aren't visible to the caller.
+  adminSupabase: () => SupabaseClient<Database> = () =>
+    createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!)
+): Promise<void> {
+  const { data: course, error } = await supabase.from("classes").select("github_org").eq("id", courseId).single();
+  if (error) {
+    throw new UserVisibleError(`Could not look up the GitHub org for course ${courseId}: ${error.message}`, 500);
+  }
+  if (typeof orgName !== "string" || typeof repoName !== "string") {
+    throw new UserVisibleError("orgName and repoName must be strings", 400);
+  }
+  const org = orgName.toLowerCase();
+  if (course.github_org?.toLowerCase() === org) return;
+  if (!write && org === "pawtograder") return;
+  // Reads only: grading already fetches whatever grader_repo names, but nothing ties a saved name to the
+  // course, so writing through it would let any instructor change a repo another course grades with.
+  if (write) {
+    throw new UserVisibleError(
+      `Requested to write to ${orgName}/${repoName} on GitHub, but only repos in the course's GitHub org (${course.github_org ?? "not set"}) can be written`,
+      403
+    );
+  }
+
+  const { data: assignments, error: graderError } = await supabase
+    .from("assignments")
+    .select("autograder(grader_repo)")
+    .eq("class_id", courseId);
+  if (graderError) {
+    throw new UserVisibleError(
+      `Could not look up the grader repos for course ${courseId}: ${graderError.message}`,
+      500
+    );
+  }
+  const repo = `${org}/${repoName.toLowerCase()}`;
+  if (assignments.some((a) => a.autograder?.grader_repo?.trim().toLowerCase() === repo)) {
+    const { data: owners, error: ownerError } = await adminSupabase()
+      .from("classes")
+      .select("id")
+      .ilike("github_org", ilikeLiteral(org))
+      .neq("id", courseId);
+    if (ownerError) {
+      throw new UserVisibleError(`Could not check who owns the GitHub org ${orgName}: ${ownerError.message}`, 500);
+    }
+    for (const owner of owners) {
+      const { data: isInstructor, error: roleError } = await supabase.rpc("authorizeforclassinstructor", {
+        class__id: owner.id
+      });
+      if (roleError) {
+        throw new UserVisibleError(`Could not check your role in course ${owner.id}: ${roleError.message}`, 500);
+      }
+      if (isInstructor === true) return;
+    }
+    throw new UserVisibleError(
+      `Requested ${orgName}/${repoName} on GitHub, but no course you teach claims ${orgName} as its GitHub org`,
+      403
+    );
+  }
+  throw new UserVisibleError(
+    `Requested ${orgName}/${repoName} on GitHub but it is not in the course's GitHub org (${course.github_org ?? "not set"}) or one of its grader repos`,
+    403
+  );
+}
+
+/**
+ * Refuses a Forgejo org that isn't the course's. Pawtograder's admin can read every org on the instance, so
+ * this check is what keeps one course's staff out of another course's repos, as the github_org check does on
+ * GitHub. Forgejo matches names case-insensitively, so this does too. Like the GitHub check, it scopes to
+ * the org, not the repo: courses that share a forgejo_org can reach each other's repos.
+ */
+export async function assertForgejoCourseOrg(
+  supabase: SupabaseClient<Database>,
+  courseId: number,
+  orgName: string
+): Promise<void> {
+  const { data, error } = await supabase.from("classes").select("slug, forgejo_org").eq("id", courseId).single();
+  if (error) {
+    throw new UserVisibleError(`Could not look up the Forgejo org for course ${courseId}: ${error.message}`, 500);
+  }
+  const org = forgejoOrgForClass(data);
+  if (!org || typeof orgName !== "string" || orgName.toLowerCase() !== org) {
+    throw new UserVisibleError(
+      `Requested ${orgName} on Forgejo but the course's Forgejo org is ${org ?? "not set"}`,
+      403
+    );
+  }
+}

@@ -1,14 +1,20 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
+  classForgejoOrg,
   ensureAccountForUser,
   ensureOrg,
   ensureRepoFromTemplate,
+  ensureStaffTeam,
   type ForgejoConfig,
+  grantTeamRepos,
   grantWrite,
   readFile,
-  revokeRepoToken
+  removeCollaborator,
+  revokeRepoToken,
+  syncTeamMembers
 } from "../_shared/ForgejoWrapper.ts";
+import { gradeWorkflowSha } from "../_shared/forgejoGradeWorkflow.ts";
 
 /** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
 export const STALE_CLAIM_MINUTES = 10;
@@ -145,6 +151,56 @@ export type RepoReconcileResult = {
   failures: { assignmentId: number; profileId: string; error: unknown }[];
 };
 
+/** One student's repo, as forgejo_repos_needed describes it: owner is the org, login the student's Forgejo login. */
+export type StudentRepoSpec = {
+  assignment_id: number;
+  class_id: number;
+  profile_id: string;
+  login: string;
+  owner: string;
+  name: string;
+  template_repo: string;
+};
+
+/**
+ * Creates one student's repo from the handout and makes them a writer, then records the repository row ready.
+ * Shared by the reconciler's backlog and by a staff member's Test Assignment repo, which is made the same way.
+ * `orgsReady` lets a pass check each org once. Returns the repository's owner/name.
+ */
+export async function provisionForgejoStudentRepo(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  repo: StudentRepoSpec,
+  ops: RepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite },
+  orgsReady: Set<string> = new Set()
+): Promise<string> {
+  const repository = `${repo.owner}/${repo.name}`;
+  const owner = {
+    assignment_id: repo.assignment_id,
+    class_id: repo.class_id,
+    profile_id: repo.profile_id,
+    assignment_group_id: null
+  };
+  assertTemplateInOrg(repo.template_repo, repo.owner);
+  // Claim the name before any Forgejo call: a group repo in a 'both' assignment can derive the same
+  // name (group "blue", login "group-blue"), and the unique index on (git_provider, repository) lets
+  // only one of them hold it. The row stays not ready, so the student is still listed, until they can push.
+  const id =
+    (await existingRepositoryRow(supabase, repository, owner)) ??
+    (await reserveRepositoryRow(supabase, owner, repository));
+  if (!orgsReady.has(repo.owner)) {
+    await ops.ensureOrg(config, repo.owner);
+    orgsReady.add(repo.owner);
+  }
+  await ops.ensureRepoFromTemplate(config, repo.template_repo, repo.owner, repo.name);
+  if (!(await ops.grantWrite(config, repository, repo.login))) {
+    throw new Error("Forgejo doesn't report write access for the student");
+  }
+  const { error: readyError } = await supabase.from("repositories").update({ is_github_ready: true }).eq("id", id);
+  if (readyError) throw readyError;
+  return repository;
+}
+
 export async function reconcileForgejoRepos(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
@@ -160,37 +216,31 @@ export async function reconcileForgejoRepos(
   const result: RepoReconcileResult = { created: 0, failures: [] };
   const orgsReady = new Set<string>();
   for (const repo of needed ?? []) {
-    const repository = `${repo.owner}/${repo.name}`;
-    const owner = {
-      assignment_id: repo.assignment_id,
-      class_id: repo.class_id,
-      profile_id: repo.profile_id,
-      assignment_group_id: null
-    };
     try {
-      assertTemplateInOrg(repo.template_repo, repo.owner);
-      // Claim the name before any Forgejo call: a group repo in a 'both' assignment can derive the same
-      // name (group "blue", login "group-blue"), and the unique index on (git_provider, repository) lets
-      // only one of them hold it. The row stays not ready, so the student is still listed, until they can push.
-      const id =
-        (await existingRepositoryRow(supabase, repository, owner)) ??
-        (await reserveRepositoryRow(supabase, owner, repository));
-      if (!orgsReady.has(repo.owner)) {
-        await ops.ensureOrg(config, repo.owner);
-        orgsReady.add(repo.owner);
-      }
-      await ops.ensureRepoFromTemplate(config, repo.template_repo, repo.owner, repo.name);
-      if (!(await ops.grantWrite(config, repository, repo.login))) {
-        throw new Error("Forgejo doesn't report write access for the student");
-      }
-      const { error: readyError } = await supabase.from("repositories").update({ is_github_ready: true }).eq("id", id);
-      if (readyError) throw readyError;
+      await provisionForgejoStudentRepo(supabase, config, repo, ops, orgsReady);
       result.created++;
     } catch (failure) {
       result.failures.push({ assignmentId: repo.assignment_id, profileId: repo.profile_id, error: failure });
     }
   }
   return result;
+}
+
+export type GroupRepoOps = RepoOps & { removeCollaborator: typeof removeCollaborator };
+
+/** The group's members' Forgejo logins on this instance, as the database has them now. */
+async function currentGroupLogins(
+  supabase: SupabaseClient<Database>,
+  assignmentGroupId: number,
+  instanceUrl: string
+): Promise<string[]> {
+  // function-grants: service-role
+  const { data, error } = await supabase.rpc("forgejo_group_member_logins", {
+    p_assignment_group_id: assignmentGroupId,
+    p_instance_url: instanceUrl
+  });
+  if (error) throw error;
+  return (data ?? []).map((r) => r.login);
 }
 
 /** Accounts first, so students who just got one get their repos in the same pass. */
@@ -202,12 +252,14 @@ export type GroupRepoReconcileResult = {
 /**
  * One repo per group for released Forgejo group assignments (#1236), with every member a writer. The
  * repo is recorded as ready only once every member has a Forgejo login and Forgejo reports write
- * access for each, so a member still waiting for an account keeps the group in the next pass.
+ * access for each, so a member still waiting for an account keeps the group in the next pass. Grants
+ * go to the roster as read after the repo row is reserved, and a member who left during the grants is
+ * removed again before the save.
  */
 export async function reconcileForgejoGroupRepos(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
-  ops: RepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite }
+  ops: GroupRepoOps = { ensureOrg, ensureRepoFromTemplate, grantWrite, removeCollaborator }
 ): Promise<GroupRepoReconcileResult> {
   // function-grants: service-role
   const { data: needed, error } = await supabase.rpc("forgejo_group_repos_needed", {
@@ -246,9 +298,23 @@ export async function reconcileForgejoGroupRepos(
         orgsReady.add(group.owner);
       }
       await ops.ensureRepoFromTemplate(config, group.template_repo, group.owner, group.name);
+      // The backlog's roster may be stale. Read it again now the row exists, so a member who left before
+      // the reserve (and so queued no revocation) is not granted.
+      const granting = await currentGroupLogins(supabase, group.assignment_group_id, config.url);
       let allWrite = true;
-      for (const login of group.logins) {
+      for (const login of granting) {
         if (!(await ops.grantWrite(config, repository, login))) allWrite = false;
+      }
+      // And once more after the grants: anyone granted who has left since is removed here, rather than left
+      // to a revocation whose second removal could run before a slow grant. A leave after this read finds
+      // the row and queues a revocation that runs after these grants.
+      const members = new Set(
+        (await currentGroupLogins(supabase, group.assignment_group_id, config.url)).map((l) => l.toLowerCase())
+      );
+      const granted: string[] = [];
+      for (const login of granting) {
+        if (members.has(login.toLowerCase())) granted.push(login);
+        else await ops.removeCollaborator(config, repository, login);
       }
       if (!allWrite) throw new Error("Forgejo doesn't report write access for every group member");
       // The database decides readiness against the current roster, so a member who joined during this
@@ -258,7 +324,7 @@ export async function reconcileForgejoGroupRepos(
         p_assignment_group_id: group.assignment_group_id,
         p_repository: repository,
         p_instance_url: config.url,
-        p_granted: group.logins
+        p_granted: granted
       });
       if (saveError) throw saveError;
       if (ready) result.created++;
@@ -302,12 +368,11 @@ export async function reconcileForgejoWorkflowHashes(
   const result: HashReconcileResult = { set: 0, failures: [] };
   for (const assignment of assignments ?? []) {
     try {
-      assertTemplateInOrg(assignment.template_repo!, assignment.classes.forgejo_org || assignment.classes.slug);
+      assertTemplateInOrg(assignment.template_repo!, classForgejoOrg(assignment.classes));
       const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
       // Every submission to this assignment would be rejected, so report it rather than skip it.
       if (workflow === null) throw new Error("The handout has no .github/workflows/grade.yml");
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workflow));
-      const workflowSha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const workflowSha = await gradeWorkflowSha(workflow);
       const { error: saveError } = await supabase
         .from("autograder")
         .update({ workflow_sha: workflowSha })
@@ -317,6 +382,116 @@ export async function reconcileForgejoWorkflowHashes(
       result.set++;
     } catch (failure) {
       result.failures.push({ assignmentId: assignment.id, error: failure });
+    }
+  }
+  return result;
+}
+
+export const MAX_ORG_HOOKS_PER_PASS = 20;
+
+export type OrgHookResult = { checked: number; failures: { org: string; error: unknown }[] };
+
+/** The API's max_rows (supabase/config.toml), so a short page means the last one. */
+export const CLASS_PAGE_SIZE = 1000;
+
+export function orgHookWindow(orgs: string[], now: number): string[] {
+  const sorted = [...new Set(orgs)].sort();
+  if (sorted.length <= MAX_ORG_HOOKS_PER_PASS) return sorted;
+  const hour = Math.floor(now / 3_600_000);
+  const start = (hour * MAX_ORG_HOOKS_PER_PASS) % sorted.length;
+  return Array.from({ length: MAX_ORG_HOOKS_PER_PASS }, (_, i) => sorted[(start + i) % sorted.length]);
+}
+
+/** The repo backlogs only ensureOrg orgs with repos to create, so this upgrades every other org's hook. */
+export async function reconcileForgejoOrgHooks(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  ensure: typeof ensureOrg = ensureOrg,
+  now: number = Date.now()
+): Promise<OrgHookResult> {
+  const result: OrgHookResult = { checked: 0, failures: [] };
+  if (!config.pushHook) return result;
+  const orgs: string[] = [];
+  for (let from = 0; ; from += CLASS_PAGE_SIZE) {
+    const { data: classes, error } = await supabase
+      .from("classes")
+      .select("slug, forgejo_org, repositories!inner(id)")
+      .eq("repositories.git_provider", "forgejo")
+      .limit(1, { referencedTable: "repositories" })
+      .order("id")
+      .range(from, from + CLASS_PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const c of classes ?? []) {
+      const org = classForgejoOrg(c);
+      if (org) orgs.push(org);
+    }
+    if ((classes ?? []).length < CLASS_PAGE_SIZE) break;
+  }
+  for (const org of orgHookWindow(orgs, now)) {
+    try {
+      await ensure(config, org);
+      result.checked++;
+    } catch (failure) {
+      result.failures.push({ org, error: failure });
+    }
+  }
+  return result;
+}
+
+export const MAX_STAFF_TEAMS_PER_PASS = 50;
+
+export type StaffTeamOps = {
+  ensureStaffTeam: typeof ensureStaffTeam;
+  syncTeamMembers: typeof syncTeamMembers;
+  grantTeamRepos: typeof grantTeamRepos;
+};
+
+export type StaffTeamResult = {
+  synced: number;
+  failures: { classId: number; error: unknown }[];
+};
+
+/**
+ * Each class's staff team in its Forgejo org, like the `{slug}-staff` team on GitHub: its members are the
+ * class's instructors, graders and admins with a Forgejo account, and it can write to every ready student
+ * and group repo and to the handouts. A class is listed every pass, since a role change or a new repo
+ * leaves no mark for a backlog query; when nothing changed that costs three reads.
+ */
+export async function reconcileForgejoStaffTeams(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  ops: StaffTeamOps = { ensureStaffTeam, syncTeamMembers, grantTeamRepos }
+): Promise<StaffTeamResult> {
+  // function-grants: service-role
+  const { data: classes, error } = await supabase.rpc("forgejo_staff_teams", {
+    p_instance_url: config.url,
+    p_limit: MAX_STAFF_TEAMS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: StaffTeamResult = { synced: 0, failures: [] };
+  for (const cls of classes ?? []) {
+    try {
+      const teamId = await ops.ensureStaffTeam(config, cls.org, cls.team);
+      // Recorded as soon as the team exists, before the steps that can fail: the team outlives the repos
+      // that caused it (#1398 archives a deleted assignment's repos but leaves the team holding its
+      // grants), and its name must outlive the class's slug and forgejo_org. From then on the backlog lists
+      // the recorded org and team, so a TA dropped later loses the team that actually holds the grants.
+      // function-grants: service-role
+      const { error: recordError } = await supabase.rpc("record_forgejo_staff_team", {
+        p_class_id: cls.class_id,
+        p_instance_url: config.url,
+        p_org: cls.org,
+        p_team: cls.team,
+        p_team_id: teamId
+      });
+      if (recordError) throw recordError;
+      // Members first: a staff member removed from the class loses every repo at once.
+      await ops.syncTeamMembers(config, teamId, cls.logins);
+      await ops.grantTeamRepos(config, teamId, cls.org, cls.repositories);
+      result.synced++;
+    } catch (failure) {
+      result.failures.push({ classId: cls.class_id, error: failure });
     }
   }
   return result;
@@ -370,26 +545,159 @@ export async function revokeDroppedTokens(
   return result;
 }
 
+export type GroupLeaveResult = {
+  removed: number;
+  /** Rows whose repository is gone or now answers to another name, dropped without calling Forgejo. */
+  discarded: number;
+  failures: { assignmentGroupId: number; profileId: string; error: unknown }[];
+};
+
 /**
- * One pass: accounts first, so students who just got one get their repos in the same pass; then repos, group
- * repos and workflow hashes; then revoking dropped students' and idle workspace tokens (forgejo_repo_tokens_to_revoke).
+ * Takes students who left a group off its Forgejo repo (#1374). The database queues one row per student and repo
+ * when a membership leaves a group (20261122140100_forgejo_group_repo_revocations.sql), and cancels it if they
+ * rejoin first. Each row is removed once now and once more after a 10-minute grace, in case a group pass that
+ * read the roster before they left granted them afterwards.
+ *
+ * That grace is why the repository's identity is checked and not just its name. Archiving a repo renames it and
+ * frees the name (#1398), so in those ten minutes a new group can be given a repo called the same thing; removing
+ * the student from THAT one would take away access they currently have, and the repair path cannot undo it, since
+ * finish_forgejo_group_repo_revocation only looks at the group the row was queued for. A row whose repository row
+ * is gone, or now holds a different name, is therefore dropped without calling Forgejo: archiving removes every
+ * collaborator before it renames, so the access this row exists to revoke is already gone.
  */
-export async function reconcileForgejo(supabase: SupabaseClient<Database>, config: ForgejoConfig) {
-  // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
+export async function revokeGroupLeavers(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  remove: typeof removeCollaborator = removeCollaborator
+): Promise<GroupLeaveResult> {
+  // function-grants: service-role
+  const { data: due, error } = await supabase.rpc("forgejo_group_repo_revocations_needed", {
+    p_instance_url: config.url,
+    p_stale_minutes: STALE_CLAIM_MINUTES,
+    p_limit: MAX_REVOCATIONS_PER_PASS
+  });
+  if (error) throw error;
+
+  const result: GroupLeaveResult = { removed: 0, discarded: 0, failures: [] };
+  for (const row of due ?? []) {
+    try {
+      // function-grants: service-role
+      const { data: claimId, error: claimError } = await supabase.rpc("claim_forgejo_group_repo_revocation", {
+        p_id: row.id,
+        p_stale_minutes: STALE_CLAIM_MINUTES
+      });
+      if (claimError) throw claimError;
+      if (claimId == null) continue;
+      // Claimed first, so the check below reads the repository while this pass holds the row.
+      if (row.repository_id != null) {
+        const { data: repoRow, error: repoError } = await supabase
+          .from("repositories")
+          .select("id, repository")
+          .eq("id", row.repository_id)
+          .maybeSingle();
+        if (repoError) throw repoError;
+        if (!repoRow || repoRow.repository.toLowerCase() !== row.repository.toLowerCase()) {
+          // Deleted directly rather than through finish_forgejo_group_repo_revocation, which would test
+          // membership of the group this row named and re-grant it — the wrong repo entirely. Claim-matched,
+          // as revokeDroppedTokens deletes a token row, so a pass that took the row after this one read it
+          // keeps its own claim.
+          const { error: dropError } = await supabase
+            .from("forgejo_group_repo_revocations")
+            .delete()
+            .eq("id", row.id)
+            .eq("claim_id", claimId);
+          if (dropError) throw dropError;
+          result.discarded++;
+          continue;
+        }
+      }
+      // On failure the claim stays, and the row is retried once it is stale.
+      await remove(config, row.repository, row.login);
+      // Re-grants instead when the student is back in the group.
+      // function-grants: service-role
+      const { error: finishError } = await supabase.rpc("finish_forgejo_group_repo_revocation", {
+        p_id: row.id,
+        p_claim_id: claimId,
+        p_assignment_group_id: row.assignment_group_id,
+        p_profile_id: row.profile_id
+      });
+      if (finishError) throw finishError;
+      result.removed++;
+    } catch (failure) {
+      result.failures.push({ assignmentGroupId: row.assignment_group_id, profileId: row.profile_id, error: failure });
+    }
+  }
+  return result;
+}
+
+/** The steps of one pass, injectable so the orchestration can be tested without Forgejo. */
+export const PASS_STEPS = {
+  revoke: revokeDroppedTokens,
+  accounts: reconcileForgejoAccounts,
+  repos: reconcileForgejoRepos,
+  groupRepos: reconcileForgejoGroupRepos,
+  hashes: reconcileForgejoWorkflowHashes,
+  orgHooks: reconcileForgejoOrgHooks,
+  staffTeams: reconcileForgejoStaffTeams,
+  groupLeavers: revokeGroupLeavers
+};
+
+/**
+ * One pass. Token revocation runs first: it has no other trigger, and a later step may time the pass out. Then
+ * accounts, so students who just got one get their repos in the same pass; then repos, group repos, workflow
+ * hashes and org hooks; then staff teams; then students who left a group lose its repo.
+ */
+export async function reconcileForgejo(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  steps: typeof PASS_STEPS = PASS_STEPS
+) {
+  let revocation: RevokeResult | undefined;
+  let revocationError: unknown;
+  try {
+    revocation = await steps.revoke(supabase, config);
+  } catch (e) {
+    revocationError = e;
+  }
   let stepError: unknown;
   let accounts: ReconcileResult | undefined;
   let repos: RepoReconcileResult | undefined;
   let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
+  let orgHooks: OrgHookResult | undefined;
+  let staffTeams: StaffTeamResult | undefined;
+  let groupLeavers: GroupLeaveResult | undefined;
   try {
-    accounts = await reconcileForgejoAccounts(supabase, config);
-    repos = await reconcileForgejoRepos(supabase, config);
-    groupRepos = await reconcileForgejoGroupRepos(supabase, config);
-    hashes = await reconcileForgejoWorkflowHashes(supabase, config);
+    accounts = await steps.accounts(supabase, config);
+    repos = await steps.repos(supabase, config);
+    groupRepos = await steps.groupRepos(supabase, config);
+    hashes = await steps.hashes(supabase, config);
+    orgHooks = await steps.orgHooks(supabase, config);
   } catch (e) {
     stepError = e;
   }
-  const revocation = await revokeDroppedTokens(supabase, config);
+  // Staff-team sync removes departed staff and the group revocation removes leavers, so each runs whatever
+  // failed above, and one failing doesn't skip the other.
+  try {
+    staffTeams = await steps.staffTeams(supabase, config);
+  } catch (e) {
+    stepError ??= e;
+  }
+  try {
+    groupLeavers = await steps.groupLeavers(supabase, config);
+  } catch (e) {
+    stepError ??= e;
+  }
+  if (revocationError !== undefined) throw revocationError;
   if (stepError !== undefined) throw stepError;
-  return { accounts: accounts!, repos: repos!, groupRepos: groupRepos!, hashes: hashes!, revocation };
+  return {
+    accounts: accounts!,
+    repos: repos!,
+    groupRepos: groupRepos!,
+    hashes: hashes!,
+    orgHooks: orgHooks!,
+    staffTeams: staffTeams!,
+    groupLeavers: groupLeavers!,
+    revocation: revocation!
+  };
 }

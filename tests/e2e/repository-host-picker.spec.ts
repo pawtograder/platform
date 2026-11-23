@@ -9,6 +9,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "../global-setup";
 import { TZDate } from "@date-fns/tz";
 import { addDays } from "date-fns";
+import { FORGEJO_AUTOGRADER_REQUIRED_REASON } from "@/lib/gitProviderOptions";
 import {
   createClass,
   createUserInClass,
@@ -173,9 +174,10 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(repoMode.locator('option[value="template_with_student_forks"]')).toBeDisabled();
     await expect(repoMode.locator('option[value="fork_from_prior_assignment"]')).toBeDisabled();
     await expect(repoMode.locator('option[value="template_only_staff"]')).toBeEnabled();
-    // Forgejo grading (#1239) grades only assignments with the autograder on, so it stays available.
-    await expect(page.getByRole("checkbox", { name: /Enable autograder/i })).toBeEnabled();
+    // On Forgejo a push only becomes a submission through a grading run, so the autograder is held on.
+    await expect(page.getByRole("checkbox", { name: /Enable autograder/i })).toBeDisabled();
     await expect(page.getByRole("checkbox", { name: /Enable autograder/i })).toBeChecked();
+    await expect(page.getByText(FORGEJO_AUTOGRADER_REQUIRED_REASON)).toBeVisible();
     await expect(page.getByRole("checkbox", { name: /Block force-push to default branch/i })).toBeDisabled();
     await expect(page.getByRole("checkbox", { name: /Block force-push to default branch/i })).not.toBeChecked();
     await expect(page.getByText("Branch protection is only applied to GitHub repositories.")).toBeVisible();
@@ -351,5 +353,15 @@ test.describe("Repository host picker and GitHub prompts", () => {
     const handout = `e2e-ignore/fh-handout-${suffix}`;
     await expect(page.getByText(handout).first()).toBeVisible();
     await expect(page.locator(`a[href="https://github.com/${handout}"]`)).toHaveCount(0);
+  });
+
+  test("Repository Status describes a Forgejo assignment's repos, not GitHub's", async ({ page }) => {
+    await loginAsUser(page, instructorOn, flagOn);
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/repositories`);
+    await expect(page.getByText(/Student repositories are created on Forgejo from the handout/).first()).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(page.getByText(/rate-limited by GitHub/)).toHaveCount(0);
+    await expect(page.getByText("GitHub Ready", { exact: true })).toHaveCount(0);
   });
 });
