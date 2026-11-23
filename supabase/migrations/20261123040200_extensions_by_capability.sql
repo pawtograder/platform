@@ -47,6 +47,10 @@
 -- redefines it writes (moderate_discussion, grade_submissions, handle_regrades, grant_extensions,
 -- help_students, manage_flashcards, run_polls); only the names that are capabilities yet join.
 --
+-- Number: this was 20261122150200 until 2026-11-23, when #1408's migration moved from
+-- 20261122150000 (it collided with #1395's) to 20261123040000 and #1409's to 20261123040100. It
+-- stays right after both.
+--
 -- Safe to run again: the inserts skip rows that exist, CREATE OR REPLACE gives the same function,
 -- and each policy is dropped first.
 
