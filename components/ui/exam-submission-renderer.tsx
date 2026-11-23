@@ -40,10 +40,14 @@ export function questionHeading(q: ExamQuestionResult): string {
 /**
  * CSS sprite-style crop: show only `region` of the page image.
  *
- * Sized from the region's share of the page width (#1263), so every crop on a page is at the same
- * zoom. There is no height target any more: the old `height = 120` default fixed the rendered
- * height and let width follow the aspect ratio, which made the zoom a function of how tall a box
- * the instructor happened to draw. This supersedes the note #1138 added about height being a
+ * Sized from the region's share of the page width (#1263), so a crop's scale no longer follows how
+ * tall a box the instructor drew. `maxWidth: 100%` below still clamps a crop wider than its row,
+ * which is the one case where two crops end up at different zooms; `cropDisplayWidth` records why
+ * that bound stands.
+ *
+ * There is no height target any more: the old `height = 120` default fixed the rendered height and
+ * let width follow the aspect ratio, which made the zoom a function of how tall a box the
+ * instructor happened to draw. This supersedes the note #1138 added about height being a
  * target rather than a guarantee; the prop it described is gone.
  *
  * Width plus aspectRatio is still one driver, not two. Setting width and height independently is

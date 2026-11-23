@@ -123,6 +123,12 @@ export const CROP_PAGE_RENDER_WIDTH = 1000;
  *
  * A region the instructor drew small therefore renders small. That is the point: it holds less.
  * "View original page" is still there for reading one closely.
+ *
+ * One bound on "the one zoom": the caller renders the box with `maxWidth: 100%`, so a crop whose
+ * width here exceeds the row it sits in scales down whole and reads smaller than the crops that
+ * fit. A page-wide region on a narrow panel is what hits this. Removing the bound means sizing
+ * every crop as a share of the row rather than in px, which buys one guaranteed scale at the cost
+ * of a zoom that moves with the window. Raised by CodeRabbit on #1323.
  */
 export function cropDisplayWidth(region: NormRect, pageRenderWidth: number = CROP_PAGE_RENDER_WIDTH): number {
   // A degenerate region has no width to scale from; fall back to the full page rather than 0px,
