@@ -91,13 +91,17 @@ BEGIN
   WHERE cr.class_id = p_class_id AND cr.default_for = 'instructor'
   ON CONFLICT DO NOTHING;
 
-  -- Graders can help students, manage flashcards and run live polls today (#1010 areas
-  -- 10, 13 and 11), so new classes put those on the default grader role. Instructors
-  -- already get them from the CROSS JOIN above.
+  -- What the default grader role can do today, for new classes (#1010). One list for every #1010
+  -- migration that redefines this function, so whichever runs last keeps the others' grants. A
+  -- name joins only once its capability exists, so the list can name capabilities other open PRs
+  -- add (grade_submissions, handle_regrades and grant_extensions are #1408-#1410's).
   INSERT INTO public.role_capabilities (role_id, capability)
-  SELECT cr.id, cap
+  SELECT cr.id, c.name
   FROM public.class_roles cr
-  CROSS JOIN (VALUES ('help_students'), ('manage_flashcards'), ('run_polls')) AS caps(cap)
+  JOIN public.capabilities c ON c.name IN (
+    'help_students', 'manage_flashcards', 'run_polls',
+    'grade_submissions', 'handle_regrades', 'grant_extensions'
+  )
   WHERE cr.class_id = p_class_id AND cr.default_for = 'grader'
   ON CONFLICT DO NOTHING;
 END;
