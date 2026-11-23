@@ -130,7 +130,9 @@ message is no longer queued stays unfinished until staff re-run `exams scans fin
 review action. Do not wait for a recovery that will not come.
 
 **Start every give-up investigation here**, because dead-lettered messages are kept in a normal
-table rather than only in the queue:
+table rather than only in the queue. The table is `service_role` only (`revoke all ... from anon,
+authenticated`, migration `20261107120000_exam_grading.sql:380-383`), so this needs the service role
+key or a direct database connection, not a signed-in client:
 
 ```sql
 select created_at, method, error_type, error_message, retry_count,
@@ -140,10 +142,13 @@ order by created_at desc
 limit 50;
 ```
 
-Every row corresponds to a batch that was also set to `error`. `envelope` holds the original
-message, so a reproduction does not need the queue.
+Almost every row corresponds to a batch that was also set to `error`. The exception is a batch
+already in `completed`: `setBatchError` ends with `.neq('status', 'completed')` (`index.ts:167`), so
+a late or duplicate finalize that read the row before it was stamped reaches the DLQ and Sentry
+without changing the batch. A DLQ row pointing at a `completed` batch is that case, not corruption.
+`envelope` holds the original message, so a reproduction does not need the queue.
 
-`error_type` is the error's class name (`index.ts:126`), which identifies two of the four give-up
+`error_type` is the error's class name (`index.ts:128`), which identifies two of the four give-up
 paths and not the other two. Read the row like this:
 
 | Give-up path                | How to recognize it                                           |
@@ -181,8 +186,11 @@ retry once the cause is fixed. Re-running Process preserves matches that were al
 
 **Batch stuck in `ocr`.** Page OCR runs as separate queue messages, possibly across concurrent
 invocations, and `match` must not start until all of them finish. So the match message re-queues
-itself every 30 seconds, bounded at 30 attempts, which is about 15 minutes. Past that it is treated
-as a real failure and the batch surfaces an error rather than waiting forever. If the status has not
+itself every 30 seconds, bounded at 30 attempts, which is about 15 minutes. Past that it throws,
+but the error does not surface straight away: the OCR wait bumps `ocr_waits`, not `retry_count`, so
+the throw lands on the transient path with `retry_count` still 0 and buys five more attempts at
+`min(300, 10 * 2^n)` seconds, another 310s. **Budget about 20 minutes from the last OCR write to the
+batch showing an error**, and expect it to sit in `ocr` for all of it. If the status has not
 moved and no error has appeared, check `ocr_pending` with the query above; if pages are still
 unread, find out whether the worker is running at all before anything else.
 
