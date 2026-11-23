@@ -1,6 +1,6 @@
 /**
  * #1010: the regrade request's Resolve button and staff comment box follow handle_regrades
- * (20261122150100_regrades_by_capability.sql). A grader on the default grader role and an instructor
+ * (20261123040100_regrades_by_capability.sql). A grader on the default grader role and an instructor
  * see both. A grader on a custom role that turns handle_regrades off still sees the request, since
  * every staff member of the class can read it, but not Resolve or the comment box.
  *
