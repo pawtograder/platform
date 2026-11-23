@@ -139,11 +139,36 @@ Separately, many pages call `Sentry.captureException` directly, which reports wh
 expected or not. So a toast with no Sentry event is normal, and a Sentry event for a refused write
 request can come from one of those direct calls.
 
-The client's `beforeSend` (`instrumentation-client.ts`) drops hydration errors on both paths. It
-drops PGRST303 ("JWT expired") only when a page passes the raw PostgREST object to
-`Sentry.captureException`, because the check reads `event.extra.__serialized__`, which Sentry fills
-in only for a plain object. `reportUnexpectedError` wraps the object in `new Error(...)` first, and
-PGRST303 isn't on its expected list, so a PGRST303 that goes through it reaches Sentry.
+A capture doesn't always become an event. If you expect one and can't find it, check whether the
+client's `beforeSend` (`instrumentation-client.ts`) dropped it. These checks apply to every event:
+
+- **Hydration errors:** an exception value containing "Hydration failed", "There was an error while
+  hydrating" or "Text content does not match server-rendered HTML", or React's minified errors #418,
+  #423 and #425.
+- **Network and abort errors:** an `AbortError` whose value is "The operation was aborted." or
+  contains "Fetch is aborted"; a `TypeError` containing "Failed to fetch", "Load failed" (Safari) or
+  "NetworkError when attempting to fetch"; and a `ChunkLoadError` containing both "Loading chunk"
+  and "failed". An exception entry with a `message` field containing one of the network or abort
+  texts is dropped whatever its type.
+- **A worker that can't load a chunk:** any exception value containing "Failed to execute
+  'importScripts' on 'WorkerGlobalScope'".
+- **A deploy that landed mid-session:** a `TypeError` about reading `'call'` of undefined, and only
+  when one of its stack frames comes from the webpack runtime.
+- **Browser extensions:** an event that has `app:///` stack frames, none of them under
+  `app:///_next/`.
+
+These checks read `event.extra.__serialized__`, which Sentry fills in only when a page passes a
+plain object (such as a raw PostgREST error) to `Sentry.captureException`:
+
+- PGRST303, or a message containing "JWT expired".
+- A message containing "Bad Request", unless it also contains "invalid envelope".
+- A message containing "Failed to connect to MetaMask".
+- A message or details containing "Failed to fetch", "Load failed", "NetworkError when attempting to
+  fetch", "The operation was aborted", "Fetch is aborted" or "Loading chunk".
+
+`reportUnexpectedError` wraps the object in `new Error(...)` first, so none of the plain-object
+checks see it. PGRST303 isn't on its expected list either, so a PGRST303 that goes through it
+reaches Sentry.
 
 ## What normal looks like
 
@@ -204,14 +229,14 @@ only to instructors and admins, so this means the user's role changed after the 
 reload hides the button. The publish handler expects 42501, so there is no Sentry event. Copy Groups
 from Prior Assignment doesn't call this function: since #1401 anyone with `manage_groups` sees it.
 
-**The same refusal with no "who to ask" sentence.** The database raised P0001. On staging, before
-#1297, this is expected: Publish Changes shows for anyone with `publish_groups`, and the function
-refuses anyone who isn't an instructor or admin with P0001. Once #1297 is deployed, it means the
-publish migration isn't applied. Run the checks in Checking it by hand.
+**The same refusal with no "who to ask" sentence.** The database raised P0001. On a client with
+#1247 but not #1297, this is expected: Publish Changes shows for anyone with `publish_groups`, and
+the function refuses anyone who isn't an instructor or admin with P0001. Once #1297 is deployed, it
+means the publish migration isn't applied. Run the checks in Checking it by hand.
 
-**The publish refusal shows only "You don't have permission to do that."** The database raised
-42501, but the client is from before #1247 (for example after an app rollback), and its mapper
-replaces every 42501 message with the generic sentence. Nothing is broken.
+**The publish refusal shows "Unknown error".** The client is from before #1247 (staging today, or
+after an app rollback). Its publish handler doesn't call the mapper, so a P0001 or 42501 refusal
+reads "Unknown error" and is a Sentry event (see Rollback). Nothing is broken.
 
 **Staff see "contact your instructor".** Either #1247 isn't deployed (staging has #1246's roles, but
 no screen passes one yet), or that call site doesn't pass a role. Search the component for
@@ -252,10 +277,23 @@ migration that re-creates `publish_assignment_group_changes` from
 both codes: P0001 shows the function's message as raised, and 42501 shows it as a sentence with the
 "who to ask" sentence.
 
-Rolling the app back while the migration stays is safe. A client that has #1247 but not #1297 still
-shows the function's 42501 message, since the mapper change is in #1247. A client from before #1247
-turns every 42501 into "You don't have permission to do that. If you need access, contact your
-instructor."
+Rolling the app back while the migration stays is safe. The publish refusal looks different on each
+client version, so the toast and the Sentry event tell you which one a user has:
+
+- **Before #1247** (staging today): the publish handler in
+  `app/course/[course_id]/manage/assignments/[assignment_id]/groups/page.tsx` throws the plain
+  PostgREST object, which isn't an `Error`, so the toast reads "Error publishing changes" with
+  "Unknown error", for P0001 and 42501 alike. It doesn't show the generic 42501 sentence, because
+  this handler doesn't call the mapper. It calls `Sentry.captureException` directly, so every
+  refusal is an event titled "Object captured as exception with keys: code, details, hint,
+  message", with the object under `__serialized__`. Other screens on this client that use the
+  mapper turn every 42501 into "You don't have permission to do that. If you need access, contact
+  your instructor."
+- **#1247 without #1297:** the toast shows the function's 42501 message and the "who to ask"
+  sentence, since the mapper change is in #1247. The handler still calls `Sentry.captureException`
+  directly, so each refusal is still an event.
+- **#1297:** the same toast, and the handler calls `reportUnexpectedError` with
+  `{ expected: ["42501"] }`, so a 42501 refusal sends no event.
 
 ## Suggested alert (not shipped)
 
