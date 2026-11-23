@@ -1,5 +1,5 @@
 /**
- * #1010: the Emailer follows send_announcements (20261122210700_announcements_by_capability.sql).
+ * #1010: the Emailer follows send_announcements (20261123160000_announcements_by_capability.sql).
  *
  * - Reading, creating, changing and deleting email_batches and emails needs send_announcements in
  *   the row's class. The default instructor role holds it; the default grader role doesn't.

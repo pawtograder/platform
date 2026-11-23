@@ -1,5 +1,5 @@
 /**
- * #1010: the Emailer needs send_announcements (20261122210700_announcements_by_capability.sql).
+ * #1010: the Emailer needs send_announcements (20261123160000_announcements_by_capability.sql).
  * Without it the Emailer item is hidden from the Course Settings menu, and opening the page by its
  * address sends you to the course home page. A Head TA on a custom role with send_announcements
  * sees the item and the page. Instructors see no change.
