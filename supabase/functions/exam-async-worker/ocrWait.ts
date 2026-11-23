@@ -31,12 +31,15 @@
  * 15.5-18 minutes; with readers arriving less often it is later.
  *
  * Compared with staging under the same arrival of readers, counted read k+1 is no earlier than the
- * old rule's read k+1 as long as this re-queue reaches the database at most 1s (the guard) sooner
- * after its read than the old worker's send did. It is not enforced: both are one call from the same
- * worker to the same database, and this one comes later in practice (the worker takes its lease
- * before the handler runs, and the re-queue also takes the claim lock). If it were more than 1s
- * sooner, a counted read could fall on an earlier reader: with a reader every 31.5s and the re-queue
- * 1.5s sooner, the limit comes after about half the time (still no sooner than the floor above). Re-parked messages get new msg_ids and sit further
+ * old rule's read k+1 as long as (1) this re-queue's stamp falls at most 1s (the guard) sooner after
+ * its read than the old worker's send did, and (2) the old replacement committed within its 30s
+ * delay, or this one commits no sooner after its read than the old one did. A replacement is read
+ * only once it is committed and its delay has passed. The old send was a call of its own that
+ * committed as it sent, so (2) held unless a commit stalled for over 30s. (1) holds in practice:
+ * this re-queue comes later (the worker takes its lease before the handler runs, and the re-queue
+ * takes the claim lock). Neither is enforced. Past them a counted read can fall on an earlier
+ * reader: with a reader every 31.5s and the re-queue 1.5s sooner, the limit comes after about half
+ * the time. The floor above holds either way. Re-parked messages get new msg_ids and sit further
  * back in the queue, which can only delay them.
  *
  * Messages already queued when this deploys carry no ocr_wait_from. One with ocr_waits >= 1 was

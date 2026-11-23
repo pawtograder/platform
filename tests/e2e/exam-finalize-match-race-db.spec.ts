@@ -357,7 +357,7 @@ test.describe("finalize cannot split a scanned exam between two students (#1270)
     } finally {
       await audit.end();
     }
-    // Bob's exam, finalized alongside, is untouched.
+    // Bob's exam, queued by the same Create, still has exactly one submission, and it is his.
     const { data: bobSub } = await supabase
       .from("submissions")
       .select("profile_id")

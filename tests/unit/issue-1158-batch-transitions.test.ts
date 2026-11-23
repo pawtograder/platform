@@ -130,7 +130,7 @@ describe("issue #1158: worker batch status transitions", () => {
   // reader every 25s), then counted from the worker's read time (sooner, when the re-queue reaches
   // the database seconds after the read: CodeRabbit's 31s readers and 2s send). Now a counted wait
   // is stamped by the database at the replacement's own send (ocr_wait_from), as the old delay was.
-  describe("match gives up on OCR after 30 waits of 31s, and no sooner than before #1158 while sends take as long", () => {
+  describe("match gives up on OCR after 30 waits of 31s, and no sooner than before #1158 under the conditions in ocrWait.ts", () => {
     const S = 1000;
     const MIN = 60 * S;
 
@@ -162,6 +162,9 @@ describe("issue #1158: worker batch status transitions", () => {
     // reach its re-queue's send, any extra wait for the claim lock (new rule only), and how long the
     // re-queue's transaction stays uncommitted. `sendLatency` is staging's; `newSendLatency`, when
     // set, is this rule's, for the two paths taking different times (default: the same).
+    // `commitDelay` is the same for both paths, as in the code: staging's send committed as it sent,
+    // and exam_worker_requeue commits right after its send. ocrWait.ts states the commit condition the
+    // comparison with staging relies on; the 30 waits of 31s don't depend on it.
     type Readers = (t: number) => number;
     type Schedule = {
       readers: Readers;
@@ -255,9 +258,9 @@ describe("issue #1158: worker batch status transitions", () => {
       expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
     });
 
-    // The comparison with staging assumes this re-queue reaches the database no sooner after its
-    // read than staging's send did, give or take the 1s guard (CodeRabbit on #1308). Up to 1s sooner
-    // is covered by the guard; more is not, and is not enforced (see ocrWait.ts).
+    // The comparison with staging assumes this re-queue's stamp falls no sooner after its read than
+    // staging's send did, give or take the 1s guard, and that the commits don't differ (CodeRabbit on
+    // #1308). Up to 1s sooner is covered by the guard; more is not, and is not enforced (ocrWait.ts).
     const unequal: [string, Schedule][] = schedules.flatMap(([name, schedule]) =>
       [0.5 * S, 1 * S]
         .filter((d) => schedule.sendLatency >= d)
