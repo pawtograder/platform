@@ -188,9 +188,7 @@ describe("CLI command authorization audit", () => {
       if (commandName === "flashcards.copy" || commandName === "surveys.copy") {
         const capability = commandName === "flashcards.copy" ? "manage_flashcards" : "manage_surveys";
         expect(body).toMatch(
-          new RegExp(
-            `assertUserHasClassCapability\\(ctx\\.supabase, ctx\\.userId, targetClass\\.id, "${capability}"\\)`
-          )
+          new RegExp(`assertUserHasClassCapability\\(ctx\\.userId, targetClass\\.id, "${capability}"\\)`)
         );
         expect(body).not.toMatch(/assertUserHasClassCapability\([^;]*sourceClass\.id/);
       } else {

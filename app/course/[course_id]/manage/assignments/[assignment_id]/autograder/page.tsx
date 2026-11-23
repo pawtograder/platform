@@ -6,8 +6,13 @@ import RepoFileEditor from "@/components/github/RepoFileEditor";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
+import { toastAutograderNotRecorded, toastForgejoRepositoriesUnchanged } from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { FORGEJO_GRADER_SETUP_REASON } from "@/lib/gitProviderOptions";
+import {
+  FORGEJO_AUTOGRADER_REQUIRED_REASON,
+  FORGEJO_GRADER_SETUP_REASON,
+  forgejoAutograderLockedOn
+} from "@/lib/gitProviderOptions";
 import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -95,12 +100,6 @@ export default function AutograderPage() {
       const supabase = createClient();
       const priorHasAutograder = savedHasAutograder.current;
       const nextHasAutograder = values.assignments.has_autograder;
-      // The grade.yml sync below rejects Forgejo assignments, whose handout is on Forgejo. Returning
-      // before it needs the flag unchanged, which the disabled radio keeps.
-      if (values.assignments?.git_provider === "forgejo" && priorHasAutograder !== nextHasAutograder) {
-        throw new Error(FORGEJO_GRADER_SETUP_REASON);
-      }
-
       // Only validate the grader repo when the autograder will REMAIN enabled.
       // This reads pawtograder.yml from that repo, so doing it unconditionally
       // meant a broken or missing grader repo blocked the save — making it
@@ -239,6 +238,14 @@ export default function AutograderPage() {
             type: "warning"
           });
         }
+        if (syncResult?.forgejo_workflow_record_failed) {
+          toastAutograderNotRecorded(syncResult.forgejo_workflow_record_failed, {
+            assignmentId: Number.parseInt(assignment_id as string),
+            classId: Number.parseInt(course_id as string),
+            supabase
+          });
+        }
+        toastForgejoRepositoriesUnchanged(syncResult?.forgejo_existing_repositories_unchanged, nextHasAutograder);
         if ((syncResult?.unsynced_other_class_count ?? 0) > 0) {
           // Count only: naming assignments in another class would disclose them to an
           // instructor who is not authorized for it.
@@ -367,6 +374,11 @@ export default function AutograderPage() {
   );
   const currentGraderRepo = watch("grader_repo");
   const currentAssignment = watch("assignments");
+  // Judged on the saved flag, so a Forgejo assignment saved with the autograder off can still turn it on.
+  const autograderLockedOn = forgejoAutograderLockedOn(currentAssignment?.git_provider ?? "github", {
+    git_provider: currentAssignment?.git_provider,
+    has_autograder: savedHasAutograder.current
+  });
 
   // grader_repo is "owner/repo". Parse into exactly two segments so a malformed value
   // (extra slashes) is rejected here rather than silently producing a slash-containing
@@ -417,7 +429,13 @@ export default function AutograderPage() {
           <Fieldset.Content>
             <Field
               label="Autograder configuration for this assignment"
-              helperText="Disabling the autograder removes the grading workflow from the handout repository, so no GitHub Actions run and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
+              helperText={
+                currentAssignment?.git_provider === "forgejo"
+                  ? autograderLockedOn
+                    ? FORGEJO_AUTOGRADER_REQUIRED_REASON
+                    : "This assignment was saved with the autograder off, so student pushes create no submissions. Enable it to restore the grading workflow in the handout. Student repositories that already exist keep their own copy of the handout: Forgejo cannot sync handout changes into them yet."
+                  : "Disabling the autograder removes the grading workflow from the handout repository, so no grading runs start and every push creates a submission for you to grade by hand. Student repositories that already exist keep their copy of the workflow until they are next synced with the handout."
+              }
               errorText={errors.enabled?.message?.toString()}
               invalid={errors.enabled ? true : false}
             >
@@ -427,12 +445,13 @@ export default function AutograderPage() {
                 render={({ field }) => (
                   <RadioGroup.Root
                     name={field.name}
-                    disabled={currentAssignment?.git_provider === "forgejo"}
                     value={field.value ? "true" : "false"}
                     onValueChange={(details) => field.onChange(details.value === "true")}
                   >
                     <Radio value="true">Enabled</Radio>
-                    <Radio value="false">Disabled</Radio>
+                    <Radio value="false" disabled={autograderLockedOn}>
+                      Disabled
+                    </Radio>
                   </RadioGroup.Root>
                 )}
               />

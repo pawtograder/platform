@@ -71,6 +71,14 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
 
 const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
 
+/**
+ * update_rubric_full refused to create a rubric because someone else created one for the same round
+ * first (unique_violation). An expected outcome, not a fault, so it isn't reported to Sentry.
+ */
+class RubricSaveConflictError extends Error {}
+// update_rubric_full raises the round conflict as a unique_violation with this hint.
+const RUBRIC_ROUND_CONFLICT_HINT = "rubric_round_conflict";
+
 function hydrateRubricTree(
   rubric: Omit<HydratedRubric, "rubric_parts">,
   parts: HydratedRubricPart[],
@@ -160,24 +168,6 @@ function resolveExistingRubricIdForRound(
   if (!fkColumn || !assignment) return undefined;
   const fkId = assignment[fkColumn];
   return fkId && fkId > 0 ? fkId : undefined;
-}
-
-async function syncAssignmentRubricFkIfNeeded(
-  assignment: Assignment,
-  reviewRound: NonNullable<HydratedRubric["review_round"]>,
-  savedRubricId: number
-) {
-  const fkColumn = assignmentRubricFkForRound(reviewRound);
-  if (!fkColumn || assignment[fkColumn] === savedRubricId) return;
-
-  const supabase = createClient();
-  const { error } = await supabase
-    .from("assignments")
-    .update({ [fkColumn]: savedRubricId })
-    .eq("id", assignment.id);
-  if (error) {
-    throw new Error(`Rubric saved but failed to link it to the assignment: ${error.message}`);
-  }
 }
 
 /**
@@ -506,6 +496,25 @@ function InnerRubricPage() {
       }
     >
   >({});
+  // For each round with unsaved changes: the id of the rubric the draft started from, or 0 if it
+  // started as a new rubric. activeRubric can't tell: when someone else creates this round's rubric,
+  // the effect below swaps it in while the draft text stays, so a save would overwrite theirs.
+  const draftBaseRubricIdRef = useRef<Record<string, number>>({});
+  // The round on screen now. A save reads it when it finishes, since the user may have switched
+  // rounds while it ran.
+  const currentRoundRef = useRef(activeReviewRound);
+  useLayoutEffect(() => {
+    currentRoundRef.current = activeReviewRound;
+  }, [activeReviewRound]);
+  useEffect(() => {
+    if (!activeReviewRound) return;
+    if (!hasUnsavedChanges) {
+      delete draftBaseRubricIdRef.current[activeReviewRound];
+    } else if (!(activeReviewRound in draftBaseRubricIdRef.current)) {
+      draftBaseRubricIdRef.current[activeReviewRound] = activeRubric && activeRubric.id > 0 ? activeRubric.id : 0;
+    }
+  }, [hasUnsavedChanges, activeReviewRound, activeRubric]);
+
   const rubric = useHydratedRubricByReviewRound(activeReviewRound);
   useEffect(() => {
     setActiveRubric(rubric);
@@ -1272,6 +1281,7 @@ function InnerRubricPage() {
       if (!assignmentDetails || !activeReviewRound) {
         throw new Error("Cannot save: Missing assignment details or active review round.");
       }
+      const savedRound = activeReviewRound;
 
       let parsedRubricFromEditor: HydratedRubric;
       let negativePointsWarnings: PointsValidationWarning[];
@@ -1310,11 +1320,27 @@ function InnerRubricPage() {
         activeReviewRound,
         allHydratedRubrics
       );
+      // A draft saves only to the rubric it started from. One that started from a rubric that is now
+      // gone must not save over this round's new rubric, and one that started as a new rubric must
+      // not save over one someone else created for this round in the meantime.
+      const draftBaseRubricId = draftBaseRubricIdRef.current[savedRound];
+      if (draftBaseRubricId > 0 && !allHydratedRubrics.some((r) => r.id === draftBaseRubricId)) {
+        throw new RubricSaveConflictError(
+          "This round's rubric changed while you were editing, so your changes weren't saved. Copy your unsaved YAML before reloading the page to edit it."
+        );
+      }
+      if (draftBaseRubricId === 0 && (existingRubricForRound || resolvedExistingId)) {
+        throw new RubricSaveConflictError(
+          "A rubric for this round was just created by someone else, so your changes weren't saved. Copy your unsaved YAML before reloading the page to edit it."
+        );
+      }
       const rubricId =
-        (activeRubric && activeRubric.id > 0 ? activeRubric.id : 0) ||
-        existingRubricForRound?.id ||
-        resolvedExistingId ||
-        0;
+        draftBaseRubricId > 0
+          ? draftBaseRubricId
+          : (activeRubric && activeRubric.id > 0 ? activeRubric.id : 0) ||
+            existingRubricForRound?.id ||
+            resolvedExistingId ||
+            0;
 
       // Resolve cross-rubric YAML references against the live set of sibling
       // rubrics. We pass the resolved (referencing, referenced) pairs in the
@@ -1469,23 +1495,32 @@ function InnerRubricPage() {
         p_rubric: payload as never
       });
       if (error) {
+        // Only the round conflict is an expected refusal. Any other duplicate key is a fault and
+        // goes to Sentry like other save errors.
+        if (error.code === "23505" && error.hint === RUBRIC_ROUND_CONFLICT_HINT) {
+          throw new RubricSaveConflictError(error.message);
+        }
         throw new Error(error.message);
       }
 
-      setHasUnsavedChanges(false);
-      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+      // Clear what belongs to the saved round. If the user switched to another round while the save
+      // ran, that round's draft, unsaved flag and base rubric stay as they are.
+      setUnsavedStatusPerTab((prev) => ({ ...prev, [savedRound]: false }));
       setStashedEditorStates((prev) => {
         const newState = { ...prev };
-        if (activeReviewRound) delete newState[activeReviewRound];
+        delete newState[savedRound];
         return newState;
       });
+      delete draftBaseRubricIdRef.current[savedRound];
+      if (currentRoundRef.current === savedRound) setHasUnsavedChanges(false);
 
       invalidate({ resource: "assignments", invalidates: ["all"] });
       await refetchCurrentRubric();
 
-      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, activeReviewRound);
-      if (freshRubric) {
-        await syncAssignmentRubricFkIfNeeded(assignmentDetails, activeReviewRound, freshRubric.id);
+      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, savedRound);
+      // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
+      // only manage_rubrics, not manage_assignments.
+      if (freshRubric && currentRoundRef.current === savedRound) {
         syncEditorFromSavedRubric(freshRubric);
       }
 
@@ -1674,9 +1709,9 @@ function InnerRubricPage() {
                     meta: { closable: true }
                   });
                 } catch (error) {
-                  if (error instanceof NegativePointsError) {
-                    // A rubric-authoring mistake, not a fault: show the offending paths and do not
-                    // report it to Sentry as "an unexpected error occurred".
+                  if (error instanceof NegativePointsError || error instanceof RubricSaveConflictError) {
+                    // A rubric-authoring mistake or a save conflict, not a fault: show the message and
+                    // do not report it to Sentry as "an unexpected error occurred".
                     toaster.error({
                       title: "Cannot save rubric",
                       description: error.message,
