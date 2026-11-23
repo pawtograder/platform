@@ -112,7 +112,7 @@ function otherCoursesClient() {
             rows = rows.filter((c) => c.id !== id);
             return query;
           },
-          limit: () => Promise.resolve({ data: rows, error: null })
+          then: (resolve: (result: unknown) => void) => resolve({ data: rows, error: null })
         };
         return query;
       }

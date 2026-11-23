@@ -84,8 +84,7 @@ export async function assertGitHubCourseRepo(
       .from("classes")
       .select("id")
       .ilike("github_org", ilikeLiteral(org))
-      .neq("id", courseId)
-      .limit(20);
+      .neq("id", courseId);
     if (ownerError) {
       throw new UserVisibleError(`Could not check who owns the GitHub org ${orgName}: ${ownerError.message}`, 500);
     }
@@ -93,7 +92,12 @@ export async function assertGitHubCourseRepo(
     // A grader shared with a GitHub section of the same course lives in that section's org; its
     // instructors may read it from both.
     for (const owner of owners) {
-      const { data: isInstructor } = await supabase.rpc("authorizeforclassinstructor", { class__id: owner.id });
+      const { data: isInstructor, error: roleError } = await supabase.rpc("authorizeforclassinstructor", {
+        class__id: owner.id
+      });
+      if (roleError) {
+        throw new UserVisibleError(`Could not check your role in course ${owner.id}: ${roleError.message}`, 500);
+      }
       if (isInstructor === true) return;
     }
     throw new UserVisibleError(
