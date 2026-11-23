@@ -9,8 +9,9 @@
  *
  * Who may publish doesn't change here: the function still allows instructors and admins only
  * (moving it to the publish_groups capability belongs to #1010). Until then the page shows Publish
- * Changes and Copy Groups only to instructors and admins, even to a grader who holds
- * publish_groups. So the UI test loads the page as an instructor and demotes them to grader before
+ * Changes only to instructors and admins, even to a grader who holds publish_groups. Copy Groups
+ * follows manage_groups (#1401), which the default grader role doesn't hold, so this grader doesn't
+ * get it either. So the UI test loads the page as an instructor and demotes them to grader before
  * they click. The class's default grader role holds publish_groups, so the capability refresh the
  * demotion triggers doesn't hide the button; the page's role is read once, so it still offers it.
  */
