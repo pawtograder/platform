@@ -1,5 +1,11 @@
 // The handout's .github/workflows/grade.yml on Forgejo (#1253). The chart's example is the source; the test
 // keeps this copy identical to it apart from the grading server, since edge functions can't read the chart.
+/** autograder.workflow_sha for a grade.yml: the SHA-256 of its text, as hex, as updateAutograderWorkflowHash stores on GitHub. */
+export async function gradeWorkflowSha(workflow: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workflow));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export const forgejoGradeWorkflow = (
   gradingServer: string
 ) => `# Goes at .github/workflows/grade.yml in the Forgejo handout repo; see README "Grade workflow on Forgejo".

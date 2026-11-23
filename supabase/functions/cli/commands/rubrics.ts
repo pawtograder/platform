@@ -6,7 +6,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveClass, resolveAssignment, resolveRubricIdForType } from "../utils/resolvers.ts";
-import { assertUserCanAccessClass, assertUserIsClassInstructor } from "../utils/auth.ts";
+import { assertUserCanAccessClass, assertUserHasClassCapability } from "../utils/auth.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
 import { pageAll } from "../utils/paging.ts";
 import {
@@ -288,7 +288,7 @@ function classifyRubricRpcError(code: string | undefined, message: string, rubri
   if (code === "P0001") {
     if (/Not authorized to edit rubrics/i.test(message)) {
       return new CLICommandError(
-        `${message}. If you were recently granted instructor access, wait for the role sync and retry.`,
+        `${message}. If you were recently given manage_rubrics, wait for the role sync and retry.`,
         403
       );
     }
@@ -312,8 +312,8 @@ function classifyRubricRpcError(code: string | undefined, message: string, rubri
  *
  * The RPC is one transaction that diffs rather than wipes, cascades points changes to
  * existing comments, and recomputes affected submission_reviews — none of which the
- * raw inserts did. It gates on `authorizeforclassinstructor`, so it must be called on
- * a per-user client, and `rubrics.import` is therefore instructor-only.
+ * raw inserts did. It gates on the manage_rubrics capability, so it must be called on
+ * a per-user client, and `rubrics.import` needs manage_rubrics in the class.
  */
 async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as RubricsImportParams;
@@ -328,9 +328,9 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
-  // Instructor-level: the RPC enforces the same thing, but checking here means a
-  // grader gets a clear 403 instead of a raw Postgres exception after the read work.
-  await assertUserIsClassInstructor(supabase, ctx.userId, classData.id);
+  // The RPC enforces the same thing, but checking here means a grader without
+  // manage_rubrics gets a clear 403 instead of a raw Postgres exception after the read work.
+  await assertUserHasClassCapability(ctx.userId, classData.id, "manage_rubrics");
   const assignment = await resolveAssignment(supabase, classData.id, assignmentIdentifier);
 
   const targetRubricId = resolveRubricIdForType(assignment, rubricType);
@@ -480,7 +480,7 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
   }
 
   // A per-user client, minted immediately before the call: the RPC gates on
-  // authorizeforclassinstructor, which needs auth.uid(), and the JWT lives 60
+  // the manage_rubrics capability, which needs auth.uid(), and the JWT lives 60
   // seconds without auto-refresh, so the reads above can outlast one minted earlier.
   const writeClient = await createAuthenticatedSupabaseClient(ctx.userId);
   const { data: rpcSummary, error: rpcError } = await writeClient.rpc("update_rubric_full", {

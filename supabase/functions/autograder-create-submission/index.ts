@@ -6,6 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { startCheckRun } from "./startCheckRun.ts";
 import { createHash } from "node:crypto";
 import { TZDate } from "npm:@date-fns/tz";
 import { addSeconds, format, isAfter } from "npm:date-fns@4";
@@ -1432,19 +1433,13 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
         // instructor triggered it — would inherit the deadline bypass via
         // `staffTriggeredBy !== null`. An instructor re-trigger re-sets
         // `triggered_by` via the manual trigger function, so retry still works.
-        const checkRunUpdate: {
-          status: CheckRunStatus;
-          triggered_by?: null;
-        } = {
-          status: {
-            ...(checkRun.status as CheckRunStatus),
-            started_at: new Date().toISOString()
-          }
-        };
-        if (staffTriggeredBy !== null) {
-          checkRunUpdate.triggered_by = null;
+        try {
+          await startCheckRun(adminSupabase, checkRun.id, staffTriggeredBy !== null);
+        } catch (error) {
+          scope?.setTag("check_run_start_failed", "true");
+          Sentry.captureException(error, scope);
+          throw error;
         }
-        await adminSupabase.from("repository_check_runs").update(checkRunUpdate).eq("id", checkRun.id);
       }
 
       try {

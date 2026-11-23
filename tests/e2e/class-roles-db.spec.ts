@@ -48,9 +48,11 @@ const SEEDED_CAPABILITIES = [
   "manage_review_assignments",
   "manage_roles",
   "manage_roster",
+  "manage_rubrics",
   "manage_student_repositories",
   "moderate_discussion",
-  "publish_groups"
+  "publish_groups",
+  "send_announcements"
 ];
 /** Capabilities seed_default_class_roles() also puts on the default grader role. */
 const GRADER_SEEDED_CAPABILITIES = ["moderate_discussion"];

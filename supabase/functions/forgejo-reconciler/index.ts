@@ -75,15 +75,14 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos, groupRepos, hashes, staffTeams, groupLeavers, revocation } = await reconcileForgejo(
-      supabase,
-      config
-    );
+    const { accounts, repos, groupRepos, hashes, orgHooks, staffTeams, groupLeavers, revocation } =
+      await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
         `workflow hashes ${hashes.set} (failed ${hashes.failures.length}), ` +
+        `org hooks ${orgHooks.checked} (failed ${orgHooks.failures.length}), ` +
         `staff teams ${staffTeams.synced} (failed ${staffTeams.failures.length}), ` +
         `group leavers removed ${groupLeavers.removed} (discarded ${groupLeavers.discarded}, ` +
         `failed ${groupLeavers.failures.length})`
@@ -120,6 +119,15 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(hashes.failures[0].error, hashScope);
     }
+    if (orgHooks.failures.length > 0) {
+      const hookScope = scope.clone();
+      hookScope.setFingerprint(["forgejo-reconciler", "org-hook-failed"]);
+      hookScope.setContext("failures", {
+        count: orgHooks.failures.length,
+        orgs: orgHooks.failures.slice(0, 20).map((f) => f.org)
+      });
+      Sentry.captureException(orgHooks.failures[0].error, hookScope);
+    }
     if (staffTeams.failures.length > 0) {
       const staffScope = scope.clone();
       staffScope.setFingerprint(["forgejo-reconciler", "staff-team-failed"]);
@@ -151,6 +159,8 @@ Deno.serve(async (req) => {
       group_repos_failed: groupRepos.failures.length,
       workflow_hashes_set: hashes.set,
       workflow_hashes_failed: hashes.failures.length,
+      org_hooks_checked: orgHooks.checked,
+      org_hooks_failed: orgHooks.failures.length,
       staff_teams_synced: staffTeams.synced,
       staff_teams_failed: staffTeams.failures.length,
       group_leavers_removed: groupLeavers.removed,
