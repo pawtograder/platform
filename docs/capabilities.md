@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -163,3 +163,45 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Groups: publish_groups and manage_groups
+
+Manage Groups uses two capabilities. Both are on the default instructor role only.
+
+- **`publish_groups`**: stage group changes (Create New Group, Bulk Create, Tweak a Group, Edit
+  Group, Move Student) and publish them. For now only the screen checks it: a TA with
+  `publish_groups` can stage changes and press Publish, but `publish_assignment_group_changes`
+  still lets only instructors (and site admins) publish, until #1297 moves it to the capability.
+- **`manage_groups`**: changes that save at once, without staging: set a group's mentor, rename a
+  group (the `assignment_groups` UPDATE policy; the page has no Rename button), and Copy Groups
+  from another assignment (`copy_groups_from_assignment`). A group can't move to another
+  assignment or class, for anyone. Copy also turns off the per-row repo
+  sync in `sync_repos_after_assignment_group_change` and syncs once at the end; that trigger honors
+  the flag for a caller with `manage_groups`.
+
+Anyone enrolled in a class can read that class's group memberships (`assignment_groups_members`).
+Before `20261122210600` the policy compared a class to itself, so it let anyone enrolled in any
+class read every class's memberships.
+
+## Roster: manage_roster
+
+`manage_roster` covers lab sections, class section names and students on the Enrollments page. It is
+on the default instructor role only.
+
+- **Lab sections:** creating, changing and deleting `lab_sections`, `lab_section_meetings` and
+  `lab_section_leaders`, and the lab sections page (without it, the page sends you to the lab
+  roster). A meeting's lab section, and a leader's profile and lab section, must be in the row's
+  class, for everyone.
+  A lab section's `sis_crn` stays instructor-only (`guard_lab_section_sis_crn`): SIS sync enrolls
+  that SIS section's roster with their SIS roles, so whoever sets it could make people staff. The
+  same trigger stops anyone moving a lab section to another class from the API.
+- **Class sections:** `update_class_section_name()`. It still changes only the name.
+- **Enrollments, students only:** someone with `manage_roster` who isn't an instructor of the class
+  can remove a student, change a student's SIS sync override, cancel a pending student invitation,
+  and add a student who isn't in the class yet (`enrollments-add`). They can never touch a grader or
+  instructor row, change anyone's role or `class_role_id` (their own included), or add or invite a
+  grader or instructor. The `guard_roster_manager_update` trigger limits them to `disabled` and
+  `sis_sync_opt_out` on a student's `user_roles` row, and to `status` on a student invitation.
+- **Instructor-only for now:** creating invitations (the auto-accept trigger can re-enable an
+  existing grader or instructor), Edit role, Edit profile, CSV import, Canvas/SIS/LTI sync and admin
+  import. Tags are unchanged (any staff).

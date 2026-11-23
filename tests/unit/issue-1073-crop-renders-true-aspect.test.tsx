@@ -81,8 +81,12 @@ describe("issue #1073: the rendered crop uses the page's pixel size", () => {
   it("drives the box with width plus aspectRatio rather than an independent height", async () => {
     const crop = await renderCrop({ width: PAGE_W, height: PAGE_H });
 
-    // height * aspect, with the component's default 120px height.
-    expect(crop.style.width).toBe(`${Math.round(120 * TRUE_ASPECT)}px`);
+    // This used to assert the exact width `Math.round(120 * TRUE_ASPECT)`, which was how the
+    // width happened to be computed when the component fixed each crop's HEIGHT at 120px. #1263
+    // changed that: the width now comes from the region's share of the page, so every crop is at
+    // one zoom. The number was never what this test was for. What it guards is the pair below,
+    // which is what #1073 was about: one driver, never an explicit height.
+    expect(crop.style.width).toMatch(/^\d+px$/);
     expect(crop.style.aspectRatio).not.toBe("");
     // An explicit height is what let a clamped crop distort again once the flex row shrank it.
     expect(crop.style.height).toBe("");
