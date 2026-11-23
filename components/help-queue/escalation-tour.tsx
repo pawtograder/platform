@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import useAuthState from "@/hooks/useAuthState";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { ESCALATION_NOTE_MAX_LENGTH } from "@/lib/helpRequestEscalation";
 import { createClient } from "@/utils/supabase/client";
@@ -41,9 +42,13 @@ async function hasSeenTour(): Promise<boolean> {
 /**
  * Walkthroughs dismissed since the page loaded. Staff can leave the office hours layout and come
  * back before markTourSeen's upsert commits. The new instance's read then finds no row, so the
- * automatic open also checks this set. It lives at module level so it outlasts a remount.
+ * automatic open also checks this set. It lives at module level so it outlasts a remount. Keys
+ * include the user id: signing out doesn't reload the page, so the next person to sign in on the
+ * tab must not inherit this person's dismissals.
  */
 const dismissedThisPageLoad = new Set<string>();
+
+const dismissalKey = (userId: string | undefined, item: string) => `${userId ?? ""}:${item}`;
 
 /** Clears dismissedThisPageLoad. Only tests call it, to start each case from a fresh page load. */
 export function resetEscalationTourForTests() {
@@ -335,6 +340,7 @@ function ResolveButtonInline() {
  */
 export function EscalationTour() {
   const isStaff = useIsGraderOrInstructor();
+  const userId = useAuthState().user?.id;
   const [open, setOpen] = useState(false);
   // -1 is the intro prompt; 0..STEPS.length-1 are the tutorial steps.
   const [step, setStep] = useState(-1);
@@ -346,21 +352,22 @@ export function EscalationTour() {
     if (!isStaff) return;
     let cancelled = false;
     void hasSeenTour().then((seen) => {
-      if (cancelled || seen || handledRef.current || dismissedThisPageLoad.has(ESCALATION_TOUR_ITEM)) return;
+      if (cancelled || seen || handledRef.current) return;
+      if (dismissedThisPageLoad.has(dismissalKey(userId, ESCALATION_TOUR_ITEM))) return;
       setStep(-1);
       setOpen(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [isStaff]);
+  }, [isStaff, userId]);
 
   const close = useCallback(() => {
     handledRef.current = true;
-    dismissedThisPageLoad.add(ESCALATION_TOUR_ITEM);
+    dismissedThisPageLoad.add(dismissalKey(userId, ESCALATION_TOUR_ITEM));
     void markTourSeen();
     setOpen(false);
-  }, []);
+  }, [userId]);
 
   const reopen = useCallback(() => {
     handledRef.current = true;

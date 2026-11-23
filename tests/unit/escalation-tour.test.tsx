@@ -7,7 +7,7 @@
  *   public.user_whats_new_seen, so it holds across browsers and devices. The header button
  *   reopens it at the prompt.
  * - Once dismissed, it stays closed for the rest of the page load even if the component remounts
- *   before the row is saved.
+ *   before the row is saved, but only for the user who dismissed it.
  * - Show me walks through every step in order, and Back returns to the previous one.
  * - When the record can't be read the prompt stays closed instead of reopening on every page load.
  */
@@ -16,7 +16,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EscalationTour, resetEscalationTourForTests } from "@/components/help-queue/escalation-tour";
 
 let mockIsStaff = true;
+let mockUserId = "staff-a";
 jest.mock("@/hooks/useClassProfiles", () => ({ useIsGraderOrInstructor: () => mockIsStaff }));
+jest.mock("@/hooks/useAuthState", () => ({ __esModule: true, default: () => ({ user: { id: mockUserId } }) }));
 jest.mock("@sentry/nextjs", () => ({ captureException: jest.fn() }));
 
 /**
@@ -54,6 +56,7 @@ const dialogTitle = () =>
 beforeEach(() => {
   resetEscalationTourForTests();
   mockIsStaff = true;
+  mockUserId = "staff-a";
   mockSeen.clear();
   mockReadError = null;
   mockReadGate = null;
@@ -206,6 +209,29 @@ describe("EscalationTour", () => {
     renderTour();
     await waitFor(() => expect(mockFrom).toHaveBeenCalled());
     await expect(screen.findByText(PROMPT, undefined, { timeout: 500 })).rejects.toThrow();
+    save();
+  });
+
+  it("still opens for another user who signs in on the same tab before the record is saved", async () => {
+    // Signing out is a soft navigation, so the page doesn't reload between the two users.
+    let save!: () => void;
+    mockUpsert.mockImplementation(
+      (row: { item: string }) =>
+        new Promise((resolve) => {
+          save = () => {
+            mockSeen.add(row.item);
+            resolve({ error: null });
+          };
+        })
+    );
+    const { unmount } = renderTour();
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByText(PROMPT)).toBeNull());
+
+    unmount();
+    mockUserId = "staff-b";
+    renderTour();
+    expect(await screen.findByText(PROMPT)).toBeTruthy();
     save();
   });
 
