@@ -70,6 +70,13 @@
 -- review_assignments policies, the release RPCs' bodies (they follow the policy and the trigger),
 -- the submissionreviewreleasecascade trigger, and the SELECT policies.
 --
+-- Number: this was 20261122150000 until 2026-11-23, when it collided with #1395's
+-- 20261122150000_workflow_events_forgejo_completion_key.sql. It now sorts after the newest
+-- migration on staging (20261122140500) and after #1299-#1301, which also redefine
+-- seed_default_class_roles() with an older list, and before #1409 (20261123040100) and #1410
+-- (20261123040200), which build on it. #1429 (20261123140100) redefines the function later with
+-- the same list.
+--
 -- Safe to run again: the inserts skip rows that exist, policies are dropped before they are
 -- created, and CREATE OR REPLACE gives the same functions.
 
