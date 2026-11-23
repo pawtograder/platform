@@ -1,5 +1,5 @@
 /**
- * #1010: the extension controls follow grant_extensions (20261123040200_extensions_by_capability.sql).
+ * #1010: the extension controls follow grant_extensions (20261123180200_extensions_by_capability.sql).
  *
  * - The course-wide Due Date Extensions page and its Course Settings link need grant_extensions;
  *   without it, the page sends a staff member back to the course page. Gift Tokens and Edit Late
