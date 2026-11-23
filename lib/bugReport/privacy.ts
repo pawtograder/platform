@@ -2994,6 +2994,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   pg_buffercache_pages: "none",
   pg_buffercache_summary: "none",
   pg_buffercache_usage_counts: "none",
+  prepare_forgejo_repo_archive: "none",
   preview_error_pin_matches: { $: "none", "$.recent_submissions[*].student_name": "name" },
   process_calendar_announcements: "none",
   promote_whatif_grader_result: "none",

@@ -15431,6 +15431,10 @@ export type Database = {
         Args: never;
         Returns: Record<string, unknown>[];
       };
+      prepare_forgejo_repo_archive: {
+        Args: { p_repository: string };
+        Returns: boolean;
+      };
       preview_error_pin_matches: {
         Args: {
           p_assignment_id: number;

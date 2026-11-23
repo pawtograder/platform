@@ -77,7 +77,17 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
       //Archive, on the host this row is on. The name alone can't decide it: a class can hold the same
       //owner/name on GitHub and on Forgejo, and the other one belongs to someone else (#1378).
       if (repository.git_provider === "forgejo") {
-        // The row stays, so the repositories delete trigger never queues it; queue it here.
+        // The row stays, so the repositories delete trigger never queues it; queue it here. It's marked not
+        // ready first: the repo is about to be renamed away, and a group with no ready repo is listed by
+        // forgejo_group_repos_needed again once it has members, so it gets a new repo under the same name.
+        const { error: ready_error } = await adminSupabase
+          .from("repositories")
+          .update({ is_github_ready: false })
+          .eq("id", repository.id);
+        if (ready_error) {
+          console.error(ready_error);
+          throw new Error("Failed to mark the group's Forgejo repository not ready");
+        }
         // function-grants: service-role
         const { error: archive_error } = await adminSupabase.rpc("queue_forgejo_repo_archives", {
           p_class_ids: [membership.class_id],

@@ -868,7 +868,14 @@ type DueArchive = { id: number; class_id: number; repository: string };
 
 function fakeArchiveSupabase(
   due: DueArchive[],
-  opts: { unclaimable?: number[]; dueError?: unknown; pinned?: Record<number, string>; claimLost?: number[] } = {}
+  opts: {
+    unclaimable?: number[];
+    dueError?: unknown;
+    pinned?: Record<number, string>;
+    claimLost?: number[];
+    // Repos whose group has members again, so prepare_forgejo_repo_archive says not to archive them.
+    rejoined?: string[];
+  } = {}
 ) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const saved: { values: Record<string, unknown>; id: unknown }[] = [];
@@ -880,6 +887,11 @@ function fakeArchiveSupabase(
       rpcCalls.push({ name, args });
       if (name === "forgejo_repo_archives_due") {
         return Promise.resolve(opts.dueError ? { data: null, error: opts.dueError } : { data: due, error: null });
+      }
+      if (name === "prepare_forgejo_repo_archive") {
+        order.push(`prepare ${args.p_repository}`);
+        const rejoined = (opts.rejoined ?? []).includes(args.p_repository as string);
+        return Promise.resolve({ data: !rejoined, error: null });
       }
       assertEquals(name, "claim_forgejo_repo_archive");
       const claimed = !(opts.unclaimable ?? []).includes(args.p_id as number);
@@ -937,7 +949,7 @@ Deno.test("archives: each claimed repo is archived and recorded with its new nam
     order.push(`archive ${repository} -> ${destination}`);
     return Promise.resolve(repository.endsWith("gone") ? null : destination!);
   });
-  assertEquals(result, { archived: 2, failures: [] });
+  assertEquals(result, { archived: 2, kept: 0, failures: [] });
   assertEquals(archived, ["cs4535/hw1-group-a", "cs4535/hw1-gone"]);
   assertEquals(rpcCalls[0], {
     name: "forgejo_repo_archives_due",
@@ -952,13 +964,57 @@ Deno.test("archives: each claimed repo is archived and recorded with its new nam
   assert(destination.startsWith("cs4535/archived-"), destination);
   // The repo that was gone records no name, including the one written down for it.
   assertEquals(done[1].values.archived_as, null);
-  // Where each repo is going is written down before Forgejo is asked to rename it.
-  assertEquals(order.slice(0, 2), [
+  // Each repo is checked first, and where it is going is written down before Forgejo is asked to rename it.
+  assertEquals(order.slice(0, 3), [
+    "prepare cs4535/hw1-group-a",
     `write 1 ${JSON.stringify(destination)}`,
     `archive cs4535/hw1-group-a -> ${destination}`
   ]);
-  assertEquals(order[3].startsWith('write 2 "cs4535/archived-'), true, order[3]);
-  assertEquals(order[4].startsWith("archive cs4535/hw1-gone -> cs4535/archived-"), true, order[4]);
+  assertEquals(order[4], "prepare cs4535/hw1-gone");
+  assertEquals(order[5].startsWith('write 2 "cs4535/archived-'), true, order[5]);
+  assertEquals(order[6].startsWith("archive cs4535/hw1-gone -> cs4535/archived-"), true, order[6]);
+});
+
+// A group repo is queued when its last member leaves. Someone joining (or being moved in) before the pass gets to
+// it keeps the repo: the archive would remove them and rename their repo away.
+Deno.test("archives: a group repo whose group has members again is kept, and the entry finished", async () => {
+  const { client, saved, order } = fakeArchiveSupabase(
+    [
+      { id: 1, class_id: 3, repository: "cs4535/hw1-group-a" },
+      { id: 2, class_id: 3, repository: "cs4535/hw1-group-b" }
+    ],
+    { rejoined: ["cs4535/hw1-group-a"] }
+  );
+  const archived: string[] = [];
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository, destination) => {
+    archived.push(repository);
+    return Promise.resolve(destination!);
+  });
+  assertEquals(result, { archived: 1, kept: 1, failures: [] });
+  assertEquals(archived, ["cs4535/hw1-group-b"]);
+  assertEquals(order[0], "prepare cs4535/hw1-group-a");
+  assertEquals(order[1], "write 1 null");
+  const kept = saved.find((s) => s.id === 1)!;
+  assertEquals(kept.values.archived_as, null);
+  assertEquals(typeof kept.values.archived_at, "string");
+});
+
+// The check is only for an untouched repo. Once a destination is written down, an earlier attempt may already have
+// renamed it, so the entry has to finish.
+Deno.test("archives: a retry with a destination written down doesn't re-check the group", async () => {
+  const pinned = "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-group-a";
+  const { client, rpcCalls } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-group-a" }], {
+    pinned: { 1: pinned },
+    rejoined: ["cs4535/hw1-group-a"]
+  });
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, _repository, destination) =>
+    Promise.resolve(destination!)
+  );
+  assertEquals(result, { archived: 1, kept: 0, failures: [] });
+  assertEquals(
+    rpcCalls.some((c) => c.name === "prepare_forgejo_repo_archive"),
+    false
+  );
 });
 
 // The crash the destination is written down for: a pass renames the repo, then dies before recording where it
@@ -974,7 +1030,7 @@ Deno.test("archives: a retry reuses the destination the lost attempt wrote down"
     // What archiveRepo returns when the old name is gone but the destination is there.
     return Promise.resolve(destination!);
   });
-  assertEquals(result, { archived: 1, failures: [] });
+  assertEquals(result, { archived: 1, kept: 0, failures: [] });
   assertEquals(order, [`archive cs4535/hw1-a -> ${pinned}`, `write 1 ${JSON.stringify(pinned)}`]);
   assertEquals(saved.length, 1, "a destination already written down is not replaced");
   assertEquals(saved[0].values.archived_as, pinned);
@@ -986,7 +1042,7 @@ Deno.test("archives: one another pass has claimed is left alone", async () => {
   });
   let calls = 0;
   const result = await archiveUnlinkedRepos(client, config, () => (calls++, Promise.resolve(null)));
-  assertEquals(result, { archived: 0, failures: [] });
+  assertEquals(result, { archived: 0, kept: 0, failures: [] });
   assertEquals(calls, 0);
   assertEquals(saved, []);
 });
@@ -1025,10 +1081,10 @@ Deno.test("archives: a pass that lost its claim writes nothing and leaves the re
   });
   let calls = 0;
   const result = await archiveUnlinkedRepos(client, config, () => (calls++, Promise.resolve(null)));
-  assertEquals(result, { archived: 0, failures: [] });
+  assertEquals(result, { archived: 0, kept: 0, failures: [] });
   assertEquals(calls, 0);
   assertEquals(saved, []);
-  assertEquals(order, ["refused 1"]);
+  assertEquals(order, ["prepare cs4535/hw1-a", "refused 1"]);
 });
 
 Deno.test("archives: a completion write a newer claim refuses isn't counted", async () => {
@@ -1038,7 +1094,7 @@ Deno.test("archives: a completion write a newer claim refuses isn't counted", as
     claimLost: [1]
   });
   const result = await archiveUnlinkedRepos(client, config, () => Promise.resolve(null));
-  assertEquals(result, { archived: 0, failures: [] });
+  assertEquals(result, { archived: 0, kept: 0, failures: [] });
   assertEquals(saved, [], "the destination the other pass recorded is not replaced with null");
 });
 

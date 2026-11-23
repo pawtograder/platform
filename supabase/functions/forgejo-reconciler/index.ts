@@ -76,7 +76,7 @@ Deno.serve(async (req) => {
   try {
     const { archives, accounts, repos, groupRepos, hashes, revocation } = await reconcileForgejo(supabase, config);
     console.log(
-      `[forgejo-reconciler] Archived ${archives.archived} (failed ${archives.failures.length}), ` +
+      `[forgejo-reconciler] Archived ${archives.archived} (kept ${archives.kept}, failed ${archives.failures.length}), ` +
         `accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
@@ -127,6 +127,7 @@ Deno.serve(async (req) => {
     await Sentry.flush(2000);
     return json({
       archived: archives.archived,
+      archive_kept: archives.kept,
       archive_failed: archives.failures.length,
       provisioned: accounts.provisioned,
       failed: accounts.failures.length,

@@ -393,7 +393,8 @@ export async function writeClaimedArchive(
   return (data ?? []).length > 0;
 }
 
-export type ArchiveResult = { archived: number; failures: { classId: number; error: unknown }[] };
+/** `kept`: group repos not archived because the group had members again by the time the pass got to them. */
+export type ArchiveResult = { archived: number; kept: number; failures: { classId: number; error: unknown }[] };
 
 /**
  * Archives Forgejo repos that were unlinked from their student or group (#1378), the Forgejo side of
@@ -412,7 +413,7 @@ export async function archiveUnlinkedRepos(
   });
   if (error) throw error;
 
-  const result: ArchiveResult = { archived: 0, failures: [] };
+  const result: ArchiveResult = { archived: 0, kept: 0, failures: [] };
   for (const row of due ?? []) {
     try {
       // function-grants: service-role
@@ -435,6 +436,26 @@ export async function archiveUnlinkedRepos(
       if (entryError) throw entryError;
       let destination = entry.archived_as;
       if (destination === null) {
+        // First attempt, so the repo hasn't been touched. A group repo is queued when its last member leaves;
+        // if the group has members again, it keeps its repo. Otherwise the row (if one is left) is marked not
+        // ready, so a group that gets members later is given a new repo under this name.
+        // function-grants: service-role
+        const { data: stillDue, error: prepareError } = await supabase.rpc("prepare_forgejo_repo_archive", {
+          p_repository: row.repository
+        });
+        if (prepareError) throw prepareError;
+        if (!stillDue) {
+          // Done with no new name: nothing was renamed.
+          if (
+            await writeClaimedArchive(supabase, row.id, claim, {
+              archived_at: new Date().toISOString(),
+              archived_as: null
+            })
+          ) {
+            result.kept++;
+          }
+          continue;
+        }
         destination = archivedRepoName(row.repository);
         // A pass that lost its claim (it stalled past STALE_CLAIM_MINUTES and another took over) stops here.
         if (!(await writeClaimedArchive(supabase, row.id, claim, { archived_as: destination }))) continue;

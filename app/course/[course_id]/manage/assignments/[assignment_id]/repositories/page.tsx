@@ -577,6 +577,10 @@ function CleanupIndividualReposButton({
                   </li>
                   <li>Delete related submissions, grades, and workflow data from Pawtograder</li>
                   <li>Remove the individual repository records (group repos are unchanged)</li>
+                  <li>
+                    On Forgejo, keep the repositories of students who aren&apos;t in a group, since Pawtograder would
+                    otherwise give them a new, empty one
+                  </li>
                 </Box>
                 <Text fontSize="sm" color="red.600" _dark={{ color: "red.300" }}>
                   This cannot be undone. Continue only if you are sure.

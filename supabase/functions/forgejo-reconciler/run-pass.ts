@@ -22,6 +22,7 @@ const { archives, accounts, repos, groupRepos, hashes, revocation } = await reco
 console.log(
   JSON.stringify({
     archived: archives.archived,
+    archiveKept: archives.kept,
     accounts: accounts.provisioned,
     repos: repos.created,
     groupRepos: groupRepos.created,
