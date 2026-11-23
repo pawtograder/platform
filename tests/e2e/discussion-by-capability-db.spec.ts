@@ -286,6 +286,65 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     expect((await thread(root)).pinned).toBe(false);
   });
 
+  test("only a moderator creates a pinned or answered post or moves a topic, and an author can't move a post to another class", async () => {
+    const newPost = (author: TestingUser, extra: { pinned?: boolean; answer?: number }) => ({
+      subject: `E2E guard ${Date.now().toString(36)}-${++unique}`,
+      body: "New post",
+      topic_id: topics[classA.id][0],
+      is_question: false,
+      instructors_only: false,
+      author: author.private_profile_id,
+      class_id: classA.id,
+      draft: false,
+      root_class_id: classA.id,
+      ...extra
+    });
+    const studentClient = await createAuthenticatedClient(student);
+    const graderClient = await createAuthenticatedClient(plainGrader);
+
+    // Creating a post that is already pinned or answered.
+    expectRefused(
+      await studentClient.from("discussion_threads").insert(newPost(student, { pinned: true })),
+      "a student creating a pinned post"
+    );
+    const existing = await newRoot(classA.id, student);
+    expectRefused(
+      await studentClient.from("discussion_threads").insert(newPost(student, { answer: existing })),
+      "a student creating a post with an answer"
+    );
+    const { data: pinnedByGrader, error: graderInsertError } = await graderClient
+      .from("discussion_threads")
+      .insert(newPost(plainGrader, { pinned: true }))
+      .select("id, pinned")
+      .single();
+    expect(graderInsertError, "a moderator creates a pinned post").toBeNull();
+    expect(pinnedByGrader!.pinned).toBe(true);
+    // A normal post is still fine.
+    expect((await studentClient.from("discussion_threads").insert(newPost(student, {}))).error).toBeNull();
+
+    // Moving a post to another topic.
+    const root = await newRoot(classA.id, student);
+    expectRefused(
+      await studentClient.from("discussion_threads").update({ topic_id: topics[classA.id][1] }).eq("id", root),
+      "an author moving their own post to another topic"
+    );
+    expect((await thread(root)).topic_id).toBe(topics[classA.id][0]);
+    expect(
+      (await graderClient.from("discussion_threads").update({ topic_id: topics[classA.id][1] }).eq("id", root)).error,
+      "a moderator moves a post to another topic"
+    ).toBeNull();
+    expect((await thread(root)).topic_id).toBe(topics[classA.id][1]);
+
+    // Moving a post into another class.
+    const own = await newRoot(classA.id, student);
+    expectRefused(
+      await studentClient.from("discussion_threads").update({ class_id: classB.id }).eq("id", own),
+      "an author moving their own post into another class"
+    );
+    const { data: still } = await supabase.from("discussion_threads").select("class_id").eq("id", own).single();
+    expect(still!.class_id).toBe(classA.id);
+  });
+
   test("moderate_discussion in one class doesn't reach another class", async () => {
     const r = await moderateAs(plainGrader, classB.id, studentB);
     expect(r.rootRow.pinned).toBe(false);

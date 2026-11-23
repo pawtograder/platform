@@ -20,10 +20,12 @@
 --      toggle_discussion_thread_author_anonymity and the staff part of
 --      set_discussion_thread_visibility check moderate_discussion instead of the app role. The
 --      author part of set_discussion_thread_visibility is unchanged. Only those checks change.
---   5. Pinning and marking answers: an author could update every column of their own post, so a
---      student could pin their own post or set its answer to anything through the API. Now only a
---      moderator can pin or unpin; only the question's author or a moderator can mark or unmark an
---      answer, and the answer must be a reply in that thread.
+--   5. Pinning, answers, topics and classes: an author could update every column of their own post,
+--      so a student could pin it, set its answer to anything, move it to another topic or move it
+--      into another class through the API. Now only a moderator can pin or unpin, change a post's
+--      topic, or create a post that is pinned or already has an answer; only the question's author or
+--      a moderator can mark or unmark an answer, and the answer must be a reply in that thread; and
+--      an author's update must keep the post in the author's own class.
 --
 -- Not changed: reading threads, posting, likes, follows, read status, discussion topics, error
 -- pins, AI help, discussion engagement and the Discord link.
@@ -109,7 +111,8 @@ CREATE POLICY "Discussion moderators can update threads" ON public.discussion_th
   USING (class_id IN (SELECT public.user_class_ids_with_capability('moderate_discussion')))
   WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('moderate_discussion')));
 
--- The author branch of the old "self updates, or instructor or grader", unchanged.
+-- The author branch of the old "self updates, or instructor or grader". The updated row must still
+-- be the author's own post in the author's own class, so an author can't move it into another class.
 CREATE POLICY "Authors can update their own threads" ON public.discussion_threads
   FOR UPDATE TO authenticated
   USING (
@@ -117,6 +120,15 @@ CREATE POLICY "Authors can update their own threads" ON public.discussion_thread
       SELECT 1
       FROM public.user_privileges up
       WHERE up.user_id = auth.uid()
+        AND (up.public_profile_id = discussion_threads.author OR up.private_profile_id = discussion_threads.author)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND up.class_id = discussion_threads.class_id
         AND (up.public_profile_id = discussion_threads.author OR up.private_profile_id = discussion_threads.author)
     )
   );
@@ -542,14 +554,17 @@ REVOKE ALL ON FUNCTION public.set_discussion_thread_visibility(bigint, boolean) 
 GRANT EXECUTE ON FUNCTION public.set_discussion_thread_visibility(bigint, boolean) TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- 5. Pinning and marking answers
+-- 5. Pinning, answers and topics
 -- ---------------------------------------------------------------------------
 
 -- The author rule above lets an author update every column of their own post. This keeps pinning
--- to moderators, and marking an answer to the question's author and moderators, with the answer a
--- reply in the same thread. Writes with no signed-in user (service role, migrations) aren't
--- checked; no edge function or migration writes these columns today.
-CREATE OR REPLACE FUNCTION public.discussion_threads_guard_pin_and_answer()
+-- and topic changes to moderators, and marking an answer to the question's author and moderators,
+-- with the answer a reply in the same thread. A new post can't start pinned or with an answer unless
+-- its author is a moderator. Moving a topic through set_discussion_thread_topic or
+-- mark_discussion_thread_duplicate still works: both need moderate_discussion already. Writes with no
+-- signed-in user (service role, migrations) aren't checked; no edge function or migration writes
+-- these columns today.
+CREATE OR REPLACE FUNCTION public.discussion_threads_guard_moderation()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -563,10 +578,25 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  IF TG_OP = 'INSERT' THEN
+    v_is_moderator := NEW.class_id IN (SELECT public.user_class_ids_with_capability('moderate_discussion'));
+    IF (NEW.pinned OR NEW.answer IS NOT NULL) AND NOT v_is_moderator THEN
+      RAISE EXCEPTION 'Only a discussion moderator can create a pinned or answered post'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  -- UPDATE: the moderator check is for the post's class before the update.
   v_is_moderator := OLD.class_id IN (SELECT public.user_class_ids_with_capability('moderate_discussion'));
 
   IF NEW.pinned IS DISTINCT FROM OLD.pinned AND NOT v_is_moderator THEN
     RAISE EXCEPTION 'Only a discussion moderator can pin or unpin a post'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF NEW.topic_id IS DISTINCT FROM OLD.topic_id AND NOT v_is_moderator THEN
+    RAISE EXCEPTION 'Only a discussion moderator can move a post to another topic'
       USING ERRCODE = 'insufficient_privilege';
   END IF;
 
@@ -597,9 +627,9 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.discussion_threads_guard_pin_and_answer() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.discussion_threads_guard_moderation() FROM PUBLIC, anon, authenticated;
 
-DROP TRIGGER IF EXISTS discussion_threads_guard_pin_and_answer ON public.discussion_threads;
-CREATE TRIGGER discussion_threads_guard_pin_and_answer
-  BEFORE UPDATE OF pinned, answer ON public.discussion_threads
-  FOR EACH ROW EXECUTE FUNCTION public.discussion_threads_guard_pin_and_answer();
+DROP TRIGGER IF EXISTS discussion_threads_guard_moderation ON public.discussion_threads;
+CREATE TRIGGER discussion_threads_guard_moderation
+  BEFORE INSERT OR UPDATE OF pinned, answer, topic_id ON public.discussion_threads
+  FOR EACH ROW EXECUTE FUNCTION public.discussion_threads_guard_moderation();
