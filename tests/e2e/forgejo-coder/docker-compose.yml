@@ -12,6 +12,7 @@ services:
     ports:
       - "127.0.0.1:${FORGEJO_PORT:-3100}:${FORGEJO_PORT:-3100}"
       - "127.0.0.1:${CODER_PORT:-7080}:${CODER_PORT:-7080}"
+      - "127.0.0.1:${FUNCTIONS_PORT:-3150}:${FUNCTIONS_PORT:-3150}"
 
   forgejo:
     image: ghcr.io/pawtograder/mirror/forgejo/forgejo:15.0.9-rootless
@@ -33,6 +34,8 @@ services:
       FORGEJO__oauth2_client__USERNAME: email
       FORGEJO__oauth2_client__ACCOUNT_LINKING: disabled
       FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES: "email profile"
+      # The class orgs' push hooks deliver to the functions container at 127.0.0.1 (cloud workspaces journey).
+      FORGEJO__webhook__ALLOWED_HOST_LIST: loopback
       FORGEJO__log__LEVEL: Info
 
   coder-db:
@@ -54,6 +57,13 @@ services:
         condition: service_started
       coder-db:
         condition: service_healthy
+      agents-init:
+        condition: service_completed_successfully
+    volumes:
+      # The `kubernetes` template run-e2e.sh pushes: the lane's main.tf beside the chart's own clone.sh.
+      - ./coder-template/main.tf:/pawtograder-template/main.tf:ro
+      - ../../../charts/pawtograder/files/coder-templates/kubernetes/clone.sh:/pawtograder-template/clone.sh:ro
+      - agents:/agents
     environment:
       CODER_HTTP_ADDRESS: "0.0.0.0:${CODER_PORT:-7080}"
       CODER_ACCESS_URL: "http://127.0.0.1:${CODER_PORT:-7080}"
@@ -76,3 +86,83 @@ services:
       CODER_OIDC_IGNORE_USERINFO: "true"
       CODER_OIDC_ACCESS_TOKEN_CLAIMS: "true"
       CODER_OIDC_USERNAME_FIELD: "sub"
+      # The chart's coder.externalAuth.github slot (CODER_GITHUB_AUTH_ID=github), played by Forgejo: the lane
+      # can't reach GitHub, so a second origin of the same Forgejo (localhost instead of 127.0.0.1) stands in
+      # for github.com, and Forgejo's OAuth2 provider for GitHub's. The authorize URL stays on 127.0.0.1, where
+      # the student's Forgejo session is; REGEX matches only the stand-in origin, so the agent's GIT_ASKPASS
+      # answers for GitHub clones and Forgejo clones keep using the credentials file Pawtograder delivers.
+      CODER_EXTERNAL_AUTH_0_ID: github
+      CODER_EXTERNAL_AUTH_0_TYPE: gitea
+      CODER_EXTERNAL_AUTH_0_DISPLAY_NAME: GitHub
+      CODER_EXTERNAL_AUTH_0_CLIENT_ID: "${GITHUB_STANDIN_CLIENT_ID:-}"
+      CODER_EXTERNAL_AUTH_0_CLIENT_SECRET: "${GITHUB_STANDIN_CLIENT_SECRET:-}"
+      CODER_EXTERNAL_AUTH_0_AUTH_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/login/oauth/authorize"
+      CODER_EXTERNAL_AUTH_0_TOKEN_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/login/oauth/access_token"
+      CODER_EXTERNAL_AUTH_0_VALIDATE_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}/api/v1/user"
+      CODER_EXTERNAL_AUTH_0_REGEX: "^http://localhost:${FORGEJO_PORT:-3100}(/.*)?$$"
+
+  # Empties the shared /agents volume and makes it writable by the coder user (uid 1000) of both images.
+  agents-init:
+    image: ${WORKSPACE_IMAGE:-ghcr.io/pawtograder/coder-workspace:staging-latest}
+    user: "0:0"
+    volumes:
+      - agents:/agents
+    entrypoint: ["sh", "-c", "rm -rf /agents/* && chown 1000:1000 /agents"]
+
+  # Where the lane's workspaces run: the chart's workspace image, running each agent the template hands over
+  # (workspace-agents.sh). Its network namespace is the loopback container's, so the agent reaches Coder and
+  # Forgejo at the URLs the template and workspace-open use. The image is amd64-only; on an arm64 host,
+  # WORKSPACE_IMAGE=codercom/code-server:4.143.1 (same user, home and code-server) and WORKSPACE_ARCH=arm64.
+  workspace:
+    image: ${WORKSPACE_IMAGE:-ghcr.io/pawtograder/coder-workspace:staging-latest}
+    network_mode: service:loopback
+    depends_on:
+      loopback:
+        condition: service_started
+      agents-init:
+        condition: service_completed_successfully
+    volumes:
+      - agents:/agents
+      - ./workspace-agents.sh:/e2e/workspace-agents.sh:ro
+    entrypoint: ["sh", "/e2e/workspace-agents.sh"]
+
+  # The edge functions the cloud workspaces journey reaches, run unmodified under Deno (functions-router.ts).
+  functions:
+    image: docker.io/denoland/deno:2.9.8
+    network_mode: service:loopback
+    depends_on: [loopback]
+    user: "0:0"
+    volumes:
+      - ../../../supabase/functions:/supabase/functions:ro
+      - ./functions-router.ts:/e2e/functions-router.ts:ro
+      - deno-cache:/deno-dir
+    command: ["deno", "run", "--allow-all", "--no-lock", "/e2e/functions-router.ts"]
+    environment:
+      DENO_DIR: /deno-dir
+      FUNCTIONS_PORT: "${FUNCTIONS_PORT:-3150}"
+      SUPABASE_URL: "http://127.0.0.1:${SB_API_PORT:-56321}"
+      SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY:-}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY:-}"
+      CODER_URL: "http://127.0.0.1:${CODER_PORT:-7080}"
+      CODER_API_TOKEN: "${CODER_API_TOKEN:-}"
+      CODER_GITHUB_AUTH_ID: github
+      GITHUB_URL: "http://localhost:${FORGEJO_PORT:-3100}"
+      FORGEJO_URL: "http://127.0.0.1:${FORGEJO_PORT:-3100}"
+      FORGEJO_ADMIN_USERNAME: "${FORGEJO_ADMIN_USER:-}"
+      FORGEJO_ADMIN_PASSWORD: "${FORGEJO_ADMIN_PASSWORD:-}"
+      FORGEJO_AUTH_SOURCE_ID: "${SOURCE_ID:-}"
+      FORGEJO_WEBHOOK_SECRET: "${FORGEJO_WEBHOOK_SECRET:-}"
+      # As in deploy.yml's e2e job: the GitHub Actions side of a submission is the suite's e2e token, and
+      # E2E_MOCK_GITHUB keeps autograder-create-submission from cloning from GitHub. GitHubWrapper builds an
+      # App at import, so it gets a throwaway key.
+      E2E_ENABLE: "true"
+      E2E_MOCK_GITHUB: "true"
+      END_TO_END_SECRET: "${END_TO_END_SECRET:-not-a-secret}"
+      GITHUB_APP_ID: "1"
+      GITHUB_PRIVATE_KEY_STRING: "${E2E_GITHUB_PRIVATE_KEY_STRING:-}"
+      GITHUB_OAUTH_CLIENT_ID: not-a-real-oauth-client-id
+      GITHUB_OAUTH_CLIENT_SECRET: not-a-real-oauth-client-secret
+
+volumes:
+  agents:
+  deno-cache:

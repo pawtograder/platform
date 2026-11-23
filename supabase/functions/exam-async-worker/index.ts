@@ -11,10 +11,12 @@ import {
   ProviderTransientError,
   wordsInRegion,
   type NormRect,
-  type PageImage,
-  type WordBox
+  type PageImage
 } from "../_shared/examVision.ts";
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
+import { mapRectToScan, wordsToTemplate } from "../_shared/examRegistration.ts";
+import { alignBatch, loadTemplates, ocrWords, requireAligned, toOcrData } from "./pageAlignment.ts";
+import { downloadImage, downloadImageCached } from "./storage.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -166,30 +168,6 @@ async function setBatchError(admin: Admin, batchId: number, message: string): Pr
   if (updErr) throw new Error(`mark batch ${batchId} errored failed: ${updErr.message}`);
 }
 
-async function downloadImage(admin: Admin, bucket: string, path: string): Promise<Uint8Array> {
-  const { data, error } = await admin.storage.from(bucket).download(path);
-  if (error || !data) throw new Error(`download ${bucket}/${path} failed: ${error?.message}`);
-  return new Uint8Array(await data.arrayBuffer());
-}
-
-// Download an image at most once per cache. Lets a single doMatch group / finalize pass
-// reuse the same page bytes (e.g. SIS-id and name regions on one page, or a page that is
-// both copied to submission-files and read for answer structuring) instead of re-fetching.
-// Caches the in-flight promise so even concurrent reads of one path share a single fetch.
-function downloadImageCached(
-  admin: Admin,
-  cache: Map<string, Promise<Uint8Array>>,
-  bucket: string,
-  path: string
-): Promise<Uint8Array> {
-  let pending = cache.get(path);
-  if (!pending) {
-    pending = downloadImage(admin, bucket, path);
-    cache.set(path, pending);
-  }
-  return pending;
-}
-
 // Which class, exam and batch a page's image_path must name (#1078). Taken from the batch row:
 // staff write image_path, and the page's own exam_id is not tied to its batch's exam.
 async function loadScanScope(admin: Admin, batchId: number): Promise<ScanScope> {
@@ -234,7 +212,7 @@ async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs)
   // belongs to no queued work and is dropped (a zero-row update is not an error).
   const { error: updErr } = await admin
     .from("exam_scan_pages")
-    .update({ ocr_text: result.text, ocr_data: { words: result.words } as unknown as Json })
+    .update({ ocr_text: result.text, ocr_data: toOcrData(result.words) })
     .eq("id", args.scan_page_id)
     .eq("batch_id", batchId);
   // Throw on write failure so the message is requeued, not archived (would lose the OCR).
@@ -429,6 +407,15 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   const scanScope: ScanScope = { classId: batch.class_id, examId: batch.exam_id, batchId: batch.id };
   for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
 
+  // Line every page up with its template page before reading any region; a page that cannot be
+  // refuses the batch (#1292). Before linking, so a refused batch creates no scanned exams.
+  const groupCount = Math.ceil(pages.length / perExam);
+  const groups = await alignBatch(
+    admin,
+    scanScope,
+    Array.from({ length: groupCount }, (_, g) => pages.slice(g * perExam, g * perExam + perExam))
+  );
+
   // identity regions (kind name/student_id) defined on the template. A template may
   // define one of each; when both exist we read each independently (they can sit on
   // different pages) and combine the two signals to disambiguate the student.
@@ -450,7 +437,7 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // Read the identity within one region (or the whole first page when region is null).
   const readRegionIdentity = async (
     region: IdRegion | undefined,
-    groupPages: typeof pages,
+    groupPages: (typeof groups)[number],
     cache: Map<string, Promise<Uint8Array>>
   ) => {
     const pageNumber = region?.page_number ?? 1;
@@ -469,15 +456,11 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     }
     const bytes = await downloadImageCached(admin, cache, "exam-scans", page.image_path);
     const img: PageImage = { name: page.image_path, bytes, width: page.width ?? 0, height: page.height ?? 0 };
-    const rect: NormRect | null = region
-      ? { x: region.x, y: region.y, width: region.width, height: region.height }
-      : null;
+    const rect: NormRect | null = region ? mapRectToScan(region, page.reg) : null;
     return provider.readIdentity(img, rect);
   };
 
   const roster = await loadRoster(admin, classId);
-  const groupCount = Math.ceil(pages.length / perExam);
-  const groups = Array.from({ length: groupCount }, (_, g) => pages.slice(g * perExam, g * perExam + perExam));
 
   // Create the scanned exams and link every group in one transaction (exam_link_scan_groups). It
   // refuses, as a whole, a grouping that would change the pages of an exam a human confirmed or
@@ -672,6 +655,10 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   }
   // Check every page's image path before copying or structuring from any of them (#1078).
   for (const p of pages) assertScanPathInScope(p.image_path, scanScope, `scan page ${p.id}`);
+  // Line the pages up with the template as it is now, before creating anything. Staff can replace
+  // the template between match and finalize, so a page that no longer lines up refuses the batch
+  // before anything is created (#1292).
+  const [groupPages] = requireAligned(batchId, [pages], await loadTemplates(admin, scanScope), (p) => p.ocr_data);
 
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
@@ -687,7 +674,6 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   // a crash) re-runs them safely. pageBytes fetches each page image at most once.
   {
     const pageBytes = new Map<string, Promise<Uint8Array>>();
-    const groupPages = pages;
 
     // Idempotent rebuild WITHOUT deleting existing rows: a blanket delete of the
     // submission's files would fail once a grader has commented on a page (the
@@ -757,9 +743,11 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
       const examPageNo = Math.max(1, r.page_number);
       const page = groupPages[examPageNo - 1];
       if (!page) continue;
-      const words = ((page.ocr_data as { words?: WordBox[] } | null)?.words ?? []) as WordBox[];
-      const rect: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
-      const ocrText = wordsInRegion(words, rect);
+      // Read the region as drawn, against this scan's words moved into template space. `rect` is
+      // where the region sits on the scan, for the model and the grader's crop.
+      const drawn: NormRect = { x: r.x, y: r.y, width: r.width, height: r.height };
+      const ocrText = wordsInRegion(wordsToTemplate(ocrWords(page.ocr_data), page.reg), drawn);
+      const rect = mapRectToScan(drawn, page.reg);
       let structuredValue: unknown = ocrText;
       const question = r.exam_questions as unknown as { answer_type: string | null; label: string | null } | null;
       const answerType = question?.answer_type ?? null;
@@ -832,6 +820,11 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   const env = msg.message;
   scope.setTag("exam_method", env.method);
   scope.setTag("batch_id", String(env.batch_id));
+  // #1293: every captureException below is a give-up. This says whether the budget ran out on the
+  // first failure or the sixth, which is the difference between a hard failure and a provider
+  // having a bad few minutes -- the context the per-retry events used to carry before they stopped
+  // being sent.
+  scope.setTag("attempt", String((env.retry_count ?? 0) + 1));
 
   // poison-pill protection
   if (msg.read_ct >= PGMQ_MAX_READ_CT) {
@@ -876,7 +869,15 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
         await archive(admin, msg.msg_id);
         return;
       }
-      // requeue this message with the provider's backoff; archive the current copy
+      // requeue this message with the provider's backoff; archive the current copy.
+      // This path never captured, so #1293 changes nothing here beyond making the retry visible
+      // in the logs the same way the transient path below now is. Logged separately from that
+      // one because a run full of rate limits means the quota is too small, while a run full of
+      // transient errors means the provider is unwell, and those want different responses.
+      log(
+        `rate-limit retry ${(env.retry_count ?? 0) + 1} for ${env.method} ` +
+          `(batch ${env.batch_id}) in ${error.retryAfterSeconds}s`
+      );
       await requeue(admin, env, error.retryAfterSeconds);
       await archive(admin, msg.msg_id);
       return;
@@ -891,8 +892,22 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       return;
     }
     // transient: requeue with exponential backoff
-    Sentry.captureException(error, scope);
+    //
+    // #1293: deliberately no captureException. Reaching here is the backoff working, not a
+    // failure -- the message is requeued and the next attempt usually succeeds. #1132 made
+    // transient provider failures propagate here instead of being swallowed, so capturing meant a
+    // 200-student finalize (about 1800 provider calls) could raise hundreds of Sentry events for
+    // a condition handled correctly and silently, burying the give-up paths above that actually
+    // need triage.
+    //
+    // The retry stays observable without them: this line makes the rate queryable in the function
+    // logs, and the `attempt` tag set at the top of this function tells any event that IS captured
+    // how many tries the message had already used.
     const delay = Math.min(300, 10 * Math.pow(2, retryCount));
+    log(
+      `retry ${retryCount + 1} for ${env.method} (batch ${env.batch_id}) in ${delay}s: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+    );
     await requeue(admin, env, delay);
     await archive(admin, msg.msg_id);
   }

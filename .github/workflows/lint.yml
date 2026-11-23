@@ -384,11 +384,17 @@ jobs:
       # that the TS flag reader agrees with the database's strict reader;
       # course-gemini-key-panel pins the settings page's status-read deadline,
       # stale-response guard and failure announcements.
+      # escalation-tour pins the staff "What's new" walkthrough: it opens once per person (read from
+      # user_whats_new_seen), stays closed when that read fails, and keeps its previews inert.
       # The office hours alert suites are pure-logic hook tests with no database. They go here
       # by name because neither lane picked them up otherwise: this list does not glob, and
       # deploy.yml matches `tests/unit/issue` only. useTurnAlert and queue-health-alerts shipped
       # in #1287 and ran nowhere until this line — the same green-by-omission the bug-reporter
       # prefix above was added to end.
+      # table-controller-id-only-broadcast pins how TableController handles ID-only broadcasts:
+      # refetch, eviction when RLS hides the row, and the uncached-id check (#1310).
+      # The office hours onboarding suites (#1347) test pure rules and a hook with mocked data, so
+      # they go here by name for the same reason.
       - name: Run Jest unit tests
         run: |
           npx jest --runInBand \
@@ -402,12 +408,19 @@ jobs:
             tests/unit/exam-region-math.test.ts \
             tests/unit/exam-split.test.ts \
             tests/unit/exam-to-surveyjs.test.ts \
+            tests/unit/issue-1013-use-now.test.ts \
+            tests/unit/issue-1013-refresh-current-page.test.ts \
             tests/unit/useCapability.test.tsx \
             tests/unit/course-gemini-key.test.ts \
             tests/unit/course-gemini-key-panel.test.tsx \
+            tests/unit/escalation-tour.test.tsx \
             tests/unit/useTurnAlert.test.tsx \
             tests/unit/queue-health-alerts.test.ts \
             tests/unit/escalation-alerts.test.tsx \
+            tests/unit/table-controller-id-only-broadcast.test.ts \
+            tests/unit/office-hours-onboarding.test.ts \
+            tests/unit/office-hours-onboarding-hook.test.tsx \
+            tests/unit/onboarding-seen.test.ts \
             tests/unit/bugReport
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a

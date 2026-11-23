@@ -291,7 +291,8 @@ export default function NewAssignmentPage() {
                 { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
                 supabase
               );
-              // Grader repositories are only created on GitHub; see FORGEJO_GRADER_SETUP_REASON.
+              // assignment-create-solution-repo refuses Forgejo; the instructor picks a GitHub grader repo on the
+              // Autograder page, where this form now lands.
               if (!isForgejo) {
                 await assignmentCreateSolutionRepo(
                   { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
@@ -327,10 +328,7 @@ export default function NewAssignmentPage() {
                       // form links back to it -- its `assignment_id` defaults to null, so without
                       // this the flow can leave a survey assignment with no survey attached.
                       `/course/${course_id}/manage/surveys/new?assignment_id=${data.id}`
-                    : isForgejo
-                      ? // The Autograder page sets up GitHub grader repositories, which Forgejo rejects.
-                        base
-                      : `${base}/autograder`;
+                    : `${base}/autograder`;
             // Awaited, and the navigation goes through the hook: this also drops the browser's
             // Router Cache, which still holds the pre-insert render of the assignments list the
             // user came from (#937). `revalidateTag` alone never reached that copy.
