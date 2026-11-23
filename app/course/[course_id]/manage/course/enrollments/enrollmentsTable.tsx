@@ -167,6 +167,7 @@ export default function EnrollmentsTable() {
   const labSections = useLabSections();
   const classSections = useClassSections();
   const course = useCourse();
+  const hasGitHubOrg = Boolean(course?.github_org?.trim());
   const discordServerConfigured = !!course?.discord_server_id;
   const cloudWorkspacesEnabled = courseFeatureEffectiveEnabled(
     (course as CourseWithFeatures | undefined)?.features,
@@ -916,7 +917,7 @@ export default function EnrollmentsTable() {
           const userRoleEntry = row.original;
           const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
           const isTargetInstructor = userRoleEntry.role === "instructor";
-          const canDiagnoseGitHub = userRoleEntry.role === "student";
+          const canDiagnoseGitHub = hasGitHubOrg && userRoleEntry.role === "student";
 
           const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
           let editRoleTooltipContent = "Edit user role";
@@ -1023,6 +1024,7 @@ export default function EnrollmentsTable() {
       classSections,
       labSections,
       setSisSyncOptOut,
+      hasGitHubOrg,
       discordServerConfigured,
       discordStateByUser,
       discordStatusUnknown,
