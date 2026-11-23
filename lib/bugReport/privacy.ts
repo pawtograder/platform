@@ -921,6 +921,24 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "flashcards.prompt": "none",
   "flashcards.title": "none",
   "flashcards.updated_at": "none",
+  "forgejo_class_staff_teams.class_id": "none",
+  "forgejo_class_staff_teams.created_at": "none",
+  "forgejo_class_staff_teams.instance_url": "none",
+  "forgejo_class_staff_teams.org": "none",
+  "forgejo_class_staff_teams.team": "none",
+  "forgejo_class_staff_teams.team_id": "none",
+  "forgejo_group_repo_revocations.assignment_group_id": "none",
+  "forgejo_group_repo_revocations.claim_id": "none",
+  "forgejo_group_repo_revocations.claimed_at": "none",
+  "forgejo_group_repo_revocations.created_at": "none",
+  "forgejo_group_repo_revocations.first_revoked_at": "none",
+  "forgejo_group_repo_revocations.id": "none",
+  "forgejo_group_repo_revocations.instance_url": "none",
+  "forgejo_group_repo_revocations.login": "handle",
+  "forgejo_group_repo_revocations.profile_id": "none",
+  // A group repo's owner/name, as repositories.repository.
+  "forgejo_group_repo_revocations.repository": "handle",
+  "forgejo_group_repo_revocations.repository_id": "none",
   "forgejo_repo_tokens.id": "none",
   "forgejo_repo_tokens.instance_url": "none",
   "forgejo_repo_tokens.recorded_at": "none",
@@ -2410,10 +2428,10 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$[*].previous_guild_id": "none"
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
+  claim_forgejo_group_repo_revocation: "none",
   claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
-  cloud_workspaces_enabled: "none",
   cleanup_discord_async_errors: "none",
   cleanup_expired_realtime_subscriptions: "none",
   cleanup_github_async_errors: "none",
@@ -2430,6 +2448,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // UNCERTAIN: $.error is SQLERRM from a WHEN OTHERS handler and is marked free_text to be safe. Its raised messages contain only ids.
   clear_unfinished_review_assignments: { $: "none", "$.error": "free_text" },
   cli_import_submission_comments_batch: "none",
+  cloud_workspaces_enabled: "none",
   coder_workspace_deletion_date: "none",
   complete_eligible_grading_reviews: "none",
   copy_groups_from_assignment: "none",
@@ -2530,6 +2549,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   exam_worker_set_batch_status: "none",
   exam_worker_set_match_suggestion: "none",
   finalize_submission_early: "none",
+  // void: removes the queued row, or marks the repo for re-granting when the student rejoined.
+  finish_forgejo_group_repo_revocation: "none",
   finish_help_request: "none",
   fix_assignment_repo_permissions: {
     $: "none",
@@ -2538,6 +2559,17 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.results[*].error_message": "free_text"
   },
   forgejo_accounts_needed: { "$[*].email": "email", "$[*].name": "name", "$[*].user_id": "none" },
+  forgejo_group_member_logins: { "$[*].login": "handle" },
+  // void: queue and cancel collaborator removals for students who left or rejoined a group.
+  forgejo_group_members_left: "none",
+  forgejo_group_members_rejoined: "none",
+  forgejo_group_repo_revocations_needed: {
+    "$[*].assignment_group_id": "none",
+    "$[*].id": "none",
+    "$[*].login": "handle",
+    "$[*].profile_id": "none",
+    "$[*].repository": "handle"
+  },
   forgejo_group_repos_needed: {
     "$[*].all_members_have_logins": "none",
     "$[*].assignment_group_id": "none",
@@ -2567,6 +2599,14 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     // The repo name ends in the student's Forgejo login.
     "$[*].name": "handle",
     "$[*].template_repo": "none"
+  },
+  forgejo_staff_teams: {
+    "$[*].class_id": "none",
+    "$[*].org": "none",
+    "$[*].team": "none",
+    "$[*].logins": "handle",
+    // Student repo names end in a Forgejo login, and group repo names in a name students choose.
+    "$[*].repositories": "free_text"
   },
   generate_anon_name: "name",
   get_all_class_metrics: "none",
@@ -3015,6 +3055,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   record_discord_async_error: "none",
   record_discord_membership_status: "none",
   record_forgejo_repo_token: "none",
+  record_forgejo_staff_team: "none",
   record_github_async_error: "none",
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",

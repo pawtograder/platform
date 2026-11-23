@@ -854,6 +854,11 @@
       { "name": "flashcards_deck_id_fkey", "columns": ["deck_id"], "ref": "flashcard_decks" }
     ]
   },
+  "forgejo_class_staff_teams": {
+    "kind": "table",
+    "fks": [{ "name": "forgejo_class_staff_teams_class_id_fkey", "columns": ["class_id"], "ref": "classes" }]
+  },
+  "forgejo_group_repo_revocations": { "kind": "table", "fks": [] },
   "forgejo_repo_tokens": {
     "kind": "table",
     "fks": [{ "name": "forgejo_repo_tokens_user_id_fkey", "columns": ["user_id"], "ref": "users" }]
