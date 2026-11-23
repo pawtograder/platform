@@ -61,11 +61,17 @@ test.describe("Exam grading OCR pipeline", () => {
     expect(examErr).toBeNull();
     expect(examId).toBeTruthy();
 
+    // The worker OCRs the template page before matching (#1292), so the image has to exist.
+    const templatePath = `classes/${course.id}/exams/${examId}/template/page-1.png`;
+    const templateUp = await supabase.storage
+      .from("exam-templates")
+      .upload(templatePath, PNG_1x1, { contentType: "image/png", upsert: true });
+    expect(templateUp.error).toBeNull();
     await supabase.from("exam_template_pages").insert({
       class_id: course.id,
       exam_id: examId as number,
       page_number: 1,
-      image_path: `classes/${course.id}/exams/${examId}/template/page-1.png`,
+      image_path: templatePath,
       width: 1000,
       height: 1400
     });
@@ -209,6 +215,13 @@ test.describe("Exam grading OCR pipeline", () => {
     expect(stillConfirmed).toBe(2);
 
     // --- finalize ---
+    // Finalize a batch as if it was matched before #1292 deployed, when nothing read the template:
+    // finalize has to read it itself rather than refusing the batch.
+    const { error: unreadErr } = await supabase
+      .from("exam_template_pages")
+      .update({ ocr_data: null })
+      .eq("exam_id", examId as number);
+    expect(unreadErr).toBeNull();
     const { error: finErr } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
 
@@ -222,6 +235,12 @@ test.describe("Exam grading OCR pipeline", () => {
         { timeout: 60_000, intervals: [1000, 2000, 3000] }
       )
       .toBe("completed");
+    const { data: reread } = await supabase
+      .from("exam_template_pages")
+      .select("ocr_data")
+      .eq("exam_id", examId as number)
+      .single();
+    expect(reread?.ocr_data).not.toBeNull();
 
     // --- 7) assert submissions, raw files, and the exam_v1 artifact exist ---
     const { data: submissions } = await supabase
