@@ -42,7 +42,15 @@ jest.mock("@chakra-ui/react", () => {
     )
   );
   Element.displayName = "Element";
-  return { Box: Element, Heading: Element, Text: Element, VStack: Element, Button: Element, HStack: Element };
+  return {
+    Box: Element,
+    Heading: Element,
+    Text: Element,
+    VStack: Element,
+    Button: Element,
+    HStack: Element,
+    Spinner: Element
+  };
 });
 jest.mock("@/components/ui/alert", () => {
   const Alert = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement> & { title: string }>(
@@ -189,4 +197,31 @@ test("a read-back shares the save deadline and cannot reconcile after a retry", 
   read.resolve({ data: row("New"), error: null });
   await settle();
   expect(mockToast).toHaveBeenCalledTimes(1);
+});
+
+test("a submit in flight shows a banner and asks before the page closes", async () => {
+  render(<SurveyTakingPage />);
+  await settle();
+  const submit = deferred<{ data: unknown; error: unknown }>();
+  mockWrite.mockReturnValueOnce(submit.promise);
+  const leave = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  expect(leave()).toBe(false);
+  act(() => {
+    props().onComplete!(model("New"), {
+      showSaveInProgress: jest.fn(),
+      clearSaveMessages: jest.fn(),
+      showSaveSuccess: jest.fn()
+    } as unknown as CompleteEvent);
+  });
+  await settle();
+  expect(screen.getByText(/Submitting your survey/)).toHaveTextContent("Keep this page open");
+  expect(leave()).toBe(true);
+  submit.resolve({ data: row("New"), error: null });
+  await settle();
+  expect(screen.queryByText(/Submitting your survey/)).toBeNull();
+  expect(leave()).toBe(false);
 });

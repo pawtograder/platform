@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Heading, Text, VStack, Button, HStack } from "@chakra-ui/react";
+import { Box, Heading, Text, VStack, Button, HStack, Spinner } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Alert } from "@/components/ui/alert";
@@ -59,6 +59,9 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   failed: "fg.error",
   refused: "fg.error"
 };
+// Autosave states where leaving the page could lose answers. A save in flight is not one: the
+// pagehide handler resends it with keepalive.
+const UNSAVED_STATUSES: ReadonlySet<AutosaveStatus> = new Set(["retrying", "offline", "failed"]);
 // Shown in the same status region, in the `failed` color, after an edit the page can't save because
 // the student's saved response didn't load.
 const UNSAVABLE_STATUS_TEXT =
@@ -668,6 +671,20 @@ export default function SurveyTakingPage() {
     [private_profile_id, surveyId, canAutosave]
   );
 
+  // Ask before the tab closes or reloads while a submit is in flight or answers aren't saved. The
+  // browser shows its own wording; the banner below says why.
+  const leaveWouldLoseAnswers = isSubmitting || UNSAVED_STATUSES.has(autosaveStatus);
+  useEffect(() => {
+    if (!leaveWouldLoseAnswers) return;
+    const warnBeforeLeave = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Chrome before 119 and older Safari show the prompt only when returnValue is set.
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeave);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeave);
+  }, [leaveWouldLoseAnswers]);
+
   const handleBackToSurveys = useCallback(() => {
     router.push(`/course/${course_id}/surveys`);
   }, [router, course_id]);
@@ -801,6 +818,21 @@ export default function SurveyTakingPage() {
               </Button>
             )}
           </HStack>
+        )}
+
+        {/* Shown from Complete until the server confirms or the submit fails. A submit can wait up
+            to SAVE_TIMEOUT_MS plus a read-back, and closing the laptop or the tab meanwhile may
+            leave it unsent. */}
+        {isSubmitting && (
+          <Alert
+            role="status"
+            aria-live="polite"
+            status="info"
+            icon={<Spinner size="sm" />}
+            title="Submitting your survey…"
+          >
+            Keep this page open and your computer awake until it says your survey is submitted.
+          </Alert>
         )}
 
         {submitError && (
