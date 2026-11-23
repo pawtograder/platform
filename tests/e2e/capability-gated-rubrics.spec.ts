@@ -1,5 +1,5 @@
 /**
- * #1010: editing rubrics needs manage_rubrics (20261122210800_rubrics_by_capability.sql). Without
+ * #1010: editing rubrics needs manage_rubrics (20261123150300_rubrics_by_capability.sql). Without
  * it the Configure Rubric nav item is hidden, and opening the rubric page by URL sends you back to
  * the assignment page. A Head TA on a custom role with manage_rubrics sees it and can save a rubric.
  * Instructors see no change.
