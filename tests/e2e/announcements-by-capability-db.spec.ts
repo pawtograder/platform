@@ -1,9 +1,12 @@
 /**
  * #1010: the Emailer follows send_announcements (20261123160000_announcements_by_capability.sql).
  *
- * - Reading, creating, changing and deleting email_batches and emails needs send_announcements in
- *   the row's class. The default instructor role holds it; the default grader role doesn't.
+ * - Reading and creating email_batches and emails needs send_announcements in the row's class. The
+ *   default instructor role holds it; the default grader role doesn't.
+ * - Changing and deleting them stay instructor-only (staging's policies, unchanged).
  * - A new email must go to someone enrolled in its class, and its batch must be in the same class.
+ * - A new email becomes a notification for its recipient (the email_notifications() trigger),
+ *   whoever sends it.
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
@@ -129,6 +132,30 @@ test.describe("The Emailer follows send_announcements (#1010)", () => {
     expect(data!.emails).toEqual([{ user_id: studentA.user_id }]);
   });
 
+  test("a Head TA's email becomes a notification for the student", async () => {
+    const subject = `E2E notified ${Date.now().toString(36)}`;
+    const client = await createAuthenticatedClient(headTa);
+    const batch = await client
+      .from("email_batches")
+      .insert({ ...batchValues(classA.id), subject })
+      .select("id")
+      .single();
+    expect(batch.error).toBeNull();
+    const email = await client.from("emails").insert({ ...emailValues(classA.id, batch.data!.id, studentA), subject });
+    expect(email.error).toBeNull();
+
+    const { data: notes, error } = await supabase
+      .from("notifications")
+      .select("class_id, style, body")
+      .eq("user_id", studentA.user_id)
+      .eq("class_id", classA.id)
+      .eq("style", "email")
+      .eq("body->>subject", subject);
+    expect(error).toBeNull();
+    expect(notes).toHaveLength(1);
+    expect(notes![0].body).toMatchObject({ type: "email", action: "create", subject, body: "Hello" });
+  });
+
   test("a default grader is refused, and sees no emails", async () => {
     const { batch } = await sendAs(plainGrader, classA.id, studentA);
     expectRefused(batch, "a grader's batch");
@@ -169,34 +196,38 @@ test.describe("The Emailer follows send_announcements (#1010)", () => {
     expect(data).toEqual([]);
   });
 
-  test("changing an email re-checks the recipient and batch, and a default grader can't change or delete", async () => {
+  test("only an instructor can change or delete emails and batches", async () => {
     const { batch, email } = await sendAs(headTa, classA.id, studentA);
     expect(email?.error).toBeNull();
     const emailId = email!.data!.id;
-    const batchB = await serviceBatch(classB.id);
+    const batchId = batch.data!.id;
 
-    const headTaClient = await createAuthenticatedClient(headTa);
-    expectRefused(
-      await headTaClient.from("emails").update({ user_id: studentB.user_id }).eq("id", emailId),
-      "moving an email to a student of another class"
-    );
-    expectRefused(
-      await headTaClient.from("emails").update({ batch_id: batchB }).eq("id", emailId),
-      "moving an email to another class's batch"
-    );
-
-    // A default grader's update and delete match no rows they can see, so nothing changes.
-    const graderClient = await createAuthenticatedClient(plainGrader);
-    await graderClient.from("emails").update({ subject: "changed" }).eq("id", emailId);
-    await graderClient.from("emails").delete().eq("id", emailId);
-    await graderClient.from("email_batches").delete().eq("id", batch.data!.id);
+    // A Head TA with send_announcements and a default grader: there is no update or delete policy
+    // for them, so these match no rows and nothing changes.
+    for (const user of [headTa, plainGrader]) {
+      const client = await createAuthenticatedClient(user);
+      await client.from("emails").update({ subject: "changed" }).eq("id", emailId);
+      await client.from("email_batches").update({ class_id: classB.id, subject: "changed" }).eq("id", batchId);
+      await client.from("emails").delete().eq("id", emailId);
+      await client.from("email_batches").delete().eq("id", batchId);
+    }
     const { data: row } = await supabase.from("emails").select("subject, user_id, batch_id").eq("id", emailId).single();
-    expect(row).toEqual({ subject: "E2E email", user_id: studentA.user_id, batch_id: batch.data!.id });
-    expect((await supabase.from("email_batches").select("id").eq("id", batch.data!.id)).data).toHaveLength(1);
+    expect(row).toEqual({ subject: "E2E email", user_id: studentA.user_id, batch_id: batchId });
+    const { data: batchRow } = await supabase.from("email_batches").select("class_id").eq("id", batchId).single();
+    expect(batchRow).toEqual({ class_id: classA.id });
 
-    // The Head TA can delete their own class's email.
-    expect((await headTaClient.from("emails").delete().eq("id", emailId)).error).toBeNull();
-    expect(await emailsOfBatch(batch.data!.id)).toEqual([]);
+    // An instructor still can, as before.
+    const instructorClient = await createAuthenticatedClient(instructor);
+    const changed = await instructorClient
+      .from("emails")
+      .update({ subject: "changed by instructor" })
+      .eq("id", emailId)
+      .select("id");
+    expect(changed.error).toBeNull();
+    expect(changed.data).toHaveLength(1);
+    expect((await instructorClient.from("emails").delete().eq("id", emailId).select("id")).data).toHaveLength(1);
+    expect((await instructorClient.from("email_batches").delete().eq("id", batchId).select("id")).data).toHaveLength(1);
+    expect(await emailsOfBatch(batchId)).toEqual([]);
   });
 
   test("an instructor can still send an email and read it back", async () => {

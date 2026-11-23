@@ -147,10 +147,12 @@ again when the staff channel says the viewer's own role changed or a role's capa
 `send_announcements` is the Emailer (Course Settings > Emailer). There is no separate announcements
 feature; "Announcements" is only a discussion topic icon. It is on the default instructor role only.
 
-- It covers reading, creating, changing and deleting `email_batches` and `emails` (reading too,
-  because the Emailer reads a new batch back to get its id), the Emailer menu item, and the
-  Emailer page, which sends people without it to the course home page.
-- A new or changed email must go to someone enrolled in its class (a `user_roles` row in the same
+- It covers reading and creating `email_batches` and `emails` (reading too, because the Emailer
+  reads a new batch back to get its id), the Emailer menu item, and the Emailer page, which sends
+  people without it to the course home page.
+- Changing and deleting emails and batches stay instructor-only. The Emailer only creates and
+  reads, and neither table records who sent a batch.
+- A new email must go to someone enrolled in its class (a `user_roles` row in the same
   class), and its batch must belong to the same class. The `email_notifications()` trigger turns
   each email into a notification for its recipient. This limits the recipient only: Cc and
   Reply-to can be any address, as the Emailer allows.
