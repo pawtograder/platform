@@ -7,6 +7,7 @@ import { ClassRealTimeController } from "./ClassRealTimeController";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
 import { bugReportIngest, registerRowSource, unregisterRowSource } from "@/lib/bugReport/ingestGate";
+import { refusedWriteError } from "@/lib/refusedWriteError";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 export type TablesThatHaveAnIDField = {
@@ -39,6 +40,19 @@ type ChannelType =
   | "help_queues"
   | "class_staff"
   | "discussion_thread_root";
+
+/**
+ * Privacy-aware broadcasts send only `{ id }` as `data` (e.g. private help_requests on the class
+ * students channel). Matching that against a realtime filter fails on every missing column and
+ * drops the row, so such messages are treated as ID-only and the row is refetched under RLS.
+ */
+function idOnlyRowId(data: unknown): unknown {
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const keys = Object.keys(data);
+    if (keys.length === 1 && keys[0] === "id") return (data as { id: unknown }).id;
+  }
+  return undefined;
+}
 
 /**
  * Tables that have an updated_at column and support incremental refetching.
@@ -786,6 +800,7 @@ export default class TableController<
   private _postSsrCatchUpDone: boolean = false;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
+  private _shouldRefetchUncachedIdOnly: ((id: IDType) => boolean) | null = null;
   /**
    * Optional select clause to use when fetching a single row (e.g., after realtime events).
    * This enables preserving joined columns for controllers initialized with joined selects.
@@ -1111,7 +1126,11 @@ export default class TableController<
   /**
    * Refetch multiple rows by their IDs using IN queries with batching
    */
-  private async _refetchRowsByIds(ids: IDType[]): Promise<Map<IDType, ResultOne>> {
+  /**
+   * @param queriedIds when given, receives every id whose batch query succeeded, so a caller can
+   * tell "no longer visible" (queried, absent) apart from "query failed" (not queried).
+   */
+  private async _refetchRowsByIds(ids: IDType[], queriedIds?: Set<IDType>): Promise<Map<IDType, ResultOne>> {
     const results = new Map<IDType, ResultOne>();
     const batchSize = 100;
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
@@ -1128,6 +1147,7 @@ export default class TableController<
           continue;
         }
 
+        for (const id of batch) queriedIds?.add(id);
         if (data) {
           for (const row of data) {
             const typedRow = row as unknown as ResultOne;
@@ -1751,7 +1771,8 @@ export default class TableController<
     initialData,
     enableAutoRefetch,
     autoFetchMissingRows,
-    debounceJitter
+    debounceJitter,
+    shouldRefetchUncachedIdOnly
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1794,6 +1815,14 @@ export default class TableController<
      * Default: 500ms
      */
     debounceJitter?: number;
+    /**
+     * For an ID-only UPDATE (`{ id }` as data) about a row this controller doesn't hold, decides
+     * whether to fetch it. Without it, every such row is fetched. Privacy-aware broadcasts send
+     * every private row to every subscriber as an id, so most of those fetches return nothing:
+     * help_requests uses this to fetch only tickets the user is on (#1310). Rows already held are
+     * always refetched, so updates and RLS evictions still apply. Inserts are unaffected.
+     */
+    shouldRefetchUncachedIdOnly?: (id: IDType) => boolean;
   }) {
     this._rows = [];
     this._client = client;
@@ -1804,6 +1833,7 @@ export default class TableController<
     this._submissionId = submissionId || null;
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
+    this._shouldRefetchUncachedIdOnly = shouldRefetchUncachedIdOnly ?? null;
     this._debounceInterval = debounceInterval || 500;
     // Default jitter reduced from 5000ms to 500ms to improve perceived responsiveness
     // while still providing some thundering herd protection
@@ -2077,10 +2107,11 @@ export default class TableController<
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
+        const idOnly = idOnlyRowId(message.data);
+        if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
+        } else if (message.row_id ?? idOnly) {
+          idsToRefetch.push((message.row_id ?? idOnly) as IDType);
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
@@ -2143,10 +2174,15 @@ export default class TableController<
     // Separate messages with data from those requiring refetch
     for (const message of messages) {
       if (message.type !== "gradebook_row_recalc_state") {
-        if (message.data) {
+        const idOnly = idOnlyRowId(message.data);
+        if (message.data && idOnly === undefined) {
           messagesWithData.push(message);
-        } else if (message.row_id) {
-          idsToRefetch.push(message.row_id as IDType);
+        } else if (message.row_id ?? idOnly) {
+          const id = (message.row_id ?? idOnly) as IDType;
+          const held = this._rows.some((r) => (r as ResultOne & { id: IDType }).id === id);
+          if (held || !this._shouldRefetchUncachedIdOnly || this._shouldRefetchUncachedIdOnly(id)) {
+            idsToRefetch.push(id);
+          }
         } else if ("row_ids" in message && message.row_ids && message.row_ids.length > 0) {
           // Statement-level triggers send a `row_ids` array (e.g. submission_reviews,
           // gradebook_column_students). Small (< BULK_THRESHOLD) operations arrive here with
@@ -2167,7 +2203,16 @@ export default class TableController<
     // Batch refetch for messages without data and await completion
     if (idsToRefetch.length > 0) {
       try {
-        const refetchedRows = await this._refetchRowsByIds(idsToRefetch);
+        const queriedIds = new Set<IDType>();
+        const refetchedRows = await this._refetchRowsByIds(idsToRefetch, queriedIds);
+        // A successful refetch that returns nothing means the row is no longer visible to this
+        // user (e.g. a public help request made private, which non-participants receive as an
+        // ID-only payload). Failed batches are not in queriedIds, so errors never evict.
+        for (const id of queriedIds) {
+          if (!refetchedRows.has(id) && this._rows.some((r) => (r as ResultOne & { id: IDType }).id === id)) {
+            this._removeRow(id);
+          }
+        }
         for (const [id, row] of refetchedRows) {
           const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
           const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
@@ -3358,12 +3403,66 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const { error } = await this._client.from(this._table).delete().eq("id", id);
+    const restore = () => this._restoreRemovedRow(id as IDType, existingRow);
+    const { error, count } = await this._client.from(this._table).delete({ count: "exact" }).eq("id", id);
     if (error) {
-      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      restore();
       throw error;
     }
-    return;
+    await this._throwIfDeleteRefused(id, count, restore);
+  }
+
+  /**
+   * Puts back a row that `delete` or `hardDelete` removed from the cache before a write that
+   * failed or was refused.
+   *
+   * A realtime broadcast can put the row back first, while the write or the follow-up select in
+   * {@link _throwIfDeleteRefused} is in flight. That copy is newer than `snapshot`, so when the id
+   * is already in the cache, keep it. Passing the snapshot to `_addRow` would overwrite it, because
+   * `_addRow` turns a known id into an update.
+   */
+  private _restoreRemovedRow(id: IDType, snapshot: PossiblyTentativeResult<ResultOne>): void {
+    if (this._rowsById.has(id)) return;
+    this._addRow({ ...snapshot, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+  }
+
+  /**
+   * After a delete (hard or soft) that RLS may have refused: throws a {@link refusedWriteError}
+   * and puts the row back when nothing was changed and the row is still there.
+   *
+   * RLS doesn't fail a write it refuses. The statement matches 0 rows and PostgREST answers with
+   * no error, so before this check a refused delete looked like a success. The delete asks only
+   * for the changed-row count (`count: "exact"`), not the rows, so the response stays empty.
+   *
+   * Asking for the count doesn't change which soft deletes work. On a table whose SELECT policy
+   * hides soft-deleted rows, Postgres rejects any `UPDATE ... WHERE id = ...` that hides the row
+   * ("new row violates row-level security policy"), with or without RETURNING. That was already
+   * true before this change.
+   *
+   * With 0 rows changed, the row was either refused or already gone (another tab, a realtime
+   * race). A follow-up select tells them apart, as `withBlockedDeleteErrors` does for refine:
+   * - **still visible:** refused. Restore the row and throw.
+   * - **not visible:** this session can't read the row now. Leave it removed and resolve, which is
+   *   what a delete did before. Usually the row is gone, but a refused delete also lands here when
+   *   the session lost the right to read the row after loading it (a capability removed while the
+   *   page was open). That case still reports success; see `withBlockedDeleteErrors`.
+   */
+  private async _throwIfDeleteRefused(
+    id: ExtractIdType<RelationName>,
+    count: number | null,
+    restore: () => void
+  ): Promise<void> {
+    // `count` is null only if PostgREST sent no count; keep the old behaviour then.
+    if (count !== 0) return;
+    const { data, error } = await this._client.from(this._table).select("id").eq("id", id).limit(1);
+    if (error) {
+      restore();
+      throw error;
+    }
+    if (data && data.length > 0) {
+      restore();
+      throw refusedWriteError("delete");
+    }
   }
 
   /**
@@ -3387,15 +3486,16 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const { error } = await this._client
+    const restore = () => this._restoreRemovedRow(id as IDType, existingRow);
+    const { error, count } = await this._client
       .from(this._table)
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ deleted_at: new Date().toISOString() }, { count: "exact" })
       .eq("id", id);
     if (error) {
-      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      restore();
       throw error;
     }
-    return;
+    await this._throwIfDeleteRefused(id, count, restore);
   }
   async update(id: IDType, row: Partial<ResultOne>): Promise<ResultOne> {
     if (this._closed) {
@@ -3417,6 +3517,11 @@ export default class TableController<
     const { data, error } = await this._client.from(this._table).update(row).eq("id", id).select("*").single();
     if (error) {
       this._updateRow(id, oldRow as ResultOne & { id: IDType }, false);
+      // `.single()` on an update that changed 0 rows: RLS refused it (it doesn't raise an error,
+      // the UPDATE just matches nothing), or the row is gone. Same error as the refine provider.
+      if (error.code === "PGRST116") {
+        throw refusedWriteError("update");
+      }
       throw error;
     }
     this._updateRow(id, data, false);

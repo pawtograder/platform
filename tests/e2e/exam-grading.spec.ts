@@ -61,11 +61,17 @@ test.describe("Exam grading OCR pipeline", () => {
     expect(examErr).toBeNull();
     expect(examId).toBeTruthy();
 
+    // The worker OCRs the template page before matching (#1292), so the image has to exist.
+    const templatePath = `classes/${course.id}/exams/${examId}/template/page-1.png`;
+    const templateUp = await supabase.storage
+      .from("exam-templates")
+      .upload(templatePath, PNG_1x1, { contentType: "image/png", upsert: true });
+    expect(templateUp.error).toBeNull();
     await supabase.from("exam_template_pages").insert({
       class_id: course.id,
       exam_id: examId as number,
       page_number: 1,
-      image_path: `classes/${course.id}/exams/${examId}/template/page-1.png`,
+      image_path: templatePath,
       width: 1000,
       height: 1400
     });
@@ -209,6 +215,13 @@ test.describe("Exam grading OCR pipeline", () => {
     expect(stillConfirmed).toBe(2);
 
     // --- finalize ---
+    // Finalize a batch as if it was matched before #1292 deployed, when nothing read the template:
+    // finalize has to read it itself rather than refusing the batch.
+    const { error: unreadErr } = await supabase
+      .from("exam_template_pages")
+      .update({ ocr_data: null })
+      .eq("exam_id", examId as number);
+    expect(unreadErr).toBeNull();
     const { error: finErr } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
     expect(finErr).toBeNull();
 
@@ -222,6 +235,12 @@ test.describe("Exam grading OCR pipeline", () => {
         { timeout: 60_000, intervals: [1000, 2000, 3000] }
       )
       .toBe("completed");
+    const { data: reread } = await supabase
+      .from("exam_template_pages")
+      .select("ocr_data")
+      .eq("exam_id", examId as number)
+      .single();
+    expect(reread?.ocr_data).not.toBeNull();
 
     // --- 7) assert submissions, raw files, and the exam_v1 artifact exist ---
     const { data: submissions } = await supabase
@@ -273,6 +292,45 @@ test.describe("Exam grading OCR pipeline", () => {
     const graded = (submissions ?? [])[1]!;
     await loginAsUser(page, grader, course);
     await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${graded.id}/files`);
+
+    // The grader lands on the exam_v1 artifact finalize wrote, and it renders (#1187). Before #1149,
+    // ArtifactView signed a storage file that exam_v1 artifacts don't have, so every finalized exam
+    // showed "Error downloading artifact" in place of the whole view, and the card never appeared.
+    const { data: gradedArtifact } = await supabase
+      .from("submission_artifacts")
+      .select("data")
+      .eq("submission_id", graded.id)
+      .eq("data->>format", "exam_v1")
+      .single();
+    const [gradedQuestion] = (
+      gradedArtifact!.data as { questions: { exam_question_id: number; label: string | null }[] }
+    ).questions;
+    const [gradedSis, otherSis] =
+      graded.profile_id === alice.private_profile_id ? [aliceSis, bobSis] : [bobSis, aliceSis];
+
+    // #1072: the heading is the instructor's name for the question, not its database id.
+    //
+    // This assertion used to read `Question ${gradedQuestion.exam_question_id}`, so it pinned the
+    // bug in place: the exam is created above with `label: "Item 1"`, and the grader was shown
+    // "Question 67". Asserting the id meant the spec went green on exactly the output #1072 is
+    // about, and would have gone red on the fix.
+    //
+    // The label has to reach here through the artifact, not just through the renderer, so check
+    // the artifact carries it before checking what the page shows. A renderer assertion alone
+    // passes just as well when `finalize` never wrote the field and the fallback is doing it.
+    expect(gradedQuestion.label).toBe("Item 1");
+    const questionCard = page.getByRole("heading", { name: "Item 1", exact: true }).first();
+    await expect(questionCard).toBeVisible();
+    // The id must not survive as a heading anywhere, or the nullable-label fallback is still
+    // firing on a question that does have a label.
+    await expect(
+      page.getByRole("heading", { name: `Question ${gradedQuestion.exam_question_id}`, exact: true })
+    ).toHaveCount(0);
+    await expect(page.getByText("OCR text").first()).toBeVisible();
+    await expect(page.getByText(`sis-${gradedSis}`).first()).toBeVisible();
+    await expect(page.getByText(`sis-${otherSis}`)).toHaveCount(0);
+    await expect(page.getByText(/Error downloading artifact/)).toHaveCount(0);
+
     await page.getByRole("checkbox", { name: /Item 1/ }).check({ force: true });
     await page.getByLabel("Points for Item 1").fill("3");
     await page.getByRole("button", { name: "Add Check" }).click();
@@ -290,6 +348,11 @@ test.describe("Exam grading OCR pipeline", () => {
       )
       .toBe(3);
     await expect(page.getByText("Q1 3/5")).toBeVisible();
+    // Checked again after the grading round trip: the renderer mounts before ArtifactView's own
+    // signing request settles, so the checks above could run before a failed signing replaced the
+    // view. By now that request has long since settled.
+    await expect(questionCard).toBeVisible();
+    await expect(page.getByText(/Error downloading artifact/)).toHaveCount(0);
 
     // --- 8) crash-safety: re-finalizing a completed batch is a no-op ---
     const { data: reCountDone } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });

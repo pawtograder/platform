@@ -357,6 +357,18 @@ spec:
                   name: {{ $ctx.Values.secrets.names.jwt }}
                   key: JWT_SIGNING_JWK
                   optional: true
+            # MCP_JWT_SECRET is the OTHER half of MCP/CLI auth: the HMAC secret
+            # that signs the long-lived `mcp_` API tokens themselves (JWT_SECRET
+            # above signs the short-lived per-user JWTs a token is exchanged
+            # for). Without it, creating an API token fails with
+            # "MCP_JWT_SECRET must be set". Optional for the same reason as
+            # JWT_SECRET: a missing key degrades MCP/CLI only.
+            - name: MCP_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ctx.Values.secrets.names.jwt }}
+                  key: MCP_JWT_SECRET
+                  optional: true
             # Sentry identity, consumed by supabase/functions/_shared/SentryContext.ts. ENVIRONMENT was
             # previously unset for edge functions, so Sentry labelled their events by whatever each
             # Sentry.init happened to pass — the same deploy reported some events as "development" and
@@ -418,6 +430,35 @@ spec:
             {{- if $ctx.Values.forgejo.enabled }}
             - name: FORGEJO_URL
               value: {{ include "pawtograder.forgejo.url" $ctx | quote }}
+            # optional: a missing required secretKeyRef would stop the whole edge tier.
+            - name: FORGEJO_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.forgejo.adminSecret" $ctx }}
+                  key: username
+                  optional: true
+            - name: FORGEJO_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pawtograder.forgejo.adminSecret" $ctx }}
+                  key: password
+                  optional: true
+            {{- with include "pawtograder.forgejo.authSourceId" $ctx }}
+            - name: FORGEJO_AUTH_SOURCE_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $ctx.Values.coder.enabled }}
+            # workspace-open (#1222) calls Coder here and builds the student's links from it.
+            - name: CODER_URL
+              value: {{ include "pawtograder.coder.url" $ctx | quote }}
+            {{- with $ctx.Values.coder.externalAuth.github }}
+            {{- if .enabled }}
+            # The id workspace-open looks for when a GitHub repository needs its link.
+            - name: CODER_GITHUB_AUTH_ID
+              value: {{ .id | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- with $ctx.Values.edgeFunctions.extraEnv }}
             {{- toYaml . | nindent 12 }}

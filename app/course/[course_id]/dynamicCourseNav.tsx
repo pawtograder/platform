@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
@@ -92,7 +92,9 @@ const LinkItems = (courseID: number) => [
   {
     name: "Gradebook",
     icon: FiBookOpen,
-    instructor_only: true,
+    // Shown from the capability tables rather than the app role (#1010), so a Head TA with
+    // manage_gradebook can reach the gradebook controls the database lets them use.
+    capability: "manage_gradebook",
     target: `/course/${courseID}/manage/gradebook`,
     feature_flag: COURSE_FEATURES.GRADEBOOK
   },
@@ -279,6 +281,7 @@ export default function DynamicCourseNav() {
 
   const isInstructor = useIsInstructor();
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  const canManageGradebook = useCapability("manage_gradebook");
   /**
    * Which responsive twin carries the landmark ids. Only the ids move with the
    * breakpoint — the accessibility tree is left to the CSS `display` split (see
@@ -306,8 +309,16 @@ export default function DynamicCourseNav() {
       (link) =>
         (!link.instructors_or_graders_only || isInstructorOrGrader) &&
         (!link.student_only || !isInstructorOrGrader) &&
-        (!link.instructor_only || isInstructor)
+        (!("instructor_only" in link && link.instructor_only) || isInstructor)
     )
+    .filter((link) => {
+      // A capability this filter doesn't know hides the link rather than showing it to everyone.
+      const capability = "capability" in link ? link.capability : undefined;
+      if (!capability) return true;
+      // Instructors hold every capability. isInstructor keeps their link even if the capability
+      // lookup fails, since the provider stops retrying after a few failures.
+      return capability === "manage_gradebook" && (canManageGradebook || isInstructor);
+    })
     .filter((link) => {
       const featureFlag = "feature_flag" in link ? link.feature_flag : undefined;
       if (!featureFlag) return true;
@@ -333,8 +344,10 @@ export default function DynamicCourseNav() {
           copy the user is actually seeing.) */}
       <Box display={{ base: "block", md: "none" }}>
         <VStack gap={2} align="stretch">
-          {/* Top row: Course picker, logo, course name, user menu */}
-          <HStack justifyContent="space-between" alignItems="center">
+          {/* Top row: Course picker, logo, course name, user menu. Wraps so the user menu moves
+              below the course name when both don't fit at 320px (a long title word plus the
+              time zone chip overflowed the page). */}
+          <HStack justifyContent="space-between" alignItems="center" flexWrap="wrap">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
               <NextLink href="/course" aria-label={`${branding.name} home`}>

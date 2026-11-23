@@ -11,7 +11,7 @@
  *   - inlines our own modules into one file, so the published package has no
  *     internal file layout to keep stable
  *
- * The three runtime dependencies stay external. Inlining them is tempting for a
+ * The runtime dependencies stay external. Inlining them is tempting for a
  * zero-dependency install, but yargs pulls in y18n, which loads locale JSON from
  * disk relative to __dirname — bundling that yields subtly broken help output.
  */

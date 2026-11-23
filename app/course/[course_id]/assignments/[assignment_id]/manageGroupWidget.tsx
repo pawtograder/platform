@@ -6,6 +6,7 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
+import { useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -873,8 +874,38 @@ function GroupDetails({
   );
 }
 
+const READY_SUFFIX = " (ready ✅)";
+
+// Until the reconciler has created the Forgejo repo and given the student access, `is_github_ready`
+// is false and a link would 404, so the repo is plain text that says so. Repository changes are
+// only broadcast to staff, so a student sees the link after the page reloads.
+function ForgejoRepositoryLabel({ repository }: { repository: Repository }) {
+  const instanceUrl = useForgejoInstanceUrl();
+  if (!repository.is_github_ready || !instanceUrl) {
+    return (
+      <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">
+        {repository.repository}
+        {repository.is_github_ready ? READY_SUFFIX : " (waiting for access)"}
+      </Text>
+    );
+  }
+  const label = `${repository.repository}${READY_SUFFIX}`;
+  return (
+    <Link
+      href={`${instanceUrl}/${repository.repository}`}
+      data-visual-test="transparent"
+      data-visual-placeholder="repository"
+    >
+      {label}
+    </Link>
+  );
+}
+
 function RepositoryLabel({ repository }: { repository: Repository }) {
   const { role } = useClassProfiles();
+  if (repository.git_provider === "forgejo") {
+    return <ForgejoRepositoryLabel repository={repository} />;
+  }
   if (!role.github_org_confirmed) {
     return (
       <Text as="span" data-visual-test="transparent" data-visual-placeholder="repository">

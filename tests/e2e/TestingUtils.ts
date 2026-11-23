@@ -661,6 +661,36 @@ export async function ensureTimeZonePreferenceInitialized(
   );
 }
 
+// Same item as ESCALATION_TOUR_ITEM in components/help-queue/escalation-tour.tsx. Not imported,
+// because this file runs in Node and the component pulls in React and Chakra.
+const ESCALATION_TOUR_ITEM = "oh-escalation:v1";
+
+/**
+ * The escalation "What's new" walkthrough opens once per person for course staff on the office
+ * hours page, and its dialog blocks every click behind it. Record it as seen for this user in
+ * public.user_whats_new_seen before the app loads. A test of the walkthrough itself should log in
+ * with `showWhatsNew: true`, which clears the record instead.
+ */
+export async function markWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">) {
+  const { error } = await supabase
+    .from("user_whats_new_seen")
+    .upsert(
+      { user_id: testingUser.user_id, item: ESCALATION_TOUR_ITEM },
+      { onConflict: "user_id,item", ignoreDuplicates: true }
+    );
+  if (error) throw new Error(`markWhatsNewSeen: ${error.message}`);
+}
+
+/** Removes the walkthrough record so it opens on the user's next visit, as on a first visit. */
+export async function clearWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">) {
+  const { error } = await supabase
+    .from("user_whats_new_seen")
+    .delete()
+    .eq("user_id", testingUser.user_id)
+    .eq("item", ESCALATION_TOUR_ITEM);
+  if (error) throw new Error(`clearWhatsNewSeen: ${error.message}`);
+}
+
 export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 10000): Promise<boolean> {
   const timezoneDialog = page.getByRole("dialog", { name: TIMEZONE_DIALOG_TITLE });
   const isVisible = await timezoneDialog.isVisible({ timeout: timeoutMs }).catch(() => false);
@@ -821,9 +851,20 @@ export async function logMagicLink(users: (TestingUser | undefined)[]) {
   }
 }
 
-export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
+export async function loginAsUser(
+  page: Page,
+  testingUser: TestingUser,
+  course?: Course,
+  dismissTimezoneDialog = true,
+  { showWhatsNew = false }: { showWhatsNew?: boolean } = {}
+) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);
+  }
+  if (showWhatsNew) {
+    await clearWhatsNewSeen(testingUser);
+  } else {
+    await markWhatsNewSeen(testingUser);
   }
 
   await page.goto("/");
@@ -1959,7 +2000,8 @@ export async function insertAssignment({
   protect_block_force_push,
   protect_require_pull_request,
   protect_required_reviewers,
-  assignment_type
+  assignment_type,
+  git_provider
 }: {
   due_date: string;
   suggested_due_date?: string;
@@ -2000,6 +2042,11 @@ export async function insertAssignment({
   protect_block_force_push?: boolean;
   protect_require_pull_request?: boolean;
   protect_required_reviewers?: number;
+  /**
+   * Defaults to undefined (DB default 'github'). 'forgejo' needs the class's cloud-workspaces flag
+   * on, and leaves template_repo null: the host is locked once a handout exists.
+   */
+  git_provider?: "github" | "forgejo";
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -2054,7 +2101,7 @@ export async function insertAssignment({
     due_date: due_date,
     suggested_due_date: suggested_due_date ?? null,
     minutes_due_after_lab: lab_due_date_offset,
-    template_repo: noRepoMode ? null : TEST_HANDOUT_REPO,
+    template_repo: noRepoMode || git_provider === "forgejo" ? null : TEST_HANDOUT_REPO,
     autograder_points: 100,
     total_points: 100,
     max_late_tokens: 10,
@@ -2072,6 +2119,7 @@ export async function insertAssignment({
     grader_pseudonymous_mode: grader_pseudonymous_mode || false,
     show_leaderboard: show_leaderboard || false,
     ...(assignment_type !== undefined ? { assignment_type } : {}),
+    ...(git_provider !== undefined ? { git_provider } : {}),
     ...(repo_mode !== undefined ? { repo_mode } : {}),
     ...(repo_mode === "fork_from_prior_assignment" ? { source_assignment_id: source_assignment_id ?? null } : {}),
     ...protectionFields

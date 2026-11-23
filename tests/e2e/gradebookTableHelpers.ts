@@ -1,6 +1,8 @@
 /** Instructor-gradebook helpers shared by the column-groups and topics E2E specs. */
 import type { Page } from "@playwright/test";
 import { expect } from "../global-setup";
+import { supabase } from "./TestingUtils";
+import { visualScreenshot } from "./VisualTestUtils";
 
 /** Wide enough that each realistic gradebook fits in one capture, collapsed or expanded. */
 export const GRADEBOOK_VIEWPORT = { width: 2400, height: 900 };
@@ -23,6 +25,12 @@ export async function headerUnits(page: Page): Promise<string[]> {
 
 /** Settled virtualized table: same row transforms and scroll offsets on two animation frames. */
 export async function waitForVirtualizerIdle(page: Page) {
+  // Forget the previous call's signature. Expanding groups or switching views changes columns but
+  // not row transforms or scroll offsets, so a stale signature would match on the first frame and
+  // return before React has rendered the change.
+  await page.evaluate(() => {
+    delete (window as unknown as { __virtSig?: string }).__virtSig;
+  });
   await page.waitForFunction(
     () => {
       const container = document.querySelector('[role="region"][aria-label="Instructor Gradebook Table"]');
@@ -40,6 +48,106 @@ export async function waitForVirtualizerIdle(page: Page) {
     },
     { polling: "raf", timeout: 10_000 }
   );
+}
+
+/**
+ * Wait until no rendered cell shows the recalculating indicator. gradebookCell.tsx draws a pulsing
+ * calculator icon (`.gradebook-cell-pulse`) while the cell's row has `is_recalculating` set, and the
+ * flag reaches the page by realtime broadcast, after the database has finished. A capture taken
+ * before the broadcast arrives shows the icons. Each flip also remounts the cell's children, which
+ * defeats bounding-box stability checks. Waits for the whole set to drain, and lets a
+ * recalculation that stays stuck past `timeoutMs` fail the test instead of passing silently.
+ */
+export async function waitForGradebookCellsIdle(page: Page, timeoutMs = 30_000) {
+  if ((await page.locator(".gradebook-cell-pulse").count()) === 0) return;
+  await page.waitForFunction(() => document.querySelectorAll(".gradebook-cell-pulse").length === 0, undefined, {
+    timeout: timeoutMs
+  });
+}
+
+/** No cell recalculating and the virtualizer settled: the instructor table is ready to capture. */
+export async function settleInstructorGradebook(page: Page) {
+  await waitForGradebookCellsIdle(page);
+  await waitForVirtualizerIdle(page);
+}
+
+/**
+ * Poll until every rendered instructor cell of `columnId` shows the score the database holds for it.
+ * Use after a change that recalculates a column on a page that is already open: the recalculation
+ * wait in gradebookColumnGroupsFixtures.ts says the database is done, but the new scores still have
+ * to arrive by realtime before the cells show them. Cells render `round(score, 2)` (the default
+ * render expression), "-" for no score, and "Missing" for a missing one.
+ */
+export async function expectInstructorColumnMatchesDb(page: Page, columnId: number, timeout = 60_000) {
+  const { data, error } = await supabase
+    .from("gradebook_column_students")
+    .select("student_id, score, score_override, is_missing")
+    .eq("gradebook_column_id", columnId)
+    .eq("is_private", true);
+  if (error) throw new Error(`Failed to read scores for column ${columnId}: ${error.message}`);
+  const expected = (data ?? []).map((row) => {
+    const score = row.score_override ?? row.score;
+    const text = row.is_missing ? "Missing" : score === null ? "-" : String(Math.round(score * 100) / 100);
+    return { student: row.student_id, text };
+  });
+  await expect
+    .poll(
+      async () => {
+        const shown = await tableRegion(page).evaluate((el, id) => {
+          const out: Record<string, string> = {};
+          el.querySelectorAll(`[data-gradebook-cell-trigger][data-column-id="${id}"]`).forEach((cell) => {
+            const student = cell.getAttribute("data-student-id");
+            if (student) out[student] = (cell.textContent ?? "").replace(/\*/g, "").trim();
+          });
+          return out;
+        }, columnId);
+        return expected.filter(({ student, text }) => shown[student] !== text).map(({ student }) => student);
+      },
+      { timeout, message: `Gradebook cells of column ${columnId} never matched the database` }
+    )
+    .toEqual([]);
+}
+
+/** Expand every group and wait until no collapsed group (an "Expand group" cell button) is left. */
+export async function expandAllGroups(page: Page) {
+  await tableRegion(page).getByRole("button", { name: "Expand all groups" }).click();
+  await expect(tableRegion(page).getByRole("button", { name: "Expand group", exact: true })).toHaveCount(0);
+  await settleInstructorGradebook(page);
+}
+
+type GradebookScreenshotOptions = NonNullable<Parameters<typeof visualScreenshot>[2]> & {
+  /**
+   * The capture shows an open menu. A realtime refresh re-renders the table under an open menu
+   * and can close it while visualScreenshot waits for the page to settle, so the capture would
+   * show the table without the menu. Reopen it with `open` if `menuItem` is no longer visible.
+   */
+  keepMenuOpen?: { menuItem: string; open: () => Promise<void> };
+};
+
+/**
+ * visualScreenshot for the instructor gradebook page: waits for recalculation indicators to drain
+ * and the virtualizer to settle before the capture, and again right before it is taken.
+ */
+export async function gradebookScreenshot(page: Page, name: string, options: GradebookScreenshotOptions = {}) {
+  const { keepMenuOpen, beforeScreenshot, ...rest } = options;
+  await settleInstructorGradebook(page);
+  return visualScreenshot(page, name, {
+    ...rest,
+    beforeScreenshot: async (api) => {
+      await waitForGradebookCellsIdle(page);
+      if (keepMenuOpen) {
+        const item = page.getByRole("menuitem", { name: keepMenuOpen.menuItem, exact: true });
+        if (!(await item.isVisible())) {
+          await keepMenuOpen.open();
+          // Argos parks the pointer before this callback; reopening moved it back onto the trigger,
+          // whose hover style would make this capture differ from one that didn't need a reopen.
+          await page.mouse.move(0, 0);
+          await expect(item).toBeVisible();
+        }
+      }
+      await beforeScreenshot?.(api);
+    }
+  });
 }
 
 export async function waitForToastsGone(page: Page) {
