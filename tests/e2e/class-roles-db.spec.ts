@@ -1104,11 +1104,13 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
         expect(note.data).toMatchObject({ id: role!.id });
       }
 
+      // Leave out the role created and deleted above, which also sent role_capabilities notes.
       const capabilityNotes = (operation: string) =>
         notes.filter(
           (n) =>
             n.table === "role_capabilities" &&
             n.operation === operation &&
+            (n.data as { role_id?: number })?.role_id !== role!.id &&
             (n.data as { capability?: string })?.capability === "manage_assignments"
         );
 
