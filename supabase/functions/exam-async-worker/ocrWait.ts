@@ -25,9 +25,19 @@
  *   old rule could not yet have made is never counted.
  * - A re-queue that does not count carries ocr_wait_from forward unchanged.
  *
- * So under the same arrival of readers, counted read k+1 is never earlier than the old rule's read
- * k+1. Re-parked messages get new msg_ids and sit further back in the queue, which can only delay
- * them. With idle readers a wait counts every 31-36s, so the limit is about 15.5-18 minutes.
+ * What this guarantees on its own: the batch errors only after 30 counted waits, each at least 31s
+ * of database time after the previous counted re-queue, so never sooner than 15.5 minutes after the
+ * first (staging's floor was 15). With idle readers a wait counts every 31-36s, so the limit is about
+ * 15.5-18 minutes; with readers arriving less often it is later.
+ *
+ * Compared with staging under the same arrival of readers, counted read k+1 is no earlier than the
+ * old rule's read k+1 as long as this re-queue reaches the database at most 1s (the guard) sooner
+ * after its read than the old worker's send did. It is not enforced: both are one call from the same
+ * worker to the same database, and this one comes later in practice (the worker takes its lease
+ * before the handler runs, and the re-queue also takes the claim lock). If it were more than 1s
+ * sooner, a counted read could fall on an earlier reader: with a reader every 31.5s and the re-queue
+ * 1.5s sooner, the limit comes after about half the time (still no sooner than the floor above). Re-parked messages get new msg_ids and sit further
+ * back in the queue, which can only delay them.
  *
  * Messages already queued when this deploys carry no ocr_wait_from. One with ocr_waits >= 1 was
  * re-queued by an older worker; its enqueued_at (now() of that send, no later than its

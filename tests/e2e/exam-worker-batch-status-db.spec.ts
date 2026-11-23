@@ -128,6 +128,17 @@ async function cleanup(client: Client, msgId: number) {
   await client.query("SELECT pgmq.archive('exam_processing', $1::bigint)", [msgId]);
 }
 
+/**
+ * A query the test expects to block. If an assertion fails before the test awaits it, cleanup ends
+ * its client and the query rejects with nobody listening; that unhandled rejection is reported on
+ * top of, or instead of, the real failure. Handling it here as soon as it starts prevents that;
+ * awaiting the returned promise, or `expect(...).rejects`, still sees the outcome.
+ */
+function blockedQuery<T>(query: Promise<T>): Promise<T> {
+  query.catch(() => {});
+  return query;
+}
+
 test.describe("exam_worker_set_batch_status: only the message's current holder moves the batch (#1158)", () => {
   test("the holder's write applies; a stale claim token changes nothing", async () => {
     const { classId, batchId } = await seedBatch("ocr");
@@ -221,15 +232,16 @@ test.describe("exam_worker_set_batch_status: only the message's current holder m
       expect(theirs).toEqual({ msgId: ours.msgId, readCt: ours.readCt + 1, tag: ours.tag });
       const writerPid = await backendPid(writer);
       const readerPid = await backendPid(reader);
-      const pending = setStatus(writer, ours, batchId, "error", ["finalizing"], "from the former holder");
+      const pending = blockedQuery(setStatus(writer, ours, batchId, "error", ["finalizing"], "from the former holder"));
       expect((await waitUntilBlocked(monitor, writerPid, readerPid, 5000)).observed).toBe(true);
       await reader.query("COMMIT");
       expect(await pending).toBe("not_owner");
       expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
       await cleanup(writer, ours.msgId);
     } finally {
-      await writer.end();
+      // The reader holds the lock the writer may still be waiting on: release it first.
       await reader.end();
+      await writer.end();
       await monitor.end();
     }
   });
@@ -592,9 +604,11 @@ test.describe("queue disposition: only the message's current holder acks, re-que
       const clientPid = await backendPid(client);
       const blockerPid = await backendPid(blocker);
       await client.query("BEGIN");
-      const pending = client.query<{ outcome: string }>(
-        "SELECT public.exam_worker_requeue($1, $2, $3::jsonb, 3600, true) AS outcome",
-        [ours.msgId, ours.readCt, JSON.stringify(message)]
+      const pending = blockedQuery(
+        client.query<{ outcome: string }>(
+          "SELECT public.exam_worker_requeue($1, $2, $3::jsonb, 3600, true) AS outcome",
+          [ours.msgId, ours.readCt, JSON.stringify(message)]
+        )
       );
       expect((await waitUntilBlocked(monitor, clientPid, blockerPid, 5000)).observed).toBe(true);
       await new Promise((r) => setTimeout(r, 2000));
@@ -647,11 +661,30 @@ test.describe("queue disposition: only the message's current holder acks, re-que
     }
   });
 
-  test("give up: a batch outside the allowed states keeps its status; a message with no envelope still goes to the DLQ", async () => {
+  test("give up: a batch outside the allowed states keeps its status, and the message is still recorded and archived", async () => {
     const client = await privilegedClient();
     try {
       const { batchId, current } = await staleAndCurrent(client);
+      // A late give-up for a finalize whose batch has since completed: 'completed' is not in from.
       await supabase.from("exam_scan_batches").update({ status: "completed" }).eq("id", batchId);
+      const envelope = { method: "finalize", batch_id: batchId, test_tag: current.tag, retry_count: 5 };
+      const g = { batchId, from: ["finalizing"], error: "late give-up", errorType: "Error", envelope };
+      expect(await callFn("exam_worker_give_up", giveUpArgs(current, g))).toBe("given_up");
+      expect(await batchRow(batchId)).toEqual({ status: "completed", error: null });
+      const dlq = await dlqRecords(client, current.tag);
+      expect(dlq.queue).toBe(1);
+      expect(dlq.audit).toHaveLength(1);
+      expect((await tagged(client, current.tag)).archived).toEqual([current.msgId]);
+      await cleanupTag(client, current.tag);
+    } finally {
+      await client.end();
+    }
+  });
+
+  test("give up with no batch (a message with no usable envelope): no batch is touched, the message is recorded and archived", async () => {
+    const client = await privilegedClient();
+    try {
+      const { batchId, current } = await staleAndCurrent(client);
       const g = {
         batchId: null,
         from: [],
@@ -660,7 +693,7 @@ test.describe("queue disposition: only the message's current holder acks, re-que
         envelope: { not_an_envelope: true, test_tag: current.tag }
       };
       expect(await callFn("exam_worker_give_up", giveUpArgs(current, g))).toBe("given_up");
-      expect(await batchRow(batchId)).toEqual({ status: "completed", error: null });
+      expect(await batchRow(batchId)).toEqual({ status: "finalizing", error: null });
       const dlq = await dlqRecords(client, current.tag);
       expect(dlq.queue).toBe(1);
       expect(dlq.audit[0].method).toBeNull();
@@ -738,9 +771,11 @@ test.describe("queue disposition: only the message's current holder acks, re-que
       expect(theirs?.readCt).toBe(ours.readCt + 1);
       const writerPid = await backendPid(writer);
       const readerPid = await backendPid(reader);
-      const pending = writer.query<{ outcome: string }>(
-        "SELECT public.exam_worker_give_up($1, $2, $3, ARRAY['finalizing'], 'stale', 'Error', $4::jsonb) AS outcome",
-        [ours.msgId, ours.readCt, batchId, JSON.stringify({ test_tag: ours.tag })]
+      const pending = blockedQuery(
+        writer.query<{ outcome: string }>(
+          "SELECT public.exam_worker_give_up($1, $2, $3, ARRAY['finalizing'], 'stale', 'Error', $4::jsonb) AS outcome",
+          [ours.msgId, ours.readCt, batchId, JSON.stringify({ test_tag: ours.tag })]
+        )
       );
       expect((await waitUntilBlocked(monitor, writerPid, readerPid, 5000)).observed).toBe(true);
       await reader.query("COMMIT");
@@ -749,8 +784,9 @@ test.describe("queue disposition: only the message's current holder acks, re-que
       expect(await dlqRecords(writer, ours.tag)).toEqual({ queue: 0, audit: [] });
       await cleanupTag(writer, ours.tag);
     } finally {
-      await writer.end();
+      // The reader holds the lock the writer may still be waiting on: release it first.
       await reader.end();
+      await writer.end();
       await monitor.end();
     }
   });
@@ -1008,7 +1044,7 @@ test.describe("Create refuses a batch that is already creating submissions (#115
       const secondPid = await backendPid(second);
       await first.query("BEGIN");
       expect((await first.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId])).rows[0].n).toBe(1);
-      const waiting = second.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId]);
+      const waiting = blockedQuery(second.query("SELECT public.enqueue_exam_finalize($1) AS n", [batchId]));
       expect((await waitUntilBlocked(monitor, secondPid, firstPid, 5000)).observed).toBe(true);
       // Keep the first Create's message hidden from running workers, then commit it.
       await first.query(

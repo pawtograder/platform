@@ -12,9 +12,9 @@ export type ExamAsyncArgs = ProcessPageArgs | MatchArgs | FinalizeArgs;
 // and MUST NOT be spent on anything else. `ocr_waits` is counted separately so a match message
 // that legitimately parks itself waiting for the process_page fan-out to finish does not eat
 // the error budget it would need if a real transient failure happened afterwards.
-// `ocr_waits` counts only waits at least 30s apart, and `ocr_wait_from` is the database time the
+// `ocr_waits` counts only waits at least 31s apart, and `ocr_wait_from` is the database time the
 // last counted one was re-queued, stamped by exam_worker_requeue, so the limit is never reached
-// sooner than staging's 30 waits of 30s (exam-async-worker/ocrWait.ts). `ocr_wait_started_ms`
+// sooner than 30 waits of 31s (exam-async-worker/ocrWait.ts has how it compares with staging). `ocr_wait_started_ms`
 // (epoch ms) is the first wait, for the error message. `ocr_wait_counted_ms` was the previous
 // worker-clock boundary; messages that still carry it are read with their enqueued_at instead.
 type ExamAsyncMeta = {

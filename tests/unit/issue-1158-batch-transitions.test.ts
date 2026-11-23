@@ -130,7 +130,7 @@ describe("issue #1158: worker batch status transitions", () => {
   // reader every 25s), then counted from the worker's read time (sooner, when the re-queue reaches
   // the database seconds after the read: CodeRabbit's 31s readers and 2s send). Now a counted wait
   // is stamped by the database at the replacement's own send (ocr_wait_from), as the old delay was.
-  describe("match gives up on OCR no sooner than before #1158", () => {
+  describe("match gives up on OCR after 30 waits of 31s, and no sooner than before #1158 while sends take as long", () => {
     const S = 1000;
     const MIN = 60 * S;
 
@@ -159,10 +159,17 @@ describe("issue #1158: worker batch status transitions", () => {
     });
 
     // A schedule: when readers reach the waiting message if it is visible, how long a read takes to
-    // reach its re-queue's send (the same handler and network either way), any extra wait for the
-    // claim lock (new rule only), and how long the re-queue's transaction stays uncommitted.
+    // reach its re-queue's send, any extra wait for the claim lock (new rule only), and how long the
+    // re-queue's transaction stays uncommitted. `sendLatency` is staging's; `newSendLatency`, when
+    // set, is this rule's, for the two paths taking different times (default: the same).
     type Readers = (t: number) => number;
-    type Schedule = { readers: Readers; sendLatency: number; lockWait?: number; commitDelay?: number };
+    type Schedule = {
+      readers: Readers;
+      sendLatency: number;
+      newSendLatency?: number;
+      lockWait?: number;
+      commitDelay?: number;
+    };
     const every =
       (gap: number, offset = 0): Readers =>
       (t) =>
@@ -186,14 +193,20 @@ describe("issue #1158: worker batch status transitions", () => {
       return t;
     };
     /** Now: 5s re-queues; a counted one is stamped with its own send instant (after the claim lock). */
-    const nowErrorsAt = ({ readers, sendLatency, lockWait = 0, commitDelay = 0 }: Schedule) => {
+    const nowErrorsAt = ({
+      readers,
+      sendLatency,
+      newSendLatency = sendLatency,
+      lockWait = 0,
+      commitDelay = 0
+    }: Schedule) => {
       let t = readers(0);
       let waits = 0;
       let boundary: number | undefined;
       for (let reads = 0; reads < 100_000; reads++) {
         const step = nextOcrWait(waits, boundary, t);
         if (step.exhausted) return t;
-        const sentAt = t + sendLatency + lockWait;
+        const sentAt = t + newSendLatency + lockWait;
         if (step.counted) boundary = sentAt;
         waits = step.waits;
         t = readers(Math.max(sentAt + 5 * S, sentAt + commitDelay));
@@ -240,6 +253,33 @@ describe("issue #1158: worker batch status transitions", () => {
 
     test.each(schedules)("%s: never sooner than before #1158", (_name, schedule) => {
       expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
+    });
+
+    // The comparison with staging assumes this re-queue reaches the database no sooner after its
+    // read than staging's send did, give or take the 1s guard (CodeRabbit on #1308). Up to 1s sooner
+    // is covered by the guard; more is not, and is not enforced (see ocrWait.ts).
+    const unequal: [string, Schedule][] = schedules.flatMap(([name, schedule]) =>
+      [0.5 * S, 1 * S]
+        .filter((d) => schedule.sendLatency >= d)
+        .map((d): [string, Schedule] => [
+          `${name}, this re-queue ${d / S}s sooner`,
+          { ...schedule, newSendLatency: schedule.sendLatency - d }
+        ])
+    );
+    test.each(unequal)("%s: never sooner than before #1158 (within the guard)", (_name, schedule) => {
+      expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
+    });
+
+    test("past the guard the comparison can fail, but never the 30 waits of 31s", () => {
+      const schedule: Schedule = { readers: every(31.5 * S), sendLatency: 2 * S, newSendLatency: 0.5 * S };
+      expect(nowErrorsAt(schedule)).toBeLessThan(stagingErrorsAt(schedule));
+      expect(nowErrorsAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
+    });
+
+    // What the rule guarantees by itself, whatever the readers and send times: the batch errors only
+    // after 30 counted waits, each at least 31s of database time after the previous counted re-queue.
+    test.each([...schedules, ...unequal])("%s: not before 30 waits of 31s after the first read", (_name, schedule) => {
+      expect(nowErrorsAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
     });
 
     test("CodeRabbit's case fails the read-time rule and passes this one", () => {
