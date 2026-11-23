@@ -59,9 +59,10 @@ const AUTOSAVE_STATUS_COLOR: Record<AutosaveStatus, string> = {
   failed: "fg.error",
   refused: "fg.error"
 };
-// Autosave states where leaving the page could lose answers. A save in flight is not one: the
-// pagehide handler resends it with keepalive.
-const UNSAVED_STATUSES: ReadonlySet<AutosaveStatus> = new Set(["retrying", "offline", "failed"]);
+// Autosave states where leaving the page could lose answers. A save in flight counts: the pagehide
+// handler resends it with keepalive, but a response over the keepalive size budget goes out as an
+// ordinary request, which the browser may cancel on unload.
+const UNSAVED_STATUSES: ReadonlySet<AutosaveStatus> = new Set(["saving", "retrying", "offline", "failed"]);
 // Shown in the same status region, in the `failed` color, after an edit the page can't save because
 // the student's saved response didn't load.
 const UNSAVABLE_STATUS_TEXT =
