@@ -76,7 +76,7 @@ const LinkItems = (courseId: number, assignmentId: number): NavItem[] => [
     label: "Configure Rubric",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`,
     icon: FaPen,
-    instructorsOnly: true
+    capability: "manage_rubrics"
   },
   {
     label: "Test Assignment",
@@ -166,14 +166,16 @@ export function ManageAssignmentNav({
   const isInstructor = useIsInstructor();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const canManageAssignments = useCapability("manage_assignments");
+  const canManageRubrics = useCapability("manage_rubrics");
   const canManageStudentRepositories = useCapability("manage_student_repositories");
   // The capabilities nav items can name. One that isn't here hides its item.
   const heldCapabilities: Record<string, boolean> = React.useMemo(
     () => ({
       manage_assignments: canManageAssignments,
+      manage_rubrics: canManageRubrics,
       manage_student_repositories: canManageStudentRepositories
     }),
-    [canManageAssignments, canManageStudentRepositories]
+    [canManageAssignments, canManageRubrics, canManageStudentRepositories]
   );
   const pathname = usePathname();
   const router = useRouter();
