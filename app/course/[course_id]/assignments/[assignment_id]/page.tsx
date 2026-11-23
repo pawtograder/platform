@@ -235,13 +235,14 @@ export default function AssignmentPage() {
         templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
       >
-        <GridItem>
+        {/* minWidth 0 lets the title and due date wrap at 320px instead of widening the page. */}
+        <GridItem minWidth={0}>
           <Flex width="100%" alignItems={"center"}>
-            <Box>
+            <Box minWidth={0}>
               <Heading as="h1" size="lg">
                 {assignment.title}
               </Heading>
-              <HStack>
+              <HStack minWidth={0} flexWrap="wrap">
                 <AssignmentDueDate
                   assignment={assignment}
                   showLateTokenButton={true}
