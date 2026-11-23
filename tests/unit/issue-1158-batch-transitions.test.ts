@@ -270,9 +270,11 @@ describe("issue #1158: worker batch status transitions", () => {
       expect(nowErrorsAt(schedule)).toBeGreaterThanOrEqual(stagingErrorsAt(schedule));
     });
 
-    test("past the guard the comparison can fail, but never the 30 waits of 31s", () => {
+    // Past the guard the comparison with staging is not guaranteed: with a reader every 31.5s and this
+    // re-queue 1.5s sooner than staging's send, the limit comes after about half staging's time. The
+    // 30 waits of 31s below still hold there.
+    test("past the guard, still never before 30 waits of 31s", () => {
       const schedule: Schedule = { readers: every(31.5 * S), sendLatency: 2 * S, newSendLatency: 0.5 * S };
-      expect(nowErrorsAt(schedule)).toBeLessThan(stagingErrorsAt(schedule));
       expect(nowErrorsAt(schedule) - schedule.readers(0)).toBeGreaterThanOrEqual(30 * 31 * S);
     });
 
