@@ -30,13 +30,13 @@ export const CAPABILITY_CATALOG = {
     area: "Manage Assignments",
     section: "Groups",
     label: "Manage groups",
-    info: "Set group mentors, rename groups, and copy groups from another assignment under Manage Assignments > Manage Groups."
+    info: "Set group mentors and copy groups from another assignment under Manage Assignments > Manage Groups."
   },
   publish_groups: {
     area: "Manage Assignments",
     section: "Groups",
     label: "Publish groups",
-    info: "Edit groups and move students between them under Manage Assignments > Manage Groups, and publish those changes so students can use their groups."
+    info: "Create and edit groups and move students between them under Manage Assignments > Manage Groups. Publishing those changes still needs an instructor for now."
   },
   manage_review_assignments: {
     area: "Manage Assignments",
