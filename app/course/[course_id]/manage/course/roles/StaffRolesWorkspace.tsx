@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Tooltip } from "@/components/ui/tooltip";
+import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import NextLink from "next/link";
 import { groupCapabilities } from "./capabilityCatalog";
 import { useAnnouncer } from "@/components/ui/live-announcer";
@@ -28,6 +28,7 @@ import {
   NativeSelect,
   Skeleton,
   Switch,
+  VisuallyHidden,
   Tabs,
   Flex,
   Table,
@@ -505,11 +506,24 @@ export default function StaffRolesWorkspace() {
                           >
                             <HStack>
                               <Text>{capability.label}</Text>
-                              <Tooltip content={capability.info} openDelay={0}>
-                                <IconButton size="2xs" variant="ghost" aria-label={`About ${capability.label}`}>
-                                  <FiInfo />
-                                </IconButton>
-                              </Tooltip>
+                              {/* A click-to-open toggletip, not a hover tooltip: it has to work on touch,
+                                  on click and from a screen reader. */}
+                              <PopoverRoot positioning={{ placement: "top" }}>
+                                <PopoverTrigger asChild>
+                                  <IconButton size="2xs" variant="ghost" aria-label={`About ${capability.label}`}>
+                                    <FiInfo />
+                                  </IconButton>
+                                </PopoverTrigger>
+                                <PopoverContent maxW="sm">
+                                  <PopoverArrow />
+                                  <PopoverBody>
+                                    <Text fontSize="sm">{capability.info}</Text>
+                                  </PopoverBody>
+                                </PopoverContent>
+                              </PopoverRoot>
+                              <VisuallyHidden id={`capability-info-${capability.name}`}>
+                                {capability.info}
+                              </VisuallyHidden>
                             </HStack>
                             <Switch.Root
                               checked={checked}
@@ -521,6 +535,7 @@ export default function StaffRolesWorkspace() {
                               <Switch.HiddenInput
                                 role="switch"
                                 aria-label={`${roleDisplayName(selectedRole)}: ${capability.label}`}
+                                aria-describedby={`capability-info-${capability.name}`}
                               />
                               <Switch.Control>
                                 <Switch.Thumb />

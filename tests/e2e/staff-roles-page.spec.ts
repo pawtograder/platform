@@ -113,8 +113,14 @@ test.describe("Staff Roles page", () => {
         .getByRole("region", { name: "Reviews", exact: true })
         .getByRole("switch", { name: "Grader: Manage review assignments" })
     ).toBeVisible();
-    await page.getByRole("button", { name: "About Manage assignments", exact: true }).focus();
-    await expect(page.getByRole("tooltip")).toContainText("Create and edit assignments in Manage Assignments.");
+    // The "i" opens on click (and so on tap and from a screen reader), and the switch is described by
+    // the same text so it is read without opening anything.
+    await page.getByRole("button", { name: "About Manage assignments", exact: true }).click();
+    await expect(page.getByRole("dialog")).toContainText("Create and edit assignments in Manage Assignments");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("switch", { name: "Grader: Manage assignments" })).toHaveAccessibleDescription(
+      /Create and edit assignments in Manage Assignments/
+    );
     await showStaff(page);
     await expect(page.getByRole("combobox", { name: `Role for ${grader.private_profile_name}` })).toBeVisible();
     await expect(page.getByRole("combobox", { name: `Role for ${otherGrader.private_profile_name}` })).toBeVisible();

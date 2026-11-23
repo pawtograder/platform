@@ -18,7 +18,7 @@ export const CAPABILITY_CATALOG = {
     area: "Manage Assignments",
     section: "Assignments",
     label: "Manage assignments",
-    info: "Create and edit assignments in Manage Assignments."
+    info: "Create and edit assignments in Manage Assignments, including their autograder settings. Also syncs student repositories from Repository Status."
   },
   manage_rubrics: {
     area: "Manage Assignments",
@@ -36,7 +36,7 @@ export const CAPABILITY_CATALOG = {
     area: "Manage Assignments",
     section: "Groups",
     label: "Publish groups",
-    info: "Publish group changes under Manage Assignments > Manage Groups so students can use their groups."
+    info: "Edit groups and move students between them under Manage Assignments > Manage Groups, and publish those changes so students can use their groups."
   },
   manage_review_assignments: {
     area: "Manage Assignments",
@@ -93,8 +93,8 @@ export const CAPABILITY_CATALOG = {
     info: "Pin, edit, answer, merge, move, and hide posts in Discussion."
   },
   send_announcements: {
-    area: "Discussion",
-    section: "Announcements",
+    area: "Course Settings",
+    section: "Emailer",
     label: "Send announcements",
     info: "Send emails to the class from Course Settings > Emailer."
   },
