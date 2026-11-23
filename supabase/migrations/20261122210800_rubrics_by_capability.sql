@@ -552,7 +552,9 @@ BEGIN
          v_old_assignment_id, v_old_review_round
     FROM public.rubrics
     WHERE id = v_rubric_id AND class_id = v_class_id
-    FOR UPDATE;
+    -- NO KEY UPDATE: the save never changes the rubric's id, so an assignment edit's foreign-key
+    -- check on this rubric doesn't have to wait for the save.
+    FOR NO KEY UPDATE;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Rubric % not found in class %', v_rubric_id, v_class_id;
