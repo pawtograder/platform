@@ -44,6 +44,7 @@ import {
 const SEEDED_CAPABILITIES = [
   "manage_assignments",
   "manage_gradebook",
+  "manage_groups",
   "manage_review_assignments",
   "manage_roles",
   "manage_roster",
