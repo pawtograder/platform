@@ -120,9 +120,13 @@ describe("getUserFacingErrorMessage", () => {
       }
     });
 
-    it("are not sent to Sentry", () => {
+    it("are sent to Sentry unless the caller expects 42501, as the publish handler does", () => {
       jest.mocked(Sentry.captureException).mockClear();
-      expect(reportUnexpectedError(publishRefused, { operation: "publish" })).toBeUndefined();
+      reportUnexpectedError(publishRefused, { operation: "publish" });
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+
+      jest.mocked(Sentry.captureException).mockClear();
+      expect(reportUnexpectedError(publishRefused, { operation: "publish" }, { expected: ["42501"] })).toBeUndefined();
       expect(Sentry.captureException).not.toHaveBeenCalled();
     });
   });
@@ -233,23 +237,22 @@ describe("isExpectedUserError", () => {
     expect(isExpectedUserError(refusedWriteError("delete"))).toBe(true);
   });
 
-  it("is false by default for no-row and foreign-key errors, and for Postgres's own permission errors", () => {
-    for (const code of ["PGRST116", "23503"]) {
+  it("is false by default for permission, no-row and foreign-key errors", () => {
+    for (const code of ["42501", "PGRST116", "23503"]) {
       expect(isExpectedUserError({ code, message: "x" })).toBe(false);
-    }
-    for (const message of [
-      "permission denied for table assignments",
-      "permission denied for function publish_assignment_group_changes",
-      'new row violates row-level security policy for table "assignment_self_review_settings"',
-      "must be owner of table assignments"
-    ]) {
-      expect(isExpectedUserError({ code: "42501", message })).toBe(false);
     }
   });
 
-  it("is true for a 42501 a database function raised on purpose", () => {
-    expect(isExpectedUserError({ code: "42501", message: "Only instructors can publish group changes" })).toBe(true);
-    expect(isExpectedUserError({ code: "42501", message: "Access denied" })).toBe(true);
+  it("is false by default for every 42501, whether Postgres or one of our functions raised it", () => {
+    for (const message of [
+      "permission denied for table assignments",
+      'new row violates row-level security policy for table "assignment_self_review_settings"',
+      "Only instructors can publish group changes",
+      "insufficient permissions: manage_gradebook required for class 12"
+    ]) {
+      expect(isExpectedUserError({ code: "42501", message })).toBe(false);
+      expect(isExpectedUserError({ code: "42501", message }, { expected: ["42501"] })).toBe(true);
+    }
   });
 
   it("is true for codes the caller expects", () => {

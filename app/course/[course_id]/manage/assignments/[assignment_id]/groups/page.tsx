@@ -9,7 +9,7 @@ import {
   AssignmentGroupWithMembersAndMentor,
   UserRoleWithPrivateProfileGroupMembershipsAndUser
 } from "@/utils/supabase/DatabaseTypes";
-import { useCapability } from "@/hooks/useClassProfiles";
+import { useCapability, useIsAdmin, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
 import {
   useIsTableControllerReady,
@@ -256,6 +256,12 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const canEditGroups = useCapability("publish_groups");
   // Copy Groups writes the groups at once, without staging, so it needs manage_groups.
   const canManageGroups = useCapability("manage_groups");
+  // publish_assignment_group_changes still accepts only instructors and admins, so only they get
+  // Publish Changes until #1010 moves it to publish_groups. Others with publish_groups can stage
+  // changes but not publish them.
+  const isInstructor = useIsInstructor();
+  const isAdmin = useIsAdmin();
+  const canPublishGroups = canEditGroups && (isInstructor || isAdmin);
   // The (Edit) link opens the assignment form, which needs manage_assignments.
   const canManageAssignments = useCapability("manage_assignments");
   const { assignmentGroupsWithMembers, assignments, userRolesWithProfiles } = courseController;
@@ -392,7 +398,11 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     } catch (e) {
       console.error(e);
       // A refusal from the publish function (42501) is expected, not a bug: keep it out of Sentry.
-      reportUnexpectedError(e, { operation: "publish_assignment_group_changes", assignment_id: assignment.id });
+      reportUnexpectedError(
+        e,
+        { operation: "publish_assignment_group_changes", assignment_id: assignment.id },
+        { expected: ["42501"] }
+      );
       toaster.create({
         title: "Error publishing changes",
         description: getUserFacingErrorMessage(e, { role: errorRole }),
@@ -617,14 +627,16 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                       Clear Groups To Create
                     </Button>
                   )}
-                  <Button
-                    colorPalette={"green"}
-                    onClick={() => {
-                      publishChanges();
-                    }}
-                  >
-                    Publish Changes
-                  </Button>
+                  {canPublishGroups && (
+                    <Button
+                      colorPalette={"green"}
+                      onClick={() => {
+                        publishChanges();
+                      }}
+                    >
+                      Publish Changes
+                    </Button>
+                  )}
                 </Flex>
               )}
             </Box>
