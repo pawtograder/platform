@@ -31,6 +31,11 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
 - [Data Retention & Storage Sizing](./data-retention.md): where data lives
   (Postgres / S3 / GitHub), how to size storage, how to enforce an age-based
   ("delete after N years") policy, and audit-log partition maintenance.
+- [Cloud Workspaces (Forgejo and Coder)](./forgejo-coder.md): live checks for
+  settings the chart doesn't supply, then for each component (Forgejo, sign-in,
+  Coder, Actions runner, reconciler, push webhook, workspaces, course flag) the
+  signals that exist, diagnosis commands, recovery and what it loses. Ends with
+  the flags and the course risks.
 
 ## Configuration
 

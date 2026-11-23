@@ -15,7 +15,7 @@ const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 if (!config || !url || !key) {
   throw new Error("Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and the four FORGEJO_* settings");
 }
-const { accounts, repos, groupRepos, hashes, orgHooks, revocation } = await reconcileForgejo(
+const { accounts, repos, groupRepos, hashes, orgHooks, staffTeams, groupLeavers, revocation } = await reconcileForgejo(
   createClient<Database>(url, key),
   config
 );
@@ -26,6 +26,9 @@ console.log(
     groupRepos: groupRepos.created,
     hashes: hashes.set,
     orgHooks: orgHooks.checked,
+    staffTeams: staffTeams.synced,
+    groupLeavers: groupLeavers.removed,
+    groupLeaversDiscarded: groupLeavers.discarded,
     revoked: revocation.revoked,
     failures: [
       ...accounts.failures,
@@ -33,6 +36,8 @@ console.log(
       ...groupRepos.failures,
       ...hashes.failures,
       ...orgHooks.failures,
+      ...staffTeams.failures,
+      ...groupLeavers.failures,
       ...revocation.failures
     ].map((f) => String(f.error))
   })

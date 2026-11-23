@@ -17,9 +17,10 @@ import { reconcileForgejo } from "./reconcile.ts";
  * for each student in each released Forgejo assignment (#1093), so both exist before the student
  * first signs in. Invoked hourly via pg_cron, and kicked when someone joins such a class, a class
  * turns the flag on (20261112120100_forgejo_reconciler.sql) or a Forgejo assignment is released
- * (20261118140000_forgejo_repos.sql). Each pass then revokes the workspace tokens of students who have
- * left the repo's class (20261118160000_forgejo_repo_tokens.sql), and tokens no open has re-minted for
- * 14 days (20261119190000_forgejo_repo_tokens_idle.sql).
+ * (20261118140000_forgejo_repos.sql). Each pass then takes students who left a group off its repo
+ * (20261122140100_forgejo_group_repo_revocations.sql), and revokes the workspace tokens of students who
+ * have left the repo's class (20261118160000_forgejo_repo_tokens.sql), and tokens no open has re-minted
+ * for 14 days (20261119190000_forgejo_repo_tokens_idle.sql).
  */
 
 if (Deno.env.get("SENTRY_DSN")) {
@@ -74,13 +75,17 @@ Deno.serve(async (req) => {
   const supabase = createClient<Database>(supabaseUrl, supabaseKey, { auth: REQUEST_SCOPED_AUTH_OPTIONS });
 
   try {
-    const { accounts, repos, groupRepos, hashes, orgHooks, revocation } = await reconcileForgejo(supabase, config);
+    const { accounts, repos, groupRepos, hashes, orgHooks, staffTeams, groupLeavers, revocation } =
+      await reconcileForgejo(supabase, config);
     console.log(
       `[forgejo-reconciler] Accounts ${accounts.provisioned} (failed ${accounts.failures.length}), ` +
         `repos ${repos.created} (failed ${repos.failures.length}), ` +
         `group repos ${groupRepos.created} (failed ${groupRepos.failures.length}), ` +
         `workflow hashes ${hashes.set} (failed ${hashes.failures.length}), ` +
-        `org hooks ${orgHooks.checked} (failed ${orgHooks.failures.length})`
+        `org hooks ${orgHooks.checked} (failed ${orgHooks.failures.length}), ` +
+        `staff teams ${staffTeams.synced} (failed ${staffTeams.failures.length}), ` +
+        `group leavers removed ${groupLeavers.removed} (discarded ${groupLeavers.discarded}, ` +
+        `failed ${groupLeavers.failures.length})`
     );
     console.log(`[forgejo-reconciler] Revoked ${revocation.revoked} tokens, failed ${revocation.failures.length}`);
     // One event per kind per pass, not per item: an outage or a bad credential fails everything at once.
@@ -123,6 +128,26 @@ Deno.serve(async (req) => {
       });
       Sentry.captureException(orgHooks.failures[0].error, hookScope);
     }
+    if (staffTeams.failures.length > 0) {
+      const staffScope = scope.clone();
+      staffScope.setFingerprint(["forgejo-reconciler", "staff-team-failed"]);
+      staffScope.setContext("failures", {
+        count: staffTeams.failures.length,
+        class_ids: staffTeams.failures.slice(0, 20).map((f) => f.classId)
+      });
+      Sentry.captureException(staffTeams.failures[0].error, staffScope);
+    }
+    if (groupLeavers.failures.length > 0) {
+      const leaveScope = scope.clone();
+      leaveScope.setFingerprint(["forgejo-reconciler", "group-leave-failed"]);
+      leaveScope.setContext("failures", {
+        count: groupLeavers.failures.length,
+        leavers: groupLeavers.failures
+          .slice(0, 20)
+          .map((f) => ({ assignment_group_id: f.assignmentGroupId, profile_id: f.profileId }))
+      });
+      Sentry.captureException(groupLeavers.failures[0].error, leaveScope);
+    }
     reportFailures(scope, "revoke-failed", revocation.failures);
     await Sentry.flush(2000);
     return json({
@@ -136,6 +161,11 @@ Deno.serve(async (req) => {
       workflow_hashes_failed: hashes.failures.length,
       org_hooks_checked: orgHooks.checked,
       org_hooks_failed: orgHooks.failures.length,
+      staff_teams_synced: staffTeams.synced,
+      staff_teams_failed: staffTeams.failures.length,
+      group_leavers_removed: groupLeavers.removed,
+      group_leavers_discarded: groupLeavers.discarded,
+      group_leavers_failed: groupLeavers.failures.length,
       revoked: revocation.revoked,
       revoke_failed: revocation.failures.length
     });
