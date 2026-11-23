@@ -216,18 +216,22 @@ Deno.test("small batch: each queued repo is claimed, deleted, then marked done",
   ]);
 });
 
-Deno.test("small batch: a repo the reconciler holds or already archived is left to it", async () => {
-  const { client, log } = fakeSupabase([{ id: 1, repository: "org/a" }], { unclaimable: [1] });
-  const remove = () => Promise.reject(new Error("must not delete"));
-  const counts = await deleteForgejoRepositoriesSynchronously(
-    client,
-    config,
-    [target("org/a"), target("org/b")],
-    remove
-  );
-  assertEquals(counts, { deleted: 0, queued: 2, skipped: 0 });
-  assertEquals(log, ["find org/a", "claim 1", "find org/b"]);
-});
+Deno.test(
+  "small batch: a repo the reconciler holds is left queued, and one it already archived is skipped",
+  async () => {
+    const { client, log } = fakeSupabase([{ id: 1, repository: "org/a" }], { unclaimable: [1] });
+    const remove = () => Promise.reject(new Error("must not delete"));
+    const counts = await deleteForgejoRepositoriesSynchronously(
+      client,
+      config,
+      [target("org/a"), target("org/b")],
+      remove
+    );
+    // org/a is held by a live claim, so it stays queued; org/b has no pending entry, so it was already archived.
+    assertEquals(counts, { deleted: 0, queued: 1, skipped: 1 });
+    assertEquals(log, ["find org/a", "claim 1", "find org/b"]);
+  }
+);
 
 Deno.test("small batch: a failed delete stays queued and never throws", async () => {
   const { client, log } = fakeSupabase([{ id: 1, repository: "org/a" }]);

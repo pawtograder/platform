@@ -9,11 +9,11 @@ import {
   type ForgejoConfig,
   grantWrite,
   readFile,
-  revokeRepoToken
+  revokeRepoToken,
+  STALE_CLAIM_MINUTES
 } from "../_shared/ForgejoWrapper.ts";
 
-/** A claim older than this belonged to a pass that died; the next pass adopts what it created. */
-export const STALE_CLAIM_MINUTES = 10;
+export { STALE_CLAIM_MINUTES };
 
 /**
  * Accounts per pass, at about two Forgejo calls each. Every kick and every hourly run is a pass, so a

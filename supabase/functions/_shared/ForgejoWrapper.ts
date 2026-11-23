@@ -124,6 +124,12 @@ export async function ensureAccountForUser(
   throw new Error("No free Forgejo username after 20 attempts");
 }
 
+/**
+ * A forgejo-reconciler claim older than this belonged to a pass that died; the next pass adopts what it created.
+ * assignment-delete claims archive entries with the same value.
+ */
+export const STALE_CLAIM_MINUTES = 10;
+
 const CODER_TOKEN_PREFIX = "pawtograder-coder-";
 /** Younger tokens than this may belong to a concurrent open that hasn't stored its token yet. */
 export const REPLACED_TOKEN_GRACE_MS = 10 * 60_000;

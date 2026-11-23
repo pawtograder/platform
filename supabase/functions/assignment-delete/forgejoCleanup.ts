@@ -1,11 +1,13 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { deleteRepo, type ForgejoConfig, listRecentCommitShas } from "../_shared/ForgejoWrapper.ts";
+import {
+  deleteRepo,
+  type ForgejoConfig,
+  listRecentCommitShas,
+  STALE_CLAIM_MINUTES
+} from "../_shared/ForgejoWrapper.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { type GitHubRepoTarget, hasOnlyHandoutCommits, modifiedRepositoryMessage } from "./repositoryCleanup.ts";
-
-/** The claim forgejo-reconciler's archive step uses (STALE_CLAIM_MINUTES there). */
-const ARCHIVE_STALE_CLAIM_MINUTES = 10;
 
 export type ForgejoRepositoryRow = { repository: string | null; synced_handout_sha: string | null };
 
@@ -81,14 +83,14 @@ export async function deleteForgejoRepositoriesSynchronously(
         .maybeSingle();
       if (error) throw error;
       if (!job) {
-        // Already archived by the reconciler.
-        counts.queued++;
+        // Already archived by the reconciler: nothing is left to delete or queue.
+        counts.skipped++;
         continue;
       }
       // function-grants: service-role
       const { data: claim, error: claimError } = await supabase.rpc("claim_forgejo_repo_archive", {
         p_id: job.id,
-        p_stale_minutes: ARCHIVE_STALE_CLAIM_MINUTES
+        p_stale_minutes: STALE_CLAIM_MINUTES
       });
       if (claimError) throw claimError;
       if (!claim) {
