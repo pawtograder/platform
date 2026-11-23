@@ -4,13 +4,15 @@
  *
  * - Manage Review Assignments: its actions, and the Bulk Assign and Reassign pages, need
  *   manage_review_assignments. Without it those two pages send you back to the reviews page.
- * - Manage Groups: every change needs publish_groups; without it the page is read-only.
+ * - Manage Groups: staging changes and publishing need publish_groups; Copy Groups and the mentor
+ *   drop-down need manage_groups. Without either the page is read-only. capability-gated-groups.spec.ts
+ *   covers a role with only one of the two.
  * - Flashcard Decks: create / delete need manage_flashcards. The default grader role holds it; a
  *   custom role with it turned off keeps the nav entry and hides list controls and deck-detail add / edit /
  *   delete card controls.
  *
- * Default roles only for the review and groups checks: the instructor role holds those capabilities,
- * the grader role holds neither, until the last review test gives the default grader role
+ * Default roles only for the review and groups checks: the instructor role holds every capability,
+ * the grader role none of these, until the last review test gives the default grader role
  * manage_review_assignments (instructors can edit it since 20261119120000_custom_roles_copy_grader_role.sql).
  * The flashcard check uses its own custom role so it does not change the default grader role.
  */
