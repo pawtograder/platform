@@ -1,4 +1,4 @@
--- Proof harness for 20261122160000_forgejo_repo_archives.sql (#1378).
+-- Proof harness for 20261123170000_forgejo_repo_archives.sql (#1378).
 --
 -- Makes its own fixtures and ends in ROLLBACK. Run it in one transaction with the migration if the
 -- migration isn't applied yet:
@@ -18,7 +18,7 @@
 --   2. enqueue_github_archive_repo stays GitHub-only: a Forgejo name queues neither a GitHub job nor a
 --      Forgejo archive, a GitHub name still queues the GitHub job, and a GitHub delete never queues a
 --      live Forgejo repo with the same owner/name; a caller passing p_git_provider => 'github' still
---      archives the GitHub repo after deleting its row (20261122160100_github_archive_repo_host.sql)
+--      archives the GitHub repo after deleting its row (20261123170100_github_archive_repo_host.sql)
 --   3. a name already pending isn't queued twice
 --   4. forgejo_repo_archives_due lists pending entries; claim_forgejo_repo_archive claims once and returns
 --      the claim, a live claim hides the entry, and immediate deletion can't claim a recorded destination

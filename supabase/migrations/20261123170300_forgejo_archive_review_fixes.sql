@@ -1,4 +1,4 @@
--- Review fixes for #1398's Forgejo archives (20261122160000_forgejo_repo_archives.sql).
+-- Review fixes for #1398's Forgejo archives (20261123170000_forgejo_repo_archives.sql).
 --
 -- 1. cleanup_individual_repositories_for_assignment keeps the Forgejo repos of students who are in no
 --    group. Before #1398 the repositories DELETE guard refused this RPC on Forgejo. Now it deletes
