@@ -406,6 +406,14 @@ export async function downloadArchive(
 }
 
 /**
+ * The class's Forgejo org: forgejo_org, else the slug, lowercased like every Forgejo name Pawtograder stores. The
+ * same rule as the migrations' lower(coalesce(nullif(c.forgejo_org, ''), c.slug)).
+ */
+export function classForgejoOrg(cls: { forgejo_org?: string | null; slug?: string | null }): string {
+  return (cls.forgejo_org || cls.slug || "").toLowerCase();
+}
+
+/**
  * The repository's API path, for a plain owner/name only. The admin can call every endpoint, so a name with
  * "..", "?" or another slash, as an instructor could type into template_repo, must never reach the URL.
  */
@@ -420,37 +428,54 @@ export function repoPath(repository: string): string {
 /**
  * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
  * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
- * created there would belong to them. Then gives the org its push hook, so student pushes reach Commit History.
+ * created there would belong to them. Then gives the org its hook.
  */
 export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
   await claimOrg(config, org);
   if (config.pushHook) await ensurePushHook(config, org, config.pushHook);
 }
 
+/** Forgejo (15.0.9) has no webhook event for a run being requested or starting. */
+export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failure"] as const;
+
 /**
  * An org hook, not a system one: classes can share an instance, and an org's hook covers every repo in it,
  * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
  * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
  * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
+ * Forgejo 15.0.9's hook PATCH ignores action_run events, so a hook missing them is replaced, not patched.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
   const hooks = await forgejo(config, "GET", `${path}?limit=50`);
   if (!hooks.ok) throw await failure(hooks, "org hooks read");
-  const existing = ((await hooks.json()) as { id: number; config?: { url?: string } }[]).find(
-    (h) => h.config?.url === hook.url
-  );
+  const matching = (
+    (await hooks.json()) as { id: number; events?: string[] | null; config?: { url?: string } }[]
+  ).filter((h) => h.config?.url === hook.url);
   const settings = {
     active: true,
-    events: ["push"],
+    events: [...ORG_HOOK_EVENTS],
     branch_filter: "*",
     config: { url: hook.url, content_type: "json", secret: hook.secret }
   };
-  const res = existing
-    ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
-    : await forgejo(config, "POST", path, { type: "forgejo", ...settings });
-  if (!res.ok) throw await failure(res, existing ? "org hook update" : "org hook create");
-  await res.body?.cancel();
+  const subscribed = matching.find((h) => ORG_HOOK_EVENTS.every((e) => h.events?.includes(e)));
+  const keep = subscribed ?? null;
+  if (keep) {
+    const res = await forgejo(config, "PATCH", `${path}/${keep.id}`, settings);
+    if (!res.ok) throw await failure(res, "org hook update");
+    await res.body?.cancel();
+  } else {
+    const created = await forgejo(config, "POST", path, { type: "forgejo", ...settings });
+    if (!created.ok) throw await failure(created, "org hook create");
+    await created.body?.cancel();
+  }
+  // Delete stale hooks only after a subscribed one exists: deleting first lost pushes when the create failed.
+  for (const stale of matching) {
+    if (keep && stale.id === keep.id) continue;
+    const removed = await forgejo(config, "DELETE", `${path}/${stale.id}`);
+    if (!removed.ok && removed.status !== 404) throw await failure(removed, "org hook replace");
+    await removed.body?.cancel();
+  }
 }
 
 async function claimOrg(config: ForgejoConfig, org: string): Promise<void> {
@@ -589,13 +614,63 @@ export async function readFile(
   path: string,
   ref?: string
 ): Promise<string | null> {
+  return (await readFileEntry(config, repository, path, ref))?.content ?? null;
+}
+
+export async function readFileEntry(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  ref?: string
+): Promise<{ content: string; sha: string } | null> {
   const file = path.split("/").map(encodeURIComponent).join("/");
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}${query}`);
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
   if (!res.ok) throw await failure(res, "file read");
-  const { content } = (await res.json()) as { content: string };
-  return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+  const { content, sha } = (await res.json()) as { content: string; sha: string };
+  return {
+    content: new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0))),
+    sha
+  };
+}
+
+export type ForgejoFileChange =
+  | { operation: "create"; path: string; content: string }
+  | { operation: "update"; path: string; content: string; sha: string; fromPath?: string }
+  | { operation: "delete"; path: string; sha: string };
+
+function base64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export async function changeFiles(
+  config: ForgejoConfig,
+  repository: string,
+  changes: ForgejoFileChange[],
+  message: string,
+  branch = "main"
+): Promise<string> {
+  const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/contents`, {
+    branch,
+    message,
+    files: changes.map((c) => ({
+      operation: c.operation,
+      path: c.path,
+      ...(c.operation === "delete" ? {} : { content: base64(c.content) }),
+      ...(c.operation === "create" ? {} : { sha: c.sha }),
+      ...(c.operation === "update" && c.fromPath ? { from_path: c.fromPath } : {})
+    }))
+  });
+  if (!res.ok) throw await failure(res, "file change");
+  const body = (await res.json()) as { commit?: { sha?: string } };
+  if (!body.commit?.sha) throw new Error("Forgejo file change returned no commit");
+  return body.commit.sha;
 }
 
 /** The same fields of a commit that GitHub's commit API gives. */

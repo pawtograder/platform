@@ -8,6 +8,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/asse
 import {
   archivedRepoName,
   archiveRepo,
+  changeFiles,
   coderTokenName,
   ArchiveTooLargeError,
   downloadArchive,
@@ -24,6 +25,7 @@ import {
   IDLE_TOKEN_MS,
   mintRepoToken,
   readFile,
+  readFileEntry,
   removeCollaborator,
   REPLACED_TOKEN_GRACE_MS,
   repoPath,
@@ -520,7 +522,7 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
       assertEquals(calls.at(-1)?.body, {
         type: "forgejo",
         active: true,
-        events: ["push"],
+        events: ["push", "action_run_success", "action_run_failure"],
         branch_filter: "*",
         config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
       });
@@ -531,7 +533,14 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
     [
       ok({ username: "cs4535" }),
       ...ownedBy("pawtograder-admin"),
-      ok([{ id: 9, active: false, config: { url: hooked.pushHook!.url } }]),
+      ok([
+        {
+          id: 9,
+          active: false,
+          events: ["push", "action_run_success", "action_run_failure"],
+          config: { url: hooked.pushHook!.url }
+        }
+      ]),
       ok({})
     ],
     async (calls) => {
@@ -542,10 +551,93 @@ Deno.test("ensureOrg: gives an existing org its push hook once", async () => {
       );
       assertEquals(calls.at(-1)?.body, {
         active: true,
-        events: ["push"],
+        events: ["push", "action_run_success", "action_run_failure"],
         branch_filter: "*",
         config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
       });
+      assertEquals(calls.filter((c) => c.method === "POST").length, 0);
+    }
+  );
+});
+
+Deno.test("ensureOrg: replaces a hook without the action_run events, which Forgejo's PATCH can't add", async () => {
+  const stale = [{ id: 9, active: true, events: ["push"], config: { url: hooked.pushHook!.url } }];
+  await withForgejo(
+    [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      ok(stale),
+      ok({}, 201),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(
+        calls.slice(-2).map((c) => `${c.method} ${c.url}`),
+        [
+          "POST https://git.example.edu/api/v1/orgs/cs4535/hooks",
+          "DELETE https://git.example.edu/api/v1/orgs/cs4535/hooks/9"
+        ]
+      );
+      assertEquals(calls.at(-2)?.body, {
+        type: "forgejo",
+        active: true,
+        events: ["push", "action_run_success", "action_run_failure"],
+        branch_filter: "*",
+        config: { url: hooked.pushHook!.url, content_type: "json", secret: "s3cret" }
+      });
+      assertEquals(calls.filter((c) => c.method === "PATCH").length, 0);
+    }
+  );
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), status(403, "forbidden")],
+    async (calls) => {
+      await assertRejects(() => ensureOrg(hooked, "cs4535"), Error, "org hook create failed: 403");
+      assertEquals(calls.filter((c) => c.method === "DELETE").length, 0);
+    }
+  );
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), ok({}, 201), status(404)],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(calls.at(-1)?.method, "DELETE");
+    }
+  );
+  await withForgejo(
+    [ok({ username: "cs4535" }), ...ownedBy("pawtograder-admin"), ok(stale), ok({}, 201), status(403, "forbidden")],
+    async () => {
+      await assertRejects(() => ensureOrg(hooked, "cs4535"), Error, "org hook replace failed: 403");
+    }
+  );
+});
+
+Deno.test("ensureOrg: a hook left behind by an interrupted replace is cleaned up, not duplicated", async () => {
+  const both = [
+    { id: 9, active: true, events: ["push"], config: { url: hooked.pushHook!.url } },
+    {
+      id: 10,
+      active: false,
+      events: ["push", "action_run_success", "action_run_failure"],
+      config: { url: hooked.pushHook!.url }
+    }
+  ];
+  await withForgejo(
+    [
+      ok({ username: "cs4535" }),
+      ...ownedBy("pawtograder-admin"),
+      ok(both),
+      ok({}),
+      new Response(null, { status: 204 })
+    ],
+    async (calls) => {
+      await ensureOrg(hooked, "cs4535");
+      assertEquals(
+        calls.slice(-2).map((c) => `${c.method} ${c.url}`),
+        [
+          "PATCH https://git.example.edu/api/v1/orgs/cs4535/hooks/10",
+          "DELETE https://git.example.edu/api/v1/orgs/cs4535/hooks/9"
+        ]
+      );
       assertEquals(calls.filter((c) => c.method === "POST").length, 0);
     }
   );
@@ -1178,6 +1270,53 @@ Deno.test("token list: a list that keeps changing is an error, so nothing is tak
   );
 });
 
+Deno.test("readFileEntry: returns the content with its blob sha, and null for a missing file", async () => {
+  const text = "name: grade\n";
+  await withForgejo([ok({ content: btoa(text), sha: "b10b" }), new Response("{}", { status: 404 })], async () => {
+    assertEquals(await readFileEntry(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), {
+      content: text,
+      sha: "b10b"
+    });
+    assertEquals(await readFileEntry(config, "cs4535/hw1-handout", ".github/workflows/grade.yml"), null);
+  });
+});
+
+Deno.test("changeFiles: sends every change in one commit on main and returns its sha", async () => {
+  await withForgejo([ok({ commit: { sha: "c0ffee" } }, 201)], async (calls) => {
+    const sha = await changeFiles(
+      config,
+      "cs4535/hw1-handout",
+      [
+        { operation: "update", path: "a.disabled", fromPath: "a", sha: "s1", content: "é" },
+        { operation: "delete", path: "b", sha: "s2" },
+        { operation: "create", path: "c", content: "new" }
+      ],
+      "Park a"
+    );
+    assertEquals(sha, "c0ffee");
+    assertEquals(calls[0].method, "POST");
+    assertEquals(calls[0].url, "https://git.example.edu/api/v1/repos/cs4535/hw1-handout/contents");
+    assertEquals(calls[0].body, {
+      branch: "main",
+      message: "Park a",
+      files: [
+        { operation: "update", path: "a.disabled", content: btoa("\u00c3\u00a9"), sha: "s1", from_path: "a" },
+        { operation: "delete", path: "b", sha: "s2" },
+        { operation: "create", path: "c", content: btoa("new") }
+      ]
+    });
+  });
+});
+
+Deno.test("changeFiles: a refused commit throws with Forgejo's status", async () => {
+  await withForgejo([unprocessable("sha does not match")], async () => {
+    await assertRejects(
+      () => changeFiles(config, "cs4535/hw1-handout", [{ operation: "delete", path: "b", sha: "s" }], "x"),
+      Error,
+      "422"
+    );
+  });
+});
 /** A list page with Forgejo's X-Total-Count header; the total defaults to the page's own length. */
 const list = (body: unknown[], total = body.length) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "X-Total-Count": String(total) } });

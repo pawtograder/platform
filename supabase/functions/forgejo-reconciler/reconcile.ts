@@ -3,6 +3,7 @@ import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
   archivedRepoName,
   archiveRepo,
+  classForgejoOrg,
   ensureAccountForUser,
   ensureOrg,
   ensureRepoFromTemplate,
@@ -16,6 +17,7 @@ import {
   STALE_CLAIM_MINUTES,
   syncTeamMembers
 } from "../_shared/ForgejoWrapper.ts";
+import { gradeWorkflowSha } from "../_shared/forgejoGradeWorkflow.ts";
 
 export { STALE_CLAIM_MINUTES };
 
@@ -386,12 +388,11 @@ export async function reconcileForgejoWorkflowHashes(
   const result: HashReconcileResult = { set: 0, failures: [] };
   for (const assignment of assignments ?? []) {
     try {
-      assertTemplateInOrg(assignment.template_repo!, assignment.classes.forgejo_org || assignment.classes.slug);
+      assertTemplateInOrg(assignment.template_repo!, classForgejoOrg(assignment.classes));
       const workflow = await read(config, assignment.template_repo!, ".github/workflows/grade.yml");
       // Every submission to this assignment would be rejected, so report it rather than skip it.
       if (workflow === null) throw new Error("The handout has no .github/workflows/grade.yml");
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workflow));
-      const workflowSha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const workflowSha = await gradeWorkflowSha(workflow);
       const { error: saveError } = await supabase
         .from("autograder")
         .update({ workflow_sha: workflowSha })
@@ -507,6 +508,57 @@ export async function archiveUnlinkedRepos(
       result.archived++;
     } catch (failure) {
       result.failures.push({ classId: row.class_id, error: failure });
+    }
+  }
+  return result;
+}
+
+export const MAX_ORG_HOOKS_PER_PASS = 20;
+
+export type OrgHookResult = { checked: number; failures: { org: string; error: unknown }[] };
+
+/** The API's max_rows (supabase/config.toml), so a short page means the last one. */
+export const CLASS_PAGE_SIZE = 1000;
+
+export function orgHookWindow(orgs: string[], now: number): string[] {
+  const sorted = [...new Set(orgs)].sort();
+  if (sorted.length <= MAX_ORG_HOOKS_PER_PASS) return sorted;
+  const hour = Math.floor(now / 3_600_000);
+  const start = (hour * MAX_ORG_HOOKS_PER_PASS) % sorted.length;
+  return Array.from({ length: MAX_ORG_HOOKS_PER_PASS }, (_, i) => sorted[(start + i) % sorted.length]);
+}
+
+/** The repo backlogs only ensureOrg orgs with repos to create, so this upgrades every other org's hook. */
+export async function reconcileForgejoOrgHooks(
+  supabase: SupabaseClient<Database>,
+  config: ForgejoConfig,
+  ensure: typeof ensureOrg = ensureOrg,
+  now: number = Date.now()
+): Promise<OrgHookResult> {
+  const result: OrgHookResult = { checked: 0, failures: [] };
+  if (!config.pushHook) return result;
+  const orgs: string[] = [];
+  for (let from = 0; ; from += CLASS_PAGE_SIZE) {
+    const { data: classes, error } = await supabase
+      .from("classes")
+      .select("slug, forgejo_org, repositories!inner(id)")
+      .eq("repositories.git_provider", "forgejo")
+      .limit(1, { referencedTable: "repositories" })
+      .order("id")
+      .range(from, from + CLASS_PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const c of classes ?? []) {
+      const org = classForgejoOrg(c);
+      if (org) orgs.push(org);
+    }
+    if ((classes ?? []).length < CLASS_PAGE_SIZE) break;
+  }
+  for (const org of orgHookWindow(orgs, now)) {
+    try {
+      await ensure(config, org);
+      result.checked++;
+    } catch (failure) {
+      result.failures.push({ org, error: failure });
     }
   }
   return result;
@@ -705,59 +757,68 @@ export async function revokeGroupLeavers(
 }
 
 /** The steps of one pass, injectable so the orchestration can be tested without Forgejo. */
-export const RECONCILE_STEPS = {
-  archiveUnlinkedRepos,
-  reconcileForgejoAccounts,
-  reconcileForgejoRepos,
-  reconcileForgejoGroupRepos,
-  reconcileForgejoWorkflowHashes,
-  reconcileForgejoStaffTeams,
-  revokeGroupLeavers,
-  revokeDroppedTokens
+export const PASS_STEPS = {
+  revoke: revokeDroppedTokens,
+  archives: archiveUnlinkedRepos,
+  accounts: reconcileForgejoAccounts,
+  repos: reconcileForgejoRepos,
+  groupRepos: reconcileForgejoGroupRepos,
+  hashes: reconcileForgejoWorkflowHashes,
+  orgHooks: reconcileForgejoOrgHooks,
+  staffTeams: reconcileForgejoStaffTeams,
+  groupLeavers: revokeGroupLeavers
 };
 
 /**
- * One pass: unlinked repos are archived first, so a name they free can be used again in the same pass; then
- * accounts, so students who just got one get their repos in the same pass; then repos, group
- * repos and workflow hashes; then staff teams; then the revocations: students who left a group lose its repo, and
- * dropped students' and idle workspace tokens are revoked (forgejo_repo_tokens_to_revoke).
+ * One pass. Token revocation runs first: it has no other trigger, and a later step may time the pass out. Then
+ * unlinked repos are archived, so a name they free can be used again in the same pass; then accounts, so students
+ * who just got one get their repos in the same pass; then repos, group repos, workflow hashes and org hooks; then
+ * staff teams; then students who left a group lose its repo.
  */
 export async function reconcileForgejo(
   supabase: SupabaseClient<Database>,
   config: ForgejoConfig,
-  steps: typeof RECONCILE_STEPS = RECONCILE_STEPS
+  steps: typeof PASS_STEPS = PASS_STEPS
 ) {
-  // Revoking dropped tokens is the security step, so a failed backlog query in an earlier step must not skip it.
+  let revocation: RevokeResult | undefined;
+  let revocationError: unknown;
+  try {
+    revocation = await steps.revoke(supabase, config);
+  } catch (e) {
+    revocationError = e;
+  }
   let stepError: unknown;
   let accounts: ReconcileResult | undefined;
   let repos: RepoReconcileResult | undefined;
   let groupRepos: Awaited<ReturnType<typeof reconcileForgejoGroupRepos>> | undefined;
   let hashes: Awaited<ReturnType<typeof reconcileForgejoWorkflowHashes>> | undefined;
   let archives: ArchiveResult | undefined;
+  let orgHooks: OrgHookResult | undefined;
   let staffTeams: StaffTeamResult | undefined;
+  let groupLeavers: GroupLeaveResult | undefined;
   try {
-    archives = await steps.archiveUnlinkedRepos(supabase, config);
-    accounts = await steps.reconcileForgejoAccounts(supabase, config);
-    repos = await steps.reconcileForgejoRepos(supabase, config);
-    groupRepos = await steps.reconcileForgejoGroupRepos(supabase, config);
-    hashes = await steps.reconcileForgejoWorkflowHashes(supabase, config);
+    archives = await steps.archives(supabase, config);
+    accounts = await steps.accounts(supabase, config);
+    repos = await steps.repos(supabase, config);
+    groupRepos = await steps.groupRepos(supabase, config);
+    hashes = await steps.hashes(supabase, config);
+    orgHooks = await steps.orgHooks(supabase, config);
   } catch (e) {
     stepError = e;
   }
-  // Staff-team sync removes departed staff, so like the revocations below it runs whatever failed above.
+  // Staff-team sync removes departed staff and the group revocation removes leavers, so each runs whatever
+  // failed above, and one failing doesn't skip the other.
   try {
-    staffTeams = await steps.reconcileForgejoStaffTeams(supabase, config);
+    staffTeams = await steps.staffTeams(supabase, config);
   } catch (e) {
     stepError ??= e;
   }
-  // The revocations run whatever failed above, and one failing doesn't skip the other.
-  let groupLeavers: GroupLeaveResult | undefined;
   try {
-    groupLeavers = await steps.revokeGroupLeavers(supabase, config);
+    groupLeavers = await steps.groupLeavers(supabase, config);
   } catch (e) {
     stepError ??= e;
   }
-  const revocation = await steps.revokeDroppedTokens(supabase, config);
+  if (revocationError !== undefined) throw revocationError;
   if (stepError !== undefined) throw stepError;
   return {
     accounts: accounts!,
@@ -765,8 +826,9 @@ export async function reconcileForgejo(
     groupRepos: groupRepos!,
     hashes: hashes!,
     archives: archives!,
+    orgHooks: orgHooks!,
     staffTeams: staffTeams!,
     groupLeavers: groupLeavers!,
-    revocation
+    revocation: revocation!
   };
 }
