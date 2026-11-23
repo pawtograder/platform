@@ -15,6 +15,7 @@ import {
   FORGEJO_UNSUPPORTED_SETTINGS,
   forgejoChoiceUnavailableReason,
   forgejoConflicts,
+  forgejoAutograderLockedOn,
   forgejoSettingState,
   hostLockReason,
   needsGitHubPrompts,
@@ -157,6 +158,14 @@ describe("options Forgejo can't use yet", () => {
 
   it("leaves the autograder available on Forgejo, which grades only assignments that have it on", () => {
     expect(Object.keys(FORGEJO_UNSUPPORTED_SETTINGS)).not.toContain("has_autograder");
+  });
+
+  it("holds the autograder on for Forgejo, unless a saved Forgejo assignment already has it off", () => {
+    expect(forgejoAutograderLockedOn("github", undefined)).toBe(false);
+    expect(forgejoAutograderLockedOn("forgejo", undefined)).toBe(true);
+    expect(forgejoAutograderLockedOn("forgejo", { git_provider: "github", has_autograder: false })).toBe(true);
+    expect(forgejoAutograderLockedOn("forgejo", { git_provider: "forgejo", has_autograder: true })).toBe(true);
+    expect(forgejoAutograderLockedOn("forgejo", { git_provider: "forgejo", has_autograder: false })).toBe(false);
   });
 
   it("shows checkbox settings off on Forgejo, but keeps a saved Forgejo assignment's values", () => {

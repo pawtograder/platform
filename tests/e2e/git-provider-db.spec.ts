@@ -271,7 +271,6 @@ test("course deletion explains the restriction and preserves the course", async 
 for (const endpoint of [
   "assignment-create-all-repos",
   "assignment-create-solution-repo",
-  "assignment-sync-autograder-workflow",
   "github-repo-configure-webhook"
 ]) {
   test(`${endpoint} rejects a Forgejo assignment`, async () => {
@@ -300,6 +299,27 @@ for (const endpoint of [
     expect(await ok(reposFor(assignment.id))).toHaveLength(0);
   });
 }
+
+test("assignment-sync-autograder-workflow takes the Forgejo path instead of refusing the assignment", async () => {
+  // CI has no Forgejo settings, so the Forgejo path answers 503 instead of the GitHub refusal.
+  const { course, assignment } = await fixture("forgejo");
+  const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
+  await ok(
+    supabase
+      .from("assignments")
+      .update({ release_date: new Date(Date.now() - 60_000).toISOString(), template_repo: "e2e-ignore/staff" })
+      .eq("id", assignment.id)
+  );
+  const { error } = await supabase.functions.invoke("assignment-sync-autograder-workflow", {
+    headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
+    body: { class_id: course.id, assignment_id: assignment.id }
+  });
+  expect(error?.context.status).toBe(503);
+  const body = await error.context.text();
+  expect(body).toContain("Forgejo is not set up on this deployment");
+  expect(body).not.toContain("This assignment uses Forgejo");
+  expect(await ok(reposFor(assignment.id))).toHaveLength(0);
+});
 test("github-repo-configure-webhook reads a Forgejo assignment's grader repo, which stays on GitHub", async () => {
   const { course, assignment } = await fixture("forgejo");
   const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
