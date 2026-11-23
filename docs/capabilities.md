@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261123140100_discussion_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123140100_discussion_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -141,6 +141,25 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Groups: publish_groups and manage_groups
+
+Manage Groups uses two capabilities. Both are on the default instructor role only.
+
+- **`publish_groups`**: stage group changes (Create New Group, Bulk Create, Tweak a Group, Edit
+  Group, Move Student) and publish them. For now only the screen checks it: a TA with
+  `publish_groups` can stage changes and press Publish, but `publish_assignment_group_changes`
+  still lets only instructors (and site admins) publish, until #1297 moves it to the capability.
+- **`manage_groups`**: changes that save at once, without staging: set a group's mentor, rename a
+  group (the `assignment_groups` UPDATE policy; the page has no Rename button), and Copy Groups
+  from another assignment (`copy_groups_from_assignment`). A group can't move to another
+  assignment or class, for anyone. Copy also turns off the per-row repo
+  sync in `sync_repos_after_assignment_group_change` and syncs once at the end; that trigger honors
+  the flag for a caller with `manage_groups`.
+
+Anyone enrolled in a class can read that class's group memberships (`assignment_groups_members`).
+Before `20261122210600` the policy compared a class to itself, so it let anyone enrolled in any
+class read every class's memberships.
 
 ## Roster: manage_roster
 
