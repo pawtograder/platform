@@ -10,11 +10,13 @@
 --      default grader role or on custom roles: graders couldn't make any group change before, so no
 --      one loses access, and a Head TA gets it only when an instructor turns it on.
 --   2. Updating assignment_groups (setting the mentor, renaming) needs manage_groups in the group's
---      class, and the group's assignment must stay in that class. Reading groups is unchanged
---      ("enrolled in class views all").
+--      class, and the group's assignment must stay in that class. A group can't move to another
+--      assignment or class at all: its memberships would still point at the old assignment.
+--      Reading groups is unchanged ("enrolled in class views all").
 --   3. copy_groups_from_assignment checks manage_groups instead of authorizeforclassinstructor, and
 --      finds the caller's profile among the class's instructors and graders. It used to raise "Could
---      not find instructor profile for caller" for anyone but an instructor.
+--      not find instructor profile for caller" for anyone but an instructor. It also locks the source
+--      groups, so a rename during a copy waits instead of leaving the target without members.
 --   4. sync_repos_after_assignment_group_change honors the suppress_repo_sync flag (which only copy sets,
 --      so it syncs repos once at the end instead of once per row) for a caller with manage_groups,
 --      instead of only for an instructor. Without this a Head TA's copy would sync per row and could
@@ -29,8 +31,8 @@
 -- publish_assignment_group_changes keeps its own check (#1297 changes it). The INSERT policies, the
 -- group edge functions, and the SELECT on assignment_groups.
 --
--- Safe to run again: policies are dropped before they're created, the inserts skip rows that exist,
--- and the functions are CREATE OR REPLACE.
+-- Safe to run again: policies and triggers are dropped before they're created, the inserts skip rows
+-- that exist, and the functions are CREATE OR REPLACE.
 
 -- ---------------------------------------------------------------------------
 -- 1. The capability, on every default instructor role
@@ -69,6 +71,31 @@ CREATE POLICY "Group managers can update groups" ON public.assignment_groups
         AND a.class_id = assignment_groups.class_id
     )
   );
+
+-- A group keeps its assignment and class. Its memberships (assignment_groups_members) carry the
+-- assignment too, and nothing makes the two match, so moving a group even within its class would
+-- leave its members on the old assignment. No app, edge function or migration moves a group, so
+-- this refuses every move, for every caller.
+CREATE OR REPLACE FUNCTION public.assignment_groups_keep_assignment_and_class()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF NEW.assignment_id IS DISTINCT FROM OLD.assignment_id OR NEW.class_id IS DISTINCT FROM OLD.class_id THEN
+    RAISE EXCEPTION 'group % can''t move to another assignment or class', OLD.id
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.assignment_groups_keep_assignment_and_class() FROM public, anon, authenticated;
+
+DROP TRIGGER IF EXISTS assignment_groups_keep_assignment_and_class ON public.assignment_groups;
+CREATE TRIGGER assignment_groups_keep_assignment_and_class
+  BEFORE UPDATE OF assignment_id, class_id ON public.assignment_groups
+  FOR EACH ROW EXECUTE FUNCTION public.assignment_groups_keep_assignment_and_class();
 
 -- ---------------------------------------------------------------------------
 -- 3. sync_repos_after_assignment_group_change(): latest body from
@@ -180,7 +207,7 @@ $function$;
 
 -- ---------------------------------------------------------------------------
 -- 4. copy_groups_from_assignment(): latest body from 20261118140200_forgejo_group_repos.sql. Only
---    the permission check and the caller's profile lookup change.
+--    the permission check, the caller's profile lookup and the lock on the source groups change.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.copy_groups_from_assignment(
@@ -262,6 +289,17 @@ BEGIN
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(format('copy_groups:%s:%s', p_class_id, p_target_assignment_id), 0));
+
+  -- Lock the source groups until the copy commits. The copy matches target groups to source groups
+  -- by name in several statements; a rename in between would match none and leave the target with
+  -- no members. With the lock, a rename or delete waits for the copy to finish. KEY SHARE is enough,
+  -- because name is in a unique index: a rename needs a lock that KEY SHARE blocks, while a mentor
+  -- change doesn't, so two copies in opposite directions don't wait on each other's mentor updates.
+  PERFORM 1
+  FROM assignment_groups
+  WHERE assignment_id = p_source_assignment_id
+    AND class_id = p_class_id
+  FOR KEY SHARE;
 
   SELECT COUNT(*) INTO v_groups_processed
   FROM assignment_groups

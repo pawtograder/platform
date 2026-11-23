@@ -246,6 +246,27 @@ test.describe("Group changes follow manage_groups (#1010)", () => {
     expect(data!.assignment_id).toBe(assignmentA.id);
   });
 
+  test("a group with members can't be moved to another assignment in the same class", async () => {
+    const assignment1 = await newAssignment(classA.id);
+    const assignment2 = await newAssignment(classA.id);
+    const group = await newGroup(classA.id, assignment1.id, [studentA1], instructor);
+
+    for (const user of [headTa, instructor]) {
+      const client = await createAuthenticatedClient(user);
+      const { error } = await client
+        .from("assignment_groups")
+        .update({ assignment_id: assignment2.id })
+        .eq("id", group.id);
+      expect(error?.code, "moving a group to another assignment must be refused with 42501").toBe("42501");
+    }
+    const { data } = await supabase.from("assignment_groups").select("assignment_id").eq("id", group.id).single();
+    expect(data!.assignment_id).toBe(assignment1.id);
+    // Its member still belongs to the group on its own assignment.
+    expect(await membersOf(assignment1.id)).toEqual([
+      { profile_id: studentA1.private_profile_id, added_by: instructor.private_profile_id }
+    ]);
+  });
+
   test("an instructor can still set the mentor, rename a group and copy groups", async () => {
     const source = await newAssignment(classA.id);
     const sourceGroup = await newGroup(classA.id, source.id, [studentA1], instructor);

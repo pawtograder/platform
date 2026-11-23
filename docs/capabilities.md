@@ -147,10 +147,13 @@ again when the staff channel says the viewer's own role changed or a role's capa
 Manage Groups uses two capabilities. Both are on the default instructor role only.
 
 - **`publish_groups`**: stage group changes (Create New Group, Bulk Create, Tweak a Group, Edit
-  Group, Move Student) and publish them.
+  Group, Move Student) and publish them. For now only the screen checks it: a TA with
+  `publish_groups` can stage changes and press Publish, but `publish_assignment_group_changes`
+  still lets only instructors (and site admins) publish, until #1297 moves it to the capability.
 - **`manage_groups`**: changes that save at once, without staging: set a group's mentor, rename a
   group (the `assignment_groups` UPDATE policy; the page has no Rename button), and Copy Groups
-  from another assignment (`copy_groups_from_assignment`). Copy also turns off the per-row repo
+  from another assignment (`copy_groups_from_assignment`). A group can't move to another
+  assignment or class, for anyone. Copy also turns off the per-row repo
   sync in `sync_repos_after_assignment_group_change` and syncs once at the end; that trigger honors
   the flag for a caller with `manage_groups`.
 
