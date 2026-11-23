@@ -245,7 +245,8 @@ select pg_temp.check('5e the final departure removes membership, disables the re
   pg_temp.member_id('last') is null and pg_temp.pending(pg_temp.n('last-member')) = 1 and
   (select not is_github_ready from public.repositories where repository = pg_temp.n('last-member')));
 
--- 6
+-- 6: Forgejo-only courses work with both null and empty GitHub orgs.
+update public.classes set github_org = null where id = pg_temp.cls();
 update public.assignments set group_config = 'both' where id = pg_temp.a();
 insert into public.repositories (assignment_id, class_id, profile_id, repository, git_provider, is_github_ready)
 select pg_temp.a(), pg_temp.cls(), priv, pg_temp.n('individual-' || name), 'forgejo', true
@@ -261,6 +262,7 @@ select pg_temp.check('6a an all-preserved cleanup reports what it kept',
 
 insert into public.assignment_groups_members (assignment_group_id, assignment_id, class_id, profile_id, added_by)
 select pg_temp.g('g7'), pg_temp.a(), pg_temp.cls(), priv, priv from fx_members where name = 'last';
+update public.classes set github_org = '' where id = pg_temp.cls();
 create temp table cleanup_mixed as select public.cleanup_individual_repositories_for_assignment(
   pg_temp.cls(), pg_temp.a()
 ) as result;
@@ -270,6 +272,28 @@ select pg_temp.check('6b cleanup archives the grouped student''s repo and keeps 
   pg_temp.pending(pg_temp.n('individual-last')) = 1 and
   pg_temp.pending(pg_temp.n('individual-first')) = 0 and
   exists (select 1 from public.repositories where repository = pg_temp.n('individual-first')));
+
+-- GitHub targets still require an organization (and failed cleanup retains the repo).
+insert into public.repositories (assignment_id, class_id, profile_id, repository, git_provider, is_github_ready)
+select pg_temp.gh(), pg_temp.cls(), priv, pg_temp.gn('guard'), 'github', true
+from fx_members where name = 'first';
+do $$
+declare org text;
+begin
+  foreach org in array array[null::text, ''] loop
+    update public.classes set github_org = org where id = pg_temp.cls();
+    begin
+      perform public.cleanup_individual_repositories_for_assignment(pg_temp.cls(), pg_temp.gh());
+      perform pg_temp.check('6c GitHub cleanup rejects missing org', false);
+    exception when raise_exception then
+      perform pg_temp.check('6c GitHub cleanup rejects missing org',
+        sqlerrm = 'Course has no GitHub organization configured' and
+        exists (select 1 from public.repositories where repository = pg_temp.gn('guard')));
+    end;
+  end loop;
+end
+$$;
+update public.classes set github_org = 'arc-gh' where id = pg_temp.cls();
 
 -- 7
 -- Check an existing wrong-org value at deletion so updates are not a prerequisite for the guard.

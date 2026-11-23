@@ -52,10 +52,6 @@ BEGIN
     FROM public.classes
     WHERE id = p_class_id;
 
-    IF v_github_org IS NULL OR v_github_org = '' THEN
-        RAISE EXCEPTION 'Course has no GitHub organization configured';
-    END IF;
-
     IF NOT EXISTS (
         SELECT 1 FROM public.assignments a
         WHERE a.id = p_assignment_id AND a.class_id = p_class_id
@@ -125,6 +121,11 @@ BEGIN
                 v_forgejo_queued := v_forgejo_queued + 1;
             END IF;
             CONTINUE;
+        END IF;
+
+        -- Only GitHub cleanup requires a GitHub organization.
+        IF v_github_org IS NULL OR v_github_org = '' THEN
+            RAISE EXCEPTION 'Course has no GitHub organization configured';
         END IF;
 
         IF v_repo.repository IS NULL
