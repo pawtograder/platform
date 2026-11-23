@@ -419,6 +419,7 @@ jobs:
             tests/unit/office-hours-onboarding.test.ts \
             tests/unit/office-hours-onboarding-hook.test.tsx \
             tests/unit/onboarding-seen.test.ts \
+            tests/unit/repo-web-url.test.ts \
             tests/unit/bugReport
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a

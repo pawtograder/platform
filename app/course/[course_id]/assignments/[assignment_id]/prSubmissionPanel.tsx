@@ -6,7 +6,7 @@ import { toaster } from "@/components/ui/toaster";
 import { confirmPrLink } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SubmissionPrLink } from "@/utils/supabase/DatabaseTypes";
-import { Alert, Badge, Box, Heading, HStack, Link, Spinner, Stack, Table, Text } from "@chakra-ui/react";
+import { Alert, Badge, Box, Heading, HStack, Spinner, Stack, Table, Text } from "@chakra-ui/react";
 import { CrudFilter, useList } from "@refinedev/core";
 import { useMemo, useState } from "react";
 
@@ -88,9 +88,9 @@ export default function PrSubmissionPanel({
       {assignment.upstream_repo ? (
         <Text fontSize="sm" color="fg.muted" mb={3}>
           Submit by opening a pull request against{" "}
-          <Link href={repoWebUrl(repoHost, assignment.upstream_repo)} target="_blank" rel="noopener noreferrer">
+          <RepoLink href={repoWebUrl(repoHost, assignment.upstream_repo)} target="_blank" rel="noopener noreferrer">
             {assignment.upstream_repo}
-          </Link>{" "}
+          </RepoLink>{" "}
           targeting the <code>{baseBranch}</code> branch
           {assignment.pr_identification === "branch_convention" && assignment.pr_branch_convention ? (
             <>
