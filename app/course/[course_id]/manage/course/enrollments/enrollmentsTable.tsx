@@ -7,6 +7,7 @@ import PersonTags from "@/components/ui/person-tags";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
+import { useCapability, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useClassSections, useCourse, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { useDiscordMembershipStatus, type DiscordMembershipState } from "@/hooks/useDiscordMembershipStatus";
 import useModalManager from "@/hooks/useModalManager";
@@ -184,18 +185,40 @@ export default function EnrollmentsTable() {
   // which is what happens for any caller authorizeforclassgrader rejects, or on a transient failure.
   const discordStatusUnknown = discordStatusLoadingRaw || discordStatusError !== null;
 
+  // #1010: instructors manage every enrollment. Anyone else with manage_roster, such as a Head TA,
+  // manages students only: remove, SIS sync override, cancel an invitation, add. The database
+  // enforces the same rule (20261122210500_enrollments_by_capability.sql).
+  const isInstructor = useIsInstructor();
+  const canManageRoster = useCapability("manage_roster");
+  const canManageRole = useCallback(
+    (role: string) => isInstructor || (canManageRoster && role === "student"),
+    [isInstructor, canManageRoster]
+  );
+
+  // When RLS refuses an update, PostgREST changes 0 rows and returns no error. Reading the changed
+  // rows back turns that into an error, so the page doesn't report a change that didn't happen.
   const setSisSyncOptOut = useCallback(
     async (userRoleId: number, sis_sync_opt_out: boolean) => {
-      const { error } = await supabase.from("user_roles").update({ sis_sync_opt_out }).eq("id", userRoleId);
+      const { data, error } = await supabase
+        .from("user_roles")
+        .update({ sis_sync_opt_out })
+        .eq("id", userRoleId)
+        .select("id");
       if (error) throw error;
+      if (!data?.length) throw new Error("You don't have permission to change this enrollment.");
     },
     [supabase]
   );
 
   const disableUserRole = useCallback(
     async (userRoleId: string) => {
-      const { error } = await supabase.from("user_roles").update({ disabled: true }).eq("id", parseInt(userRoleId));
+      const { data, error } = await supabase
+        .from("user_roles")
+        .update({ disabled: true })
+        .eq("id", parseInt(userRoleId))
+        .select("id");
       if (error) throw error;
+      if (!data?.length) throw new Error("You don't have permission to remove this person.");
     },
     [supabase]
   );
@@ -314,9 +337,14 @@ export default function EnrollmentsTable() {
   const cancelInvitation = useCallback(
     async (invitationId: number) => {
       try {
-        const { error } = await supabase.from("invitations").update({ status: "cancelled" }).eq("id", invitationId);
+        const { data, error } = await supabase
+          .from("invitations")
+          .update({ status: "cancelled" })
+          .eq("id", invitationId)
+          .select("id");
 
         if (error) throw error;
+        if (!data?.length) throw new Error("You don't have permission to cancel this invitation.");
 
         // Refresh invitations
         await fetchInvitations();
@@ -789,6 +817,10 @@ export default function EnrollmentsTable() {
 
           const enrollment = row.original;
           const isChecked = enrollment.sis_sync_opt_out === true;
+          // The instructor policy leaves other instructors' rows alone, so their box stays disabled.
+          const canChange =
+            canManageRole(enrollment.role) &&
+            (enrollment.role !== "instructor" || enrollment.user_id === currentUser?.id);
 
           return (
             <Box
@@ -798,6 +830,7 @@ export default function EnrollmentsTable() {
             >
               <Checkbox.Root
                 checked={isChecked}
+                disabled={!canChange}
                 onCheckedChange={async (checked) => {
                   const next = checked.checked.valueOf() === true;
                   try {
@@ -886,7 +919,8 @@ export default function EnrollmentsTable() {
         cell: ({ row }) => {
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const canCancel = invitation.status === "pending";
+            const isPending = invitation.status === "pending";
+            const canCancel = isPending && canManageRole(invitation.role);
 
             return (
               <HStack gap={2} justifyContent="center">
@@ -926,12 +960,14 @@ export default function EnrollmentsTable() {
             editRoleTooltipContent = "Instructors' roles cannot be changed";
           }
 
-          const canRemoveThisUser = !isCurrentUserRow && !isTargetInstructor;
+          const canRemoveThisUser = !isCurrentUserRow && !isTargetInstructor && canManageRole(userRoleEntry.role);
           let removeUserTooltipContent = "Remove user from course";
           if (isCurrentUserRow) {
             removeUserTooltipContent = "You cannot remove yourself";
           } else if (isTargetInstructor) {
             removeUserTooltipContent = "Instructors cannot be removed this way";
+          } else if (!canRemoveThisUser) {
+            removeUserTooltipContent = "Only instructors can remove staff";
           }
 
           return (
@@ -956,7 +992,7 @@ export default function EnrollmentsTable() {
                   />
                 </Tooltip>
               )}
-              {profile && studentProfileId && (
+              {isInstructor && profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
                   <Icon
                     as={FaEdit}
@@ -966,7 +1002,7 @@ export default function EnrollmentsTable() {
                   />
                 </Tooltip>
               )}
-              {userRoleEntry && userRoleEntry.id && userRoleEntry.role && (
+              {isInstructor && userRoleEntry && userRoleEntry.id && userRoleEntry.role && (
                 <Tooltip content={editRoleTooltipContent}>
                   <Icon
                     as={FaUserCog}
@@ -985,7 +1021,7 @@ export default function EnrollmentsTable() {
                   />
                 </Tooltip>
               )}
-              {userRoleEntry && userRoleEntry.id && (
+              {(isInstructor || canManageRoster) && userRoleEntry && userRoleEntry.id && (
                 <Tooltip content={removeUserTooltipContent}>
                   <Icon
                     as={FaTrash}
@@ -1023,6 +1059,9 @@ export default function EnrollmentsTable() {
       classSections,
       labSections,
       setSisSyncOptOut,
+      canManageRole,
+      isInstructor,
+      canManageRoster,
       discordServerConfigured,
       discordStateByUser,
       discordStatusUnknown,
@@ -1294,8 +1333,8 @@ export default function EnrollmentsTable() {
         <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
           <HStack justifyContent="flex-end">
             {" "}
-            <ImportStudentsCSVModal />
-            <AddSingleCourseMember />
+            {isInstructor && <ImportStudentsCSVModal />}
+            {(isInstructor || canManageRoster) && <AddSingleCourseMember studentsOnly={!isInstructor} />}
             {/* Export Button */}
             <Button onClick={exportToCSV} variant="surface">
               <Icon as={FaFileExport} />
