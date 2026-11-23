@@ -215,6 +215,12 @@ export default function SurveyTakingPage() {
   // only be refused. Keep the sent answers so an earlier submission cannot satisfy this check.
   const submitCheckPendingRef = useRef<ResponseData | null>(null);
   const checkSubmitOnReconnectRef = useRef<() => Promise<void>>(async () => {});
+  // Counts Complete presses, so a reconnect read started before a later Complete can tell its
+  // answer is out of date.
+  const submitGenerationRef = useRef(0);
+  // A reconnect read is in flight. submitCheckPendingRef stays set until it lands, so a Complete
+  // pressed meanwhile still knows an earlier one may have got through.
+  const submitCheckInFlightRef = useRef(false);
   // Live SurveyJS model, for restoring answers from a freshly fetched submitted row when editing
   // is no longer allowed. Becoming read-only does not update the model by itself.
   const surveyModelRef = useRef<Model | null>(null);
@@ -481,6 +487,7 @@ export default function SurveyTakingPage() {
 
       setIsSubmitting(true);
       setSubmitError(null);
+      submitGenerationRef.current += 1;
       isSubmittingRef.current = true;
       // SurveyJS has already switched to its completed page. Say the answers are on their way
       // rather than leaving the thank-you text to claim they arrived.
@@ -570,12 +577,24 @@ export default function SurveyTakingPage() {
   // Back online after a Complete that may have landed while offline: read the row before any draft
   // goes out. Confirm that it holds the sent answers; otherwise they go back to autosaving.
   checkSubmitOnReconnectRef.current = async () => {
-    if (!submitCheckPendingRef.current || isSubmittingRef.current) return;
+    if (!submitCheckPendingRef.current || isSubmittingRef.current || submitCheckInFlightRef.current) return;
     const sentData = submitCheckPendingRef.current;
+    const generation = submitGenerationRef.current;
+    submitCheckInFlightRef.current = true;
+    let row: SurveyResponse | null | undefined;
+    try {
+      row = await readStoredResponse();
+    } finally {
+      submitCheckInFlightRef.current = false;
+    }
+    // A new Complete started meanwhile, so this read may predate its write. That Complete decides
+    // and resumes the queue when it ends. If it ended still unsure, its own check was skipped
+    // while this one was in flight, so run it now.
+    if (submitGenerationRef.current !== generation) {
+      if (!isSubmittingRef.current && navigator.onLine) void checkSubmitOnReconnectRef.current();
+      return;
+    }
     submitCheckPendingRef.current = null;
-    const row = await readStoredResponse();
-    // A new Complete started meanwhile. It decides, and resumes the queue when it ends.
-    if (isSubmittingRef.current) return;
     if (holdsSubmission(row, sentData)) {
       showSubmittedResponse(row);
     } else {

@@ -225,3 +225,50 @@ test("a submit in flight shows a banner and asks before the page closes", async 
   expect(screen.queryByText(/Submitting your survey/)).toBeNull();
   expect(leave()).toBe(false);
 });
+
+test("a reconnect read that started before a later Complete doesn't decide that Complete", async () => {
+  render(<SurveyTakingPage />);
+  await settle();
+  const complete = (answer: string) =>
+    act(() => {
+      props().onComplete!(model(answer), {
+        showSaveInProgress: jest.fn(),
+        clearSaveMessages: jest.fn(),
+        showSaveSuccess: jest.fn()
+      } as unknown as CompleteEvent);
+    });
+  const goOnline = (online: boolean) =>
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: online });
+  // Complete A is sent, then the connection drops before the reply.
+  const submitA = deferred<{ error: unknown }>();
+  mockWrite.mockReturnValueOnce(submitA.promise);
+  complete("New");
+  await settle();
+  goOnline(false);
+  submitA.resolve({ error: new TypeError("Failed to fetch") });
+  await settle();
+  // Back online: the check for A starts reading, and its reply is held.
+  const staleRead = deferred<{ data: unknown; error: unknown }>();
+  mockRead.mockReturnValueOnce(staleRead.promise);
+  goOnline(true);
+  act(() => window.dispatchEvent(new Event("online")));
+  await settle();
+  // Complete B is pressed and fails offline while that read is still out.
+  goOnline(false);
+  mockWrite.mockResolvedValueOnce({ data: null, error: new TypeError("Failed to fetch") });
+  complete("Newer");
+  await settle();
+  expect(screen.getByRole("alert")).toHaveTextContent("may not have been submitted");
+  // The read started before B lands. It must not clear B's alert or report a submit.
+  staleRead.resolve({ data: row("New"), error: null });
+  await settle();
+  expect(screen.getByRole("alert")).toHaveTextContent("may not have been submitted");
+  expect(mockToast).not.toHaveBeenCalled();
+  // The next reconnect reads again and decides from that.
+  mockRead.mockResolvedValueOnce({ data: row("New"), error: null });
+  goOnline(true);
+  act(() => window.dispatchEvent(new Event("online")));
+  await settle();
+  expect(mockRead).toHaveBeenCalledTimes(2);
+  expect(mockToast).toHaveBeenCalledTimes(1);
+});
