@@ -66,6 +66,7 @@ function githubCourseClient(githubOrg: string | null, instructorOf: number[] = [
   const assignments = [
     { class_id: 1, autograder: { grader_repo: "pawtograder-playground/test-e2e-java-solution" } },
     { class_id: 1, autograder: null },
+    { class_id: 1, autograder: { grader_repo: "unclaimed-org/hw2-solution" } },
     // Saved by course 1's instructor, but neu-cs3500 is course 2's org.
     { class_id: 1, autograder: { grader_repo: "neu-cs3500/hw1-private" } },
     { class_id: 2, autograder: { grader_repo: "other-org/cs3500-hw1-solution" } }
@@ -92,11 +93,13 @@ function githubCourseClient(githubOrg: string | null, instructorOf: number[] = [
   } as unknown as Parameters<typeof assertGitHubCourseRepo>[0];
 }
 
-/** The service-role view of classes: course 2 owns neu-cs3500. */
+/** The service-role view of classes: course 2 owns neu-cs3500, course 3 owns pawtograder-playground. */
 function otherCoursesClient() {
   const classes = [
     { id: 1, github_org: null },
-    { id: 2, github_org: "neu-cs3500" }
+    { id: 2, github_org: "neu-cs3500" },
+    // The GitHub section whose org holds course 1's grader.
+    { id: 3, github_org: "pawtograder-playground" }
   ];
   return () =>
     ({
@@ -125,16 +128,55 @@ Deno.test("assertGitHubCourseRepo: a repo in the course's org passes, case-insen
   });
 });
 
-Deno.test("assertGitHubCourseRepo: with no org, the course's own grader repo passes, case-insensitively", async () => {
-  await assertGitHubCourseRepo(
-    githubCourseClient(null),
-    1,
-    "Pawtograder-Playground",
-    "Test-E2E-Java-Solution",
-    { write: false },
-    otherCoursesClient()
+Deno.test(
+  "assertGitHubCourseRepo: with no org, the course's own grader passes when a course the caller teaches claims its org",
+  async () => {
+    await assertGitHubCourseRepo(
+      githubCourseClient(null, [3]),
+      1,
+      "Pawtograder-Playground",
+      "Test-E2E-Java-Solution",
+      { write: false },
+      otherCoursesClient()
+    );
+  }
+);
+
+Deno.test("assertGitHubCourseRepo: the course's own grader in an org no course claims is a 403", async () => {
+  const refused = await assertRejects(
+    () =>
+      assertGitHubCourseRepo(
+        githubCourseClient(null, [1, 2, 3]),
+        1,
+        "unclaimed-org",
+        "hw2-solution",
+        { write: false },
+        otherCoursesClient()
+      ),
+    UserVisibleError,
+    "no course you teach claims"
   );
+  assertEquals(refused.status, 403);
 });
+
+Deno.test(
+  "assertGitHubCourseRepo: the same grader is a 403 for a caller who doesn't teach the claiming course",
+  async () => {
+    await assertRejects(
+      () =>
+        assertGitHubCourseRepo(
+          githubCourseClient(null),
+          1,
+          "Pawtograder-Playground",
+          "Test-E2E-Java-Solution",
+          { write: false },
+          otherCoursesClient()
+        ),
+      UserVisibleError,
+      "no course you teach claims"
+    );
+  }
+);
 
 Deno.test("assertGitHubCourseRepo: the course's own grader repo outside its org can't be written", async () => {
   const refused = await assertRejects(
@@ -179,7 +221,7 @@ Deno.test("assertGitHubCourseRepo: a grader saved in another course's org is a 4
         otherCoursesClient()
       ),
     UserVisibleError,
-    "another course's GitHub org"
+    "no course you teach claims"
   );
   assertEquals(refused.status, 403);
 });

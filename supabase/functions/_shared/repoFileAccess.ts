@@ -31,13 +31,12 @@ export function forgejoOrgForClass(cls: { slug: string | null; forgejo_org: stri
 }
 
 /**
- * Refuses a GitHub repo that is neither in the course's github_org nor, for reads, one of the course's own grader
- * repos.
- * Forgejo assignments keep their grader repo on GitHub (D6), usually outside any course org, and a
- * Forgejo-only course has no github_org at all, so the grader repos are matched by name. Only assignments in
- * this course count, which keeps one course's staff out of another course's graders. Any instructor can save
- * any name as grader_repo, so a grader in another course's github_org is refused too: otherwise saving one
- * would reach that course's private repos. GitHub matches names case-insensitively, so this does too.
+ * Refuses a GitHub repo outside the course's github_org, except a read of one of the course's own grader repos
+ * whose org a course the caller teaches claims. Forgejo assignments keep their grader repo on GitHub (D6), and a
+ * Forgejo-only course has no github_org, so its grader usually lives in the org of a GitHub section the same
+ * instructors teach. Any instructor can save any name as grader_repo, so the name alone proves nothing: the
+ * owner org must be claimed by a course the caller is an instructor of, which keeps a saved name from reaching
+ * an org no course vouches for or another course's private repos. GitHub matches names case-insensitively.
  */
 export async function assertGitHubCourseRepo(
   supabase: SupabaseClient<Database>,
@@ -88,9 +87,6 @@ export async function assertGitHubCourseRepo(
     if (ownerError) {
       throw new UserVisibleError(`Could not check who owns the GitHub org ${orgName}: ${ownerError.message}`, 500);
     }
-    if (owners.length === 0) return;
-    // A grader shared with a GitHub section of the same course lives in that section's org; its
-    // instructors may read it from both.
     for (const owner of owners) {
       const { data: isInstructor, error: roleError } = await supabase.rpc("authorizeforclassinstructor", {
         class__id: owner.id
@@ -101,7 +97,7 @@ export async function assertGitHubCourseRepo(
       if (isInstructor === true) return;
     }
     throw new UserVisibleError(
-      `Requested ${orgName}/${repoName} on GitHub, but ${orgName} is another course's GitHub org, and you aren't an instructor there`,
+      `Requested ${orgName}/${repoName} on GitHub, but no course you teach claims ${orgName} as its GitHub org`,
       403
     );
   }
