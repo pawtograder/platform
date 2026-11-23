@@ -1,11 +1,12 @@
 /**
- * useViewerErrorRole passes the viewer's course role to getUserFacingErrorMessage (#983). A course
- * admin used to fall through to `undefined`, which gave them the student wording ("contact your
- * instructor") on a refused write.
+ * useViewerErrorRole and useStaffErrorRole pick the role passed to getUserFacingErrorMessage (#983).
+ * A course admin used to get the student wording ("contact your instructor") from
+ * useViewerErrorRole, and the grader wording ("ask an instructor") from useStaffErrorRole. Both now
+ * give an admin the instructor wording.
  */
 import { renderHook } from "@testing-library/react";
 
-import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
+import { useStaffErrorRole, useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 let courseRole: string | undefined;
@@ -35,5 +36,24 @@ describe("useViewerErrorRole", () => {
       getUserFacingErrorMessage(permissionDenied, { role: "instructor" })
     );
     expect(getUserFacingErrorMessage(permissionDenied, { role })).not.toContain("contact your instructor");
+  });
+});
+
+describe("useStaffErrorRole", () => {
+  it.each([
+    ["admin", "instructor"],
+    ["instructor", "instructor"],
+    ["grader", "grader"]
+  ])("gives a course %s the %s wording", (role, expected) => {
+    courseRole = role;
+    expect(renderHook(() => useStaffErrorRole()).result.current).toBe(expected);
+  });
+
+  it("gives a course admin the same permission message as an instructor", () => {
+    courseRole = "admin";
+    const role = renderHook(() => useStaffErrorRole()).result.current;
+    expect(getUserFacingErrorMessage(permissionDenied, { role })).toBe(
+      getUserFacingErrorMessage(permissionDenied, { role: "instructor" })
+    );
   });
 });

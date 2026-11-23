@@ -3,11 +3,13 @@ import type { ErrorAudienceRole } from "@/lib/studentFacingErrorMessages";
 
 /**
  * The `role` to pass to `getUserFacingErrorMessage` on staff screens: `"instructor"` for
- * instructors, otherwise `"grader"`. Uses the effective role from `useIsInstructor`, so an
+ * instructors and course admins, otherwise `"grader"`. Uses the effective course role, so an
  * instructor viewing as a student gets the grader wording.
  */
 export function useStaffErrorRole(): Extract<ErrorAudienceRole, "instructor" | "grader"> {
-  return useIsInstructor() ? "instructor" : "grader";
+  const isInstructor = useIsInstructor();
+  const isCourseAdmin = useOptionalCourseRole() === "admin";
+  return isInstructor || isCourseAdmin ? "instructor" : "grader";
 }
 
 /**
