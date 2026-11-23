@@ -4,6 +4,7 @@ import { examExtractTemplate } from "@/lib/edgeFunctions";
 import { EXAM_ANSWER_TYPES, normalizeAnswerType } from "@/lib/exam/answerTypes";
 import { rubricBuildErrorMessage, saveExamStructure } from "@/lib/exam/examClient";
 import { parentPointsMismatches, preorder, spreadParentPoints } from "@/lib/exam/questionTree";
+import { padRegions } from "@/lib/exam/regionMath";
 import { examRubricOutOfDate } from "@/lib/exam/rubricOutOfDate";
 import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
@@ -480,40 +481,50 @@ export default function RegionEditor({
         toaster.info({ title: "No structure proposed", description: "Draw regions manually." });
         return;
       }
-      setQuestions(
-        // #1370: points Gemini put on a question rather than its parts would count for nothing.
-        spreadParentPoints(
-          proposal.questions.map((q) => {
-            const rawChoices = q.choices as unknown;
-            return {
-              id: null,
-              client_id: q.client_id,
-              parent_client_id: q.parent_client_id ?? null,
-              level: q.level,
-              ordinal: q.ordinal,
-              label: q.label ?? "",
-              // Extraction can return types the database rejects, and parents hide the type selector.
-              answer_type: normalizeAnswerType(q.answer_type),
-              points: q.points ?? 0,
-              prompt: q.prompt ?? "",
-              choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
-              correct_answer: null,
-              grading_tolerance: null
-            };
-          })
-        )
+      // #1370: points Gemini put on a question rather than its parts would count for nothing.
+      const importedQuestions = spreadParentPoints(
+        proposal.questions.map((q) => {
+          const rawChoices = q.choices as unknown;
+          return {
+            id: null,
+            client_id: q.client_id,
+            parent_client_id: q.parent_client_id ?? null,
+            level: q.level,
+            ordinal: q.ordinal,
+            label: q.label ?? "",
+            // Extraction can return types the database rejects, and parents hide the type selector.
+            answer_type: normalizeAnswerType(q.answer_type),
+            points: q.points ?? 0,
+            prompt: q.prompt ?? "",
+            choices: Array.isArray(rawChoices) ? rawChoices.map((c) => String(c)) : [],
+            correct_answer: null,
+            grading_tolerance: null
+          };
+        })
+      );
+      setQuestions(importedQuestions);
+      // #1371: Gemini boxes what's printed, so widen each region to where the student writes.
+      // Choice answers are circled, not written above a line. Name and student ID regions have no
+      // question, and grow like a line answer since they're written on a line too.
+      const circled = new Set(
+        importedQuestions
+          .filter((q) => q.answer_type === "true_false" || q.answer_type === "multiple_choice")
+          .map((q) => q.client_id)
       );
       setRegions(
-        proposal.regions.map((r) => ({
-          client_id: uid(),
-          question_client_id: r.question_client_id ?? null,
-          kind: r.kind,
-          page_number: r.page_number,
-          x: r.x,
-          y: r.y,
-          width: r.width,
-          height: r.height
-        }))
+        padRegions(
+          proposal.regions.map((r) => ({
+            client_id: uid(),
+            question_client_id: r.question_client_id ?? null,
+            kind: r.kind,
+            page_number: r.page_number,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height
+          })),
+          (r) => r.question_client_id === null || !circled.has(r.question_client_id)
+        )
       );
       toaster.success({ title: "Imported proposed structure — review and save" });
     } catch (e) {

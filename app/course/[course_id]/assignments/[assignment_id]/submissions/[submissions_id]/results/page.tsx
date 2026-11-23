@@ -1,4 +1,6 @@
 "use client";
+import { useAssignmentController } from "@/hooks/useAssignment";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import { SpokenValue } from "@/components/ui/spoken-value";
@@ -212,6 +214,7 @@ function PyretRepl({
 }
 
 export default function GraderResults() {
+  const repoHost = useRepoWebHost(useAssignmentController().assignment.git_provider);
   const { submissions_id } = useParams();
   const { query } = useShow<SubmissionWithGraderResultsAndErrors>({
     resource: "submissions",
@@ -271,8 +274,8 @@ export default function GraderResults() {
           {hasUserVisibleErrors ? (
             <Alert title="Submission Error" status="error" role="alert" p={4} mb={4}>
               An error occurred while processing your submission. Your code has been submitted to{" "}
-              <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>, but the
-              autograder encountered issues.
+              <Link href={repoWebUrl(repoHost, query.data.data.repository)}>your repository</Link>, but the autograder
+              encountered issues.
               {userVisibleErrors.map((error) => {
                 const errorMessage = error.name;
                 let errorDetails = null;
@@ -330,7 +333,7 @@ export default function GraderResults() {
             <Alert title="Submission Processing Error" status="warning" role="alert" p={4} mb={4}>
               {hasActionsRun ? "The autograder reported a problem" : "There was a problem recording this submission"},
               but the detailed message is only visible to course staff. Your code was still pushed to{" "}
-              <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
+              <Link href={repoWebUrl(repoHost, query.data.data.repository)}>your repository</Link>.
               <Box mt={4}>
                 <Text fontSize="sm">
                   {hasActionsRun ? (

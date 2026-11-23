@@ -408,6 +408,8 @@ jobs:
             tests/unit/exam-region-math.test.ts \
             tests/unit/exam-split.test.ts \
             tests/unit/exam-to-surveyjs.test.ts \
+            tests/unit/issue-1013-use-now.test.ts \
+            tests/unit/issue-1013-refresh-current-page.test.ts \
             tests/unit/useCapability.test.tsx \
             tests/unit/course-gemini-key.test.ts \
             tests/unit/course-gemini-key-panel.test.tsx \
@@ -419,6 +421,7 @@ jobs:
             tests/unit/office-hours-onboarding.test.ts \
             tests/unit/office-hours-onboarding-hook.test.tsx \
             tests/unit/onboarding-seen.test.ts \
+            tests/unit/repo-web-url.test.ts \
             tests/unit/bugReport
 
   # Guard-rail render tests: assert templates/validations.yaml still REFUSES a

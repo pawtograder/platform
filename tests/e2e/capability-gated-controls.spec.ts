@@ -259,6 +259,8 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
   let course: Awaited<ReturnType<typeof createClass>>;
   let instructor: TestingUser;
   let graderWithout: TestingUser;
+  // On the default grader role, which holds manage_flashcards.
+  let plainGrader: TestingUser;
   let deckId: number;
   let deckName: string;
 
@@ -267,6 +269,7 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     course = await createClass({ name: `E2E Flashcard Gates ${suffix}` });
     instructor = await createUserInClass({ role: "instructor", class_id: course.id });
     graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
 
     const { data: role, error } = await supabase
       .from("class_roles")
@@ -353,6 +356,33 @@ test.describe("flashcard controls gated by manage_flashcards", () => {
     await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toHaveCount(0);
     await expect(cardRow.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
     await expect(cardRow.getByRole("button", { name: /Delete flashcard/ })).toHaveCount(0);
+  });
+
+  test("a default grader with manage_flashcards sees the deck and card controls", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    await gotoWhenCapabilitiesLoaded(
+      page,
+      course.id,
+      `/course/${course.id}/manage/course/flashcard-decks`,
+      "Flashcard Decks"
+    );
+    const deckRow = page.getByRole("row").filter({ hasText: deckName });
+    await expect(deckRow).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create New Deck" })).toBeVisible();
+    await expect(deckRow.getByRole("button", { name: "Delete deck" })).toBeVisible();
+
+    await gotoWhenCapabilitiesLoaded(
+      page,
+      course.id,
+      `/course/${course.id}/manage/course/flashcard-decks/${deckId}`,
+      "Edit Flashcard Deck"
+    );
+    const cardRow = page.getByRole("group", { name: "Gating card", exact: true });
+    await expect(cardRow).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add Flashcard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toBeVisible();
+    await expect(cardRow.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    await expect(cardRow.getByRole("button", { name: /Delete flashcard/ })).toBeVisible();
   });
 });
 
