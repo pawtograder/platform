@@ -11,13 +11,22 @@ const mockPush = jest.fn();
 const mockRouter = { push: mockPush };
 const mockFrom = jest.fn();
 const mockController = {
-  surveys: {},
+  courseId: 1,
+  // The page waits on readyPromise to tell a failed survey load from a missing survey.
+  surveys: { readyPromise: Promise.resolve() },
   client: {
     from: mockFrom,
     auth: { onAuthStateChange: () => ({ data: { subscription: { unsubscribe: jest.fn() } } }) }
   }
 };
-const mockSurveyRow = { id: "survey", status: "published", allow_response_editing: true, json: {}, title: "Survey" };
+const mockSurveyRow = {
+  id: "survey",
+  class_id: 1,
+  status: "published",
+  allow_response_editing: true,
+  json: {},
+  title: "Survey"
+};
 
 jest.mock("next/navigation", () => ({
   useParams: () => ({ course_id: "course", survey_id: "survey" }),
