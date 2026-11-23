@@ -7,8 +7,7 @@
  * profile and, under the row lock, refuses when the row names someone else
  * (20261118130000_exam_create_submission_expected_profile.sql). These tests drive the interleavings
  * over direct connections (courseGeminiKeyDb.ts helpers: postgres, or a user's PostgREST-equivalent
- * transaction). The exam worker starts passing the profile in a later change, which adds an
- * end-to-end case with the real worker to this file.
+ * transaction) and, for the end-to-end case, the real exam worker, which passes the profile it read.
  *
  * Needs the disposable-database variables courseGeminiKeyDb.ts checks (CI's e2e-local sets them).
  */
@@ -16,6 +15,7 @@ import { expect, test } from "@playwright/test";
 import type { Client } from "pg";
 import { addDays } from "date-fns";
 import { backendPid, beginAsUser, privilegedClient, waitUntilBlocked } from "./courseGeminiKeyDb";
+import { processToReview, runExamWorker, seedUploadedBatch } from "./examScanFixture";
 import { createClass, createUserInClass, insertAssignment, supabase } from "./TestingUtils";
 
 const STALE = /matched to a different student than this finalize read/;
@@ -232,5 +232,137 @@ test.describe("finalize cannot split a scanned exam between two students (#1270)
     const legacy = await supabase.rpc("exam_create_submission", { p_scanned_submission_id: rowId });
     expect(legacy.error).toBeNull();
     expect(legacy.data).toBe(current.data);
+  });
+
+  test("end to end: a re-pick while the worker's finalize is in flight leaves one owner everywhere", async () => {
+    test.setTimeout(240_000);
+    const { course, instructor, alice, bob, assignment, batchId } = await seedUploadedBatch("race");
+    const carol = await createUserInClass({ role: "student", class_id: course.id, name: "Carol Late" });
+    await processToReview(batchId);
+    await supabase
+      .from("exam_scanned_submissions")
+      .update({ match_status: "confirmed" })
+      .eq("batch_id", batchId)
+      .not("matched_profile_id", "is", null);
+    const { data: aliceRow } = await supabase
+      .from("exam_scanned_submissions")
+      .select("id")
+      .eq("batch_id", batchId)
+      .eq("matched_profile_id", alice.private_profile_id)
+      .single();
+    const rowId = aliceRow!.id;
+
+    const editor = await privilegedClient();
+    const monitor = await privilegedClient();
+    try {
+      // Hold Alice's row the way an instructor's edit would, so the worker reads Alice and then
+      // waits inside exam_create_submission.
+      await beginAsUser(editor, instructor.user_id);
+      await editor.query("SELECT id FROM public.exam_scanned_submissions WHERE id = $1 FOR UPDATE", [rowId]);
+      const { error: finErr } = await supabase.rpc("enqueue_exam_finalize", { p_batch_id: batchId });
+      expect(finErr).toBeNull();
+      void runExamWorker();
+      const editorPid = await backendPid(editor);
+      await expect
+        .poll(
+          async () =>
+            (
+              await monitor.query<{ n: number }>(
+                "SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))",
+                [editorPid]
+              )
+            ).rows[0].n,
+          { timeout: 30_000, intervals: [100, 250, 500] }
+        )
+        .toBeGreaterThan(0);
+      // The batch went back to review (error, then Retry) while that message is still in flight,
+      // so the freeze trigger lets the re-pick through.
+      await supabase.from("exam_scan_batches").update({ status: "review" }).eq("id", batchId);
+      await repick(editor, rowId, carol.private_profile_id);
+      await editor.query("COMMIT");
+    } finally {
+      await Promise.all([editor.end(), monitor.end()]);
+    }
+
+    // Keep the worker going (the refused call is retried after a backoff) until the row is finalized.
+    await expect
+      .poll(
+        async () => {
+          await runExamWorker();
+          const { data } = await supabase
+            .from("exam_scanned_submissions")
+            .select("finalized_at")
+            .eq("id", rowId)
+            .single();
+          return data?.finalized_at != null;
+        },
+        { timeout: 150_000, intervals: [2000, 5000] }
+      )
+      .toBe(true);
+
+    const { data: row } = await supabase
+      .from("exam_scanned_submissions")
+      .select("matched_profile_id, submission_id")
+      .eq("id", rowId)
+      .single();
+    const { data: sub } = await supabase
+      .from("submissions")
+      .select("profile_id")
+      .eq("id", row!.submission_id!)
+      .single();
+    const { data: files } = await supabase
+      .from("submission_files")
+      .select("profile_id, storage_key")
+      .eq("submission_id", row!.submission_id!);
+    const { data: artifacts } = await supabase
+      .from("submission_artifacts")
+      .select("profile_id, data")
+      .eq("submission_id", row!.submission_id!);
+    const owners = {
+      scanned: row!.matched_profile_id,
+      submission: sub!.profile_id,
+      files: [...new Set((files ?? []).map((f) => f.profile_id))],
+      fileKeys: [...new Set((files ?? []).map((f) => f.storage_key?.split("/profiles/")[1]?.split("/")[0]))],
+      artifacts: [...new Set((artifacts ?? []).map((a) => a.profile_id))],
+      artifactKeys: [
+        ...new Set(
+          (artifacts ?? []).flatMap((a) =>
+            ((a.data as { pages: { storage_key: string }[] }).pages ?? []).map(
+              (p) => p.storage_key.split("/profiles/")[1]?.split("/")[0]
+            )
+          )
+        )
+      ]
+    };
+    const c = carol.private_profile_id;
+    expect(owners).toEqual({ scanned: c, submission: c, files: [c], fileKeys: [c], artifacts: [c], artifactKeys: [c] });
+    // The interleaving really happened: the first finalize was refused and a retry finished the job.
+    const audit = await privilegedClient();
+    try {
+      // The worker stamps finalized_at before it archives the message, so wait for the archive.
+      await expect
+        .poll(
+          async () => {
+            const { rows: retried } = await audit.query(
+              `SELECT 1 FROM pgmq.a_exam_processing
+                WHERE message->>'method' = 'finalize' AND (message->'args'->>'scanned_submission_id')::bigint = $1
+                  AND coalesce((message->>'retry_count')::int, 0) >= 1`,
+              [rowId]
+            );
+            return retried.length;
+          },
+          { timeout: 150_000, intervals: [2000, 5000] }
+        )
+        .toBeGreaterThan(0);
+    } finally {
+      await audit.end();
+    }
+    // Bob's exam, finalized alongside, is untouched.
+    const { data: bobSub } = await supabase
+      .from("submissions")
+      .select("profile_id")
+      .eq("assignment_id", assignment.id)
+      .eq("profile_id", bob.private_profile_id);
+    expect(bobSub).toHaveLength(1);
   });
 });
