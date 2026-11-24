@@ -29,7 +29,7 @@ export default function OfficeHoursAdminPage() {
   const canHelpStudents = useCapability("help_students");
   const queueHealthEnabled = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
   const queueHealthOn = queueHealthEnabled && canHelpStudents;
-  const health = useQueueHealth(Number(course_id), queueHealthOn);
+  const health = useQueueHealth(queueHealthOn);
   useQueueRedAlerts(health);
 
   // Get data for working view
