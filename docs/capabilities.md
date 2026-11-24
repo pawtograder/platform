@@ -274,8 +274,15 @@ The escalation rules still apply to capability holders and students. An ended (`
 cannot reopen. Direct updates cannot change `escalation_count`, `last_escalated_at`, or
 `check_in_expires_at`; only the escalation RPCs update those fields on the caller's behalf.
 Students can only change status from `open` or `in_progress` to `resolved`. The student check-in
-RPC keeps staging's solo-request rule and locking. The staff dashboard fetches health cards and
-red-queue alerts only when the feature is enabled and the caller holds `help_students`.
+RPC keeps staging's solo-request rule and locking. The staff dashboard shows health cards and
+red-queue alerts only when the feature is enabled and the caller holds `help_students`. It computes
+them in the browser from the realtime queue, request and shift tables and does not call
+`office_hours_queue_health`. That RPC is still an API of its own, checked separately: the caller
+must hold `help_students` in the class.
+
+Starting a shift (Start Working) needs `help_students`. Ending your own open shift does not, so a TA
+whose role loses `help_students` can still stop working, and the shift stops counting as staffed.
+A work session's request must be in the session's class on UPDATE as well as INSERT.
 
 Left as views or student actions: all office-hours SELECT policies; student create/update of their
 own requests; student chat, watchers, receipts and feedback; `authorizeforhelprequeststaff` and

@@ -17,6 +17,8 @@ export { DEFAULT_QUEUE_HEALTH_THRESHOLDS } from "@/lib/queueHealthThresholds";
 
 /** How often the wait times count up. It only moves the clock; it sends no request. */
 const CLOCK_TICK_MS = 15_000;
+/** How long to wait before refetching a table whose first load failed. */
+const LOAD_RETRY_MS = 15_000;
 
 /**
  * Health numbers for every active queue in the class, keyed by queue id, plus the class's
@@ -43,18 +45,30 @@ export function useQueueHealth(enabled: boolean = true): {
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    Promise.all([
-      controller.helpQueues.readyPromise,
-      controller.helpRequests.readyPromise,
-      controller.helpQueueAssignments.readyPromise
-    ]).then(
-      () => {
-        if (!cancelled) setLoaded(true);
-      },
-      () => undefined
-    );
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    // A new controller has its own tables to wait for.
+    setLoaded(false);
+    const tables = [controller.helpQueues, controller.helpRequests, controller.helpQueueAssignments] as const;
+    const settle = (pending: readonly Promise<void>[]) => {
+      Promise.allSettled(pending).then((results) => {
+        if (cancelled) return;
+        const failed = results.map((r) => r.status === "rejected");
+        if (!failed.includes(true)) {
+          setLoaded(true);
+          return;
+        }
+        // A failed first load leaves readyPromise rejected for good, so refetch just the tables
+        // that failed and try again.
+        retry = setTimeout(() => {
+          if (cancelled) return;
+          settle(tables.map((table, i) => (failed[i] ? table.refetchAll() : Promise.resolve())));
+        }, LOAD_RETRY_MS);
+      });
+    };
+    settle(tables.map((table) => table.readyPromise));
     return () => {
       cancelled = true;
+      if (retry) clearTimeout(retry);
     };
   }, [controller, enabled]);
 

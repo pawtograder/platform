@@ -12,6 +12,7 @@ import { getQueueTypeColor } from "@/lib/utils";
 import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useDelete } from "@refinedev/core";
+import { useEffect } from "react";
 import { BsPencil, BsPlus, BsTrash } from "react-icons/bs";
 import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
@@ -26,6 +27,14 @@ export default function HelpQueueManagement() {
   const createModal = useModalManager();
   const editModal = useModalManager<HelpQueue>();
   const canHelpStudents = useCapability("help_students");
+  // Losing the capability closes an open dialog, so it can't submit a write the database refuses.
+  const { closeModal: closeCreateModal } = createModal;
+  const { closeModal: closeEditModal } = editModal;
+  useEffect(() => {
+    if (canHelpStudents) return;
+    closeCreateModal();
+    closeEditModal();
+  }, [canHelpStudents, closeCreateModal, closeEditModal]);
 
   // Get help queues and connection status using individual hooks
   const queues = useHelpQueues();
@@ -214,13 +223,13 @@ export default function HelpQueueManagement() {
 
       {/* Modals */}
       <CreateHelpQueueModal
-        isOpen={createModal.isOpen}
+        isOpen={createModal.isOpen && canHelpStudents}
         onClose={createModal.closeModal}
         onSuccess={handleCreateSuccess}
       />
 
       <EditHelpQueueModal
-        isOpen={editModal.isOpen}
+        isOpen={editModal.isOpen && canHelpStudents}
         onClose={editModal.closeModal}
         onSuccess={handleEditSuccess}
         queue={editModal.modalData}

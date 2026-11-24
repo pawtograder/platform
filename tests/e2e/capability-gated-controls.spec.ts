@@ -771,7 +771,6 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours`);
     await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Start Working", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Stop Working", exact: true })).toHaveCount(0);
 
     await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours/settings/assignments`);
     await expect(page.getByRole("heading", { name: "Help Queue Assignment Management" })).toBeVisible();
@@ -784,6 +783,35 @@ test.describe("office hours controls gated by help_students and manage_office_ho
     await expect(page.getByRole("button", { name: "Create First Karma Entry", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  });
+
+  test("a grader without help_students can still end their own open shift", async ({ page }) => {
+    // Revoking help_students must not strand a shift: Stop Working stays for your own shift,
+    // and ending it goes through "Staff can end their own active shift".
+    await insertHelpQueueAssignment({
+      class_id: course.id,
+      help_queue_id: queueId,
+      ta_profile_id: graderWithoutHelp.private_profile_id
+    });
+    await loginAsUser(page, graderWithoutHelp, course);
+    await gotoWithCapabilities(page, `/course/${course.id}/manage/office-hours`);
+    // On shift, the page shows the working view, and the header carries Stop Working with a count.
+    await expect(page.getByRole("heading", { name: "Requests I'm Responsible For" })).toBeVisible();
+    const stop = page.getByRole("button", { name: /^Stop Working \(1\)$/ });
+    await expect(stop).toBeVisible();
+
+    await stop.click();
+    await expect(page.getByText("Stopped working on queue")).toBeVisible();
+    // Off shift, the dashboard returns, with no way to start a new shift.
+    await expect(page.getByRole("heading", { name: "Help Queues" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Stop Working/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Start Working", exact: true })).toHaveCount(0);
+    const { data: open } = await supabase
+      .from("help_queue_assignments")
+      .select("id")
+      .eq("ta_profile_id", graderWithoutHelp.private_profile_id)
+      .is("ended_at", null);
+    expect(open ?? []).toHaveLength(0);
   });
 
   test("a grader with only manage_office_hours sees Moderation in a request chat", async ({ page }) => {

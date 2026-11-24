@@ -23,9 +23,12 @@
 --     help_students.
 --   * help_request_work_sessions: staff INSERT -> help_students; instructor DELETE ->
 --     manage_office_hours; UPDATE keeps the own-record path and swaps the instructor
---     half for manage_office_hours.
+--     half for manage_office_hours, and its WITH CHECK now also requires the parent
+--     request to be in the session's class (as INSERT does).
 --   * help_queues and help_queue_assignments: graders can CRUD these today, so action
---     policies follow help_students (SELECT policies unchanged).
+--     policies follow help_students (SELECT policies unchanged). A separate UPDATE policy
+--     lets a TA end their own open shift without help_students, so revoking it can't leave
+--     a shift they can't stop.
 --   * help_request_templates and student_help_activity instructor FOR ALL -> split into
 --     INSERT / UPDATE / DELETE under manage_office_hours (SELECT / system INSERT stay).
 --   * SECURITY DEFINER helpers that gate a staff write (can_add_profile_to_help_request,
@@ -617,16 +620,23 @@ USING (
   OR class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
 )
 WITH CHECK (
-  ta_profile_id IN (
-    SELECT up.private_profile_id
-    FROM public.user_privileges up
-    WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
-    UNION
-    SELECT up.public_profile_id
-    FROM public.user_privileges up
-    WHERE up.user_id = auth.uid() AND up.public_profile_id IS NOT NULL
+  (
+    ta_profile_id IN (
+      SELECT up.private_profile_id
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid() AND up.private_profile_id IS NOT NULL
+      UNION
+      SELECT up.public_profile_id
+      FROM public.user_privileges up
+      WHERE up.user_id = auth.uid() AND up.public_profile_id IS NOT NULL
+    )
+    OR class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
   )
-  OR class_id IN (SELECT public.user_class_ids_with_capability('manage_office_hours'))
+  -- Same parent check as INSERT: the session's request must be in the session's class.
+  AND EXISTS (
+    SELECT 1 FROM public.help_requests hr
+    WHERE hr.id = help_request_id AND hr.class_id = help_request_work_sessions.class_id
+  )
 );
 
 -- ---------------------------------------------------------------------------
@@ -693,6 +703,37 @@ CREATE POLICY "Staff can delete help queue assignments"
 ON public.help_queue_assignments
 FOR DELETE TO authenticated
 USING (class_id IN (SELECT public.user_class_ids_with_capability('help_students')));
+
+-- A TA whose role loses help_students can still end their own open shift, so it stops
+-- counting as staffed. Only ending is allowed: the new row must be inactive with an
+-- ended_at, stay theirs, and stay on a queue of the same class. Starting a shift still
+-- needs help_students.
+DROP POLICY IF EXISTS "Staff can end their own active shift" ON public.help_queue_assignments;
+
+CREATE POLICY "Staff can end their own active shift"
+ON public.help_queue_assignments
+FOR UPDATE TO authenticated
+USING (
+  ended_at IS NULL
+  AND ta_profile_id IN (
+    SELECT up.private_profile_id
+    FROM public.user_privileges up
+    WHERE up.user_id = auth.uid() AND up.class_id = help_queue_assignments.class_id
+  )
+)
+WITH CHECK (
+  is_active = false
+  AND ended_at IS NOT NULL
+  AND ta_profile_id IN (
+    SELECT up.private_profile_id
+    FROM public.user_privileges up
+    WHERE up.user_id = auth.uid() AND up.class_id = help_queue_assignments.class_id
+  )
+  AND EXISTS (
+    SELECT 1 FROM public.help_queues hq
+    WHERE hq.id = help_queue_id AND hq.class_id = help_queue_assignments.class_id
+  )
+);
 
 -- ---------------------------------------------------------------------------
 -- help_request_templates: instructor-only -> manage_office_hours; SELECT unchanged

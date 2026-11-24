@@ -3728,6 +3728,120 @@ test.describe("office hours follow help_students and manage_office_hours (#1010,
     );
   });
 
+  test("a TA without help_students can end their own shift, but not reopen it or end someone else's", async () => {
+    const seedShift = async (ta: TestingUser) => {
+      const { data, error } = await supabase
+        .from("help_queue_assignments")
+        .insert({
+          class_id: classH.id,
+          help_queue_id: queueId,
+          ta_profile_id: ta.private_profile_id,
+          is_active: true,
+          started_at: new Date().toISOString(),
+          ended_at: null,
+          max_concurrent_students: 1
+        })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      return data!.id;
+    };
+    const ownShift = await seedShift(withoutHelp);
+    const othersShift = await seedShift(withHelp);
+    const client = await createAuthenticatedClient(withoutHelp);
+
+    const { data: othersEnd, error: othersEndError } = await client
+      .from("help_queue_assignments")
+      .update({ is_active: false, ended_at: new Date().toISOString() })
+      .eq("id", othersShift)
+      .select("id");
+    expect(othersEndError).toBeNull();
+    expect(othersEnd ?? [], "ending someone else's shift without help_students").toHaveLength(0);
+
+    const { data: ownEnd, error: ownEndError } = await client
+      .from("help_queue_assignments")
+      .update({ is_active: false, ended_at: new Date().toISOString() })
+      .eq("id", ownShift)
+      .select("id");
+    expect(ownEndError).toBeNull();
+    expect(ownEnd ?? [], "ending your own shift without help_students").toHaveLength(1);
+
+    const { data: reopen, error: reopenError } = await client
+      .from("help_queue_assignments")
+      .update({ is_active: true, ended_at: null })
+      .eq("id", ownShift)
+      .select("id");
+    expect(reopenError).toBeNull();
+    expect(reopen ?? [], "reopening an ended shift without help_students").toHaveLength(0);
+
+    const { data: rows } = await supabase
+      .from("help_queue_assignments")
+      .select("id, is_active, ended_at")
+      .in("id", [ownShift, othersShift]);
+    const byId = new Map((rows ?? []).map((r) => [r.id, r]));
+    expect(byId.get(ownShift)?.is_active).toBe(false);
+    expect(byId.get(ownShift)?.ended_at).not.toBeNull();
+    expect(byId.get(othersShift)?.is_active).toBe(true);
+    await supabase
+      .from("help_queue_assignments")
+      .update({ is_active: false, ended_at: new Date().toISOString() })
+      .eq("id", othersShift);
+  });
+
+  test("a work session cannot be moved to a request in another class", async () => {
+    const req = await seedRequest("Session stays in class");
+    const classX = await createClass({ name: "E2E Office Hours Session Move X" });
+    const studentX = await createUserInClass({ role: "student", class_id: classX.id });
+    const instructorX = await createUserInClass({ role: "instructor", class_id: classX.id });
+    const queueX = await insertOfficeHoursQueue({ class_id: classX.id, name: "Other class queue" });
+    const reqX = await insertHelpRequest({
+      class_id: classX.id,
+      student_profile_id: studentX.private_profile_id,
+      request: "Other class request",
+      help_queue_id: queueX.id,
+      status: "open",
+      active_staff_profile_id: instructorX.private_profile_id
+    });
+    const { data: session, error: seedError } = await supabase
+      .from("help_request_work_sessions")
+      .insert({
+        class_id: classH.id,
+        help_request_id: req.id,
+        ta_profile_id: withHelp.private_profile_id,
+        started_at: new Date().toISOString()
+      })
+      .select("id")
+      .single();
+    expect(seedError).toBeNull();
+
+    // The owner, and a manage_office_hours holder, are both refused.
+    for (const user of [withHelp, withManage]) {
+      const client = await createAuthenticatedClient(user);
+      const result = await client
+        .from("help_request_work_sessions")
+        .update({ help_request_id: reqX.id })
+        .eq("id", session!.id)
+        .select("id");
+      expectRlsBlocked(result, "moving a work session to another class's request");
+    }
+    const { data: still } = await supabase
+      .from("help_request_work_sessions")
+      .select("help_request_id")
+      .eq("id", session!.id)
+      .single();
+    expect(still?.help_request_id).toBe(req.id);
+
+    // A same-class edit still works for the owner.
+    const owner = await createAuthenticatedClient(withHelp);
+    const { data: edited, error: editError } = await owner
+      .from("help_request_work_sessions")
+      .update({ ended_at: new Date().toISOString() })
+      .eq("id", session!.id)
+      .select("id");
+    expect(editError).toBeNull();
+    expect(edited ?? []).toHaveLength(1);
+  });
+
   test("a student can still create a help request", async () => {
     const client = await createAuthenticatedClient(studentH);
     const { data, error } = await client

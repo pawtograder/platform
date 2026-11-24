@@ -15,7 +15,7 @@ import CreateHelpRequestTemplateModal from "./modals/createHelpRequestTemplateMo
 import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal";
 import { useHelpRequestTemplates } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 /**
  * Component for managing help request templates.
@@ -28,6 +28,14 @@ export default function HelpRequestTemplateManagement() {
   // Modal management
   const createModal = useModalManager();
   const editModal = useModalManager<HelpRequestTemplate>();
+  // Losing the capability closes an open dialog, so it can't submit a write the database refuses.
+  const { closeModal: closeCreateModal } = createModal;
+  const { closeModal: closeEditModal } = editModal;
+  useEffect(() => {
+    if (canManageOfficeHours) return;
+    closeCreateModal();
+    closeEditModal();
+  }, [canManageOfficeHours, closeCreateModal, closeEditModal]);
 
   // Get all templates from realtime data and filter by class_id
   const allTemplates = useHelpRequestTemplates();
@@ -271,13 +279,13 @@ export default function HelpRequestTemplateManagement() {
 
       {/* Modals */}
       <CreateHelpRequestTemplateModal
-        isOpen={createModal.isOpen}
+        isOpen={createModal.isOpen && canManageOfficeHours}
         onClose={createModal.closeModal}
         onSuccess={handleCreateSuccess}
       />
 
       <EditHelpRequestTemplateModal
-        isOpen={editModal.isOpen}
+        isOpen={editModal.isOpen && canManageOfficeHours}
         onClose={editModal.closeModal}
         onSuccess={handleEditSuccess}
         template={editModal.modalData}

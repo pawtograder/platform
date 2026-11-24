@@ -61,7 +61,8 @@ export default function HelpQueuesDashboard({
   const { course } = useCourseController();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
-  // Start / stop working writes help_queue_assignments (help_students).
+  // Starting a shift writes help_queue_assignments (help_students). Ending your own open shift
+  // is allowed without it ("Staff can end their own active shift").
   const canHelpStudents = useCapability("help_students");
 
   // Check if any calendar is configured
@@ -416,16 +417,19 @@ export default function HelpQueuesDashboard({
               </VStack>
             </Box>
             <Flex direction="column" align="flex-end" ml={4} flexShrink={0}>
-              {canHelpStudents &&
-                (myAssignment ? (
-                  <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
-                    Stop Working
-                  </Button>
-                ) : (
+              {/* Ending your own shift needs no capability, so a TA whose role loses help_students
+                  can still stop working. Starting a shift needs help_students. */}
+              {myAssignment ? (
+                <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
+                  Stop Working
+                </Button>
+              ) : (
+                canHelpStudents && (
                   <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
                     Start Working
                   </Button>
-                ))}
+                )
+              )}
               {healthOn && (
                 <Box mt={3}>
                   <QueueHealthStats health={healthByQueue[queue.id]} thresholds={healthThresholds} />
