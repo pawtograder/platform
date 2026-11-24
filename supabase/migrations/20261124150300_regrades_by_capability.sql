@@ -100,8 +100,9 @@ BEGIN
   -- What the default grader role can do today, for new classes (#1010). One list for every #1010
   -- migration that redefines this function, so whichever runs last keeps the others' grants. A
   -- name joins only once its capability exists, so the list can name capabilities other open PRs
-  -- add (moderate_discussion is #1429's; help_students, manage_flashcards and run_polls are
-  -- #1299-#1301's). Each of those PRs also gives its capability to existing grader roles.
+  -- add (grade_submissions, handle_regrades and grant_extensions are #1408-#1410's,
+  -- moderate_discussion is #1429's and help_students is #1301's). Each of those PRs also gives
+  -- its capability to existing grader roles.
   INSERT INTO public.role_capabilities (role_id, capability)
   SELECT cr.id, c.name
   FROM public.class_roles cr
