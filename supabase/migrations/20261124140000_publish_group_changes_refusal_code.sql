@@ -16,9 +16,11 @@
 -- 20261122124100 and 20261122160000. That last one collided with #1398's
 -- 20261122160000_forgejo_repo_archives.sql, so on 2026-11-23 it moved to 20261123150000. Staging
 -- then gained migrations up to 20261123170400_forgejo_archive_requeue_fence.sql, so later that day
--- it moved to 20261124120001, after every migration on staging and in the open PRs (the newest was
--- #1430's 20261124120000_push_direct_submission_integrity.sql). None of the migrations it now
--- follows re-creates this function. It never ran on a shared database (fork PR, no preview). To
+-- it moved to 20261124120001, after #1430's 20261124120000_push_direct_submission_integrity.sql.
+-- On 2026-11-24 staging gained #1299's 20261124130000_flashcards_manage_by_capability.sql and
+-- open PRs reached #1301's 20261124130200_office_hours_by_capability.sql, so it moved to
+-- 20261124140000, leaving room for the capability migrations being renumbered from
+-- 20261123180000-20261123180300. None of the migrations it now follows re-creates this function. It never ran on a shared database (fork PR, no preview). To
 -- check the body:
 --   diff <(sed -n '363,780p' supabase/migrations/20261118140200_forgejo_group_repos.sql) \
 --        <(sed -n '/^create or replace function/,$p' <this file>)
