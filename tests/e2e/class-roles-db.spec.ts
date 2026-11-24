@@ -44,7 +44,7 @@
  * 20261126150300_regrades_by_capability.sql: handle_regrades is also on the default grader role, so a
  * new custom role copies it (DEFAULT_GRADER_CAPABILITIES).
  *
- * 20261123180200_extensions_by_capability.sql: grant_extensions is also on the default grader role,
+ * 20261124150400_extensions_by_capability.sql: grant_extensions is also on the default grader role,
  * so a new custom role copies it (DEFAULT_GRADER_CAPABILITIES).
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.

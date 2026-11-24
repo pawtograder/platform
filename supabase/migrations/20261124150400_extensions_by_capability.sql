@@ -45,13 +45,16 @@
 -- extensions from student_deadline_extensions and for new assignments.
 --
 -- seed_default_class_roles() is re-created in full with the same body as
--- 20261123180100_regrades_by_capability.sql. Its grader list is the one every #1010 migration that
+-- 20261124150300_regrades_by_capability.sql. Its grader list is the one every #1010 migration that
 -- redefines it writes (moderate_discussion, grade_submissions, handle_regrades, grant_extensions,
 -- help_students, manage_flashcards, run_polls); only the names that are capabilities yet join.
 --
--- Number: this was 20261122150200 until 2026-11-23, and then 20261123040200, each time right after
--- #1408's and #1409's migrations. Later that day those moved to 20261123180000 and 20261123180100,
--- after every migration on staging and in every open PR. This one stays right after both.
+-- Number: this was 20261122150200 until 2026-11-23, then 20261123040200, and then 20261123180200,
+-- each time right after #1408's and #1409's migrations. On 2026-11-24 #1299 and #1300 put
+-- 20261124130000 and 20261124130100 on staging, and those moved to 20261124150200 and
+-- 20261124150300, after every migration on staging and in every open PR (the newest is #1428's
+-- 20261124150100). This one stays right after both, so it also runs after #1299's, #1300's, #1301's
+-- and #1429's migrations, which redefine seed_default_class_roles() too.
 --
 -- Safe to run again: the inserts skip rows that exist, CREATE OR REPLACE gives the same function,
 -- and each policy is dropped first.
@@ -70,8 +73,8 @@ FROM public.class_roles cr
 WHERE cr.default_for IN ('instructor', 'grader') OR cr.default_for IS NULL
 ON CONFLICT DO NOTHING;
 
--- The same function as 20261123180000_grading_and_release_by_capability.sql and
--- 20261123180100_regrades_by_capability.sql: the grader list there already names grant_extensions,
+-- The same function as 20261124150200_grading_and_release_by_capability.sql and
+-- 20261124150300_regrades_by_capability.sql: the grader list there already names grant_extensions,
 -- which joins now that it exists. Instructors get it from the CROSS JOIN.
 CREATE OR REPLACE FUNCTION public.seed_default_class_roles(p_class_id bigint)
 RETURNS void
