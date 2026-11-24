@@ -14,10 +14,12 @@
 -- 20261115120000 until CW-13 landed: CW-13 re-creates the function after it, so at the old
 -- timestamp the 42501 was silently undone. It was then 20261118180000, 20261122120100,
 -- 20261122124100 and 20261122160000. That last one collided with #1398's
--- 20261122160000_forgejo_repo_archives.sql, so on 2026-11-23 it moved to 20261123150000, after
--- every migration on staging and in the open PRs (the newest was #1429's
--- 20261123140100_discussion_by_capability.sql). None of the migrations it now follows re-creates
--- this function. It never ran on a shared database (fork PR, no preview). To check the body:
+-- 20261122160000_forgejo_repo_archives.sql, so on 2026-11-23 it moved to 20261123150000. Staging
+-- then gained migrations up to 20261123170400_forgejo_archive_requeue_fence.sql, so later that day
+-- it moved to 20261124120001, after every migration on staging and in the open PRs (the newest was
+-- #1430's 20261124120000_push_direct_submission_integrity.sql). None of the migrations it now
+-- follows re-creates this function. It never ran on a shared database (fork PR, no preview). To
+-- check the body:
 --   diff <(sed -n '363,780p' supabase/migrations/20261118140200_forgejo_group_repos.sql) \
 --        <(sed -n '/^create or replace function/,$p' <this file>)
 --
