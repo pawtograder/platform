@@ -208,7 +208,10 @@ async function runStatsUpdate(
         .select(
           "id, class_id, topic_id, subject, body, is_question, answer, author, likes_count, children_count, created_at"
         )
-        .in("id", threadIdChunk);
+        .in("id", threadIdChunk)
+        // A thread made private after it was posted keeps its Discord message; don't refresh it with
+        // the private post's text (#1010).
+        .eq("instructors_only", false);
 
       if (threadsError) {
         console.error("[discord-discussion-stats-update] Error fetching threads:", threadsError);
@@ -300,7 +303,7 @@ async function runStatsUpdate(
 
       const thread = threadMap.get(msg.resource_id);
       if (!thread) {
-        console.warn(`[discord-discussion-stats-update] Thread ${msg.resource_id} not found, skipping`);
+        console.warn(`[discord-discussion-stats-update] Thread ${msg.resource_id} not found or private, skipping`);
         continue;
       }
 

@@ -229,23 +229,33 @@ it off a role.
   of `set_discussion_thread_visibility` check it. Authors still edit their own posts and set their
   own thread's visibility.
 - The trigger `discussion_threads_guard_moderation` covers what the author rule would otherwise
-  allow: only a moderator can pin or unpin, change a post's topic, move a post under another thread
-  in the same class with the same visibility (its root or parent), or create a pinned post; no new
+  allow: only a moderator can pin or unpin, change a post's topic, or create a pinned post; no new
   post can start with an answer; only the question's author or a moderator marks an answer, which
   must be a reply in the same thread; and no signed-in user can move a post to another class. For
   everyone signed in, a post's topic must be in its class, and its author can only switch between
   the same person's named and anonymous profile.
+- Moving and visibility, for everyone signed in, moderators included:
+  - a post moves to another thread (its root or parent) only through
+    `mark_discussion_thread_duplicate`;
+  - a reply in a private thread is always private;
+  - a private post is made public only by `set_discussion_thread_visibility` on its thread's root,
+    which changes the root and its replies together.
+  - Those two functions set the transaction-local flags `pawtograder.discussion_merge_rpc` and
+    `pawtograder.discussion_visibility_rpc`, which the guard trusts. PostgREST can't call
+    `set_config`, so a client can't set them.
 - The same migration closes older gaps on discussion posts, which aren't capability checks:
-  - a private and a public thread can't be merged as duplicates;
+  - Mark Duplicate refuses a private and a public thread, or two private threads by different
+    people, and keeps a private reply private;
   - column privileges keep `created_at`, `likes_count`, `children_count`, `ordinal` and the
     `duplicate_*` fields to the database, and the guard sets `root_class_id` and `edited_at`;
   - a like goes only on a post the user can see in their class, and can't be moved;
-  - a turned-on watch must be on a thread the user can see, and reply notifications go only to
-    watchers enrolled in the class;
-  - private posts are never sent to Discord.
-  - a new reply's parent must be a post the user can see in the same class, and its root must be
-    that post's thread (`discussion_threads_guard_reply_target`, which runs as the user so the read
-    follows the SELECT policy).
+  - a turned-on watch must be on a thread the user can see; reply notifications go only to
+    watchers enrolled in the class, and a private reply only to staff;
+  - private posts are never sent to Discord, and the hourly stats update skips them;
+  - a new reply's parent and thread must be posts the user can see in the same class, and its root
+    must be the parent's thread (`discussion_threads_guard_reply_target`, which runs as the user so
+    the read follows the SELECT policy);
+  - existing public replies in private threads were made private.
 - Not part of it: discussion topics (instructors only), error pins and AI Help (staff tools),
   posting, follows and read status.
 

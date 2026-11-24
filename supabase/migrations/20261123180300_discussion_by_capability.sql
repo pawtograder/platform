@@ -23,14 +23,14 @@
 --   5. Pinning, answers, topics, threads and classes: an author could update every column of their
 --      own post, so a student could pin it, set its answer to anything, move it to another topic,
 --      move it under another thread or move it into another class through the API. Now only a
---      moderator can pin or unpin, change a post's topic, move a post under another thread (its root
---      or parent, in the same class and with the same visibility), or create a pinned post; no new
---      post can start with an answer (it has no replies yet); only the question's author or a
---      moderator can mark or unmark an answer, and the answer must be a reply in that thread; and no
---      signed-in user can move a post to another class.
---      Also for everyone signed in: a post's topic must be in its class, and its author can only
---      switch between the same person's named and anonymous profile. mark_discussion_thread_duplicate
---      refuses to merge a private and a public thread.
+--      moderator can pin or unpin, change a post's topic, or create a pinned post; a post only moves
+--      under another thread through mark_discussion_thread_duplicate; no new post can start with an
+--      answer (it has no replies yet); only the question's author or a moderator can mark or unmark an
+--      answer, and the answer must be a reply in that thread; and no signed-in user can move a post to
+--      another class. Also for everyone signed in: a post's topic must be in its class, and its author
+--      can only switch between the same person's named and anonymous profile.
+--      mark_discussion_thread_duplicate refuses to merge a private and a public thread, or two private
+--      threads by different people, and keeps a private reply private.
 --   6. Columns only the database sets: signed-in users can't set a post's created_at, likes_count,
 --      children_count, ordinal or duplicate_* fields; root_class_id and edited_at are set by the
 --      guard.
@@ -40,6 +40,9 @@
 --   9. Discord: a private post is never sent to the class's Discord channel.
 --  10. Replies: a new reply's parent must be a post the user can see in the same class, and its
 --      root must be that post's thread, so nobody posts into a thread they can't read.
+--  11. A reply in a private thread is always private, and only set_discussion_thread_visibility on
+--      a root makes a private post public. A post only moves to another thread through Mark
+--      Duplicate. Existing public replies in private threads become private.
 --
 -- Not changed: reading threads, posting, follows, read status, discussion topics, error pins, AI
 -- help and discussion engagement.
@@ -309,6 +312,27 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
+  -- Two private threads by different people can't be merged either: the merged thread's author
+  -- would see the other person's private post (#1010). Two private posts by the same person still
+  -- merge.
+  IF v_orig_instructors_only AND NOT EXISTS (
+    SELECT 1
+    FROM public.discussion_threads d
+    JOIN public.discussion_threads o ON o.id = p_original_root_id
+    JOIN public.user_roles ur_d
+      ON ur_d.class_id = v_dup_class_id AND d.author IN (ur_d.private_profile_id, ur_d.public_profile_id)
+    JOIN public.user_roles ur_o
+      ON ur_o.class_id = v_dup_class_id AND o.author IN (ur_o.private_profile_id, ur_o.public_profile_id)
+    WHERE d.id = p_duplicate_root_id
+      AND ur_d.user_id = ur_o.user_id
+  ) THEN
+    RAISE EXCEPTION 'Two private threads by different people can''t be merged'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  -- Lets the guard trigger accept this function's thread moves (rule B); turned off again below.
+  PERFORM set_config('pawtograder.discussion_merge_rpc', 'on', true);
+
   SELECT ur.user_id
   INTO v_author_user_id
   FROM public.user_roles ur
@@ -350,13 +374,16 @@ BEGIN
     duplicate_marked_at = now()
   WHERE id = p_duplicate_root_id;
 
+  -- A private reply stays private, even under a public original (#1010).
   UPDATE public.discussion_threads
   SET
     root = p_original_root_id,
     topic_id = v_orig_topic_id,
-    instructors_only = v_orig_instructors_only
+    instructors_only = instructors_only OR v_orig_instructors_only
   WHERE root = p_duplicate_root_id
     AND id != p_duplicate_root_id;
+
+  PERFORM set_config('pawtograder.discussion_merge_rpc', 'off', true);
 
   PERFORM public.recalculate_discussion_thread_children_counts(v_dup_class_id);
 
@@ -551,6 +578,16 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege';
   END IF;
   
+  -- Nothing to do when the thread already has this visibility. Otherwise the replies update below
+  -- would make a public thread's private replies public (#1010).
+  IF (SELECT dt.instructors_only FROM public.discussion_threads dt WHERE dt.id = p_thread_id)
+     IS NOT DISTINCT FROM p_instructors_only THEN
+    RETURN;
+  END IF;
+
+  -- Lets the guard trigger accept this visibility change (rule A); turned off again below.
+  PERFORM set_config('pawtograder.discussion_visibility_rpc', 'on', true);
+
   -- Update the root thread and all descendant threads atomically
   -- All updates happen in a single transaction (implicit)
   UPDATE public.discussion_threads
@@ -562,7 +599,8 @@ BEGIN
   SET instructors_only = p_instructors_only
   WHERE root = p_thread_id
     AND id != p_thread_id;  -- Don't update the root again
-  
+
+  PERFORM set_config('pawtograder.discussion_visibility_rpc', 'off', true);
 END;
 $function$;
 
@@ -579,10 +617,10 @@ GRANT EXECUTE ON FUNCTION public.set_discussion_thread_visibility(bigint, boolea
 -- 5. Pinning, answers, topics and threads
 -- ---------------------------------------------------------------------------
 
--- The author rule above lets an author update every column of their own post. This keeps pinning,
--- topic changes and moving a post under another thread (root or parent, in the same class and
--- with the same visibility) to moderators, and marking an answer to the question's author and moderators,
--- with the answer a reply in the same thread. A new post can start pinned only if its author is a
+-- The author rule above lets an author update every column of their own post. This keeps pinning
+-- and topic changes to moderators, moving a post to another thread to mark_discussion_thread_duplicate,
+-- a thread's visibility to set_discussion_thread_visibility, and marking an answer to the question's
+-- author and moderators, with the answer a reply in the same thread. A new post can start pinned only if its author is a
 -- moderator, and can never start with an answer (it has no replies yet). No signed-in user can move
 -- a post to another class. A new question still gets its root set to itself: the
 -- discussion_threads_notification() trigger does that right after the insert, as the poster.
@@ -599,6 +637,8 @@ AS $$
 DECLARE
   v_uid uuid := auth.uid();
   v_is_moderator boolean;
+  v_in_merge boolean := COALESCE(current_setting('pawtograder.discussion_merge_rpc', true), '') = 'on';
+  v_in_visibility boolean := COALESCE(current_setting('pawtograder.discussion_visibility_rpc', true), '') = 'on';
 BEGIN
   IF v_uid IS NULL THEN
     RETURN NEW;
@@ -673,45 +713,77 @@ BEGIN
     NEW.edited_at := now() AT TIME ZONE 'UTC';
   END IF;
 
-  -- Moving a post under another thread. The one change allowed for everyone is a new question's
-  -- root going from empty to its own id (see the comment above this function).
-  IF (
-    (NEW.root IS DISTINCT FROM OLD.root AND NOT (OLD.root IS NULL AND NEW.root = OLD.id))
-    OR NEW.parent IS DISTINCT FROM OLD.parent
-  ) AND NOT v_is_moderator THEN
-    RAISE EXCEPTION 'Only a discussion moderator can move a post under another thread'
-      USING ERRCODE = 'insufficient_privilege';
-  END IF;
-
-  -- Moderators included: the thread a post moves under must be in the post's class. Only class_id
-  -- is read, which no update changes, so this doesn't depend on the order mark_discussion_thread_duplicate
-  -- re-roots replies in.
-  IF (NEW.root IS DISTINCT FROM OLD.root OR NEW.parent IS DISTINCT FROM OLD.parent) AND EXISTS (
-    SELECT 1
-    FROM public.discussion_threads target
-    WHERE target.id IN (NEW.root, NEW.parent)
-      AND target.class_id IS DISTINCT FROM OLD.class_id
-  ) THEN
-    RAISE EXCEPTION 'A post can''t move under a thread in another class'
-      USING ERRCODE = 'insufficient_privilege';
-  END IF;
-
-  -- Moderators included: a post keeps its own visibility when it moves, so it can only move under a
-  -- thread with the same visibility. Otherwise a private post under a public thread could be read by
-  -- anyone who posted in that thread (authorize_for_private_discussion_thread() looks at who posted in
-  -- the thread), and a public post would show up in a private thread. Same rule as merging duplicates.
-  -- mark_discussion_thread_duplicate passes: it gives the moved posts the original's visibility in the
-  -- same UPDATE, and the original itself isn't changed.
+  -- Rule B: a post only moves to another thread (its root or parent) through
+  -- mark_discussion_thread_duplicate, which needs moderate_discussion and sets the transaction-local
+  -- flag pawtograder.discussion_merge_rpc while it moves posts. PostgREST can't call set_config, so a
+  -- client can't set the flag. The app never writes root or parent itself. The one other change
+  -- allowed is a new question's root going from empty to its own id (see the comment above).
   IF (NEW.root IS DISTINCT FROM OLD.root OR NEW.parent IS DISTINCT FROM OLD.parent)
-     AND NEW.root IS DISTINCT FROM NEW.id
-     AND EXISTS (
-       SELECT 1
-       FROM public.discussion_threads dest
-       WHERE dest.id = NEW.root
-         AND dest.instructors_only IS DISTINCT FROM NEW.instructors_only
-     ) THEN
-    RAISE EXCEPTION 'A post can''t move between a private and a public thread'
-      USING ERRCODE = 'invalid_parameter_value';
+     AND NOT (OLD.root IS NULL AND NEW.root = OLD.id AND NEW.parent IS NOT DISTINCT FROM OLD.parent)
+     AND NOT v_in_merge THEN
+    RAISE EXCEPTION 'A post can only move to another thread by marking its thread a duplicate'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  -- The checks below also hold inside the merge, as a second line of defence.
+  IF NEW.root IS DISTINCT FROM OLD.root OR NEW.parent IS DISTINCT FROM OLD.parent THEN
+    -- The thread a post moves under must be in the post's class. Only class_id is read, which no
+    -- update changes, so this doesn't depend on the order the merge re-roots replies in.
+    IF EXISTS (
+      SELECT 1
+      FROM public.discussion_threads target
+      WHERE target.id IN (NEW.root, NEW.parent)
+        AND target.class_id IS DISTINCT FROM OLD.class_id
+    ) THEN
+      RAISE EXCEPTION 'A post can''t move under a thread in another class'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+
+    -- A post in a private thread is always private (rule A). Outside the merge, a move also can't
+    -- change the post's visibility or join a public post to a private thread or the reverse.
+    IF NEW.root IS DISTINCT FROM NEW.id AND EXISTS (
+      SELECT 1
+      FROM public.discussion_threads dest
+      WHERE dest.id = NEW.root
+        AND (
+          (dest.instructors_only AND NOT NEW.instructors_only)
+          OR (NOT v_in_merge AND (dest.instructors_only IS DISTINCT FROM NEW.instructors_only
+                                  OR dest.instructors_only IS DISTINCT FROM OLD.instructors_only))
+        )
+    ) THEN
+      RAISE EXCEPTION 'A post can''t move between a private and a public thread'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    -- A new parent must be in the post's thread, as on INSERT. Only checked when parent itself
+    -- changes: the merge re-roots a thread's replies in one UPDATE and leaves their parents alone,
+    -- so their parents' root may not be updated yet when a row is checked.
+    IF NEW.parent IS DISTINCT FROM OLD.parent AND NEW.parent IS NOT NULL AND NOT EXISTS (
+      SELECT 1
+      FROM public.discussion_threads np
+      WHERE np.id = NEW.parent
+        AND COALESCE(np.root, np.id) = NEW.root
+    ) THEN
+      RAISE EXCEPTION 'A reply must be in the same thread as the post it answers'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END IF;
+
+  -- Rule A: no path turns a private post public, except set_discussion_thread_visibility on a root
+  -- (a root's author or a moderator), which sets pawtograder.discussion_visibility_rpc and changes
+  -- the root and its replies together. So, for everyone signed in:
+  --   - a root's visibility only changes through that function;
+  --   - a reply can be made private, never public;
+  --   - the merge can make a post private, never public.
+  IF NEW.instructors_only IS DISTINCT FROM OLD.instructors_only AND NOT v_in_visibility THEN
+    IF OLD.instructors_only AND NOT NEW.instructors_only THEN
+      RAISE EXCEPTION 'A private post can only be made public with the thread''s visibility setting'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF OLD.parent IS NULL AND NOT v_in_merge THEN
+      RAISE EXCEPTION 'A thread''s visibility only changes with the thread''s visibility setting'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
   END IF;
 
   IF NEW.answer IS DISTINCT FROM OLD.answer THEN
@@ -745,8 +817,8 @@ REVOKE ALL ON FUNCTION public.discussion_threads_guard_moderation() FROM PUBLIC,
 
 DROP TRIGGER IF EXISTS discussion_threads_guard_moderation ON public.discussion_threads;
 CREATE TRIGGER discussion_threads_guard_moderation
-  BEFORE INSERT OR UPDATE OF pinned, answer, topic_id, class_id, root, parent, author, edited_at
-  ON public.discussion_threads
+  BEFORE INSERT OR UPDATE OF pinned, answer, topic_id, class_id, root, parent, author, edited_at,
+  instructors_only ON public.discussion_threads
   FOR EACH ROW EXECUTE FUNCTION public.discussion_threads_guard_moderation();
 
 -- ---------------------------------------------------------------------------
@@ -840,8 +912,9 @@ CREATE POLICY "CRUD for self" ON public.discussion_thread_watchers
 
 REVOKE TRUNCATE ON public.discussion_thread_watchers FROM anon, authenticated;
 
--- Reply notifications go only to watchers enrolled in the class. Re-created from the live body
--- (20260317000000_filter_instructors_only_and_add_message_body.sql); only that filter is new.
+-- Reply notifications go only to watchers enrolled in the class, and a private reply (even in a
+-- public thread) only to staff. Re-created from the live body
+-- (20260317000000_filter_instructors_only_and_add_message_body.sql); only those two filters are new.
 CREATE OR REPLACE FUNCTION public.discussion_threads_notification()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -977,8 +1050,10 @@ BEGIN
                 AND ur_enrolled.disabled = false
             )
             -- For instructors_only threads: only notify staff
+            -- (#1010) also a private reply, which can sit in a public thread
             AND (
-              (NOT COALESCE((SELECT dt.instructors_only FROM discussion_threads dt WHERE dt.id = NEW.root), false))
+              (NOT COALESCE((SELECT dt.instructors_only FROM discussion_threads dt WHERE dt.id = NEW.root), false)
+               AND NOT COALESCE(NEW.instructors_only, false))
               OR EXISTS (
                 SELECT 1 FROM user_roles ur
                 WHERE ur.user_id = discussion_thread_watchers.user_id
@@ -1254,8 +1329,9 @@ GRANT EXECUTE ON FUNCTION public.enqueue_discord_discussion_thread_message(bigin
 -- then let them read the whole private thread (they had a post in it), and the insert also watched the
 -- thread for them and bumped its reply count. Now, on a signed-in user's insert:
 --   - a new question (no parent) can't name another thread as its root;
---   - a reply's parent must be a post the user can see, in the same class, and its root must be the
---     parent's thread.
+--   - a reply's parent and its thread must be posts the user can see, in the same class, and its root
+--     must be the parent's thread;
+--   - a reply in a private thread is always private.
 -- This function is SECURITY INVOKER on purpose: it runs as the signed-in user, so reading the parent
 -- follows discussion_threads' own SELECT policy, with no copy of its rules here. Writes with no
 -- signed-in user (service role, seeding) aren't checked.
@@ -1268,6 +1344,7 @@ AS $$
 DECLARE
   v_parent_class_id bigint;
   v_parent_root bigint;
+  v_root_private boolean;
 BEGIN
   IF auth.uid() IS NULL THEN
     RETURN NEW;
@@ -1296,6 +1373,21 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege';
   END IF;
 
+  -- The thread itself must be visible too, and a reply in a private thread is always private
+  -- (rule A), whatever the client sent.
+  SELECT r.instructors_only INTO v_root_private
+  FROM public.discussion_threads r
+  WHERE r.id = NEW.root;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'A reply must be to a post you can see in the same class'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF v_root_private THEN
+    NEW.instructors_only := true;
+  END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -1306,3 +1398,25 @@ DROP TRIGGER IF EXISTS discussion_threads_guard_reply_target ON public.discussio
 CREATE TRIGGER discussion_threads_guard_reply_target
   BEFORE INSERT ON public.discussion_threads
   FOR EACH ROW EXECUTE FUNCTION public.discussion_threads_guard_reply_target();
+
+-- ---------------------------------------------------------------------------
+-- 11. Existing replies in private threads become private
+-- ---------------------------------------------------------------------------
+
+-- Rule A for rows written before it: a public reply in a private thread becomes private. Only this
+-- direction: a private reply in a public thread is never made public. Runs with no signed-in user,
+-- so the guard doesn't check it.
+DO $$
+DECLARE
+  v_count bigint;
+BEGIN
+  UPDATE public.discussion_threads r
+  SET instructors_only = true
+  FROM public.discussion_threads t
+  WHERE t.id = r.root
+    AND r.id <> r.root
+    AND t.instructors_only
+    AND NOT r.instructors_only;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RAISE NOTICE 'discussion_by_capability: % public replies in private threads made private', v_count;
+END $$;
