@@ -12,9 +12,11 @@
 -- 2. The non-PR uniqueness key includes repository_id. Repository names are unique per provider since
 --    20261118140100_repository_names_per_provider.sql, so `org/repo` on GitHub and on Forgejo are
 --    different repositories, and a name-only key made a Forgejo push collide with a GitHub submission
---    for the same name and sha. `repository` stays in the key, with NULLS NOT DISTINCT, so rows from
---    before submissions.repository_id existed keep the name-only uniqueness they had. The new key only
---    adds a column to the old one, so every existing row already satisfies it.
+--    for the same name and sha. The key is the old one with coalesce(repository_id, 0) in front, and
+--    keeps the old index's default NULL handling: upload and manual submissions store repository, sha
+--    and repository_id as NULL with run_attempt 1 and run_number = the student's ordinal, so under NULLS
+--    NOT DISTINCT two students' first uploads would collide. Adding a column to the old key can only
+--    separate rows, so every row that satisfies the old index satisfies this one.
 --
 -- 3. promote_push_direct_submission: the force-push promotion as one transaction that refuses when a
 --    newer submission has been recorded since the caller re-read the branch head.
@@ -26,7 +28,7 @@ COMMENT ON COLUMN public.submissions.ingestion_pending IS
   'stopped partway. Such a row is not a completed submission and is never restored as the active one.';
 
 CREATE UNIQUE INDEX IF NOT EXISTS submissions_repository_id_sha_run_unique
-  ON public.submissions (repository_id, repository, sha, run_number, run_attempt) NULLS NOT DISTINCT
+  ON public.submissions ((coalesce(repository_id, 0)), repository, sha, run_number, run_attempt)
   WHERE submitted_via IS DISTINCT FROM 'pr';
 
 DROP INDEX IF EXISTS public.submissions_repository_sha_run_unique;

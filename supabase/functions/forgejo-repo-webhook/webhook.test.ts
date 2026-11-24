@@ -16,8 +16,9 @@ import { actionRunPayload } from "./actionRunFixture.ts";
 // webhook.ts reaches GitHubWrapper (through the push-direct submission code), which builds a GitHub
 // App at import time and needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { fromForgejoPush, handleForgejoPush, handleForgejoWebhook, verifyForgejoSignature } =
-  await import("./webhook.ts");
+const { fromForgejoPush, handleForgejoPush, handleForgejoWebhook, verifyForgejoSignature } = await import(
+  "./webhook.ts"
+);
 
 const SECRET = "test-webhook-secret";
 const FORGEJO_URL = "http://127.0.0.1:3100";

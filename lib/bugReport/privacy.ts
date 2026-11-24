@@ -1911,6 +1911,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "submissions.grading_review_id": "none",
   "submissions.head_sha": "none",
   "submissions.id": "none",
+  // A flag set while a push-direct submission is still being written.
+  "submissions.ingestion_pending": "none",
   "submissions.is_active": "none",
   "submissions.is_empty_submission": "none",
   "submissions.is_not_graded": "none",
@@ -3038,6 +3040,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   prepare_forgejo_repo_archive: "none",
   preview_error_pin_matches: { $: "none", "$.recent_submissions[*].student_name": "name" },
   process_calendar_announcements: "none",
+  // Returns a status word: "promoted", "superseded" or "missing".
+  promote_push_direct_submission: "none",
   promote_whatif_grader_result: "none",
   // UNCERTAIN: errors[].group_name is a user-chosen group name (classified free_text); errors[].error is SQLERRM, which can echo the group name or other values
   publish_assignment_group_changes: {
