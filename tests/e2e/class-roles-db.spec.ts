@@ -27,16 +27,16 @@
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
- * 20261124100000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * 20261124130000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
  * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
  * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
  * the capability (or a demoted former grader) cannot manage decks they made.
  *
- * 20261124100100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
+ * 20261124130100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
  * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
  * custom role, since graders could run polls before).
  *
- * 20261124100200_office_hours_by_capability.sql: staff help-request actions follow help_students
+ * 20261124130200_office_hours_by_capability.sql: staff help-request actions follow help_students
  * (on the default grader role and every custom role); instructor-only office-hours configuration
  * follows manage_office_hours.
  *
