@@ -5,6 +5,7 @@ import { VStack, HStack, Heading, Text } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { FaChartBar, FaPlus } from "react-icons/fa";
 import { useParams } from "next/navigation";
+import { useCapability } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import FlashCardDecksTable from "./flashCardDecksTable";
 import CreateDeckModal from "./createDeckModal";
@@ -19,6 +20,8 @@ export default function FlashcardDecksPage() {
   const params = useParams();
   const course_id = params.course_id as string;
   const [refreshKey, setRefreshKey] = useState(0);
+  // Creating decks needs manage_flashcards (#1010); View Analytics is a read and stays for staff.
+  const canManageFlashcards = useCapability("manage_flashcards");
 
   // Modal management
   const { isOpen: isCreateModalOpen, openModal: openCreateModal, closeModal: closeCreateModal } = useModalManager();
@@ -52,10 +55,12 @@ export default function FlashcardDecksPage() {
             </VStack>
 
             <HStack>
-              <Button onClick={handleCreateDeck}>
-                <FaPlus style={{ marginRight: "8px" }} />
-                Create New Deck
-              </Button>
+              {canManageFlashcards && (
+                <Button onClick={handleCreateDeck}>
+                  <FaPlus style={{ marginRight: "8px" }} />
+                  Create New Deck
+                </Button>
+              )}
               <Button asChild variant="outline">
                 <NextLink href={`/course/${course_id}/manage/course/flashcard-decks/analytics`}>
                   <FaChartBar style={{ marginRight: "8px" }} />
@@ -71,8 +76,9 @@ export default function FlashcardDecksPage() {
           <FlashCardDecksTable key={refreshKey} courseId={course_id} onDeckDeleted={handleDeckDeleted} />
         </VStack>
 
-        {/* Create Deck Modal */}
-        <CreateDeckModal isOpen={isCreateModalOpen} onClose={closeCreateModal} onSuccess={handleDeckCreated} />
+        {canManageFlashcards && (
+          <CreateDeckModal isOpen={isCreateModalOpen} onClose={closeCreateModal} onSuccess={handleDeckCreated} />
+        )}
       </VStack>
     </>
   );

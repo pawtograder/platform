@@ -85,7 +85,8 @@ function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails;
         <Link
           href={`/course/${courseId}/assignments/${request.assignment_id}/submissions/${request.submission_id}#regrade-request-${request.id}`}
         >
-          <Text color="blue.500" textDecoration="underline">
+          {/* blue.500 is about 3.7:1 on white, below WCAG AA for body text; blue.fg passes in both themes. */}
+          <Text color="blue.fg" textDecoration="underline">
             {request.assignments?.title || "Unknown"}
           </Text>
         </Link>

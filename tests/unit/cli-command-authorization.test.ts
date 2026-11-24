@@ -184,10 +184,15 @@ describe("CLI command authorization audit", () => {
       const entry = allCommands.find((c) => c.name === commandName);
       expect(entry).toBeDefined();
       const body = entry!.mod.functions.get(entry!.handler)!;
-      const checks = body.match(/assertUserCanAccessClass|assertUserIsClassInstructor/g) ?? [];
-      expect(checks.length).toBeGreaterThanOrEqual(2);
-      expect(body).toMatch(/sourceClass\.id/);
-      expect(body).toMatch(/targetClass\.id/);
+      expect(body).toMatch(/assertUserCanAccessClass\(supabase, ctx\.userId, sourceClass\.id\)/);
+      if (commandName === "flashcards.copy") {
+        expect(body).toMatch(/assertUserHasClassCapability\(ctx\.userId, targetClass\.id, "manage_flashcards"\)/);
+        expect(body).not.toMatch(/assertUserHasClassCapability\([^;]*sourceClass\.id/);
+      } else {
+        const targetHelper =
+          commandName === "assignments.copy" ? "assertUserIsClassInstructor" : "assertUserCanAccessClass";
+        expect(body).toContain(`${targetHelper}(supabase, ctx.userId, targetClass.id)`);
+      }
     }
   });
 
