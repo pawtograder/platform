@@ -1,8 +1,10 @@
 /**
- * The What's New suggestion bot's pre-filter and entry renderer (scripts/whats-new/), the parts that
- * run without a model call. Rules from docs/prd-whats-new-bot.md, Step 1.
+ * The What's New suggestion script (scripts/whats-new/): the pre-filter, the entry renderer, and
+ * the `claude -p` arguments and output parsing. Nothing here calls Claude. Rules from
+ * docs/prd-whats-new-bot.md.
  */
 import ts from "typescript";
+import { claudeArgs, DECISION_JSON_SCHEMA, parseEnvelope, type Decision } from "@/scripts/whats-new/model";
 import { diffForFiles, prefilter } from "@/scripts/whats-new/prefilter";
 import { addDays, idKey, renderEntryFile, slugify, type SuggestedEntry } from "@/scripts/whats-new/render";
 
@@ -140,5 +142,46 @@ describe("render helpers", () => {
 
   it("idKey turns a slug into a WHATS_NEW_IDS key", () => {
     expect(idKey("queue-health")).toBe("QUEUE_HEALTH");
+  });
+});
+
+describe("claude CLI call", () => {
+  const decision: Decision = {
+    significant: true,
+    reason: "Staff get a new button.",
+    audience: "staff",
+    page: "office-hours",
+    feature: null,
+    title: "New in Office Hours: x",
+    intro: "Want a quick tour?",
+    steps: [{ title: "Step", points: ["One"], previewOf: null }]
+  };
+
+  it("runs with no tools, no MCP servers and no saved session", () => {
+    const args = claudeArgs("SYSTEM");
+    expect(args).toEqual(expect.arrayContaining(["-p", "--strict-mcp-config", "--no-session-persistence"]));
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe("SYSTEM");
+    expect(args[args.indexOf("--output-format") + 1]).toBe("json");
+  });
+
+  it("sends a JSON schema the CLI accepts, without the $schema key", () => {
+    const schema = JSON.parse(DECISION_JSON_SCHEMA);
+    expect(schema.$schema).toBeUndefined();
+    expect(schema.required).toEqual(expect.arrayContaining(["significant", "reason", "steps"]));
+  });
+
+  it("reads the decision from structured_output", () => {
+    const stdout = JSON.stringify({ type: "result", is_error: false, result: "", structured_output: decision });
+    expect(parseEnvelope(stdout)).toEqual(decision);
+  });
+
+  it("throws on an error result or a missing decision", () => {
+    expect(() => parseEnvelope(JSON.stringify({ type: "result", is_error: true, result: "Not logged in" }))).toThrow(
+      /Not logged in/
+    );
+    expect(() => parseEnvelope(JSON.stringify({ type: "result", result: "no JSON here" }))).toThrow(
+      /no usable decision/
+    );
   });
 });

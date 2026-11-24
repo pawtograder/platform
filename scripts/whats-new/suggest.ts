@@ -1,19 +1,23 @@
 /**
- * What's New suggestion bot, build steps 1 and 2 of docs/prd-whats-new-bot.md.
+ * What's New suggestion script (docs/prd-whats-new-bot.md). The author of a PR that users will
+ * notice runs it on their own machine:
  *
- *   npx tsx scripts/whats-new/suggest.ts --pr 1287 --dry-run
+ *   npm run whats-new                  # the PR for the current branch
+ *   npm run whats-new -- --pr 1287     # any PR, open or merged
+ *   npm run whats-new -- --write       # also save the draft under lib/whatsNew/entries/
+ *   npm run whats-new -- --force       # ask Claude even when the pre-filter would skip the PR
  *
- * Reads the PR with the gh CLI, runs the pre-filter, asks claude-sonnet-5-5 whether the PR needs a
- * walkthrough, and prints the decision and the entry file it would generate. It posts nothing:
- * --dry-run is required until the workflow (build step 3) exists. The model call needs
- * ANTHROPIC_API_KEY (or another credential the Anthropic SDK reads).
+ * It reads the PR with the gh CLI, runs the pre-filter, asks Claude through the author's own
+ * `claude` CLI login whether the PR needs a walkthrough, and prints the decision and a draft entry
+ * file. It posts nothing to GitHub.
  */
 import { execFileSync } from "child_process";
-import Anthropic from "@anthropic-ai/sdk";
+import fs from "fs";
+import path from "path";
 import { COURSE_FEATURES } from "../../lib/courseFeatures";
-import { decide, RefusalError } from "./model";
+import { decide } from "./model";
 import { diffForFiles, prefilter } from "./prefilter";
-import { renderEntryFile, slugify } from "./render";
+import { idKey, renderEntryFile, slugify } from "./render";
 
 /* eslint-disable no-console */
 
@@ -31,12 +35,10 @@ type PrView = {
 
 function parseArgs(argv: string[]) {
   const prIndex = argv.indexOf("--pr");
-  const pr = prIndex >= 0 ? Number(argv[prIndex + 1]) : NaN;
-  if (!Number.isInteger(pr) || pr <= 0) throw new Error("Usage: suggest.ts --pr <number> --dry-run");
-  if (!argv.includes("--dry-run")) {
-    throw new Error("Only --dry-run exists so far. Posting comments and draft PRs is build step 3 and 4.");
-  }
-  return { pr };
+  const pr = prIndex >= 0 ? Number(argv[prIndex + 1]) : null;
+  if (pr !== null && (!Number.isInteger(pr) || pr <= 0))
+    throw new Error("Usage: suggest.ts [--pr <number>] [--write] [--force]");
+  return { pr, write: argv.includes("--write"), force: argv.includes("--force") };
 }
 
 function gh(args: string[]): string {
@@ -51,10 +53,10 @@ function capDiff(diff: string, max: number): { diff: string; cut: boolean } {
 }
 
 async function main() {
-  const { pr } = parseArgs(process.argv.slice(2));
-  const view = JSON.parse(
-    gh(["pr", "view", String(pr), "--json", "number,title,body,mergedAt,labels,files"])
-  ) as PrView;
+  const { pr, write, force } = parseArgs(process.argv.slice(2));
+  // Without a number, gh picks the PR for the current branch.
+  const prArg = pr === null ? [] : [String(pr)];
+  const view = JSON.parse(gh(["pr", "view", ...prArg, "--json", "number,title,body,mergedAt,labels,files"])) as PrView;
 
   const filter = prefilter({
     title: view.title,
@@ -62,14 +64,21 @@ async function main() {
     files: view.files.map((file) => file.path)
   });
   console.log(`#${view.number} ${view.title}`);
-  if (!filter.send) {
-    console.log(`Pre-filter: skip (${filter.reason}). No model call.`);
+  if (!filter.send && !force) {
+    console.log(`Pre-filter: skip (${filter.reason}). No model call. Add --force to ask Claude anyway.`);
     return;
   }
-  console.log(`Pre-filter: send. ${filter.matchedFiles.length} matched file(s):`);
-  for (const file of filter.matchedFiles) console.log(`  ${file}`);
+  // With --force and no UI files, Claude sees the whole diff, such as a migration that changes
+  // what users can see (#1275).
+  const files = filter.matchedFiles.length > 0 ? filter.matchedFiles : view.files.map((file) => file.path);
+  console.log(
+    filter.send
+      ? `Pre-filter: send. ${files.length} matched file(s):`
+      : `Pre-filter: skip (${filter.reason}), sent anyway because of --force:`
+  );
+  for (const file of files) console.log(`  ${file}`);
 
-  const { diff, cut } = capDiff(diffForFiles(gh(["pr", "diff", String(pr)]), filter.matchedFiles), MAX_DIFF_CHARS);
+  const { diff, cut } = capDiff(diffForFiles(gh(["pr", "diff", String(view.number)]), files), MAX_DIFF_CHARS);
   if (cut) console.log(`The matched diff is longer than ${MAX_DIFF_CHARS} characters; the model sees the first part.`);
 
   // Run from the repository root, as the npm scripts are.
@@ -78,13 +87,8 @@ async function main() {
   try {
     decision = await decide({ number: view.number, title: view.title, body: view.body, diff }, repoRoot);
   } catch (error) {
-    if (error instanceof RefusalError) {
-      console.error(`Model: ${error.message}`);
-      process.exitCode = 1;
-      return;
-    }
-    if (error instanceof Anthropic.AuthenticationError || /api key|apiKey|authToken|credentials/i.test(String(error))) {
-      console.error("Model: no usable Anthropic credential. Set ANTHROPIC_API_KEY to run the model call.");
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      console.error("Model: the claude CLI isn't installed. Install Claude Code and run `claude` once to sign in.");
       process.exitCode = 1;
       return;
     }
@@ -102,8 +106,21 @@ async function main() {
   const slug = slugify(decision.title.replace(/^new(\s+in\s+[^:]+)?:\s*/i, ""));
   const mergedAt = view.mergedAt ? new Date(view.mergedAt) : new Date();
   console.log(`Audience: ${decision.audience}, page: ${decision.page}, feature: ${decision.feature ?? "none"}`);
-  console.log(`\n--- lib/whatsNew/entries/${slug}.tsx ---\n`);
-  console.log(renderEntryFile(decision, { slug, prNumber: view.number, mergedAt }));
+  const file = renderEntryFile(decision, { slug, prNumber: view.number, mergedAt });
+  const relative = `lib/whatsNew/entries/${slug}.tsx`;
+  if (!write) {
+    console.log(`\n--- ${relative} ---\n`);
+    console.log(file);
+    console.log("Run again with --write to save this draft.");
+    return;
+  }
+  const target = path.join(repoRoot, relative);
+  if (fs.existsSync(target)) throw new Error(`${relative} already exists. Move it, or pick a different title.`);
+  fs.writeFileSync(target, file);
+  console.log(`\nWrote ${relative}. To finish it:`);
+  console.log(`  1. Add ${idKey(slug)}: "${slug}:v1" to WHATS_NEW_IDS in lib/whatsNew/ids.ts.`);
+  console.log("  2. Add the entry to WHATS_NEW_ENTRIES in lib/whatsNew/registry.ts.");
+  console.log("  3. Replace each TODO preview, and check every point against the real UI.");
 }
 
 main().catch((error) => {
