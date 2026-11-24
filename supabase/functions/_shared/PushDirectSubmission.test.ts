@@ -37,20 +37,39 @@ Deno.test("resolvePusherStanding: a Forgejo login on this instance resolves to i
   });
 });
 
-Deno.test("resolvePusherStanding: a Forgejo login matches literally and only on this instance", async () => {
-  const { client } = fakeSupabase(tables());
+Deno.test("resolvePusherStanding: a Forgejo login matches literally, so `_` is not a wildcard", async () => {
+  // The only staff account here is ta-jordan. Queried unescaped, ta_jordan would match it through
+  // the `_` wildcard and read as foreign staff.
+  const { client } = fakeSupabase({
+    ...tables(),
+    git_accounts: [{ user_id: "u-ta", provider: "forgejo", instance_url: FORGEJO_URL, login: "ta-jordan" }]
+  });
   const scope = new Sentry.Scope();
-  // `_` is not a wildcard: ta-jordan is not ta_jordan.
-  assertEquals(await resolvePusherStanding(client, studentRepo, "ta-jordan", scope, FORGEJO_URL), {
+  assertEquals(await resolvePusherStanding(client, studentRepo, "ta_jordan", scope, FORGEJO_URL), {
     isForeignStaff: false,
     isOwnerStaff: false
   });
   assertEquals(scope.getScopeData().tags.pusher_role, "unknown_forgejo_login");
-  // ta-sam's account is on another instance.
-  assertEquals(await resolvePusherStanding(client, studentRepo, "ta-sam", new Sentry.Scope(), FORGEJO_URL), {
+});
+
+Deno.test("resolvePusherStanding: a Forgejo login matches only on this instance", async () => {
+  // ta-sam is active staff in this class, but their account is on another instance. Matched
+  // across instances, the push would read as foreign staff.
+  const fixture = tables();
+  fixture.user_roles.push({
+    user_id: "u-other",
+    class_id: 10,
+    disabled: false,
+    role: "grader",
+    private_profile_id: "other-profile"
+  });
+  const { client } = fakeSupabase(fixture);
+  const scope = new Sentry.Scope();
+  assertEquals(await resolvePusherStanding(client, studentRepo, "ta-sam", scope, FORGEJO_URL), {
     isForeignStaff: false,
     isOwnerStaff: false
   });
+  assertEquals(scope.getScopeData().tags.pusher_role, "unknown_forgejo_login");
 });
 
 Deno.test("resolvePusherStanding: without an instance the pusher is a GitHub username, as before", async () => {

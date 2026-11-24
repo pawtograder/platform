@@ -45,6 +45,7 @@ const {
   ingestSubmissionFilesFromRepo,
   collectTextFilesFromZipBuffer,
   ForgejoIngestionNotConfiguredError,
+  MAX_SUBMISSION_ZIP_MB,
   SubmissionTooLargeError
 } = await import("./SubmissionIngestion.ts");
 
@@ -633,7 +634,9 @@ Deno.test("ingestSubmissionFilesFromRepo: a Forgejo repository is read from its 
 });
 
 Deno.test("ingestSubmissionFilesFromRepo: an oversized Forgejo archive is the usual too-large rejection", async () => {
-  // Past the 120 MB default without holding it: the same 1 MB chunk, over and over, until the reader stops.
+  // Past the limit without holding it: the same 1 MB chunk, over and over, until the reader stops. The
+  // limit is the module's own, read from MAX_SUBMISSION_ZIP_MB at import, so a shell that sets it
+  // doesn't break the test.
   const chunk = new Uint8Array(1024 * 1024);
   let pulled = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -663,11 +666,11 @@ Deno.test("ingestSubmissionFilesFromRepo: an oversized Forgejo archive is the us
         SubmissionTooLargeError
       );
       assertEquals(error.kind, "download");
-      assertEquals(error.limitMb, 120);
-      assert(error.observedMb > 120, String(error.observedMb));
+      assertEquals(error.limitMb, MAX_SUBMISSION_ZIP_MB);
+      assert(error.observedMb > MAX_SUBMISSION_ZIP_MB, String(error.observedMb));
     }
   );
-  assert(pulled < 130, `read ${pulled} chunks`);
+  assert(pulled < MAX_SUBMISSION_ZIP_MB + 10, `read ${pulled} chunks`);
   assertEquals(insertedFiles, []);
 });
 

@@ -369,6 +369,13 @@ export class ArchiveTooLargeError extends Error {
  * The repo at `sha` as a zip with one top-level directory, the same shape as GitHub's zipball, for
  * grading (#1110). Forgejo 15.0.9 held a request for an unknown commit open for minutes, hence the
  * timeout. Throws ArchiveTooLargeError, without assembling what it read, once the archive passes maxBytes.
+ *
+ * The archive is written into one buffer as it arrives rather than collected as chunks and joined at
+ * the end. Joining held the chunks and the joined copy at once, about twice the archive, and the edge
+ * isolate is capped at 256 MB while the submission limit defaults to 120 MB. With a Content-Length
+ * (and no Content-Encoding, which would make it the compressed size) the buffer is allocated once at
+ * that size, and an archive declared past maxBytes is refused before any of it is read. Without one
+ * the buffer grows by doubling, capped at maxBytes.
  */
 export async function downloadArchive(
   config: ForgejoConfig,
@@ -383,26 +390,33 @@ export async function downloadArchive(
   });
   if (!res.ok) throw await failure(res, "archive download");
   if (!res.body) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
+  const declared = res.headers.get("content-encoding") ? NaN : Number(res.headers.get("content-length") ?? NaN);
+  const knownLength = Number.isSafeInteger(declared) && declared >= 0 ? declared : null;
+  if (knownLength !== null && knownLength > maxBytes) {
+    await res.body.cancel();
+    throw new ArchiveTooLargeError(knownLength);
+  }
+  let archive = new Uint8Array(knownLength ?? Math.min(maxBytes, 1024 * 1024));
   let total = 0;
   const reader = res.body.getReader();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    total += value.length;
-    if (total > maxBytes) {
+    const next = total + value.length;
+    if (next > maxBytes) {
       await reader.cancel();
-      throw new ArchiveTooLargeError(total);
+      throw new ArchiveTooLargeError(next);
     }
-    chunks.push(value);
+    if (next > archive.length) {
+      // No length, or more bytes than it declared.
+      const grown = new Uint8Array(Math.min(maxBytes, Math.max(next, archive.length * 2)));
+      grown.set(archive.subarray(0, total));
+      archive = grown;
+    }
+    archive.set(value, total);
+    total = next;
   }
-  const archive = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    archive.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return archive;
+  return total === archive.length ? archive : archive.subarray(0, total);
 }
 
 /**

@@ -51,7 +51,7 @@ import type { Database } from "./SupabaseTypes.d.ts";
 // capped (256MB, matching supabase.com). A repo with committed build
 // artifacts/caches can blow that cap and get the worker killed mid-request.
 // These limits reject the pathological case early. Both are env-tunable.
-const MAX_SUBMISSION_ZIP_MB = Number(Deno.env.get("MAX_SUBMISSION_ZIP_MB")) || 120;
+export const MAX_SUBMISSION_ZIP_MB = Number(Deno.env.get("MAX_SUBMISSION_ZIP_MB")) || 120;
 const MAX_SUBMISSION_UNZIPPED_MB = Number(Deno.env.get("MAX_SUBMISSION_UNZIPPED_MB")) || 300;
 const MAX_SUBMISSION_ZIP_BYTES = MAX_SUBMISSION_ZIP_MB * 1024 * 1024;
 const MAX_SUBMISSION_UNZIPPED_BYTES = MAX_SUBMISSION_UNZIPPED_MB * 1024 * 1024;

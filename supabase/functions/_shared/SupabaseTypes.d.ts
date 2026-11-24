@@ -11142,6 +11142,7 @@ export type Database = {
           grading_review_id: number | null;
           head_sha: string | null;
           id: number;
+          ingestion_pending: boolean;
           is_active: boolean;
           is_empty_submission: boolean;
           is_not_graded: boolean;
@@ -11167,6 +11168,7 @@ export type Database = {
           grading_review_id?: number | null;
           head_sha?: string | null;
           id?: number;
+          ingestion_pending?: boolean;
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
@@ -11192,6 +11194,7 @@ export type Database = {
           grading_review_id?: number | null;
           head_sha?: string | null;
           id?: number;
+          ingestion_pending?: boolean;
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
@@ -15578,6 +15581,10 @@ export type Database = {
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
+      promote_push_direct_submission: {
+        Args: { p_newer_than_submission_id: number; p_submission_id: number };
+        Returns: string;
+      };
       promote_whatif_grader_result: {
         Args: { p_class_id: number; p_grader_result_id: number };
         Returns: Json;

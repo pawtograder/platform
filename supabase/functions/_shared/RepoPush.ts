@@ -45,6 +45,12 @@ export type RepoPush = {
   before?: string;
   /** When the host created the repository. Set for Forgejo pushes. */
   repositoryCreatedAt?: string;
+  /**
+   * When the webhook request arrived, taken before any processing. Set for Forgejo pushes, whose
+   * payload has no server-side push time, so the deadline check uses this instead of the moment
+   * processing reaches it.
+   */
+  receivedAt?: Date;
 };
 
 /** The parts of GitHub's push payload that `RepoPush` carries. */

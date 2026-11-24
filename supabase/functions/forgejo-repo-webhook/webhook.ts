@@ -106,7 +106,7 @@ function toRepoPushCommit(commit: ForgejoCommit): RepoPushCommit {
   };
 }
 
-export function fromForgejoPush(payload: ForgejoPushPayload): RepoPush {
+export function fromForgejoPush(payload: ForgejoPushPayload, receivedAt?: Date): RepoPush {
   return {
     provider: "forgejo",
     repository: payload.repository.full_name,
@@ -120,7 +120,8 @@ export function fromForgejoPush(payload: ForgejoPushPayload): RepoPush {
     totalCommits: payload.total_commits ?? undefined,
     pusherName: payload.pusher?.login || payload.pusher?.username || payload.sender?.login || "",
     ...(payload.before ? { before: payload.before } : {}),
-    ...(payload.repository.created_at ? { repositoryCreatedAt: payload.repository.created_at } : {})
+    ...(payload.repository.created_at ? { repositoryCreatedAt: payload.repository.created_at } : {}),
+    ...(receivedAt ? { receivedAt } : {})
   };
 }
 
@@ -380,8 +381,11 @@ async function handlePushDirect(
     sha: push.headCommit?.id ?? push.after,
     headCommitMessage: push.headCommit?.message ?? "",
     // Forgejo's push payload has no server-side push time (`repository.updated_at` moves with any
-    // repository change), and the commit date is the student's to set, so this is the receive time.
-    pushedAt: null,
+    // repository change), and the commit date is the student's to set, so this is the time the
+    // request arrived. It is taken at request entry, not here: the repository, commit-history, staff
+    // and head lookups above all run first, and a push that arrived on time must not turn late
+    // because processing crossed the deadline.
+    pushedAt: push.receivedAt ?? null,
     getHeadSha: readHead
   };
   await (deps.createSubmission ?? createPushDirectSubmission)(adminSupabase, pushDirect, studentRepo, {
@@ -409,6 +413,9 @@ function isHandledActionRunEvent(event: string | null): boolean {
 }
 
 export async function handleForgejoWebhook(req: Request, config: ForgejoWebhookConfig): Promise<Response> {
+  // Before anything else, so the deadline check sees when the push reached us rather than when
+  // processing got to it.
+  const receivedAt = new Date();
   if (req.method !== "POST") {
     return Response.json({ message: "Method not allowed" }, { status: 405 });
   }
@@ -455,7 +462,7 @@ export async function handleForgejoWebhook(req: Request, config: ForgejoWebhookC
   scope.setTag("webhook_name", event);
   scope.setTag("repository", payload.repository.full_name);
   try {
-    await config.handlePush(fromForgejoPush(payload), scope);
+    await config.handlePush(fromForgejoPush(payload, receivedAt), scope);
   } catch (err) {
     console.error(`[forgejo-repo-webhook] Error processing delivery ${deliveryId}`, err);
     Sentry.captureException(err, scope);

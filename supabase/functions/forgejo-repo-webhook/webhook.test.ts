@@ -16,9 +16,8 @@ import { actionRunPayload } from "./actionRunFixture.ts";
 // webhook.ts reaches GitHubWrapper (through the push-direct submission code), which builds a GitHub
 // App at import time and needs a non-empty private key.
 Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
-const { fromForgejoPush, handleForgejoPush, handleForgejoWebhook, verifyForgejoSignature } = await import(
-  "./webhook.ts"
-);
+const { fromForgejoPush, handleForgejoPush, handleForgejoWebhook, verifyForgejoSignature } =
+  await import("./webhook.ts");
 
 const SECRET = "test-webhook-secret";
 const FORGEJO_URL = "http://127.0.0.1:3100";
@@ -192,9 +191,14 @@ async function signedHeaders(body: string, event = "push", secret = SECRET) {
 
 Deno.test("handleForgejoWebhook passes a signed push to the push handler", async () => {
   const body = JSON.stringify(forgejoPayload());
+  const before = Date.now();
   const result = await deliver({ body, headers: await signedHeaders(body) });
   assertEquals(result.status, 200);
-  assertEquals(result.pushes, [fromForgejoPush(forgejoPayload())]);
+  assertEquals(result.pushes.length, 1);
+  // The receive time is taken when the request arrives, before the handler runs.
+  const { receivedAt, ...rest } = result.pushes[0];
+  assertEquals(rest, fromForgejoPush(forgejoPayload()));
+  assert(receivedAt instanceof Date && receivedAt.getTime() >= before && receivedAt.getTime() <= Date.now());
 });
 
 Deno.test("handleForgejoWebhook accepts X-Gitea-Signature alone", async () => {
@@ -516,6 +520,15 @@ function pushBy(login: string, payload = forgejoPayload()): RepoPush {
   return fromForgejoPush(payload);
 }
 
+Deno.test("handleForgejoPush passes the webhook's receive time as the push time", async () => {
+  const { client } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps();
+  const receivedAt = new Date("2026-11-20T23:58:00Z");
+  await handleForgejoPush(client, fromForgejoPush(forgejoPayload(), receivedAt), new Sentry.Scope(), deps);
+  assertEquals(submissions.length, 1);
+  assertEquals(submissions[0].push.pushedAt, receivedAt);
+});
+
 Deno.test("handleForgejoPush creates a push-direct submission for the student's default-branch push", async () => {
   const { client, inserts } = fakeSupabase(pushDirectTables());
   const { deps, submissions, standingCalls, headCalls } = pushDirectDeps();
@@ -532,7 +545,8 @@ Deno.test("handleForgejoPush creates a push-direct submission for the student's 
     { provider: push.provider, repoName: push.repoName, sha: push.sha, message: push.headCommitMessage },
     { provider: "forgejo", repoName: "cs101/hw1-alex", sha: HEAD, message: "Finish part 1 #submit" }
   );
-  // Forgejo has no server-side push time, so the receive time is used.
+  // Forgejo has no server-side push time. Without a receive time on the push (it was built
+  // directly here, not by handleForgejoWebhook), the shared handler falls back to the check time.
   assertEquals(push.pushedAt, null);
   // The re-check before insert reads the head on Forgejo again.
   assertEquals(await push.getHeadSha(), HEAD);

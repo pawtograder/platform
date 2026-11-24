@@ -42,8 +42,10 @@ export type PushDirectPush = {
   sha: string;
   headCommitMessage: string;
   /**
-   * When the host says the push landed, or null to use the receive time. Must not come from the
-   * commit itself: a commit date is whatever the student's clock or `git commit --date` said.
+   * When the host says the push landed (GitHub's `repository.pushed_at`), or when the webhook
+   * request arrived (Forgejo, whose payload has no push time), or null to use the time this check
+   * runs. Must not come from the commit itself: a commit date is whatever the student's clock or
+   * `git commit --date` said.
    */
   pushedAt: Date | null;
   /**
@@ -144,7 +146,10 @@ export async function createPushDirectSubmission(
   // has no push time), which is the previous behavior.
   const pushedAt = push.pushedAt;
   const pushTime = pushedAt && !Number.isNaN(pushedAt.getTime()) ? pushedAt : new Date();
-  scope.setTag("push_time_source", pushedAt ? `${push.provider}_pushed_at` : "receive_time");
+  scope.setTag(
+    "push_time_source",
+    !pushedAt ? "processing_time" : push.provider === "forgejo" ? "forgejo_received_at" : `${push.provider}_pushed_at`
+  );
   const finalDueDate = new Date(finalDueDateResult);
   const isLate =
     !actorIsStaffOwner && pushTime.getTime() > finalDueDate.getTime() && !(isNotGraded && allowNotGradedSubmissions);
@@ -159,9 +164,15 @@ export async function createPushDirectSubmission(
   // distinct 0/0 row, so that submission is not a duplicate of this push at all: treating it as
   // one skipped the hand-graded submission the student is now owed, or promoted a stale Actions
   // result as though it were this push.
+  //
+  // Keyed on the repository ROW, not only its name: names are unique per provider, so `org/repo`
+  // can be a GitHub repository and a different Forgejo one. Matching on the name alone let a
+  // Forgejo push find a GitHub submission for the same name and sha and skip, promote or delete it.
+  // submissions_repository_id_sha_run_unique carries the same key, so the insert below agrees.
   const { data: existing, error: existingErr } = await adminSupabase
     .from("submissions")
-    .select("id, grading_review_id, is_active, is_not_graded")
+    .select("id, grading_review_id, is_active, is_not_graded, ingestion_pending, created_at")
+    .eq("repository_id", studentRepo.id)
     .eq("repository", repoName)
     .eq("sha", sha)
     .eq("run_number", 0)
@@ -183,7 +194,26 @@ export async function createPushDirectSubmission(
   // submission has zero files (permit_empty_submissions=true, or the path where
   // empty detection is skipped for want of submissionFiles), and treating those as
   // incomplete would delete an ACCEPTED submission and its grading on redelivery.
-  const existingIsIncomplete = existing !== null && existing.grading_review_id === null;
+  //
+  // A grading review is not proof that ingestion FINISHED, though: the insert trigger provisions it
+  // before ingestion starts, so a worker stopped after the insert left an active, fileless row with
+  // a review, which a redelivery took for a completed submission. `ingestion_pending` is the explicit
+  // marker for that: set on insert, cleared only once the files and the verdict are written. A
+  // pending row older than INGESTION_STALE_MS was abandoned and is reclaimed like any incomplete
+  // row; a younger one may still be in progress in another delivery, so this one asks to be retried
+  // rather than deleting work out from under it.
+  const existingIsAbandoned =
+    existing !== null &&
+    existing.ingestion_pending === true &&
+    Date.now() - new Date(existing.created_at).getTime() > INGESTION_STALE_MS;
+  if (existing && existing.ingestion_pending && existing.grading_review_id !== null && !existingIsAbandoned) {
+    scope.setTag("push_direct_submission_skipped", "ingestion_in_progress");
+    throw new Error(
+      `Push-direct submission ${existing.id} for ${repoName}@${sha} is still being ingested by another delivery; ` +
+        `rejecting this delivery so it is retried once that one finishes or is abandoned`
+    );
+  }
+  const existingIsIncomplete = existing !== null && (existing.grading_review_id === null || existingIsAbandoned);
   // Why this row exists, resolved once. Needed before the late-token decision below as well as by
   // the branches further down, and it costs one query either way.
   const existingRejectionType =
@@ -322,7 +352,7 @@ export async function createPushDirectSubmission(
         await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, existing.id);
         return;
       }
-      await promoteSubmissionForCurrentHead(adminSupabase, studentRepo, existing, repoName, sha, scope);
+      await promoteSubmissionForCurrentHead(adminSupabase, studentRepo, existing, push, scope);
       // Promotion is allowed to REFUSE — a retained rejection or an is_not_graded row is not
       // something to make active — and a refusal leaves the same hole the late branch above
       // repairs. A retained oversized or empty rejection is deactivated but keeps its grading
@@ -498,9 +528,14 @@ export async function createPushDirectSubmission(
     );
   }
 
+  // The submission the insert below will demote. If this push is then rejected, that is the one to
+  // put back, and it is recorded with the rejection so a retry restores the same one.
+  const displacedSubmissionId = await findActiveSubmissionId(adminSupabase, studentRepo);
+
   // Create the submission row. Column set mirrors the autograder insert so the
   // BEFORE-INSERT trigger (ordinal/is_active) and AFTER-INSERT hook (grading
   // review) run identically. Do NOT set ordinal/is_active/grading_review_id.
+  // `ingestion_pending` stays true until the files and the verdict are written.
   const { data: inserted, error: insertError } = await adminSupabase
     .from("submissions")
     .insert({
@@ -514,7 +549,8 @@ export async function createPushDirectSubmission(
       run_attempt: 0,
       class_id: studentRepo.class_id,
       submitted_via: "git",
-      is_not_graded: isNotGraded
+      is_not_graded: isNotGraded,
+      ingestion_pending: true
     })
     .select("id")
     .single();
@@ -562,6 +598,14 @@ export async function createPushDirectSubmission(
       Sentry.captureException(mockErr, scope);
       throw mockErr;
     }
+    const { error: mockDoneErr } = await adminSupabase
+      .from("submissions")
+      .update({ ingestion_pending: false })
+      .eq("id", submissionId);
+    if (mockDoneErr) {
+      Sentry.captureException(mockDoneErr, scope);
+      throw mockDoneErr;
+    }
     return;
   }
 
@@ -604,14 +648,19 @@ export async function createPushDirectSubmission(
       isEmpty: ingestResult.isEmpty
     });
     scope.setTag("push_direct_empty_verdict", emptyVerdict);
-    // Only when there is a verdict to record. `is_empty_submission` is NOT NULL
-    // DEFAULT false, so writing `false` for the no-verdict case (the common one on
-    // a repo-only assignment, which has no submissionFiles) rewrites the value the
-    // INSERT already stored - one round trip plus a full-row audit entry per push.
-    if (ingestResult.isEmpty !== null) {
+    // An accepted push is complete once this write lands, so it also clears ingestion_pending, in
+    // the same write. A rejected one stays pending until the rejection is retained below.
+    // `is_empty_submission` is written only when there is a verdict to record: it is NOT NULL
+    // DEFAULT false, so writing `false` for the no-verdict case (the common one on a repo-only
+    // assignment, which has no submissionFiles) would rewrite the value the INSERT already stored.
+    const accepted = emptyVerdict === "accept";
+    if (ingestResult.isEmpty !== null || accepted) {
       const { error: emptyFlagError } = await adminSupabase
         .from("submissions")
-        .update({ is_empty_submission: ingestResult.isEmpty })
+        .update({
+          ...(ingestResult.isEmpty !== null ? { is_empty_submission: ingestResult.isEmpty } : {}),
+          ...(accepted ? { ingestion_pending: false } : {})
+        })
         .eq("id", submissionId);
       if (emptyFlagError) {
         // Throw rather than log-and-continue: the catch below deletes the partial
@@ -665,6 +714,7 @@ export async function createPushDirectSubmission(
             repository_name: repoName,
             sha,
             error_type: "empty_submission",
+            displaced_submission_id: displacedSubmissionId,
             detected_at: new Date().toISOString()
           }
         },
@@ -677,7 +727,7 @@ export async function createPushDirectSubmission(
         scope.setTag("empty_record_failed", "true");
         Sentry.captureException(emptyRecordError, scope);
         await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId, displacedSubmissionId);
         throw new Error(
           `Could not record the empty-submission rejection for ${repoName}@${sha} (${emptyRecordError.message}); ` +
             `rejecting this delivery so GitHub retries it`
@@ -686,7 +736,7 @@ export async function createPushDirectSubmission(
       // Strips the files and deactivates, leaving the review attached so the row stays visible.
       const deactivated = await deactivateRejectedSubmission(adminSupabase, submissionId, scope);
       // The insert demoted the student's previous submission; put it back.
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId, displacedSubmissionId);
       if (!deactivated) {
         scope.setTag("push_direct_retry_reason", "empty_deactivation_incomplete");
         throw new Error(
@@ -774,6 +824,7 @@ export async function createPushDirectSubmission(
             ...(ingestErr instanceof SubmissionFileTooLargeError
               ? { file_name: ingestErr.fileName, file_size: ingestErr.fileSize }
               : { observed_mb: ingestErr.observedMb, limit_mb: ingestErr.limitMb }),
+            displaced_submission_id: displacedSubmissionId,
             detected_at: new Date().toISOString()
           }
         },
@@ -792,7 +843,7 @@ export async function createPushDirectSubmission(
         scope.setTag("too_large_record_failed", "true");
         Sentry.captureException(recordError, scope);
         await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
-        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+        await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId, displacedSubmissionId);
         throw new Error(
           `Could not record the oversized-submission error for ${repoName}@${sha} (${recordError.message}); ` +
             `rejecting this delivery so GitHub retries it`
@@ -820,7 +871,7 @@ export async function createPushDirectSubmission(
     // another chance to restore, and stops retrying once restoration succeeds.
     let reactivateErr: unknown;
     try {
-      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId);
+      await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, submissionId, displacedSubmissionId);
     } catch (e) {
       reactivateErr = e;
       // `e`, not `ingestErr`. The comment above says to capture the restoration failure
@@ -1049,6 +1100,9 @@ async function recordRejectedPush(params: {
   scope: Sentry.Scope;
 }): Promise<void> {
   const { adminSupabase, studentRepo, repoName, sha, isNotGraded, errorType, errorName, scope } = params;
+  // What the insert demotes, recorded with the rejection so it, and not merely the highest
+  // ordinal, is what gets restored, on this delivery and on any retry.
+  const displacedSubmissionId = await findActiveSubmissionId(adminSupabase, studentRepo);
   const { data: inserted, error: insertError } = await adminSupabase
     .from("submissions")
     .insert({
@@ -1062,7 +1116,9 @@ async function recordRejectedPush(params: {
       run_attempt: 0,
       class_id: studentRepo.class_id,
       submitted_via: "git",
-      is_not_graded: isNotGraded
+      is_not_graded: isNotGraded,
+      // Not complete until the explanation is attached and the row is deactivated.
+      ingestion_pending: true
     })
     .select("id")
     .single();
@@ -1086,7 +1142,13 @@ async function recordRejectedPush(params: {
       run_attempt: 0,
       name: errorName,
       is_private: false,
-      data: { repository_name: repoName, sha, error_type: errorType, detected_at: new Date().toISOString() }
+      data: {
+        repository_name: repoName,
+        sha,
+        error_type: errorType,
+        displaced_submission_id: displacedSubmissionId,
+        detected_at: new Date().toISOString()
+      }
     },
     { onConflict: "repository_id,run_number,run_attempt,name" }
   );
@@ -1094,7 +1156,7 @@ async function recordRejectedPush(params: {
     scope.setTag("rejected_push_record_failed", "true");
     Sentry.captureException(recordError, scope);
     await cleanupPushDirectSubmission(adminSupabase, inserted.id, scope);
-    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+    await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id, displacedSubmissionId);
     throw new Error(
       `Could not record the rejection for ${repoName}@${sha} (${recordError.message}); rejecting this delivery so ` +
         `GitHub retries it`
@@ -1102,7 +1164,7 @@ async function recordRejectedPush(params: {
   }
   const deactivated = await deactivateRejectedSubmission(adminSupabase, inserted.id, scope);
   // The insert demoted whatever was active; the rejected row must not inherit that place.
-  await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id);
+  await reactivatePreviousSubmission(adminSupabase, studentRepo, scope, inserted.id, displacedSubmissionId);
   if (!deactivated) {
     throw new Error(
       `Rejected submission ${inserted.id} for ${repoName}@${sha} could not be deactivated; rejecting this delivery ` +
@@ -1205,10 +1267,10 @@ async function promoteSubmissionForCurrentHead(
   adminSupabase: SupabaseClient<Database>,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"],
   existing: { id: number; is_not_graded: boolean | null },
-  repoName: string,
-  sha: string,
+  push: PushDirectPush,
   scope: Sentry.Scope
 ): Promise<void> {
+  const { repoName, sha } = push;
   if (existing.is_not_graded) {
     scope.setTag("force_push_promote_skipped", "is_not_graded");
     return;
@@ -1218,34 +1280,118 @@ async function promoteSubmissionForCurrentHead(
     return;
   }
 
-  // Demote the current active row for this submitter first. Scoped exactly like the unique
-  // indexes: the group for a group repo, the individual otherwise.
-  let demote = adminSupabase
-    .from("submissions")
-    .update({ is_active: false })
-    .eq("assignment_id", studentRepo.assignment_id)
-    .eq("is_active", true)
-    .neq("id", existing.id);
-  demote = studentRepo.assignment_group_id
-    ? demote.eq("assignment_group_id", studentRepo.assignment_group_id)
-    : demote.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
-  const { error: demoteErr } = await demote;
-  if (demoteErr) throw demoteErr;
+  // The caller's head check ran before the existing-row lookup, the late-token decision and the
+  // rejection check above, and a newer push can be accepted in that time. Promoting then would
+  // demote the newer submission and activate this older one, so the graded commit would not be the
+  // branch head. So: note the newest submission recorded so far, re-read the head, and let the
+  // promotion RPC refuse if anything newer than that note has been recorded by the time it runs.
+  // It demotes and activates in one transaction; see promote_push_direct_submission
+  // (20261124120000) for how it settles a push that lands during the call.
+  const fence = await findNewestSubmissionId(adminSupabase, studentRepo);
+  let head: string | undefined;
+  try {
+    head = await push.getHeadSha();
+  } catch (headErr) {
+    scope.setTag("force_push_head_recheck_failed", "true");
+    Sentry.captureException(headErr, scope);
+    throw new Error(
+      `Could not re-confirm that ${sha} is the current head of ${repoName} before re-activating submission ` +
+        `${existing.id} (${headErr instanceof Error ? headErr.message : String(headErr)}); rejecting this ` +
+        `delivery so GitHub retries it`
+    );
+  }
+  if (head && head !== sha) {
+    scope.setTag("force_push_promote_skipped", "head_moved");
+    console.log(`Not re-activating submission ${existing.id}: ${repoName} has moved on to ${head}`);
+    return;
+  }
 
-  const { error: promoteErr } = await adminSupabase
-    .from("submissions")
-    .update({ is_active: true })
-    .eq("id", existing.id);
+  const { data: outcome, error: promoteErr } = await adminSupabase.rpc("promote_push_direct_submission", {
+    p_submission_id: existing.id,
+    p_newer_than_submission_id: fence ?? 0
+  });
   if (promoteErr) {
-    // Nothing is active now, since the demotion succeeded. Throwing asks GitHub to redeliver,
-    // and this branch is idempotent, so the retry re-promotes.
+    // Including a 23505 from a push accepted during the call: the retry finds that newer row and
+    // refuses. The transaction rolled back, so the previous active submission is untouched.
     scope.setTag("force_push_promote_failed", "true");
     Sentry.captureException(promoteErr, scope);
     throw promoteErr;
   }
+  if (outcome !== "promoted") {
+    scope.setTag("force_push_promote_skipped", String(outcome));
+    console.log(`Not re-activating submission ${existing.id} for ${repoName}@${sha}: ${outcome}`);
+    return;
+  }
   scope.setTag("force_push_promoted_submission", String(existing.id));
   console.log(`Re-activated submission ${existing.id}: ${repoName} was force-pushed back to ${sha}`);
 }
+
+/** Restricts a submissions query to this repository's submitter, as the one-active indexes do. */
+// The builder types are generic over the selected columns, so take anything with eq and is.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function forSubmitter<Q extends { eq: (...args: any[]) => Q; is: (...args: any[]) => Q }>(
+  query: Q,
+  studentRepo: RepositoryRow
+): Q {
+  return studentRepo.assignment_group_id
+    ? query.eq("assignment_group_id", studentRepo.assignment_group_id)
+    : query.eq("profile_id", studentRepo.profile_id!).is("assignment_group_id", null);
+}
+
+/** The submitter's active submission for this assignment, if any. */
+async function findActiveSubmissionId(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: RepositoryRow
+): Promise<number | null> {
+  const { data, error } = await forSubmitter(
+    adminSupabase.from("submissions").select("id").eq("assignment_id", studentRepo.assignment_id).eq("is_active", true),
+    studentRepo
+  )
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+/** The submitter's most recently inserted submission for this assignment, if any. */
+async function findNewestSubmissionId(
+  adminSupabase: SupabaseClient<Database>,
+  studentRepo: RepositoryRow
+): Promise<number | null> {
+  const { data, error } = await forSubmitter(
+    adminSupabase.from("submissions").select("id").eq("assignment_id", studentRepo.assignment_id),
+    studentRepo
+  )
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+/** The submission a rejected push displaced, as recorded with its rejection. */
+async function findDisplacedSubmissionId(
+  adminSupabase: SupabaseClient<Database>,
+  rejectedSubmissionId: number
+): Promise<number | null> {
+  const { data, error } = await adminSupabase
+    .from("workflow_run_error")
+    .select("data")
+    .eq("submission_id", rejectedSubmissionId);
+  if (error) throw error;
+  for (const row of data ?? []) {
+    const displaced = (row.data as { displaced_submission_id?: unknown } | null)?.displaced_submission_id;
+    if (typeof displaced === "number") return displaced;
+  }
+  return null;
+}
+
+/**
+ * A push-direct row left by a delivery that stopped after its insert: still `ingestion_pending` this
+ * long after it was created is abandoned, not in progress. Well past the edge function's wall-clock
+ * limit, so a live delivery is never mistaken for a dead one.
+ */
+const INGESTION_STALE_MS = 10 * 60 * 1000;
 
 /**
  * `data.error_type` values that mark a submission as REJECTED and retained for visibility only.
@@ -1268,7 +1414,12 @@ async function reactivatePreviousSubmission(
    * The submission being rejected. Excluded from the search because cleanup can fail
    * partway, and promoting the row we just rejected would be worse than doing nothing.
    */
-  excludeSubmissionId?: number
+  excludeSubmissionId?: number,
+  /**
+   * The submission the rejected push displaced, when the caller knows it. Otherwise it is read
+   * from the rejection's workflow_run_error, where it is recorded so a retry restores the same one.
+   */
+  displacedSubmissionId?: number | null
 ): Promise<void> {
   try {
     // Is ANY submission already active for this submitter? Asked up front, and about the whole
@@ -1305,6 +1456,46 @@ async function reactivatePreviousSubmission(
       return;
     }
 
+    // Restore what the rejected push displaced, not merely the highest ordinal. After a force-push
+    // back to A, A is active while a newer B is inactive; a rejected push C then demotes A, and the
+    // ordinal scan below would pick B, so a rejected push would change which accepted work is
+    // graded. The probe above has already established that nothing newer has taken the active slot.
+    const preferredId =
+      displacedSubmissionId !== undefined
+        ? displacedSubmissionId
+        : excludeSubmissionId !== undefined
+          ? await findDisplacedSubmissionId(adminSupabase, excludeSubmissionId)
+          : null;
+    if (preferredId !== null && preferredId !== excludeSubmissionId) {
+      const { data: preferred, error: preferredErr } = await forSubmitter(
+        adminSupabase
+          .from("submissions")
+          .select("id, is_not_graded, ingestion_pending")
+          .eq("id", preferredId)
+          .eq("assignment_id", studentRepo.assignment_id),
+        studentRepo
+      ).maybeSingle();
+      if (preferredErr) throw preferredErr;
+      if (
+        preferred &&
+        !preferred.is_not_graded &&
+        !preferred.ingestion_pending &&
+        !(await getRejectionErrorType(adminSupabase, preferred.id))
+      ) {
+        const { error: promoteErr } = await adminSupabase
+          .from("submissions")
+          .update({ is_active: true })
+          .eq("id", preferred.id);
+        if (promoteErr) throw promoteErr;
+        scope.setTag("reactivated_previous_submission", String(preferred.id));
+        scope.setTag("reactivated_displaced_submission", "true");
+        console.log(`Re-activated displaced submission ${preferred.id} after rejecting a push-direct submission`);
+        return;
+      }
+      // Gone, or no longer promotable: fall back to the newest promotable submission.
+      scope.setTag("reactivate_displaced_submission_unavailable", String(preferredId));
+    }
+
     // Built fresh per page rather than once: a postgrest builder is mutable and returns
     // itself, so reusing one across the paginated loop below would accumulate modifiers.
     const candidatePage = (offset: number) => {
@@ -1315,7 +1506,10 @@ async function reactivatePreviousSubmission(
         // #NOT-GRADED rows are deliberately left inactive by the insert trigger, so
         // promoting one would activate a submission the student asked not to be
         // graded. Only ever restore a gradeable submission.
-        .eq("is_not_graded", false);
+        .eq("is_not_graded", false)
+        // Nor a row whose ingestion is unfinished, or whose cleanup started and stopped partway:
+        // its files may be missing. A completed submission with no files keeps the flag false.
+        .eq("ingestion_pending", false);
       if (excludeSubmissionId !== undefined) {
         base = base.neq("id", excludeSubmissionId);
       }
@@ -1436,9 +1630,10 @@ async function deactivateRejectedSubmission(
     const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
     if (filesErr) throw filesErr;
 
+    // Deactivating is the last step of retaining a rejection, so it also marks the row complete.
     const { error: deactivateErr } = await adminSupabase
       .from("submissions")
-      .update({ is_active: false })
+      .update({ is_active: false, ingestion_pending: false })
       .eq("id", submissionId);
     if (deactivateErr) throw deactivateErr;
     scope.setTag("rejected_submission_retained", String(submissionId));
@@ -1454,7 +1649,7 @@ async function deactivateRejectedSubmission(
     // the marker the idempotency pre-check looks for.
     const { error: markErr } = await adminSupabase
       .from("submissions")
-      .update({ grading_review_id: null, is_active: false })
+      .update({ grading_review_id: null, is_active: false, ingestion_pending: true })
       .eq("id", submissionId);
     if (markErr) {
       scope.setTag("mark_rejected_submission_incomplete_failed", "true");
@@ -1480,9 +1675,12 @@ async function cleanupPushDirectSubmission(
     // submissions.grading_review_id at it, so deleting the submission row while
     // that reference stands is rejected by the FK — leaving the submission in
     // place. Mirrors safeCleanupRejectedSubmission in autograder-create-submission.
+    //
+    // ingestion_pending is set in the same write, so if a later step fails the row is never restored
+    // as the student's active submission: it has lost its review and may have lost its files.
     const { error: unlinkErr } = await adminSupabase
       .from("submissions")
-      .update({ grading_review_id: null, is_active: false })
+      .update({ grading_review_id: null, is_active: false, ingestion_pending: true })
       .eq("id", submissionId);
     if (unlinkErr) throw unlinkErr;
 
