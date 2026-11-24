@@ -4372,6 +4372,36 @@ export type Database = {
         };
         Relationships: [];
       };
+      forgejo_repo_archives: {
+        Row: {
+          archived_as: Pii<"free_text", string> | null;
+          archived_at: string | null;
+          claimed_at: string | null;
+          class_id: number;
+          id: number;
+          queued_at: string;
+          repository: Pii<"free_text", string>;
+        };
+        Insert: {
+          archived_as?: string | null;
+          archived_at?: string | null;
+          claimed_at?: string | null;
+          class_id: number;
+          id?: never;
+          queued_at?: string;
+          repository: string;
+        };
+        Update: {
+          archived_as?: string | null;
+          archived_at?: string | null;
+          claimed_at?: string | null;
+          class_id?: number;
+          id?: never;
+          queued_at?: string;
+          repository?: string;
+        };
+        Relationships: [];
+      };
       forgejo_repo_tokens: {
         Row: {
           id: number;
@@ -13790,6 +13820,10 @@ export type Database = {
         Args: { p_id: number; p_stale_minutes: number };
         Returns: number;
       };
+      claim_forgejo_repo_archive: {
+        Args: { p_id: number; p_require_no_destination?: boolean; p_stale_minutes: number };
+        Returns: string;
+      };
       claim_forgejo_repo_token_revocation: {
         Args: { p_id: number; p_stale_minutes: number };
         Returns: number;
@@ -14207,6 +14241,7 @@ export type Database = {
         Args: {
           p_class_id: number;
           p_debug_id?: string;
+          p_git_provider?: string;
           p_org: string;
           p_repo: string;
         };
@@ -14428,6 +14463,14 @@ export type Database = {
       forgejo_groups_need_grants: {
         Args: { p_group_ids: number[] };
         Returns: undefined;
+      };
+      forgejo_repo_archives_due: {
+        Args: { p_limit: number; p_stale_minutes: number };
+        Returns: {
+          class_id: number;
+          id: number;
+          repository: string;
+        }[];
       };
       forgejo_repo_token_revocable: {
         Args: { p_repository_id: number; p_user_id: string };
@@ -15309,6 +15352,10 @@ export type Database = {
         Returns: boolean;
       };
       kick_forgejo_reconciler: { Args: never; Returns: undefined };
+      leave_forgejo_assignment_group: {
+        Args: { p_membership_id: number };
+        Returns: boolean;
+      };
       log_api_gateway_call: {
         Args: {
           p_class_id?: number;
@@ -15517,6 +15564,10 @@ export type Database = {
         Args: never;
         Returns: Record<string, unknown>[];
       };
+      prepare_forgejo_repo_archive: {
+        Args: { p_repository: string };
+        Returns: boolean;
+      };
       preview_error_pin_matches: {
         Args: {
           p_assignment_id: number;
@@ -15539,6 +15590,10 @@ export type Database = {
           p_moves_to_fulfill?: Json;
         };
         Returns: Json;
+      };
+      queue_forgejo_repo_archives: {
+        Args: { p_class_ids: number[]; p_repositories: string[] };
+        Returns: number;
       };
       queue_repository_syncs: {
         Args: { p_force?: boolean; p_repository_ids: number[] };
