@@ -178,10 +178,12 @@ function mergeTemplateGroups(groups: (PageGroup & { tree: ProposedTree })[]): Pr
   let lastTop: ProposedQuestion | undefined;
   groups.forEach(({ firstPage, lastPage, tree }, g) => {
     const id = (raw: string) => `g${g + 1}:${raw}`;
+    // Not a truthiness check: Gemini can answer with numeric ids, and 0 is a real reference.
+    const ref = (raw: string | null | undefined) => (raw == null || raw === "" ? null : id(raw));
     const groupQuestions = (tree.questions ?? []).map((q) => ({
       ...q,
       client_id: id(q.client_id),
-      parent_client_id: q.parent_client_id ? id(q.parent_client_id) : null
+      parent_client_id: ref(q.parent_client_id)
     }));
     questions.push(...groupQuestions);
     for (const r of tree.regions ?? []) {
@@ -192,7 +194,7 @@ function mergeTemplateGroups(groups: (PageGroup & { tree: ProposedTree })[]): Pr
       regions.push({
         ...r,
         page_number: firstPage + r.page_number - 1,
-        question_client_id: r.question_client_id ? id(r.question_client_id) : null
+        question_client_id: ref(r.question_client_id)
       });
     }
     const tops = groupQuestions.filter((q) => !q.parent_client_id).sort(byOrdinal);

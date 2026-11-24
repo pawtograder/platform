@@ -635,6 +635,27 @@ Deno.test("Auto-extract sends a long template in groups of pages and merges the 
       });
     }
 
+    await t.step("a numeric client_id of 0 still works as a parent and as a region's question", async () => {
+      // 0 is falsy, so a truthiness check on the reference made the part top-level and dropped the
+      // region's question.
+      const { run } = await extract(2, () => ({
+        questions: [
+          { client_id: 0, parent_client_id: null, level: 1, ordinal: 1, label: "Problem 1" },
+          { client_id: 1, parent_client_id: 0, level: 2, ordinal: 1, label: "(a)" }
+        ],
+        regions: [{ ...region(null, 1), question_client_id: 0 }]
+      }));
+      const tree = await run();
+      assertEquals(
+        tree.questions.map((q) => [q.client_id, q.parent_client_id]),
+        [
+          ["g1:0", null],
+          ["g1:1", "g1:0"]
+        ]
+      );
+      assertEquals(tree.regions[0].question_client_id, "g1:0");
+    });
+
     await t.step("only the first name and student ID regions are kept", async () => {
       // A name line in every page footer would otherwise give one name region per group, and the
       // worker reads whichever the database returns first.
