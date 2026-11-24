@@ -124,6 +124,12 @@ export async function ensureAccountForUser(
   throw new Error("No free Forgejo username after 20 attempts");
 }
 
+/**
+ * A forgejo-reconciler claim older than this belonged to a pass that died; the next pass adopts what it created.
+ * assignment-delete claims archive entries with the same value.
+ */
+export const STALE_CLAIM_MINUTES = 10;
+
 const CODER_TOKEN_PREFIX = "pawtograder-coder-";
 /** Younger tokens than this may belong to a concurrent open that hasn't stored its token yet. */
 export const REPLACED_TOKEN_GRACE_MS = 10 * 60_000;
@@ -400,6 +406,14 @@ export async function downloadArchive(
 }
 
 /**
+ * The class's Forgejo org: forgejo_org, else the slug, lowercased like every Forgejo name Pawtograder stores. The
+ * same rule as the migrations' lower(coalesce(nullif(c.forgejo_org, ''), c.slug)).
+ */
+export function classForgejoOrg(cls: { forgejo_org?: string | null; slug?: string | null }): string {
+  return (cls.forgejo_org || cls.slug || "").toLowerCase();
+}
+
+/**
  * The repository's API path, for a plain owner/name only. The admin can call every endpoint, so a name with
  * "..", "?" or another slash, as an instructor could type into template_repo, must never reach the URL.
  */
@@ -414,37 +428,54 @@ export function repoPath(repository: string): string {
 /**
  * Creates the private org if it doesn't exist, and otherwise accepts it only when Pawtograder's admin is its
  * sole owner. A name someone else holds, as their own user or an org they own, is refused: every student repo
- * created there would belong to them. Then gives the org its push hook, so student pushes reach Commit History.
+ * created there would belong to them. Then gives the org its hook.
  */
 export async function ensureOrg(config: ForgejoConfig, org: string): Promise<void> {
   await claimOrg(config, org);
   if (config.pushHook) await ensurePushHook(config, org, config.pushHook);
 }
 
+/** Forgejo (15.0.9) has no webhook event for a run being requested or starting. */
+export const ORG_HOOK_EVENTS = ["push", "action_run_success", "action_run_failure"] as const;
+
 /**
  * An org hook, not a system one: classes can share an instance, and an org's hook covers every repo in it,
  * including ones created later. It's matched by URL, so a pass that runs again adds nothing. A matching hook is
  * rewritten with the current secret and settings: Forgejo never returns the secret, so a rotated
  * FORGEJO_WEBHOOK_SECRET, or a hook someone turned off, would otherwise stay broken.
+ * Forgejo 15.0.9's hook PATCH ignores action_run events, so a hook missing them is replaced, not patched.
  */
 async function ensurePushHook(config: ForgejoConfig, org: string, hook: { url: string; secret: string }) {
   const path = `/orgs/${encodeURIComponent(org)}/hooks`;
   const hooks = await forgejo(config, "GET", `${path}?limit=50`);
   if (!hooks.ok) throw await failure(hooks, "org hooks read");
-  const existing = ((await hooks.json()) as { id: number; config?: { url?: string } }[]).find(
-    (h) => h.config?.url === hook.url
-  );
+  const matching = (
+    (await hooks.json()) as { id: number; events?: string[] | null; config?: { url?: string } }[]
+  ).filter((h) => h.config?.url === hook.url);
   const settings = {
     active: true,
-    events: ["push"],
+    events: [...ORG_HOOK_EVENTS],
     branch_filter: "*",
     config: { url: hook.url, content_type: "json", secret: hook.secret }
   };
-  const res = existing
-    ? await forgejo(config, "PATCH", `${path}/${existing.id}`, settings)
-    : await forgejo(config, "POST", path, { type: "forgejo", ...settings });
-  if (!res.ok) throw await failure(res, existing ? "org hook update" : "org hook create");
-  await res.body?.cancel();
+  const subscribed = matching.find((h) => ORG_HOOK_EVENTS.every((e) => h.events?.includes(e)));
+  const keep = subscribed ?? null;
+  if (keep) {
+    const res = await forgejo(config, "PATCH", `${path}/${keep.id}`, settings);
+    if (!res.ok) throw await failure(res, "org hook update");
+    await res.body?.cancel();
+  } else {
+    const created = await forgejo(config, "POST", path, { type: "forgejo", ...settings });
+    if (!created.ok) throw await failure(created, "org hook create");
+    await created.body?.cancel();
+  }
+  // Delete stale hooks only after a subscribed one exists: deleting first lost pushes when the create failed.
+  for (const stale of matching) {
+    if (keep && stale.id === keep.id) continue;
+    const removed = await forgejo(config, "DELETE", `${path}/${stale.id}`);
+    if (!removed.ok && removed.status !== 404) throw await failure(removed, "org hook replace");
+    await removed.body?.cancel();
+  }
 }
 
 async function claimOrg(config: ForgejoConfig, org: string): Promise<void> {
@@ -583,13 +614,63 @@ export async function readFile(
   path: string,
   ref?: string
 ): Promise<string | null> {
+  return (await readFileEntry(config, repository, path, ref))?.content ?? null;
+}
+
+export async function readFileEntry(
+  config: ForgejoConfig,
+  repository: string,
+  path: string,
+  ref?: string
+): Promise<{ content: string; sha: string } | null> {
   const file = path.split("/").map(encodeURIComponent).join("/");
   const query = ref ? `?ref=${encodeURIComponent(ref)}` : "";
   const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}/contents/${file}${query}`);
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return null;
+  }
   if (!res.ok) throw await failure(res, "file read");
-  const { content } = (await res.json()) as { content: string };
-  return new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0)));
+  const { content, sha } = (await res.json()) as { content: string; sha: string };
+  return {
+    content: new TextDecoder().decode(Uint8Array.from(atob(content.replace(/\s/g, "")), (c) => c.charCodeAt(0))),
+    sha
+  };
+}
+
+export type ForgejoFileChange =
+  | { operation: "create"; path: string; content: string }
+  | { operation: "update"; path: string; content: string; sha: string; fromPath?: string }
+  | { operation: "delete"; path: string; sha: string };
+
+function base64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export async function changeFiles(
+  config: ForgejoConfig,
+  repository: string,
+  changes: ForgejoFileChange[],
+  message: string,
+  branch = "main"
+): Promise<string> {
+  const res = await forgejo(config, "POST", `/repos/${repoPath(repository)}/contents`, {
+    branch,
+    message,
+    files: changes.map((c) => ({
+      operation: c.operation,
+      path: c.path,
+      ...(c.operation === "delete" ? {} : { content: base64(c.content) }),
+      ...(c.operation === "create" ? {} : { sha: c.sha }),
+      ...(c.operation === "update" && c.fromPath ? { from_path: c.fromPath } : {})
+    }))
+  });
+  if (!res.ok) throw await failure(res, "file change");
+  const body = (await res.json()) as { commit?: { sha?: string } };
+  if (!body.commit?.sha) throw new Error("Forgejo file change returned no commit");
+  return body.commit.sha;
 }
 
 /** The same fields of a commit that GitHub's commit API gives. */
@@ -770,6 +851,129 @@ export async function grantWrite(config: ForgejoConfig, repository: string, logi
   if (!res.ok) throw await failure(res, "collaborator permission read");
   const { permission } = (await res.json()) as { permission: string };
   return permission === "write" || permission === "admin";
+}
+
+/**
+ * Where archiveRepo moves a repo: `archived-<timestamp>-<name>` under the same owner, the shape
+ * archiveRepoAndLock produces on GitHub. Forgejo caps repo names at 100 characters. A name that has to be cut
+ * ends in a hash of the whole original name instead, so two long names that share their first 60-odd
+ * characters still get different destinations when they are archived in the same millisecond. The caller picks
+ * this before the rename and records it, so an attempt that renames the repo and then loses the write of where
+ * it went leaves the path behind instead of a repo nobody can find (#1378).
+ */
+export function archivedRepoName(repository: string, now = new Date()): string {
+  // Refuse anything that isn't a plain owner/name here too, where the name is chosen.
+  repoPath(repository);
+  const [owner, name] = repository.split("/");
+  const archived = `archived-${now.toISOString().replace(/[:.]/g, "-")}-${name}`;
+  if (archived.length <= 100) return `${owner}/${archived}`;
+  return `${owner}/${archived.slice(0, 91)}-${fnv1a(name.toLowerCase())}`;
+}
+
+/** 32-bit FNV-1a as 8 hex digits: a short, stable tag that tells cut names apart. Not for security. */
+function fnv1a(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * True when the repo is at `repository`, which is then archived. Used for a destination an earlier attempt
+ * renamed the repo to: Forgejo applies the rename and the archive flag of one PATCH as separate steps, so that
+ * attempt may have moved the repo and failed before locking it.
+ */
+async function ensureArchivedAt(config: ForgejoConfig, repository: string): Promise<boolean> {
+  const res = await forgejo(config, "GET", `/repos/${repoPath(repository)}`);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return false;
+  }
+  if (!res.ok) throw await failure(res, "repo read");
+  const { archived } = (await res.json()) as { archived?: boolean };
+  if (archived === true) return true;
+  const patch = await forgejo(config, "PATCH", `/repos/${repoPath(repository)}`, { archived: true });
+  if (!patch.ok) throw await failure(patch, "repo archive");
+  await patch.body?.cancel();
+  return true;
+}
+
+/**
+ * Locks a repo that no longer belongs to a student or group, as archiveRepoAndLock does on GitHub: removes every
+ * collaborator, then renames it to `destination` so the old name is free again, and marks it archived, which
+ * makes it read-only. Team access (the class's staff) stays. Returns where the repo ended up, or null when it is
+ * gone: a repo missing from its old name is looked for at `destination` first, because an earlier attempt may
+ * have renamed it and failed before recording that, and the retry must not conclude the repo vanished.
+ */
+export async function archiveRepo(
+  config: ForgejoConfig,
+  repository: string,
+  destination: string = archivedRepoName(repository)
+): Promise<string | null> {
+  const path = repoPath(repository);
+  const [owner] = repository.split("/");
+  repoPath(destination);
+  const [destinationOwner, archivedName] = destination.split("/");
+  // The destination comes back from forgejo_repo_archives, so it can only ever rename the repo in place.
+  if (destinationOwner !== owner) throw new Error("The Forgejo archive destination is in another owner");
+  const found = await forgejo(config, "GET", `/repos/${path}`);
+  if (found.status === 404) {
+    await found.body?.cancel();
+    // The rename comes last, once every collaborator is gone, so a repo sitting at the destination has no
+    // collaborators left: an earlier attempt got that far and lost the write of where it went. It may not be
+    // locked yet, which ensureArchivedAt finishes.
+    return (await ensureArchivedAt(config, destination)) ? destination : null;
+  }
+  if (!found.ok) throw await failure(found, "repo read");
+  await found.body?.cancel();
+  // Every page, not just the first: a collaborator left off the list would keep write access to a repo that is
+  // about to be read-only for everyone else.
+  const collaborators = await listAll<{ login: string }>(config, `/repos/${path}/collaborators`, "collaborators read");
+  for (const { login } of collaborators) await removeCollaborator(config, repository, login);
+  const res = await forgejo(config, "PATCH", `/repos/${path}`, { name: archivedName, archived: true });
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return (await ensureArchivedAt(config, destination)) ? destination : null;
+  }
+  if (!res.ok) throw await failure(res, "repo archive");
+  await res.body?.cancel();
+  return destination;
+}
+
+/**
+ * SHAs of the newest commits on the default branch, newest first: one page, at most `limit` (Forgejo may cap it
+ * lower at [api].MAX_RESPONSE_ITEMS). Null when the repo is gone, and empty when it has no commits yet (409).
+ */
+export async function listRecentCommitShas(
+  config: ForgejoConfig,
+  repository: string,
+  limit = 100
+): Promise<string[] | null> {
+  const res = await forgejo(
+    config,
+    "GET",
+    `/repos/${repoPath(repository)}/commits?limit=${limit}&stat=false&verification=false&files=false`
+  );
+  if (res.status === 404 || res.status === 409) {
+    await res.body?.cancel();
+    return res.status === 404 ? null : [];
+  }
+  if (!res.ok) throw await failure(res, "commits read");
+  return ((await res.json()) as { sha: string }[]).map((c) => c.sha);
+}
+
+/** Deletes the repo. False when it was already gone. */
+export async function deleteRepo(config: ForgejoConfig, repository: string): Promise<boolean> {
+  const res = await forgejo(config, "DELETE", `/repos/${repoPath(repository)}`);
+  if (res.status === 404) {
+    await res.body?.cancel();
+    return false;
+  }
+  if (!res.ok) throw await failure(res, "repo deletion");
+  await res.body?.cancel();
+  return true;
 }
 
 // Forgejo has no "maintain", which GitHub gives the staff team. Write is the closest: staff can push, review

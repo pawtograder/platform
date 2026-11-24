@@ -612,6 +612,9 @@ export class CourseController {
   private _labSectionLeaders?: TableController<"lab_section_leaders">;
   private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
+  private _classRoles?: TableController<"class_roles">;
+  private _roleCapabilities?: TableController<"role_capabilities", "*, class_roles!inner(class_id)">;
+  private _capabilities?: TableController<"capabilities">;
   private _userRolesWithProfiles?: TableController<
     "user_roles",
     "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
@@ -971,6 +974,48 @@ export class CourseController {
       });
     }
     return this._classSections;
+  }
+
+  get classRoles() {
+    return (this._classRoles ??= new TableController({
+      onError: () =>
+        toaster.error({ title: "Staff roles could not be refreshed", description: "Reload the page to try again." }),
+      client: this.client,
+      table: "class_roles",
+      query: this.client.from("class_roles").select("*").eq("class_id", this.courseId),
+      classRealTimeController: this.classRealTimeController,
+      realtimeFilter: { class_id: this.courseId },
+      enableAutoRefetch: true
+    }));
+  }
+
+  get roleCapabilities() {
+    return (this._roleCapabilities ??= new TableController({
+      onError: () =>
+        toaster.error({ title: "Staff roles could not be refreshed", description: "Reload the page to try again." }),
+      client: this.client,
+      table: "role_capabilities",
+      keyColumns: ["role_id", "capability"],
+      query: this.client
+        .from("role_capabilities")
+        .select("*, class_roles!inner(class_id)")
+        .eq("class_roles.class_id", this.courseId),
+      selectForSingleRow: "*, class_roles!inner(class_id)",
+      classRealTimeController: this.classRealTimeController,
+      // The staff channel scopes row broadcasts to this course; payloads have no class_id.
+      enableAutoRefetch: true
+    }));
+  }
+
+  get capabilities() {
+    return (this._capabilities ??= new TableController({
+      onError: () =>
+        toaster.error({ title: "Staff roles could not be refreshed", description: "Reload the page to try again." }),
+      client: this.client,
+      table: "capabilities",
+      keyColumns: ["name"],
+      query: this.client.from("capabilities").select("*")
+    }));
   }
 
   get userRolesWithProfiles(): TableController<
@@ -1672,6 +1717,9 @@ export class CourseController {
   get isDataLoaded() {
     // Consider only instantiated controllers to avoid triggering lazy creation
     const createdControllers: Array<
+      | TableController<"class_roles">
+      | TableController<"role_capabilities", "*, class_roles!inner(class_id)">
+      | TableController<"capabilities">
       | TableController<"profiles">
       | TableController<"discussion_threads">
       | TableController<"discussion_thread_read_status">
@@ -1692,6 +1740,9 @@ export class CourseController {
         >
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
+    if (this._classRoles) createdControllers.push(this._classRoles);
+    if (this._roleCapabilities) createdControllers.push(this._roleCapabilities);
+    if (this._capabilities) createdControllers.push(this._capabilities);
     if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
     if (this._discussionThreadTeasers) createdControllers.push(this._discussionThreadTeasers);
     if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
@@ -1709,6 +1760,9 @@ export class CourseController {
 
   // Close method to clean up TableController instances
   close(): void {
+    this._classRoles?.close();
+    this._roleCapabilities?.close();
+    this._capabilities?.close();
     this._profiles?.close();
     this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();

@@ -14,7 +14,7 @@ Features reach users with no in-app explanation. When a merged PR changes what s
 
 ## Non-goals
 
-- Publishing walkthroughs without a person reviewing them. The script only suggests.
+- Publishing walkthroughs without a person reviewing them. The script only drafts: the author decides whether to use the draft, draws the previews and checks the text, and the walkthrough goes through PR review like any other code. Jon agreed on Nov 23 that user-facing text should keep a person in the loop.
 - Generating the UI previews inside each step. Those need someone who knows the real controls, as in the escalation tour.
 - Release notes or announcements outside the app (Discord, email).
 - Replacing CodeRabbit's review. The script answers one question when its author runs it.

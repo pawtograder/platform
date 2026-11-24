@@ -7,6 +7,9 @@
  * instructor role holds it; the default grader role doesn't. Sync (queue_repository_syncs) is not
  * part of this and still follows manage_assignments.
  *
+ * queue_repository_syncs also leaves Forgejo repositories out and counts them
+ * (20261123120000_queue_repository_syncs_skip_forgejo.sql), because handout sync only works on GitHub.
+ *
  * Nothing here reaches GitHub. Every fixture repository is a row only: not ready on GitHub, with a
  * creation_error so the repo reconciler leaves it alone, on an assignment whose repo_mode is "none"
  * (nothing creates repositories for it). So:
@@ -26,6 +29,7 @@ import {
   createUserInClass,
   createAuthenticatedClient,
   insertAssignment,
+  setCourseFeature,
   type TestingUser
 } from "./TestingUtils";
 
@@ -263,5 +267,59 @@ test.describe("Repository Status actions follow manage_student_repositories (#10
     expect(refused.error?.message ?? "", "manage_student_repositories doesn't allow Sync").toContain(
       "manage_assignments is required"
     );
+  });
+
+  test("Sync leaves Forgejo repositories out and counts them", async () => {
+    await setCourseFeature(classS.id, "cloud-workspaces", true);
+    const assignment = await insertAssignment({
+      class_id: classS.id,
+      due_date: addDays(new Date(), 14).toISOString(),
+      release_date: addDays(new Date(), 7).toISOString(),
+      git_provider: "forgejo",
+      assignment_slug: `e2e-repo-status-forgejo-${Date.now().toString(36)}`
+    });
+    // What assignment-create-handout-repo writes for a Forgejo handout: with these set and the repo
+    // ready, the repository passed every check queue_repository_syncs used to make.
+    expect(
+      (
+        await supabase
+          .from("assignments")
+          .update({ template_repo: "e2e-ignore/forgejo-handout", latest_template_sha: "b".repeat(40) })
+          .eq("id", assignment.id)
+      ).error
+    ).toBeNull();
+    unique++;
+    const { data: repo, error: repoError } = await supabase
+      .from("repositories")
+      .insert({
+        class_id: classS.id,
+        assignment_id: assignment.id,
+        profile_id: student.private_profile_id,
+        repository: `e2e-ignore/e2e-repo-status-forgejo-${Date.now().toString(36)}-${unique}`,
+        git_provider: "forgejo",
+        is_github_ready: true,
+        synced_handout_sha: "a".repeat(40)
+      })
+      .select("id")
+      .single();
+    expect(repoError).toBeNull();
+
+    // Forced, as the Sync button calls it, so nothing but the provider can explain an empty queue.
+    const synced = await (
+      await createAuthenticatedClient(instructor)
+    ).rpc("queue_repository_syncs", { p_repository_ids: [repo!.id], p_force: true });
+    expect(synced.error).toBeNull();
+    const result = synced.data as { queued_count: number; skipped_count: number; skipped_forgejo_count: number };
+    expect(result.queued_count, "nothing is queued for a Forgejo repository").toBe(0);
+    expect(result.skipped_forgejo_count, "the Forgejo repository is reported").toBe(1);
+    expect(result.skipped_count, "it isn't reported as already up to date").toBe(0);
+
+    const { data: after, error: afterError } = await supabase
+      .from("repositories")
+      .select("desired_handout_sha")
+      .eq("id", repo!.id)
+      .single();
+    expect(afterError).toBeNull();
+    expect(after!.desired_handout_sha, "no sync was claimed").toBeNull();
   });
 });

@@ -451,6 +451,9 @@ export type CheckRunStatus = {
   requested_at?: string;
   workflow_triggered_at?: string;
   check_run_marked_in_progress_at?: string;
+  workflow_run_id?: number;
+  workflow_run_url?: string;
+  workflow_run_stopped_at?: string;
   /**
    * Records which workflow run was allowed through the "dispatched before the autograder
    * was disabled" exception in autograder-create-submission. The exception is a property of
@@ -565,6 +568,14 @@ export type AssignmentSyncAutograderWorkflowResponse = {
    * assignment's forks keep a workflow that reports failing checks.
    */
   reconcile_blocked_by?: { id: number; title: string }[];
+  /** Forgejo only: existing student repos that keep their old grade.yml; callers must warn the instructor. */
+  forgejo_existing_repositories_unchanged?: number;
+  /**
+   * Forgejo only: the handout holds the requested workflow state, so `has_autograder` must stay as
+   * saved, but its workflow hash or revision was not recorded. Callers must offer a re-sync, which
+   * repairs both.
+   */
+  forgejo_workflow_record_failed?: string;
 };
 
 export type AutograderCreateReposForStudentRequest = {
