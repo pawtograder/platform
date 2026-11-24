@@ -1504,6 +1504,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "profiles.sortable_name": "name",
   "profiles.time_zone": "none",
   "profiles.updated_at": "none",
+  // Per-submitter promotion counter for push-direct force-pushes; the submitter key is an id.
+  "push_direct_promotion_versions.assignment_id": "none",
+  "push_direct_promotion_versions.submitter": "none",
+  "push_direct_promotion_versions.version": "none",
   "realtime_channel_subscriptions.channel": "none",
   "realtime_channel_subscriptions.class_id": "none",
   "realtime_channel_subscriptions.client_id": "none",
@@ -1911,6 +1915,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "submissions.grading_review_id": "none",
   "submissions.head_sha": "none",
   "submissions.id": "none",
+  // A flag set while a push-direct submission is still being written.
+  "submissions.ingestion_pending": "none",
   "submissions.is_active": "none",
   "submissions.is_empty_submission": "none",
   "submissions.is_not_graded": "none",
@@ -3038,6 +3044,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   prepare_forgejo_repo_archive: "none",
   preview_error_pin_matches: { $: "none", "$.recent_submissions[*].student_name": "name" },
   process_calendar_announcements: "none",
+  // Returns a status word: "promoted", "superseded" or "missing".
+  promote_push_direct_submission: "none",
   promote_whatif_grader_result: "none",
   // UNCERTAIN: errors[].group_name is a user-chosen group name (classified free_text); errors[].error is SQLERRM, which can echo the group name or other values
   publish_assignment_group_changes: {
@@ -3045,6 +3053,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.errors[*].error": "free_text",
     "$.errors[*].group_name": "free_text"
   },
+  // Returns the submitter's force-push promotion counter.
+  push_direct_promotion_version: "none",
   queue_forgejo_repo_archives: "none",
   queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
   // DRAFT: new entry, review and remove this comment
