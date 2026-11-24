@@ -470,10 +470,11 @@ Deno.test("Auto-extract sends a long template in groups of pages and merges the 
   });
 
   // Page n's image is the single byte n, so the stand-in can tell which pages a request carries.
-  // answer() gets those page numbers and returns Gemini's proposal for them, or an error to throw
-  // from fetch. getExamVisionProvider caches its provider, so each case loads a fresh module.
+  // answer() gets those page numbers and returns Gemini's proposal for them, a string for the
+  // model's raw text, or an error to throw from fetch. getExamVisionProvider caches its provider, so
+  // each case loads a fresh module.
   let instance = 0;
-  const extract = async (pageCount: number, answer: (pages: number[]) => Tree | Error) => {
+  const extract = async (pageCount: number, answer: (pages: number[]) => Tree | string | Error) => {
     const requests: number[][] = [];
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const body = await (input instanceof Request ? input : new Request(input, init)).json();
@@ -483,7 +484,7 @@ Deno.test("Auto-extract sends a long template in groups of pages and merges the 
       requests.push(pages);
       const reply = answer(pages);
       if (reply instanceof Error) throw reply;
-      return new Response(geminiBody(JSON.stringify(reply)), { status: 200 });
+      return new Response(geminiBody(typeof reply === "string" ? reply : JSON.stringify(reply)), { status: 200 });
     };
     const mod: typeof import("./examVision.ts") = await import(`./examVision.ts?extract-case=${++instance}`);
     const images = Array.from({ length: pageCount }, (_, i) => ({
@@ -609,6 +610,25 @@ Deno.test("Auto-extract sends a long template in groups of pages and merges the 
       assert(/by hand/.test(err.message), "message doesn't say to draw the regions by hand");
       assert(!err.message.includes(DUMMY_KEY), "message contains the credential");
     });
+
+    // A group whose answer can't be read must fail the import, not become an empty group that
+    // leaves a gap in the middle of the exam.
+    const unreadable: [string, string, string | null][] = [
+      ["isn't JSON", "Here are the questions: {", "Here are the questions"],
+      ["is {} because Gemini sent no text", "{}", null],
+      ["has questions that aren't a list", '{"questions": "Q1", "regions": []}', "Q1"],
+      ["is a list instead of an object", "[]", null]
+    ];
+    for (const [what, text, distinctive] of unreadable) {
+      await t.step(`an answer for pages 3-4 that ${what} fails the import and names those pages`, async () => {
+        const { run, mod } = await extract(6, (pages) => (pages.includes(3) ? text : { questions: [], regions: [] }));
+        const err = await assertRejects(run, mod.TemplateExtractError);
+        assert(err.message.includes("pages 3–4"), "message doesn't name the failed pages");
+        assert(!err.message.includes("1–2") && !err.message.includes("5–6"), "message names pages that worked");
+        assert(err.message.includes("couldn't be read"), "message doesn't say the answer couldn't be read");
+        if (distinctive) assert(!err.message.includes(distinctive), "message contains the model's answer");
+      });
+    }
 
     await t.step("only the first name and student ID regions are kept", async () => {
       // A name line in every page footer would otherwise give one name region per group, and the

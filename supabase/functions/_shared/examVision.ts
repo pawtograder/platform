@@ -110,12 +110,24 @@ export class TemplateExtractError extends Error {
   }
 }
 
+/**
+ * Gemini answered a group of template pages with something that isn't a question tree. Like
+ * ProviderTransientError's, its message never carries the response text.
+ */
+export class TemplateResponseError extends Error {
+  constructor() {
+    super("Gemini's answer was not a question tree");
+    this.name = "TemplateResponseError";
+  }
+}
+
 function describeFailure(err: unknown): string {
   if (err instanceof ProviderTransientError && err.category === "timeout") {
     return `Gemini took longer than ${GEMINI_TIMEOUT_MS / 1000} seconds`;
   }
   if (err instanceof ProviderTransientError) return "the request to Gemini failed";
   if (err instanceof ProviderRateLimitError) return "Gemini is rate limiting requests";
+  if (err instanceof TemplateResponseError) return "Gemini's answer couldn't be read";
   return "Gemini returned an error";
 }
 
@@ -463,13 +475,15 @@ class GeminiVision {
   private imagePart(page: PageImage) {
     return { inline_data: { mime_type: "image/png", data: toBase64(page.bytes) } };
   }
+  private stripFences(text: string): string {
+    return text
+      .replace(/^```json\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+  }
   private parseJson<T>(text: string, fallback: T): T {
     try {
-      const cleaned = text
-        .replace(/^```json\s*/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-      return JSON.parse(cleaned) as T;
+      return JSON.parse(this.stripFences(text)) as T;
     } catch {
       return fallback;
     }
@@ -525,7 +539,18 @@ class GeminiVision {
       ...pages.map((p) => this.imagePart(p))
     ];
     const text = await this.generate(parts);
-    return this.parseJson<ProposedTree>(text, { questions: [], regions: [] });
+    // Not parseJson: an empty fallback would count as an answer and leave these pages out.
+    let tree: unknown;
+    try {
+      tree = JSON.parse(this.stripFences(text));
+    } catch {
+      throw new TemplateResponseError();
+    }
+    const { questions, regions } = (tree ?? {}) as Partial<ProposedTree>;
+    if (typeof tree !== "object" || Array.isArray(tree) || !Array.isArray(questions) || !Array.isArray(regions)) {
+      throw new TemplateResponseError();
+    }
+    return tree as ProposedTree;
   }
   async readIdentity(page: PageImage, region: NormRect | null): Promise<IdentityResult> {
     const hint = region ? `The identity is within the normalized region ${JSON.stringify(region)}. ` : "";
