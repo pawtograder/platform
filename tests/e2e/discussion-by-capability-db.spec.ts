@@ -345,6 +345,46 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     expect(still!.class_id).toBe(classA.id);
   });
 
+  test("a new post can't start with an answer, and nobody signed in moves a post to another class", async () => {
+    // A moderator can't create a post that already has an answer: a new post has no replies yet.
+    const existing = await newRoot(classA.id, student);
+    const graderClient = await createAuthenticatedClient(plainGrader);
+    expectRefused(
+      await graderClient.from("discussion_threads").insert({
+        subject: `E2E answered ${Date.now().toString(36)}-${++unique}`,
+        body: "New post",
+        topic_id: topics[classA.id][0],
+        is_question: true,
+        instructors_only: false,
+        author: plainGrader.private_profile_id,
+        class_id: classA.id,
+        draft: false,
+        root_class_id: classA.id,
+        answer: existing
+      }),
+      "a moderator creating a post with an answer"
+    );
+
+    // Someone enrolled in two classes changes class_id and author together.
+    const inA = await createUserInClass({ role: "student", class_id: classA.id });
+    const inB = await createUserInClass({ role: "student", class_id: classB.id, email: inA.email });
+    expect(inB.user_id, "the same person in both classes").toBe(inA.user_id);
+    const post = await newRoot(classA.id, inA);
+    const client = await createAuthenticatedClient(inA);
+    const moved = await client
+      .from("discussion_threads")
+      .update({ class_id: classB.id, author: inB.private_profile_id })
+      .eq("id", post);
+    expectRefused(moved, "moving a post to another class together with its author");
+    expect(moved.error?.message, "refused by the class rule").toContain("can't move to another class");
+    const { data: still } = await supabase
+      .from("discussion_threads")
+      .select("class_id, author")
+      .eq("id", post)
+      .single();
+    expect(still).toEqual({ class_id: classA.id, author: inA.private_profile_id });
+  });
+
   test("moderate_discussion in one class doesn't reach another class", async () => {
     const r = await moderateAs(plainGrader, classB.id, studentB);
     expect(r.rootRow.pinned).toBe(false);

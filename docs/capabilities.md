@@ -229,9 +229,9 @@ it off a role.
   of `set_discussion_thread_visibility` check it. Authors still edit their own posts and set their
   own thread's visibility.
 - The trigger `discussion_threads_guard_moderation` covers what the author rule would otherwise
-  allow: only a moderator can pin or unpin, change a post's topic, or create a post that is already
-  pinned or answered; only the question's author or a moderator marks an answer, which must be a
-  reply in the same thread. An author's update must keep the post in the author's own class.
+  allow: only a moderator can pin or unpin, change a post's topic, or create a pinned post; no new
+  post can start with an answer; only the question's author or a moderator marks an answer, which
+  must be a reply in the same thread; and no signed-in user can move a post to another class.
 - Not part of it: discussion topics (instructors only), error pins and AI Help (staff tools),
   posting, likes, follows and read status.
 

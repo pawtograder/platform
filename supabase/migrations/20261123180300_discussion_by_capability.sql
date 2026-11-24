@@ -23,15 +23,15 @@
 --   5. Pinning, answers, topics and classes: an author could update every column of their own post,
 --      so a student could pin it, set its answer to anything, move it to another topic or move it
 --      into another class through the API. Now only a moderator can pin or unpin, change a post's
---      topic, or create a post that is pinned or already has an answer; only the question's author or
---      a moderator can mark or unmark an answer, and the answer must be a reply in that thread; and
---      an author's update must keep the post in the author's own class.
+--      topic, or create a pinned post; no new post can start with an answer (it has no replies yet);
+--      only the question's author or a moderator can mark or unmark an answer, and the answer must be
+--      a reply in that thread; and no signed-in user can move a post to another class.
 --
 -- Not changed: reading threads, posting, likes, follows, read status, discussion topics, error
 -- pins, AI help, discussion engagement and the Discord link.
 --
--- Safe to run again: policies and the trigger are dropped before they're created, the inserts skip
--- rows that exist, and the functions are CREATE OR REPLACE.
+-- Run once. The role backfill in section 1 is for the first rollout only: running it again would
+-- put moderate_discussion back on every role an instructor has taken it off.
 
 -- ---------------------------------------------------------------------------
 -- 1. The capability, on the instructor, grader and custom roles
@@ -559,8 +559,9 @@ GRANT EXECUTE ON FUNCTION public.set_discussion_thread_visibility(bigint, boolea
 
 -- The author rule above lets an author update every column of their own post. This keeps pinning
 -- and topic changes to moderators, and marking an answer to the question's author and moderators,
--- with the answer a reply in the same thread. A new post can't start pinned or with an answer unless
--- its author is a moderator. Moving a topic through set_discussion_thread_topic or
+-- with the answer a reply in the same thread. A new post can start pinned only if its author is a
+-- moderator, and can never start with an answer (it has no replies yet). No signed-in user can move
+-- a post to another class. Moving a topic through set_discussion_thread_topic or
 -- mark_discussion_thread_duplicate still works: both need moderate_discussion already. Writes with no
 -- signed-in user (service role, migrations) aren't checked; no edge function or migration writes
 -- these columns today.
@@ -579,15 +580,26 @@ BEGIN
   END IF;
 
   IF TG_OP = 'INSERT' THEN
+    IF NEW.answer IS NOT NULL THEN
+      RAISE EXCEPTION 'A new post can''t start with an answer'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     v_is_moderator := NEW.class_id IN (SELECT public.user_class_ids_with_capability('moderate_discussion'));
-    IF (NEW.pinned OR NEW.answer IS NOT NULL) AND NOT v_is_moderator THEN
-      RAISE EXCEPTION 'Only a discussion moderator can create a pinned or answered post'
+    IF NEW.pinned AND NOT v_is_moderator THEN
+      RAISE EXCEPTION 'Only a discussion moderator can create a pinned post'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
     RETURN NEW;
   END IF;
 
-  -- UPDATE: the moderator check is for the post's class before the update.
+  -- A post stays in its class, for every signed-in user. Changing class_id and author together
+  -- would otherwise let someone enrolled in two classes move a post between them.
+  IF NEW.class_id IS DISTINCT FROM OLD.class_id THEN
+    RAISE EXCEPTION 'A discussion post can''t move to another class'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  -- UPDATE: the moderator check is for the post's class.
   v_is_moderator := OLD.class_id IN (SELECT public.user_class_ids_with_capability('moderate_discussion'));
 
   IF NEW.pinned IS DISTINCT FROM OLD.pinned AND NOT v_is_moderator THEN
@@ -631,5 +643,5 @@ REVOKE ALL ON FUNCTION public.discussion_threads_guard_moderation() FROM PUBLIC,
 
 DROP TRIGGER IF EXISTS discussion_threads_guard_moderation ON public.discussion_threads;
 CREATE TRIGGER discussion_threads_guard_moderation
-  BEFORE INSERT OR UPDATE OF pinned, answer, topic_id ON public.discussion_threads
+  BEFORE INSERT OR UPDATE OF pinned, answer, topic_id, class_id ON public.discussion_threads
   FOR EACH ROW EXECUTE FUNCTION public.discussion_threads_guard_moderation();
