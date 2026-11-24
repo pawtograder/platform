@@ -105,23 +105,45 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
   });
 
   // useCapability is false while loading, so a hidden button only means something once the
-  // answer is in: wait for a successful lookup and ClassCapabilitiesProvider's loaded marker.
+  // answer is in: wait for a successful lookup by the thread page itself, then for
+  // ClassCapabilitiesProvider's loaded marker. The marker alone isn't enough (it also shows after
+  // the lookup fails), and the course page's own lookup can answer while the thread page loads, so
+  // only a response that arrives after the browser has switched to the thread page counts. The
+  // course page's unfinished requests are cancelled at that switch.
   async function openThread(page: Page, user: TestingUser) {
     await loginAsUser(page, user, course);
+    const threadPath = `/course/${course.id}/discussion/${rootId}`;
+    let onThreadPage = false;
+    const onNavigated = (frame: ReturnType<Page["mainFrame"]>) => {
+      if (frame === page.mainFrame() && new URL(frame.url()).pathname === threadPath) onThreadPage = true;
+    };
+    page.on("framenavigated", onNavigated);
     const capabilities = page.waitForResponse(
-      (r) => r.url().includes("/rpc/user_class_capabilities") && r.status() === 200
+      (r) => onThreadPage && r.url().includes("/rpc/user_class_capabilities") && r.status() === 200
     );
-    await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/discussion/${rootId}`, subject);
+    await gotoCourseUrlWhenHeadingVisible(page, threadPath, subject);
     await capabilities;
+    page.off("framenavigated", onNavigated);
     await expect(page.locator('[data-capabilities-loaded="true"]').first()).toBeAttached();
     await expect(page.getByRole("button", { name: "Reply" }).first()).toBeVisible();
   }
+
+  // The reply's own box: the innermost element holding both its text and its Reply link. Its Edit
+  // control is a link with no address, so it has no link role and is found by its text.
+  const replyContainer = (page: Page) =>
+    page
+      .locator("div")
+      .filter({ hasText: "Another student's reply" })
+      .filter({ has: page.getByText("Reply", { exact: true }) })
+      .last();
+  const replyEdit = (page: Page) => replyContainer(page).getByText("Edit", { exact: true });
 
   test("a default grader sees the moderation controls", async ({ page }) => {
     await openThread(page, grader);
     await expect(page.getByRole("button", { name: "Pin", exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Mark duplicate", exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit", exact: true }).first()).toBeVisible();
+    await expect(replyEdit(page)).toBeVisible();
     await expect(page.getByRole("button", { name: "Manage Error Pins" }).first()).toBeVisible();
   });
 
@@ -130,6 +152,8 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
     await expect(page.getByRole("button", { name: "Pin", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Mark duplicate", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+    await expect(replyContainer(page)).toBeVisible();
+    await expect(replyEdit(page)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Manage Error Pins" }).first()).toBeVisible();
   });
 

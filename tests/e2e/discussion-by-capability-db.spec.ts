@@ -14,6 +14,7 @@
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { supabase, createClass, createUserInClass, createAuthenticatedClient, type TestingUser } from "./TestingUtils";
 
@@ -120,11 +121,12 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
         p_thread_id: root,
         p_make_anonymous: true
       }),
-      visibility: await client.rpc("set_discussion_thread_visibility", { p_thread_id: root, p_instructors_only: true }),
+      // Before the visibility change: a public and a private thread can't be merged.
       duplicate: await client.rpc("mark_discussion_thread_duplicate", {
         p_duplicate_root_id: dup,
         p_original_root_id: root
-      })
+      }),
+      visibility: await client.rpc("set_discussion_thread_visibility", { p_thread_id: root, p_instructors_only: true })
     };
     return {
       root,
@@ -385,6 +387,53 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     expect(still).toEqual({ class_id: classA.id, author: inA.private_profile_id });
   });
 
+  test("only a moderator moves a post under another thread, and a new question still gets its root", async () => {
+    // A student's own new question: the notification trigger sets its root to itself, as the student.
+    const studentClient = await createAuthenticatedClient(student);
+    const { data: own, error: ownError } = await studentClient
+      .from("discussion_threads")
+      .insert({
+        subject: `E2E own question ${Date.now().toString(36)}-${++unique}`,
+        body: "My question",
+        topic_id: topics[classA.id][0],
+        is_question: true,
+        instructors_only: false,
+        author: student.private_profile_id,
+        class_id: classA.id,
+        draft: false,
+        root_class_id: classA.id
+      })
+      .select("id")
+      .single();
+    expect(ownError).toBeNull();
+    expect((await thread(own!.id)).root, "a new question is its own root").toBe(own!.id);
+
+    // The student's reply in one thread, moved under another thread.
+    const first = await newRoot(classA.id, otherStudent);
+    const second = await newRoot(classA.id, otherStudent);
+    const reply = await newReply(classA.id, first, student);
+    const parentOf = async (id: number) =>
+      (await supabase.from("discussion_threads").select("root, parent").eq("id", id).single()).data;
+
+    for (const change of [{ root: second, parent: second }, { root: second }, { parent: second }]) {
+      const result = await studentClient.from("discussion_threads").update(change).eq("id", reply);
+      expectRefused(result, `a student moving their reply (${Object.keys(change).join(", ")})`);
+      expect(result.error?.message).toContain("move a post under another thread");
+    }
+    expect(await parentOf(reply)).toEqual({ root: first, parent: first });
+
+    // A moderator can.
+    const graderClient = await createAuthenticatedClient(plainGrader);
+    const moved = await graderClient
+      .from("discussion_threads")
+      .update({ root: second, parent: second })
+      .eq("id", reply)
+      .select("id");
+    expect(moved.error).toBeNull();
+    expect(moved.data).toHaveLength(1);
+    expect(await parentOf(reply)).toEqual({ root: second, parent: second });
+  });
+
   test("moderate_discussion in one class doesn't reach another class", async () => {
     const r = await moderateAs(plainGrader, classB.id, studentB);
     expect(r.rootRow.pinned).toBe(false);
@@ -404,5 +453,378 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     for (const [what, res] of Object.entries(r.rpc)) {
       expect(res.error, what).toBeNull();
     }
+  });
+
+  // Older gaps on discussion posts, closed in the same migration (sections 4 to 8).
+
+  /** A post written as the service role, with any columns. */
+  async function servicePost(
+    values: Omit<Database["public"]["Tables"]["discussion_threads"]["Insert"], "subject" | "body">
+  ) {
+    const { data, error } = await supabase
+      .from("discussion_threads")
+      .insert({ subject: `E2E gap ${Date.now().toString(36)}-${++unique}`, body: "Body", draft: false, ...values })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    if (!values.root) {
+      expect(
+        (await supabase.from("discussion_threads").update({ root: data!.id }).eq("id", data!.id)).error
+      ).toBeNull();
+    }
+    return data!.id;
+  }
+
+  const privateRoot = (class_id: number, author: TestingUser) =>
+    servicePost({
+      class_id,
+      root_class_id: class_id,
+      topic_id: topics[class_id][0],
+      author: author.private_profile_id,
+      is_question: true,
+      instructors_only: true
+    });
+
+  test("a private and a public thread can't be merged as duplicates, either way", async () => {
+    const client = await createAuthenticatedClient(plainGrader);
+    for (const [dupPrivate, origPrivate] of [
+      [true, false],
+      [false, true]
+    ]) {
+      const dup = dupPrivate ? await privateRoot(classA.id, student) : await newRoot(classA.id, student);
+      const orig = origPrivate ? await privateRoot(classA.id, otherStudent) : await newRoot(classA.id, otherStudent);
+      const result = await client.rpc("mark_discussion_thread_duplicate", {
+        p_duplicate_root_id: dup,
+        p_original_root_id: orig
+      });
+      expect(result.error?.code, `merging a ${dupPrivate ? "private" : "public"} thread into the other`).toBe("22023");
+      const row = await thread(dup);
+      expect(row.root, "the duplicate stays its own thread").toBe(dup);
+      expect(row.instructors_only).toBe(dupPrivate);
+    }
+  });
+
+  test("a moderator can't hand a post to someone else, and an author still switches to anonymous", async () => {
+    const post = await newRoot(classA.id, student);
+    const graderClient = await createAuthenticatedClient(plainGrader);
+    const handed = await graderClient
+      .from("discussion_threads")
+      .update({ author: otherStudent.private_profile_id })
+      .eq("id", post);
+    expectRefused(handed, "a moderator giving a post to another student");
+    expect((await thread(post)).author).toBe(student.private_profile_id);
+
+    const studentClient = await createAuthenticatedClient(student);
+    const anonymous = await studentClient
+      .from("discussion_threads")
+      .update({ author: student.public_profile_id })
+      .eq("id", post)
+      .select("id");
+    expect(anonymous.error).toBeNull();
+    expect(anonymous.data).toHaveLength(1);
+    expect((await thread(post)).author).toBe(student.public_profile_id);
+
+    // And the moderator's anonymity switch, which changes author on the post and the author's replies.
+    const named = await graderClient.rpc("toggle_discussion_thread_author_anonymity", {
+      p_thread_id: post,
+      p_make_anonymous: false
+    });
+    expect(named.error).toBeNull();
+    expect((await thread(post)).author).toBe(student.private_profile_id);
+  });
+
+  test("a post's topic must be in its class", async () => {
+    const studentClient = await createAuthenticatedClient(student);
+    const inserted = await studentClient.from("discussion_threads").insert({
+      subject: `E2E foreign topic ${++unique}`,
+      body: "Body",
+      topic_id: topics[classB.id][0],
+      is_question: true,
+      instructors_only: false,
+      author: student.private_profile_id,
+      class_id: classA.id
+    });
+    expectRefused(inserted, "a post with another class's topic");
+    expect(inserted.error?.message).toContain("topic must be in the post's class");
+
+    const post = await newRoot(classA.id, student);
+    const graderClient = await createAuthenticatedClient(plainGrader);
+    const moved = await graderClient
+      .from("discussion_threads")
+      .update({ topic_id: topics[classB.id][0] })
+      .eq("id", post);
+    expectRefused(moved, "a moderator moving a post to another class's topic");
+    expect((await thread(post)).topic_id).toBe(topics[classA.id][0]);
+  });
+
+  test("only the database sets counts, times, duplicate fields and root_class_id", async () => {
+    const studentClient = await createAuthenticatedClient(student);
+    const post = await newRoot(classA.id, student);
+    const before = (
+      await supabase
+        .from("discussion_threads")
+        .select("likes_count, created_at, duplicate_marked_by_display_name")
+        .eq("id", post)
+        .single()
+    ).data;
+    for (const values of [
+      { likes_count: 999 },
+      { created_at: "2000-01-01T00:00:00Z" },
+      { duplicate_marked_by_display_name: "Prof. Fake" }
+    ]) {
+      expectRefused(
+        await studentClient.from("discussion_threads").update(values).eq("id", post),
+        `a student setting ${Object.keys(values)[0]}`
+      );
+    }
+    expect(
+      (
+        await supabase
+          .from("discussion_threads")
+          .select("likes_count, created_at, duplicate_marked_by_display_name")
+          .eq("id", post)
+          .single()
+      ).data
+    ).toEqual(before);
+
+    // A new post can't start with counts either.
+    expectRefused(
+      await studentClient.from("discussion_threads").insert({
+        subject: `E2E forged ${++unique}`,
+        body: "Body",
+        topic_id: topics[classA.id][0],
+        author: student.private_profile_id,
+        class_id: classA.id,
+        children_count: 50
+      }),
+      "a new post with a children_count"
+    );
+
+    // root_class_id and edited_at are accepted from the client, but the database sets their value.
+    const { data: created, error } = await studentClient
+      .from("discussion_threads")
+      .insert({
+        subject: `E2E root class ${++unique}`,
+        body: "Body",
+        topic_id: topics[classA.id][0],
+        is_question: true,
+        author: student.private_profile_id,
+        class_id: classA.id,
+        root_class_id: classB.id
+      })
+      .select("id, root_class_id")
+      .single();
+    expect(error).toBeNull();
+    expect(created!.root_class_id, "a question's root_class_id is its own class").toBe(classA.id);
+
+    const edited = await studentClient
+      .from("discussion_threads")
+      .update({ body: "Edited", edited_at: "2000-01-01T00:00:00Z" })
+      .eq("id", created!.id)
+      .select("edited_at")
+      .single();
+    expect(edited.error).toBeNull();
+    expect(new Date(edited.data!.edited_at + "Z").getUTCFullYear(), "the server's edit time").toBeGreaterThan(2020);
+  });
+
+  test("a like goes only on a post you can see in your class, and can't be moved", async () => {
+    const studentClient = await createAuthenticatedClient(student);
+    const like = (discussion_thread: number) =>
+      studentClient
+        .from("discussion_thread_likes")
+        .insert({ discussion_thread, creator: student.private_profile_id, emoji: "👍" })
+        .select("id")
+        .single();
+
+    const otherClassPost = await newRoot(classB.id, studentB);
+    expectRefused(await like(otherClassPost), "a like on another class's post");
+    const hiddenPost = await privateRoot(classA.id, otherStudent);
+    expectRefused(await like(hiddenPost), "a like on a private post the student can't see");
+
+    const first = await newRoot(classA.id, otherStudent);
+    const second = await newRoot(classA.id, otherStudent);
+    const liked = await like(first);
+    expect(liked.error).toBeNull();
+    expectRefused(
+      await studentClient
+        .from("discussion_thread_likes")
+        .update({ discussion_thread: second })
+        .eq("id", liked.data!.id),
+      "moving a like to another post"
+    );
+    const { data: counts } = await supabase
+      .from("discussion_threads")
+      .select("id, likes_count")
+      .in("id", [first, second]);
+    expect(Object.fromEntries(counts!.map((r) => [r.id, r.likes_count]))).toEqual({ [first]: 1, [second]: 0 });
+
+    // Unliking still works.
+    const removed = await studentClient.from("discussion_thread_likes").delete().eq("id", liked.data!.id).select("id");
+    expect(removed.data).toHaveLength(1);
+  });
+
+  test("a watch must be on a thread you can see, and reply notifications stay in the class", async () => {
+    const watch = (user: TestingUser, class_id: number, root: number, enabled = true) =>
+      createAuthenticatedClient(user).then((c) =>
+        c
+          .from("discussion_thread_watchers")
+          .insert({ user_id: user.user_id, class_id, discussion_thread_root_id: root, enabled })
+          .select("id")
+          .single()
+      );
+
+    const otherClassPost = await newRoot(classB.id, studentB);
+    expectRefused(await watch(student, classB.id, otherClassPost), "watching another class's thread");
+    expectRefused(await watch(student, classA.id, otherClassPost), "watching it under your own class");
+    const hiddenPost = await privateRoot(classA.id, otherStudent);
+    expectRefused(await watch(student, classA.id, hiddenPost), "watching a private thread you can't see");
+
+    // A watch you can make, and turning it off.
+    const visible = await newRoot(classA.id, otherStudent);
+    const ok = await watch(student, classA.id, visible);
+    expect(ok.error).toBeNull();
+    const off = await (await createAuthenticatedClient(student))
+      .from("discussion_thread_watchers")
+      .update({ enabled: false })
+      .eq("id", ok.data!.id)
+      .select("id");
+    expect(off.data).toHaveLength(1);
+
+    // An old watch row from someone outside the class (written as the service role) gets no
+    // notification; a watcher enrolled in the class does. The reply's author is watched automatically.
+    for (const [user, class_id] of [
+      [studentB, classB.id],
+      [instructor, classA.id]
+    ] as const) {
+      expect(
+        (
+          await supabase
+            .from("discussion_thread_watchers")
+            .insert({ user_id: user.user_id, class_id, discussion_thread_root_id: visible, enabled: true })
+        ).error
+      ).toBeNull();
+    }
+    const replyText = `E2E watched reply ${Date.now().toString(36)}`;
+    const replied = await (await createAuthenticatedClient(student)).from("discussion_threads").insert({
+      subject: "Re",
+      body: replyText,
+      topic_id: topics[classA.id][0],
+      author: student.private_profile_id,
+      class_id: classA.id,
+      parent: visible,
+      root: visible
+    });
+    expect(replied.error).toBeNull();
+
+    const notified = async (user: TestingUser) =>
+      (
+        await supabase
+          .from("notifications")
+          .select("id")
+          .eq("user_id", user.user_id)
+          .eq("body->>root_thread_id", String(visible))
+          .eq("body->>action", "reply")
+      ).data!.length;
+    expect(await notified(instructor), "an enrolled watcher").toBe(1);
+    expect(await notified(studentB), "a watcher from another class").toBe(0);
+
+    const { data: autoWatch } = await supabase
+      .from("discussion_thread_watchers")
+      .select("enabled")
+      .eq("user_id", student.user_id)
+      .eq("discussion_thread_root_id", visible);
+    expect(autoWatch, "the student's earlier watch is kept as it was").toEqual([{ enabled: false }]);
+  });
+
+  test("a new reply must be in a thread its author can see, in the same class", async () => {
+    const replyAs = async (user: TestingUser, values: { class_id: number; parent: number; root: number }) =>
+      (await createAuthenticatedClient(user))
+        .from("discussion_threads")
+        .insert({
+          subject: "Re",
+          body: `E2E reply target ${++unique}`,
+          topic_id: topics[values.class_id][0],
+          author: user.private_profile_id,
+          ...values
+        })
+        .select("id")
+        .single();
+
+    const hidden = await privateRoot(classA.id, otherStudent);
+    const visible = await newRoot(classA.id, otherStudent);
+    const otherVisible = await newRoot(classA.id, otherStudent);
+    const visibleReply = await newReply(classA.id, visible, otherStudent);
+    const otherClass = await newRoot(classB.id, studentB);
+
+    for (const [what, values] of [
+      ["into a private thread the student can't see", { class_id: classA.id, parent: hidden, root: hidden }],
+      ["with a private thread as root under a visible parent", { class_id: classA.id, parent: visible, root: hidden }],
+      ["under a private parent with a visible root", { class_id: classA.id, parent: hidden, root: visible }],
+      ["into another class's thread", { class_id: classA.id, parent: otherClass, root: otherClass }],
+      ["whose root isn't its parent's thread", { class_id: classA.id, parent: visibleReply, root: otherVisible }]
+    ] as const) {
+      expectRefused(await replyAs(student, values), `a reply ${what}`);
+    }
+    const { data: none } = await supabase
+      .from("discussion_threads")
+      .select("id")
+      .in("root", [hidden, otherClass])
+      .neq("author", otherStudent.private_profile_id)
+      .neq("author", studentB.private_profile_id);
+    expect(none, "nothing was posted into those threads").toEqual([]);
+
+    // A new question can't name another thread as its root.
+    expectRefused(
+      await (await createAuthenticatedClient(student)).from("discussion_threads").insert({
+        subject: `E2E question with a root ${++unique}`,
+        body: "Body",
+        topic_id: topics[classA.id][0],
+        author: student.private_profile_id,
+        class_id: classA.id,
+        root: hidden
+      }),
+      "a new question joining a private thread"
+    );
+
+    // Still allowed: a reply to a public thread, a nested reply, a reply to your own private
+    // thread, and staff replying to anyone's private thread.
+    const ownPrivate = await privateRoot(classA.id, student);
+    const ok = [
+      await replyAs(student, { class_id: classA.id, parent: visible, root: visible }),
+      await replyAs(student, { class_id: classA.id, parent: visibleReply, root: visible }),
+      await replyAs(student, { class_id: classA.id, parent: ownPrivate, root: ownPrivate }),
+      await replyAs(plainGrader, { class_id: classA.id, parent: hidden, root: hidden })
+    ];
+    for (const r of ok) expect(r.error).toBeNull();
+  });
+
+  test("a moderator in two classes can't move a post under the other class's thread", async () => {
+    // A new person who is a default grader (so a moderator) in both classes.
+    const graderA = await createUserInClass({ role: "grader", class_id: classA.id });
+    const graderB = await createUserInClass({ role: "grader", class_id: classB.id, email: graderA.email });
+    expect(graderB.user_id, "the same person in both classes").toBe(graderA.user_id);
+    const client = await createAuthenticatedClient(graderA);
+
+    const rootA = await newRoot(classA.id, student);
+    const otherRootA = await newRoot(classA.id, student);
+    const reply = await newReply(classA.id, rootA, student);
+    const rootB = await newRoot(classB.id, studentB);
+
+    for (const change of [{ root: rootB, parent: rootB }, { parent: rootB }, { root: rootB }]) {
+      const moved = await client.from("discussion_threads").update(change).eq("id", reply);
+      expectRefused(moved, `moving a reply under another class's thread (${Object.keys(change).join(", ")})`);
+      expect(moved.error?.message).toContain("another class");
+    }
+    expect((await thread(reply)).root).toBe(rootA);
+
+    // Within the class, the moderator still can.
+    const sameClass = await client
+      .from("discussion_threads")
+      .update({ root: otherRootA, parent: otherRootA })
+      .eq("id", reply)
+      .select("id");
+    expect(sameClass.error).toBeNull();
+    expect(sameClass.data).toHaveLength(1);
+    expect((await thread(reply)).root).toBe(otherRootA);
   });
 });

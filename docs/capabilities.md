@@ -229,11 +229,25 @@ it off a role.
   of `set_discussion_thread_visibility` check it. Authors still edit their own posts and set their
   own thread's visibility.
 - The trigger `discussion_threads_guard_moderation` covers what the author rule would otherwise
-  allow: only a moderator can pin or unpin, change a post's topic, or create a pinned post; no new
-  post can start with an answer; only the question's author or a moderator marks an answer, which
-  must be a reply in the same thread; and no signed-in user can move a post to another class.
+  allow: only a moderator can pin or unpin, change a post's topic, move a post under another thread
+  in the same class (its root or parent), or create a pinned post; no new post can start with an
+  answer; only the question's author or a moderator marks an answer, which must be a reply in the
+  same thread; and no signed-in user can move a post to another class. For everyone signed in, a
+  post's topic must be in its class, and its author can only switch between the same person's named
+  and anonymous profile.
+- The same migration closes older gaps on discussion posts, which aren't capability checks:
+  - a private and a public thread can't be merged as duplicates;
+  - column privileges keep `created_at`, `likes_count`, `children_count`, `ordinal` and the
+    `duplicate_*` fields to the database, and the guard sets `root_class_id` and `edited_at`;
+  - a like goes only on a post the user can see in their class, and can't be moved;
+  - a turned-on watch must be on a thread the user can see, and reply notifications go only to
+    watchers enrolled in the class;
+  - private posts are never sent to Discord.
+  - a new reply's parent must be a post the user can see in the same class, and its root must be
+    that post's thread (`discussion_threads_guard_reply_target`, which runs as the user so the read
+    follows the SELECT policy).
 - Not part of it: discussion topics (instructors only), error pins and AI Help (staff tools),
-  posting, likes, follows and read status.
+  posting, follows and read status.
 
 **The default grader role in new classes.** `seed_default_class_roles()` gives the default grader
 role every grader capability, listed by name and joined to `capabilities`, so a name that doesn't
