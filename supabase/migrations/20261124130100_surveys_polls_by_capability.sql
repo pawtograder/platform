@@ -13,10 +13,16 @@
 --   * surveys INSERT / UPDATE: authorizeforclassinstructor -> manage_surveys.
 --   * survey_assignments INSERT / UPDATE / DELETE: same.
 --   * survey_templates INSERT / UPDATE: same. SELECT and creator-only DELETE are unchanged.
+--     A trigger keeps created_by fixed after insert (like live polls), so a manage_surveys
+--     holder can't make themselves a template's creator and then delete it.
+--   * surveys: a trigger rejects any change to class_id, so a survey can't leave its
+--     assignments behind in the old class.
 --   * survey_series: the instructor FOR ALL policy becomes INSERT / UPDATE / DELETE under
 --     manage_surveys. SELECT stays on survey_series_select_graders (a view).
 --   * create_survey_assignments, soft_delete_survey, reorder_surveys_in_series: the instructor
 --     check inside each function becomes manage_surveys. Signatures, attributes and grants stay.
+--     create_survey_assignments also locks the survey row, so two calls can't merge their
+--     lists, and only replaces rows in the survey's own class.
 --   * live_polls INSERT / UPDATE / DELETE: authorizeforclassgrader -> run_polls. The
 --     authorizeforprofile(created_by) check on INSERT stays. SELECT policies are unchanged.
 --   * live_poll_responses: the staff FOR ALL policy is split so SELECT stays a grader view and
@@ -150,6 +156,26 @@ FOR UPDATE TO authenticated
 USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')))
 WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')));
 
+-- A survey stays in its class. Its survey_assignments carry their own class_id, and nothing
+-- moves them, so a manager of two classes could otherwise move a survey and strand them.
+CREATE OR REPLACE FUNCTION public.prevent_survey_class_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF OLD.class_id IS DISTINCT FROM NEW.class_id THEN
+    RAISE EXCEPTION 'Cannot move a survey to another class' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS prevent_survey_class_change_trigger ON public.surveys;
+CREATE TRIGGER prevent_survey_class_change_trigger
+BEFORE UPDATE OF class_id ON public.surveys
+FOR EACH ROW EXECUTE FUNCTION public.prevent_survey_class_change();
+
 -- survey_assignments --------------------------------------------------------
 -- New values (INSERT / UPDATE WITH CHECK) must point at a survey of the same
 -- class. Existing rows (UPDATE USING / DELETE USING) need only manage_surveys
@@ -205,6 +231,27 @@ FOR UPDATE TO authenticated
 USING (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')))
 WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('manage_surveys')));
 
+-- Delete stays creator-only, so the creator can't change. Without this, any manage_surveys
+-- holder could set created_by to themselves and then delete the template. Same rule as
+-- prevent_live_poll_created_by_change.
+CREATE OR REPLACE FUNCTION public.prevent_survey_template_created_by_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+BEGIN
+  IF OLD.created_by IS DISTINCT FROM NEW.created_by THEN
+    RAISE EXCEPTION 'Cannot change created_by of a survey template' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS prevent_survey_template_created_by_change_trigger ON public.survey_templates;
+CREATE TRIGGER prevent_survey_template_created_by_change_trigger
+BEFORE UPDATE OF created_by ON public.survey_templates
+FOR EACH ROW EXECUTE FUNCTION public.prevent_survey_template_created_by_change();
+
 -- survey_series: action policies only; SELECT stays on survey_series_select_graders
 
 DROP POLICY IF EXISTS "survey_series_manage_instructors" ON public.survey_series;
@@ -239,9 +286,12 @@ AS $function$
 DECLARE
   v_class_id BIGINT;
 BEGIN
+  -- The row lock makes a second call for the same survey wait for this one, so its DELETE
+  -- sees our rows and the survey ends up with exactly one caller's list, not both merged.
   SELECT class_id INTO v_class_id
   FROM public.surveys
-  WHERE id = p_survey_id;
+  WHERE id = p_survey_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Survey not found';
@@ -251,7 +301,20 @@ BEGIN
     RAISE EXCEPTION 'Permission denied: manage_surveys required';
   END IF;
 
-  DELETE FROM survey_assignments WHERE survey_id = p_survey_id;
+  -- A legacy row from another class that points at this survey is outside what the caller
+  -- manages, so it is not deleted here. If it would block one of the requested students,
+  -- say so instead of silently skipping them.
+  IF EXISTS (
+    SELECT 1 FROM survey_assignments
+    WHERE survey_id = p_survey_id
+      AND class_id IS DISTINCT FROM v_class_id
+      AND profile_id = ANY(p_profile_ids)
+  ) THEN
+    RAISE EXCEPTION 'A survey assignment from another class blocks this list; repair it in that class first'
+      USING ERRCODE = '23505';
+  END IF;
+
+  DELETE FROM survey_assignments WHERE survey_id = p_survey_id AND class_id = v_class_id;
 
   INSERT INTO survey_assignments (survey_id, profile_id, class_id)
   SELECT p_survey_id, unnest(p_profile_ids), v_class_id
