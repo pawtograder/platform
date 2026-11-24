@@ -129,6 +129,16 @@ export function useCapability(name: string) {
 }
 
 /**
+ * Like {@link useCapability}, but returns a function, for checking a capability chosen at render
+ * time, such as each menu item's. It answers `false` while loading and while an instructor is
+ * viewing as a student, like useCapability.
+ */
+export function useHasCapability(): (name: string) => boolean {
+  const state = useContext(ClassCapabilitiesContext);
+  return useCallback((name: string) => !!state && !state.isLoading && state.capabilities.has(name), [state]);
+}
+
+/**
  * Like {@link useCapability}, but `undefined` until the answer is in, for a page that should
  * wait before sending someone away.
  */

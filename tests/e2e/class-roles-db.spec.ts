@@ -44,11 +44,14 @@ import {
 const SEEDED_CAPABILITIES = [
   "manage_assignments",
   "manage_gradebook",
+  "manage_groups",
   "manage_review_assignments",
   "manage_roles",
   "manage_roster",
+  "manage_rubrics",
   "manage_student_repositories",
-  "publish_groups"
+  "publish_groups",
+  "send_announcements"
 ];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
@@ -1049,8 +1052,71 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     );
 
     try {
+      const name = `Broadcast role ${Date.now()}`;
+      const { data: role, error } = await instructor
+        .from("class_roles")
+        .insert({ class_id: classF.id, name })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      const roleNotes = (operation: string) =>
+        notes.filter((n) => n.table === "class_roles" && n.operation === operation);
+      await expect.poll(() => roleNotes("INSERT").length).toBe(1);
+      expect(
+        (
+          await instructor
+            .from("class_roles")
+            .update({ name: `${name} renamed` })
+            .eq("id", role!.id)
+        ).error
+      ).toBeNull();
+      await expect.poll(() => roleNotes("UPDATE").length).toBe(1);
+      // Make sure the role holds at least one capability, so the loop below checks a DELETE note.
+      expect(
+        (
+          await instructor
+            .from("role_capabilities")
+            .upsert(
+              { role_id: role!.id, capability: "manage_assignments" },
+              { onConflict: "role_id,capability", ignoreDuplicates: true }
+            )
+        ).error
+      ).toBeNull();
+      const { data: copied, error: copiedError } = await instructor
+        .from("role_capabilities")
+        .select("capability")
+        .eq("role_id", role!.id);
+      expect(copiedError).toBeNull();
+      expect(copied?.length ?? 0).toBeGreaterThan(0);
+      expect((await instructor.from("class_roles").delete().eq("id", role!.id)).error).toBeNull();
+      for (const row of copied ?? []) {
+        await expect
+          .poll(() =>
+            notes.some(
+              (note) =>
+                note.table === "role_capabilities" &&
+                note.operation === "DELETE" &&
+                (note.data as { role_id: number; capability: string })?.role_id === role!.id &&
+                (note.data as { capability: string }).capability === row.capability
+            )
+          )
+          .toBe(true);
+      }
+      await expect.poll(() => roleNotes("DELETE").length).toBe(1);
+      for (const note of [...roleNotes("INSERT"), ...roleNotes("UPDATE"), ...roleNotes("DELETE")]) {
+        expect(note).toMatchObject({ type: "staff_data_change", class_id: classF.id, row_id: String(role!.id) });
+        expect(note.data).toMatchObject({ id: role!.id });
+      }
+
+      // Leave out the role created and deleted above, which also sent role_capabilities notes.
       const capabilityNotes = (operation: string) =>
-        notes.filter((n) => n.table === "role_capabilities" && n.operation === operation);
+        notes.filter(
+          (n) =>
+            n.table === "role_capabilities" &&
+            n.operation === operation &&
+            (n.data as { role_id?: number })?.role_id !== role!.id &&
+            (n.data as { capability?: string })?.capability === "manage_assignments"
+        );
 
       expect(
         (await instructor.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "manage_assignments" }))

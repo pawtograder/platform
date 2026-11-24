@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -89,6 +89,10 @@ Like `assertUserIsInstructorOrServiceRole`, which it replaces for an action a ca
 also lets through the service role and an admin of any course. Load the row's class from the database
 and filter by it, so a capability in one class can't reach another class's rows.
 
+A CLI command (`supabase/functions/cli/`) has no Authorization header: it runs on the service role
+with the caller's user id. Use `assertUserHasClassCapability(userId, class_id, "manage_rubrics")` from
+`cli/utils/auth.ts`, which asks the same function on a client minted for that user.
+
 ## Adding a capability
 
 Write one migration that:
@@ -113,11 +117,37 @@ Write one migration that:
 
    For an instructor-only capability, use `WHERE cr.default_for = 'instructor'`.
 
+   Use the query above only if every grader could do the action before. If the old rule was
+   conditional (only in some classes, or only for some roles), add the capability only to the roles
+   that met it, so no one gains access the old rule denied.
+
 3. Updates `public.seed_default_class_roles()` if a default role other than instructor should get
    it in new classes too. It sets up the default roles when a class is created.
 
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
+
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+The side menu has three pages:
+
+- Create / Edit Role: create a copy of Grader, or pick a role to rename, delete, or edit its capabilities. The default Grader role cannot be renamed or deleted. Roles with active or disabled members cannot be deleted.
+- Staff & Roles: the Staff tab lists active graders with a role drop-down. Moving a grader requires an instructor. The Roles tab lists Grader and custom roles with active membership counts and any removed members.
+- Roles & Capabilities: pick a role, then toggle capabilities grouped by app area and section. Each info button explains the action and where to find it. Changes save immediately. The selected role is linkable with `?role=<id>`.
+
+The typed catalog in `capabilityCatalog.ts` includes pending capabilities, but shows only rows in the database. Unknown capabilities appear under Other with their database description. `manage_roles` is always hidden. Enrollments shows each grader's staff role using the same live controllers; its Edit Role dialog still changes the app role.
+
+The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
+creation, renames, deletions and capability changes arrive as row updates on the staff channel.
+Enrollments share the course controller's `userRolesWithProfiles` cache. Controllers page through
+all rows and catch up when the staff channel reconnects.
+
+Updates and deletes ask for the rows they changed, because a policy can refuse those without an
+error; the page then reports the change as not saved and puts the control back. A refused insert
+fails with an error, so creating a role does not ask for rows back.
 
 ## A capability that also decides who can see something
 
@@ -141,6 +171,49 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Emailer: send_announcements
+
+`send_announcements` is the Emailer (Course Settings > Emailer). There is no separate announcements
+feature; "Announcements" is only a discussion topic icon. It is on the default instructor role only.
+
+- It covers reading and creating `email_batches` and `emails` (reading too, because the Emailer
+  reads a new batch back to get its id), the Emailer menu item, and the Emailer page, which sends
+  people without it to the course home page.
+- Changing and deleting emails and batches stay instructor-only. The Emailer only creates and
+  reads, and neither table records who sent a batch.
+- A new email must go to someone enrolled in its class (a `user_roles` row in the same
+  class), and its batch must belong to the same class. The `email_notifications()` trigger turns
+  each email into a notification for its recipient. This limits the recipient only: Cc and
+  Reply-to can be any address, as the Emailer allows.
+- Discussion topics are not part of it.
+
+**Pages: hide the button, or send the person away.** A page whose only purpose is one capability's
+action sends people without it somewhere useful: its server `layout.tsx` checks
+`userHasClassCapability(course_id, "...")` (in `lib/ssrUtils.ts`) and calls `redirect`, as `/new` and
+`/edit` do for `manage_assignments` and `/rubric` does for `manage_rubrics`. A page that also shows
+things to look at stays open and only hides its action buttons with `useCapability`, as Manage
+Groups does for `publish_groups`. `RequireManageReviews` is an older client-side version of the
+redirect, used by Bulk Assign and Reassign.
+
+## Groups: publish_groups and manage_groups
+
+Manage Groups uses two capabilities. Both are on the default instructor role only.
+
+- **`publish_groups`**: stage group changes (Create New Group, Bulk Create, Tweak a Group, Edit
+  Group, Move Student) and publish them. For now only the screen checks it: a TA with
+  `publish_groups` can stage changes and press Publish, but `publish_assignment_group_changes`
+  still lets only instructors (and site admins) publish, until #1297 moves it to the capability.
+- **`manage_groups`**: changes that save at once, without staging: set a group's mentor, rename a
+  group (the `assignment_groups` UPDATE policy; the page has no Rename button), and Copy Groups
+  from another assignment (`copy_groups_from_assignment`). A group can't move to another
+  assignment or class, for anyone. Copy also turns off the per-row repo
+  sync in `sync_repos_after_assignment_group_change` and syncs once at the end; that trigger honors
+  the flag for a caller with `manage_groups`.
+
+Anyone enrolled in a class can read that class's group memberships (`assignment_groups_members`).
+Before `20261122210600` the policy compared a class to itself, so it let anyone enrolled in any
+class read every class's memberships.
 
 ## Roster: manage_roster
 

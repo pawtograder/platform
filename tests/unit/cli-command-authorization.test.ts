@@ -31,6 +31,7 @@ const COMMANDS_DIR = join(__dirname, "../../supabase/functions/cli/commands");
 const AUTHZ_CALLS = [
   "assertUserCanAccessClass",
   "assertUserIsClassInstructor",
+  "assertUserHasClassCapability",
   // classes.list has no single class to assert against, so it filters instead.
   "listAccessibleClassIds"
 ];

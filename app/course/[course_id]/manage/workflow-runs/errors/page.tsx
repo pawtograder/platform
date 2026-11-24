@@ -1,4 +1,6 @@
 "use client";
+import { repoWebUrl, useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
+import { useAssignments } from "@/hooks/useCourseController";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 
 import { Box, Heading, Text, HStack, Button, Link, Spinner, Input } from "@chakra-ui/react";
@@ -38,6 +40,7 @@ type WorkflowRunErrorRow = GetResult<
         repositories!repository_id(
           id,
           repository,
+          git_provider,
           synced_handout_sha
         ),
         submissions!submission_id(
@@ -64,6 +67,8 @@ type WorkflowRunErrorRow = GetResult<
         )`
 >;
 function WorkflowErrorsTable() {
+  const forgejoHost = useForgejoInstanceUrl();
+  const assignments = useAssignments();
   const { course_id } = useParams();
 
   // Memoize server filters to prevent unnecessary API calls
@@ -192,8 +197,16 @@ function WorkflowErrorsTable() {
           if (!repoName) return <Text fontSize="sm">-</Text>;
 
           const sha = submission?.sha;
-          const githubUrl = sha ? `https://github.com/${repoName}/commit/${sha}` : `https://github.com/${repoName}`;
+          const githubUrl = repoWebUrl(
+            (repository?.git_provider ?? assignments.find((a) => a.id === submission?.assignment_id)?.git_provider) ===
+              "forgejo"
+              ? forgejoHost
+              : "https://github.com",
+            repoName,
+            sha ? `/commit/${sha}` : ""
+          );
 
+          if (!githubUrl) return <Text fontSize="sm">{repoName.split("/").pop()}</Text>;
           return (
             <Link as={NextLink} href={githubUrl} target="_blank" fontSize="sm" _hover={{ textDecoration: "underline" }}>
               {repoName.split("/").pop()}
@@ -342,7 +355,7 @@ function WorkflowErrorsTable() {
         }
       }
     ],
-    [course_id]
+    [course_id, forgejoHost, assignments]
   );
 
   const serverOrderBys = useMemo(
@@ -377,6 +390,7 @@ function WorkflowErrorsTable() {
       repositories!repository_id(
         id,
         repository,
+        git_provider,
         synced_handout_sha
       ),
       submissions!submission_id(
