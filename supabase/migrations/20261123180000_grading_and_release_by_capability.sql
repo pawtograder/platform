@@ -44,7 +44,9 @@
 --      unchanged from 20260417120000.
 --   5. Comment UPDATE (edit, soft delete) on the same three tables: release_grades replaces the
 --      instructor check, and grade_submissions replaces the grader check inside the unreleased
---      branch. The rest is copied unchanged from 20260520120000.
+--      branch. Both branches now also require the comment's review, if it has one, to be in the
+--      comment's class, before and after the edit. The rest is copied unchanged from
+--      20260520120000.
 --   6. check_grading_completion_eligibility and complete_eligible_grading_reviews (Finalize
 --      Grading) check grade_submissions instead of authorizeforclassgrader. Each is the body from
 --      20260303140000 with only that check changed.
@@ -59,8 +61,8 @@
 --   * A grader on a custom role with release_grades turned on can release and unrelease grades
 --     (including Release all and Unrelease all) and change a released grade the way an instructor
 --     can: edit any review and its tweaks, and add, edit or delete any comment or rubric check.
---     That reaches only their own class: a comment that names their class but points at another
---     class's review is refused.
+--     That reaches only their own class: adding a comment that names their class but points at
+--     another class's review is refused, and so is editing one to point there.
 --   * A custom role with grade_submissions turned off can't grade, except an unreleased review
 --     they are assigned to.
 --   * Students are unchanged: self-review and their own submission comments use the assignee and
@@ -517,13 +519,27 @@ DROP POLICY IF EXISTS "Release managers always; others only own comment if revie
 DROP POLICY IF EXISTS "Release managers always; others only own comment if review not released" ON public.submission_file_comments;
 DROP POLICY IF EXISTS "Release managers always; others only own comment if review not released" ON public.submission_artifact_comments;
 
+-- Both branches require the comment's review to be in the comment's class, before and after the
+-- edit. The capabilities are checked in the comment's class_id, so without this a TA with
+-- release_grades in one class could edit a comment there to point at another class's review.
 CREATE POLICY "Release managers always; others only own comment if review not released"
 ON public.submission_comments
 AS PERMISSIVE
 FOR UPDATE
 TO authenticated
 USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+  (
+    class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+    AND (
+      submission_review_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM public.submission_reviews sr
+        WHERE sr.id = submission_comments.submission_review_id
+          AND sr.class_id = submission_comments.class_id
+      )
+    )
+  )
   OR (
     public.authorizeforprofile(author)
     AND (
@@ -532,6 +548,7 @@ USING (
         SELECT 1
         FROM public.submission_reviews sr
         WHERE sr.id = submission_comments.submission_review_id
+          AND sr.class_id = submission_comments.class_id
           AND sr.released = false
           AND (
             submission_comments.class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
@@ -542,7 +559,18 @@ USING (
   )
 )
 WITH CHECK (
-  class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+  (
+    class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+    AND (
+      submission_review_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM public.submission_reviews sr
+        WHERE sr.id = submission_comments.submission_review_id
+          AND sr.class_id = submission_comments.class_id
+      )
+    )
+  )
   OR (
     public.authorizeforprofile(author)
     AND (
@@ -551,6 +579,7 @@ WITH CHECK (
         SELECT 1
         FROM public.submission_reviews sr
         WHERE sr.id = submission_comments.submission_review_id
+          AND sr.class_id = submission_comments.class_id
           AND sr.released = false
           AND (
             submission_comments.class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
@@ -567,7 +596,18 @@ AS PERMISSIVE
 FOR UPDATE
 TO authenticated
 USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+  (
+    class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+    AND (
+      submission_review_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM public.submission_reviews sr
+        WHERE sr.id = submission_file_comments.submission_review_id
+          AND sr.class_id = submission_file_comments.class_id
+      )
+    )
+  )
   OR (
     public.authorizeforprofile(author)
     AND (
@@ -576,6 +616,7 @@ USING (
         SELECT 1
         FROM public.submission_reviews sr
         WHERE sr.id = submission_file_comments.submission_review_id
+          AND sr.class_id = submission_file_comments.class_id
           AND sr.released = false
           AND (
             submission_file_comments.class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
@@ -586,7 +627,18 @@ USING (
   )
 )
 WITH CHECK (
-  class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+  (
+    class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+    AND (
+      submission_review_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM public.submission_reviews sr
+        WHERE sr.id = submission_file_comments.submission_review_id
+          AND sr.class_id = submission_file_comments.class_id
+      )
+    )
+  )
   OR (
     public.authorizeforprofile(author)
     AND (
@@ -595,6 +647,7 @@ WITH CHECK (
         SELECT 1
         FROM public.submission_reviews sr
         WHERE sr.id = submission_file_comments.submission_review_id
+          AND sr.class_id = submission_file_comments.class_id
           AND sr.released = false
           AND (
             submission_file_comments.class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
@@ -611,7 +664,18 @@ AS PERMISSIVE
 FOR UPDATE
 TO authenticated
 USING (
-  class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+  (
+    class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+    AND (
+      submission_review_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM public.submission_reviews sr
+        WHERE sr.id = submission_artifact_comments.submission_review_id
+          AND sr.class_id = submission_artifact_comments.class_id
+      )
+    )
+  )
   OR (
     public.authorizeforprofile(author)
     AND (
@@ -620,6 +684,7 @@ USING (
         SELECT 1
         FROM public.submission_reviews sr
         WHERE sr.id = submission_artifact_comments.submission_review_id
+          AND sr.class_id = submission_artifact_comments.class_id
           AND sr.released = false
           AND (
             submission_artifact_comments.class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
@@ -630,7 +695,18 @@ USING (
   )
 )
 WITH CHECK (
-  class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+  (
+    class_id IN (SELECT public.user_class_ids_with_capability('release_grades'))
+    AND (
+      submission_review_id IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM public.submission_reviews sr
+        WHERE sr.id = submission_artifact_comments.submission_review_id
+          AND sr.class_id = submission_artifact_comments.class_id
+      )
+    )
+  )
   OR (
     public.authorizeforprofile(author)
     AND (
@@ -639,6 +715,7 @@ WITH CHECK (
         SELECT 1
         FROM public.submission_reviews sr
         WHERE sr.id = submission_artifact_comments.submission_review_id
+          AND sr.class_id = submission_artifact_comments.class_id
           AND sr.released = false
           AND (
             submission_artifact_comments.class_id IN (SELECT public.user_class_ids_with_capability('grade_submissions'))
@@ -650,11 +727,11 @@ WITH CHECK (
 );
 
 COMMENT ON POLICY "Release managers always; others only own comment if review not released" ON public.submission_comments IS
-  'release_grades: any comment in the class, released or not. grade_submissions: own rows on an unreleased review. Students: own rows while the review is unreleased and not completed. NULL submission_review_id keeps prior behavior for non-review comments.';
+  'release_grades: any comment in the class, released or not, whose review (if any) is in the same class. grade_submissions: own rows on an unreleased review. Students: own rows while the review is unreleased and not completed. NULL submission_review_id keeps prior behavior for non-review comments.';
 COMMENT ON POLICY "Release managers always; others only own comment if review not released" ON public.submission_file_comments IS
-  'release_grades: any comment in the class, released or not. grade_submissions: own rows on an unreleased review. Students: own rows while the review is unreleased and not completed. NULL submission_review_id keeps prior behavior for non-review comments.';
+  'release_grades: any comment in the class, released or not, whose review (if any) is in the same class. grade_submissions: own rows on an unreleased review. Students: own rows while the review is unreleased and not completed. NULL submission_review_id keeps prior behavior for non-review comments.';
 COMMENT ON POLICY "Release managers always; others only own comment if review not released" ON public.submission_artifact_comments IS
-  'release_grades: any comment in the class, released or not. grade_submissions: own rows on an unreleased review. Students: own rows while the review is unreleased and not completed. NULL submission_review_id keeps prior behavior for non-review comments.';
+  'release_grades: any comment in the class, released or not, whose review (if any) is in the same class. grade_submissions: own rows on an unreleased review. Students: own rows while the review is unreleased and not completed. NULL submission_review_id keeps prior behavior for non-review comments.';
 
 -- ---------------------------------------------------------------------------
 -- 6. Finalize Grading

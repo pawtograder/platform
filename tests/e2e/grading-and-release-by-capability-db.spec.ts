@@ -800,6 +800,66 @@ test.describe("grading and releasing grades follow grade_submissions and release
     expect((await review(subB.grading_review_id)).released).toBe(false);
   });
 
+  test("a comment can't be edited to point at another class's review", async () => {
+    const subA = await newSubmission();
+    const subB = await newSubmission(classB.id, assignmentB.id);
+    const headTaCheck = await addCheckAsService(subA, headTa);
+    const graderCheck = await addCheckAsService(subA, plainGrader);
+    const { data: lineComment, error: lineError } = await supabase
+      .from("submission_file_comments")
+      .insert({
+        submission_id: subA.submission_id,
+        submission_file_id: subA.file_id,
+        submission_review_id: subA.grading_review_id,
+        class_id: classA.id,
+        author: headTa.private_profile_id,
+        comment: "Line comment",
+        line: 1,
+        released: false,
+        eventually_visible: true
+      })
+      .select("id")
+      .single();
+    expect(lineError).toBeNull();
+
+    // The Head TA holds release_grades in class A, and the comments stay in class A. Before, the
+    // release_grades branch checked only the comment's class_id, so these moved onto class B's grade.
+    const toClassB = { submission_review_id: subB.grading_review_id };
+    expectRefused(
+      await headTaClient.from("submission_comments").update(toClassB).eq("id", headTaCheck).select("id"),
+      "a class A Head TA moving a rubric check onto a class B review"
+    );
+    expectRefused(
+      await headTaClient.from("submission_file_comments").update(toClassB).eq("id", lineComment!.id).select("id"),
+      "a class A Head TA moving a line comment onto a class B review"
+    );
+    // The author branch (grade_submissions, own comment, unreleased review) is checked the same way.
+    expectRefused(
+      await graderClient.from("submission_comments").update(toClassB).eq("id", graderCheck).select("id"),
+      "a class A grader moving their own rubric check onto a class B review"
+    );
+
+    for (const [table, id] of [
+      ["submission_comments", headTaCheck],
+      ["submission_comments", graderCheck],
+      ["submission_file_comments", lineComment!.id]
+    ] as const) {
+      const { data: row, error } = await supabase.from(table).select("submission_review_id").eq("id", id).single();
+      expect(error).toBeNull();
+      expect(row!.submission_review_id, `${table} ${id} still points at class A's review`).toBe(subA.grading_review_id);
+    }
+
+    // Editing the comment in place still works.
+    const { data: edited, error: editError } = await headTaClient
+      .from("submission_comments")
+      .update({ comment: "Edited by the Head TA" })
+      .eq("id", headTaCheck)
+      .select("id");
+    expect(editError).toBeNull();
+    expect(edited).toHaveLength(1);
+    expect((await comment(headTaCheck)).comment).toBe("Edited by the Head TA");
+  });
+
   test("a custom role without grade_submissions can't grade or finalize", async () => {
     const sub = await newSubmission();
     expectRefused(
