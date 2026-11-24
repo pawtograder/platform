@@ -1116,8 +1116,71 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     );
 
     try {
+      const name = `Broadcast role ${Date.now()}`;
+      const { data: role, error } = await instructor
+        .from("class_roles")
+        .insert({ class_id: classF.id, name })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      const roleNotes = (operation: string) =>
+        notes.filter((n) => n.table === "class_roles" && n.operation === operation);
+      await expect.poll(() => roleNotes("INSERT").length).toBe(1);
+      expect(
+        (
+          await instructor
+            .from("class_roles")
+            .update({ name: `${name} renamed` })
+            .eq("id", role!.id)
+        ).error
+      ).toBeNull();
+      await expect.poll(() => roleNotes("UPDATE").length).toBe(1);
+      // Make sure the role holds at least one capability, so the loop below checks a DELETE note.
+      expect(
+        (
+          await instructor
+            .from("role_capabilities")
+            .upsert(
+              { role_id: role!.id, capability: "manage_assignments" },
+              { onConflict: "role_id,capability", ignoreDuplicates: true }
+            )
+        ).error
+      ).toBeNull();
+      const { data: copied, error: copiedError } = await instructor
+        .from("role_capabilities")
+        .select("capability")
+        .eq("role_id", role!.id);
+      expect(copiedError).toBeNull();
+      expect(copied?.length ?? 0).toBeGreaterThan(0);
+      expect((await instructor.from("class_roles").delete().eq("id", role!.id)).error).toBeNull();
+      for (const row of copied ?? []) {
+        await expect
+          .poll(() =>
+            notes.some(
+              (note) =>
+                note.table === "role_capabilities" &&
+                note.operation === "DELETE" &&
+                (note.data as { role_id: number; capability: string })?.role_id === role!.id &&
+                (note.data as { capability: string }).capability === row.capability
+            )
+          )
+          .toBe(true);
+      }
+      await expect.poll(() => roleNotes("DELETE").length).toBe(1);
+      for (const note of [...roleNotes("INSERT"), ...roleNotes("UPDATE"), ...roleNotes("DELETE")]) {
+        expect(note).toMatchObject({ type: "staff_data_change", class_id: classF.id, row_id: String(role!.id) });
+        expect(note.data).toMatchObject({ id: role!.id });
+      }
+
+      // Leave out the role created and deleted above, which also sent role_capabilities notes.
       const capabilityNotes = (operation: string) =>
-        notes.filter((n) => n.table === "role_capabilities" && n.operation === operation);
+        notes.filter(
+          (n) =>
+            n.table === "role_capabilities" &&
+            n.operation === operation &&
+            (n.data as { role_id?: number })?.role_id !== role!.id &&
+            (n.data as { capability?: string })?.capability === "manage_assignments"
+        );
 
       expect(
         (await instructor.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "manage_assignments" }))
@@ -2478,6 +2541,15 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
     expect(stillThere?.title).toBe("Other class survey");
   });
 
+  test("a survey cannot move to another class, even for a manager of both", async () => {
+    const survey = await surveyFor("Stays in its class", instructorS.public_profile_id);
+    const otherClass = await createClass({ name: "E2E Surveys Move Target" });
+    const { error } = await supabase.from("surveys").update({ class_id: otherClass.id }).eq("id", survey.id);
+    expect(error?.message ?? "").toMatch(/Cannot move a survey to another class/);
+    const { data: still } = await supabase.from("surveys").select("class_id").eq("id", survey.id).single();
+    expect(still?.class_id).toBe(classS.id);
+  });
+
   test("a grader with manage_surveys manages assignments for a survey in the same class", async () => {
     const survey = await surveyFor("Assignable survey", instructorS.public_profile_id);
     const student = await createUserInClass({ role: "student", class_id: classS.id });
@@ -2704,6 +2776,42 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
     expect(repaired).toEqual([{ survey_id: surveyA.id }]);
   });
 
+  test("create_survey_assignments replaces only the survey's own class rows", async () => {
+    // A legacy row can sit in class B while pointing at a class A survey. A manager in A must
+    // not delete it through the SECURITY DEFINER function, and must hear about it if it blocks.
+    const classB = await createClass({ name: "E2E Surveys Replace-Scope B" });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const studentA = await createUserInClass({ role: "student", class_id: classS.id });
+    const survey = await surveyFor("Replace scope survey", instructorS.public_profile_id);
+    const { data: legacy, error: legacyError } = await supabase
+      .from("survey_assignments")
+      .insert({ survey_id: survey.id, class_id: classB.id, profile_id: studentB.private_profile_id })
+      .select("id")
+      .single();
+    expect(legacyError).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+    const { error: replaceError } = await client.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [studentA.private_profile_id]
+    });
+    expect(replaceError).toBeNull();
+    const { data: legacyStill } = await supabase.from("survey_assignments").select("id").eq("id", legacy!.id);
+    expect(legacyStill ?? [], "the class B row survives a class A replacement").toHaveLength(1);
+    const { data: ownRows } = await supabase
+      .from("survey_assignments")
+      .select("profile_id")
+      .eq("survey_id", survey.id)
+      .eq("class_id", classS.id);
+    expect(ownRows).toEqual([{ profile_id: studentA.private_profile_id }]);
+
+    const { error: blockedError } = await client.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [studentB.private_profile_id]
+    });
+    expect(blockedError?.message ?? "").toMatch(/blocks this list/);
+  });
+
   test("can_manage_survey_in_class returns true only for manage_surveys holders on matching surveys", async () => {
     const classB = await createClass({ name: "E2E Surveys Helper B" });
     const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
@@ -2804,6 +2912,20 @@ test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
       .select("id")
       .single();
     expect(othersError).toBeNull();
+    // Delete is creator-only, so a manage_surveys holder must not be able to become the creator.
+    const { error: takeOverError } = await client
+      .from("survey_templates")
+      .update({ created_by: withCap.private_profile_id })
+      .eq("id", othersTemplate!.id);
+    expect(takeOverError?.message ?? "", "changing created_by on someone else's template").toMatch(
+      /Cannot change created_by of a survey template/
+    );
+    const { data: stillCreator } = await supabase
+      .from("survey_templates")
+      .select("created_by")
+      .eq("id", othersTemplate!.id)
+      .single();
+    expect(stillCreator?.created_by).toBe(instructorS.private_profile_id);
     const { data: nonCreatorDelete, error: nonCreatorDeleteError } = await client
       .from("survey_templates")
       .delete()

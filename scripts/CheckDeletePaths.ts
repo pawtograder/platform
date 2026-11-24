@@ -277,12 +277,13 @@ const FOREIGN_KEYS: Record<
 /**
  * SQL functions allowed to delete from repositories or submissions. Each must name every table
  * that references each of its `targets` with NO ACTION/RESTRICT, except the ones in `leaves`:
- * tables it relies on to block the delete instead of clearing them.
+ * tables it relies on to block the delete instead of clearing them. Callers that delegate
+ * repository deletion to delete_repository_rows only list submissions here.
  */
 const SQL_DELETE_PATHS: Record<string, { targets: Target[]; leaves?: string[] }> = {
   delete_repository_rows: { targets: ["repositories"], leaves: ["submissions"] },
-  cleanup_individual_repositories_for_assignment: { targets: ["repositories", "submissions"] },
-  delete_assignment_with_all_data: { targets: ["repositories", "submissions"] }
+  cleanup_individual_repositories_for_assignment: { targets: ["submissions"] },
+  delete_assignment_with_all_data: { targets: ["submissions"] }
 };
 
 /**
@@ -292,12 +293,12 @@ const SQL_DELETE_PATHS: Record<string, { targets: Target[]; leaves?: string[] }>
  */
 const TS_DELETE_PATHS: Record<string, string> = {
   "supabase/functions/autograder-create-submission/index.ts": "safeCleanupRejectedSubmission",
-  "supabase/functions/github-repo-webhook/index.ts": "cleanupPushDirectSubmission"
+  "supabase/functions/_shared/PushDirectSubmission.ts": "cleanupPushDirectSubmission"
 };
 
 const SOURCE_DIRS = ["app", "components", "hooks", "lib", "utils", "scripts", "supabase/functions"];
 const TS_DELETE = /\.from\(\s*["'](repositories|submissions)["']\s*\)\s*\.delete\(/g;
-const SQL_DELETE = /\bdelete\s+from\s+(?:"?public"?\.)?"?(repositories|submissions)"?(?![\w"])/i;
+const SQL_DELETE = /\bdelete\s+from\s+(?:"?public"?\.)?"?(repositories|submissions)"?(?![\w"])/gi;
 
 const ON_DELETE: Record<string, OnDelete> = {
   a: "no action",
@@ -417,12 +418,14 @@ async function main() {
       }
     }
     for (const [name, srcs] of bodies) {
-      if (SQL_DELETE_PATHS[name]) continue;
-      const match = srcs.map((src) => SQL_DELETE.exec(src)).find((m) => m);
-      if (match) {
+      const directDeleteTarget = srcs
+        .flatMap((src) => [...src.matchAll(SQL_DELETE)])
+        .map((match) => match[1].toLowerCase() as Target)
+        .find((target) => !SQL_DELETE_PATHS[name]?.targets.includes(target));
+      if (directDeleteTarget) {
         errors.push(
-          `public.${name} deletes from ${match[1]} directly. ` +
-            (match[1] === "repositories"
+          `public.${name} deletes from ${directDeleteTarget} directly. ` +
+            (directDeleteTarget === "repositories"
               ? "Call public.delete_repository_rows instead"
               : "Register it in SQL_DELETE_PATHS in scripts/CheckDeletePaths.ts")
         );

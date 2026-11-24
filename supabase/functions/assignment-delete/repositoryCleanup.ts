@@ -76,8 +76,43 @@ export function parseGitHubRepoFullName(value: string | null | undefined): {
   };
 }
 
+/**
+ * The rule both hosts' delete preflights use to tell a student repo with work in it from one generated from the
+ * handout. `shasNewestFirst` is the newest page of its default branch. A repo with more than one commit holds
+ * student work unless its oldest commit is the handout's oldest or the handout commit last synced into it.
+ */
+export function hasOnlyHandoutCommits(
+  shasNewestFirst: readonly string[],
+  handoutOldestSha: string | null | undefined,
+  syncedHandoutSha: string | null | undefined
+): boolean {
+  if (shasNewestFirst.length <= 1) return true;
+  const oldest = shasNewestFirst[shasNewestFirst.length - 1];
+  return oldest === handoutOldestSha || oldest === syncedHandoutSha;
+}
+
+export function modifiedRepositoryMessage(repository: string): string {
+  return (
+    `Cannot delete assignment: Repository ${repository} has been modified beyond the template. ` +
+    `Please manually delete modified repositories if you want to proceed.`
+  );
+}
+
 export function selectGitHubCleanupStrategy(targetCount: number): GitHubCleanupStrategy {
   return targetCount > ASYNC_ARCHIVE_REPO_THRESHOLD ? "archive_asynchronously" : "delete_synchronously";
+}
+
+/**
+ * The strategy for what the delete RPC reported: GitHub and Forgejo repositories share one budget, so a
+ * mixed assignment is counted across both hosts.
+ */
+export function selectCleanupStrategyForDeleted(deleteResult: {
+  github_repositories?: unknown;
+  forgejo_repositories?: unknown;
+}): { strategy: GitHubCleanupStrategy; github: GitHubRepoTarget[]; forgejo: GitHubRepoTarget[] } {
+  const github = parseDeletedGitHubRepositories(deleteResult.github_repositories);
+  const forgejo = parseDeletedGitHubRepositories(deleteResult.forgejo_repositories);
+  return { strategy: selectGitHubCleanupStrategy(github.length + forgejo.length), github, forgejo };
 }
 
 function targetKey(org: string, repo: string) {

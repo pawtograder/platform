@@ -6,9 +6,12 @@ import { RealtimeChannelManager, type ClassesRealtimeUpdate } from "./RealtimeCh
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
-type TablesThatHaveAnIDField = {
-  [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
-}[keyof DatabaseTableTypes];
+type TablesThatHaveAnIDField =
+  | {
+      [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
+    }[keyof DatabaseTableTypes]
+  | "role_capabilities"
+  | "capabilities";
 
 // Extend known broadcast tables to include row-level recalculation state
 type KnownBroadcastTables = TablesThatHaveAnIDField | "gradebook_row_recalc_state";
