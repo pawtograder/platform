@@ -127,6 +127,28 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+The side menu has three pages:
+
+- Create / Edit Role: create a copy of Grader, or pick a role to rename, delete, or edit its capabilities. The default Grader role cannot be renamed or deleted. Roles with active or disabled members cannot be deleted.
+- Staff & Roles: the Staff tab lists active graders with a role drop-down. Moving a grader requires an instructor. The Roles tab lists Grader and custom roles with active membership counts and any removed members.
+- Roles & Capabilities: pick a role, then toggle capabilities grouped by app area and section. Each info button explains the action and where to find it. Changes save immediately. The selected role is linkable with `?role=<id>`.
+
+The typed catalog in `capabilityCatalog.ts` includes pending capabilities, but shows only rows in the database. Unknown capabilities appear under Other with their database description. `manage_roles` is always hidden. Enrollments shows each grader's staff role using the same live controllers; its Edit Role dialog still changes the app role.
+
+The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
+creation, renames, deletions and capability changes arrive as row updates on the staff channel.
+Enrollments share the course controller's `userRolesWithProfiles` cache. Controllers page through
+all rows and catch up when the staff channel reconnects.
+
+Updates and deletes ask for the rows they changed, because a policy can refuse those without an
+error; the page then reports the change as not saved and puts the control back. A refused insert
+fails with an error, so creating a role does not ask for rows back.
+
 ## A capability that also decides who can see something
 
 Most capabilities are actions, and any staff member can still see what they saw before. One

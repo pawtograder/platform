@@ -859,6 +859,7 @@
     "fks": [{ "name": "forgejo_class_staff_teams_class_id_fkey", "columns": ["class_id"], "ref": "classes" }]
   },
   "forgejo_group_repo_revocations": { "kind": "table", "fks": [] },
+  "forgejo_repo_archives": { "kind": "table", "fks": [] },
   "forgejo_repo_tokens": {
     "kind": "table",
     "fks": [{ "name": "forgejo_repo_tokens_user_id_fkey", "columns": ["user_id"], "ref": "users" }]
@@ -1637,6 +1638,31 @@
   "pg_buffercache": { "kind": "view", "fks": [] },
   "pr_base_tree_cache": { "kind": "table", "fks": [] },
   "profiles": { "kind": "table", "fks": [] },
+  "push_direct_promotion_versions": {
+    "kind": "table",
+    "fks": [
+      {
+        "name": "push_direct_promotion_versions_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignment_overview"
+      },
+      {
+        "name": "push_direct_promotion_versions_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments"
+      },
+      {
+        "name": "push_direct_promotion_versions_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "assignments_with_effective_due_dates"
+      },
+      {
+        "name": "push_direct_promotion_versions_assignment_id_fkey",
+        "columns": ["assignment_id"],
+        "ref": "submissions_with_grades_for_assignment_and_regression_test"
+      }
+    ]
+  },
   "realtime_channel_subscriptions": { "kind": "table", "fks": [] },
   "repositories": {
     "kind": "table",
