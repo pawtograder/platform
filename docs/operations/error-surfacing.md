@@ -17,7 +17,7 @@ rows instead of failing it.
 | #1296 | merged (`454de927`)               | `TableController` does the same for `update`, `delete` and `hardDelete`, and puts the row back in its cache                                                                                                                       |
 | #1246 | merged (`3a9bbfe4`)               | One mapper for every role (`getUserFacingErrorMessage`), and `reportUnexpectedError` with its list of expected codes                                                                                                              |
 | #1247 | open                              | Toasts across the app use the mapper, staff screens pass the viewer's role, the mapper keeps a database function's own 42501, 23505 and 23514 message and filters Postgres's own text, and two ESLint rules ban the old fallbacks |
-| #1297 | open (migration `20261123150000`) | `publish_assignment_group_changes` refuses with 42501, its publish handler expects that 42501, and Publish Changes needs an instructor or admin                                                                                   |
+| #1297 | open (migration `20261124120001`) | `publish_assignment_group_changes` refuses with 42501, its publish handler expects that 42501, and Publish Changes needs an instructor or admin                                                                                   |
 
 Staging has #1246: the mapper takes a role, and `reportUnexpectedError` is there with its list of
 expected codes. Until #1247 merges, staging differs from the rest of this page in these ways:
@@ -184,10 +184,12 @@ request.
 
 ## Checking it by hand
 
-Whether the publish migration from #1297 is applied, and whether the function raises 42501:
+Whether the publish migration from #1297 ran, and whether the function raises 42501. The version
+query only says the migration ran: it still finds `20261124120001` after a rollback (see Rollback).
+The `prosrc LIKE` query says whether the function raises 42501 now:
 
 ```sql
-SELECT version FROM supabase_migrations.schema_migrations WHERE version = '20261123150000';
+SELECT version FROM supabase_migrations.schema_migrations WHERE version = '20261124120001';
 
 SELECT prosrc LIKE '%insufficient_privilege%' AS raises_42501
 FROM pg_proc
@@ -231,8 +233,11 @@ from Prior Assignment doesn't call this function: since #1401 anyone with `manag
 
 **The same refusal with no "who to ask" sentence.** The database raised P0001. On a client with
 #1247 but not #1297, this is expected: Publish Changes shows for anyone with `publish_groups`, and
-the function refuses anyone who isn't an instructor or admin with P0001. Once #1297 is deployed, it
-means the publish migration isn't applied. Run the checks in Checking it by hand.
+the function refuses anyone who isn't an instructor or admin with P0001. It is also expected after
+someone rolls the publish migration back (see Rollback). Otherwise, once #1297 is deployed, the
+function should raise 42501. To tell whether it does, run the `prosrc LIKE` query in Checking it by
+hand, not the version query: a rollback re-creates the old function in a new migration, so
+`20261124120001` stays recorded in `schema_migrations` after it.
 
 **The publish refusal shows "Unknown error".** The client is from before #1247 (staging today, or
 after an app rollback). Its publish handler doesn't call the mapper, so a P0001 or 42501 refusal
@@ -273,9 +278,12 @@ and pass `{ role: errorRole }` on a screen staff see.
 
 Migrations are forward-only (see [Rollback](./rollback.md)). To go back to the P0001 refusal, add a
 migration that re-creates `publish_assignment_group_changes` from
-`20261118140200_forgejo_group_repos.sql`, the definition `20261123150000` copied. The client handles
-both codes: P0001 shows the function's message as raised, and 42501 shows it as a sentence with the
-"who to ask" sentence.
+`20261118140200_forgejo_group_repos.sql`, the definition `20261124120001` copied. The rollback
+re-creates the old function in a new migration, so `20261124120001` stays recorded in
+`supabase_migrations.schema_migrations` and the version query in Checking it by hand still finds it.
+To tell whether the function still raises 42501, use the `prosrc LIKE` query instead. After a
+rollback, a P0001 publish refusal is expected. The client handles both codes: P0001 shows the
+function's message as raised, and 42501 shows it as a sentence with the "who to ask" sentence.
 
 Rolling the app back while the migration stays is safe. The publish refusal looks different on each
 client version, so the toast and the Sentry event tell you which one a user has:
