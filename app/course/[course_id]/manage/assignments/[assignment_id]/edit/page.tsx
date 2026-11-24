@@ -676,7 +676,7 @@ export default function EditAssignment() {
               .eq("id", syncTarget.assignmentId)
               .eq("has_autograder", values.has_autograder);
             if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
-            const detail = syncError instanceof Error ? syncError.message : String(syncError);
+            const detail = getUserFacingErrorMessage(syncError, { role: errorRole });
             if (rollbackError) {
               toastAutograderSyncFailed(detail, syncTarget);
             } else {
