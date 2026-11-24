@@ -27,6 +27,15 @@
  * capabilities. A new custom role starts as a copy of the default grader role, and instructors can
  * edit the default grader role. This replaces step 2's "custom roles only add" rule.
  *
+ * 20261124130000_flashcards_manage_by_capability.sql: creating, editing and deleting flashcard decks
+ * and cards follow manage_flashcards. Graders held that access before, so it is on the default grader
+ * role and every custom role. The old creator OR on deck/card writes is gone, so a creator without
+ * the capability (or a demoted former grader) cannot manage decks they made.
+ *
+ * 20261124130100_surveys_polls_by_capability.sql: survey staff writes follow manage_surveys
+ * (instructor only); live-poll staff writes follow run_polls (on the default grader role and every
+ * custom role, since graders could run polls before).
+ *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
 import { addDays } from "date-fns";
@@ -43,13 +52,21 @@ import {
 
 const SEEDED_CAPABILITIES = [
   "manage_assignments",
+  "manage_flashcards",
   "manage_gradebook",
+  "manage_groups",
   "manage_review_assignments",
   "manage_roles",
   "manage_roster",
+  "manage_rubrics",
   "manage_student_repositories",
-  "publish_groups"
+  "manage_surveys",
+  "publish_groups",
+  "run_polls",
+  "send_announcements"
 ];
+/** Capabilities seed_default_class_roles() puts on the default grader role (not only instructor). */
+const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards", "run_polls"];
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
 async function defaultRoles(class_id: number) {
@@ -95,14 +112,14 @@ test.describe("class roles and capabilities", () => {
 
   const roleFor = (roles: typeof rolesA, app_role: string) => roles.find((r) => r.default_for === app_role)!;
 
-  test("a new class gets default roles, and only instructor holds the seeded capabilities", async () => {
+  test("a new class gets default roles, and instructor holds every seeded capability", async () => {
     expect(rolesA.map((r) => r.default_for).sort()).toEqual(DEFAULT_ROLES);
     const capabilitiesOf = (app_role: string) =>
       roleFor(rolesA, app_role)
         .role_capabilities.map((rc) => rc.capability)
         .sort();
     expect(capabilitiesOf("instructor")).toEqual(SEEDED_CAPABILITIES);
-    expect(capabilitiesOf("grader")).toEqual([]);
+    expect(capabilitiesOf("grader")).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect(capabilitiesOf("student")).toEqual([]);
     expect(capabilitiesOf("admin")).toEqual([]);
   });
@@ -200,7 +217,12 @@ test.describe("class roles and capabilities", () => {
 
     const after = await defaultRoles(classA.id);
     expect(after.map((r) => r.name).sort(), "no role was added").toEqual(DEFAULT_ROLES);
-    expect(roleFor(after, "grader").role_capabilities, "grader gained no capability").toHaveLength(0);
+    expect(
+      roleFor(after, "grader")
+        .role_capabilities.map((rc) => rc.capability)
+        .sort(),
+      "grader capabilities unchanged by the attempt"
+    ).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect((await userRole(graderA)).class_role_id, "grader is still on the grader role").toBe(
       roleFor(rolesA, "grader").id
     );
@@ -220,7 +242,7 @@ test.describe("class roles and capabilities", () => {
       );
     expect(ownCapsError).toBeNull();
     expect(ownCaps ?? [], "a member must read their class's capability mappings").toHaveLength(
-      SEEDED_CAPABILITIES.length
+      SEEDED_CAPABILITIES.length + GRADER_SEEDED_CAPABILITIES.length
     );
 
     // RLS hides rows instead of raising, so check the error first: a null result from an error must not pass.
@@ -334,7 +356,8 @@ test.describe("custom class roles", () => {
       .from("role_capabilities")
       .insert({ role_id: roleId, capability: "manage_review_assignments" });
     expect(addError).toBeNull();
-    expect(await roleCapabilities(roleId)).toEqual(["manage_review_assignments"]);
+    // The copy trigger already put grader-seeded capabilities on the new role from the default grader role.
+    expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "manage_review_assignments", "run_polls"]);
 
     const { data: removed, error: removeError } = await instructor
       .from("role_capabilities")
@@ -433,13 +456,13 @@ test.describe("custom class roles", () => {
       name: graderRole.name,
       default_for: "grader"
     });
-    expect(await roleCapabilities(graderRole.id)).toEqual([]);
+    expect(await roleCapabilities(graderRole.id)).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect(await roleCapabilities(instructorRole.id)).toEqual(SEEDED_CAPABILITIES);
     for (const app_role of ["student", "admin"]) {
       expect(await roleCapabilities(defaultC(app_role).id), `the default ${app_role} role`).toEqual([]);
     }
     expect(await classRole(customId)).toMatchObject({ class_id: classC.id, default_for: null });
-    expect(await roleCapabilities(customId)).toEqual([]);
+    expect(await roleCapabilities(customId)).toEqual(GRADER_SEEDED_CAPABILITIES);
     const { data: fakeRoles, error: fakeRolesError } = await supabase
       .from("class_roles")
       .select("id")
@@ -519,8 +542,8 @@ test.describe("custom class roles", () => {
       }
 
       expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
-      expect(await roleCapabilities(customId)).toEqual(["publish_groups"]);
-      expect(await roleCapabilities(graderRoleId)).toEqual(["publish_groups"]);
+      expect(await roleCapabilities(customId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
+      expect(await roleCapabilities(graderRoleId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
       const { data: extra, error: extraError } = await supabase
         .from("class_roles")
         .select("id")
@@ -529,7 +552,7 @@ test.describe("custom class roles", () => {
       expect(extraError).toBeNull();
       expect(extra).toHaveLength(0);
     } finally {
-      // Other tests in this class expect the default grader role to be empty.
+      // Other tests in this class expect only the seeded grader capabilities.
       const { error } = await supabase
         .from("role_capabilities")
         .delete()
@@ -786,8 +809,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     expect((await supabase.from("user_roles").update({ class_role_id: role_id }).eq("id", row.id)).error).toBeNull();
   }
 
-  // The default grader role holds publish_groups, as a migration would set up. Head TA turns
-  // manage_review_assignments on; Course coordinator turns publish_groups off.
+  // The default grader role already holds manage_flashcards and run_polls; this also gives it
+  // publish_groups, as a migration would. Head TA turns manage_review_assignments on; Course
+  // coordinator turns publish_groups off (and keeps the grader-seeded capabilities).
   test.beforeAll(async () => {
     classE = await createClass({ name: "E2E Grader Copy E" });
     instructorE = await createUserInClass({ role: "instructor", class_id: classE.id });
@@ -830,7 +854,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     ).toBeNull();
     try {
       const roleId = await createRoleAsInstructor("Copied TA");
-      expect(await roleCapabilities(roleId)).toEqual(["publish_groups"]);
+      expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
     } finally {
       expect(
         (await supabase.from("role_capabilities").delete().eq("role_id", graderRoleId).eq("capability", "manage_roles"))
@@ -840,14 +864,19 @@ test.describe("custom roles start as a copy of the default grader role", () => {
   });
 
   test("a grader on a custom role holds what that role turns on", async () => {
-    expect(await roleCapabilities(headTaRoleId)).toEqual(["manage_review_assignments", "publish_groups"]);
+    expect(await roleCapabilities(headTaRoleId)).toEqual([
+      "manage_flashcards",
+      "manage_review_assignments",
+      "publish_groups",
+      "run_polls"
+    ]);
     expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
     expect(await holds(headTa, "publish_groups"), "copied from the default grader role").toBe(true);
     expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
   });
 
   test("a custom role can turn a default off, so it holds less than a plain grader", async () => {
-    expect(await roleCapabilities(coordinatorRoleId)).toEqual([]);
+    expect(await roleCapabilities(coordinatorRoleId)).toEqual(["manage_flashcards", "run_polls"]);
     expect(await holds(coordinator, "publish_groups"), "the coordinator turned it off").toBe(false);
     expect(await holds(plainGrader, "publish_groups"), "plain graders keep it").toBe(true);
   });
@@ -913,7 +942,8 @@ test.describe("custom roles start as a copy of the default grader role", () => {
           .select("role_id"),
         `granting manage_assignments to ${which} without holding it`
       );
-      expect(await roleCapabilities(role_id), which).toEqual([]);
+      // manage_flashcards is already on the grader role and was copied onto the custom role.
+      expect(await roleCapabilities(role_id), which).toEqual(GRADER_SEEDED_CAPABILITIES);
     }
 
     // Nor through the copy: a role made from a default grader role that has it doesn't get it.
@@ -931,7 +961,11 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("id")
       .single();
     expect(copyError).toBeNull();
-    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual(["publish_groups"]);
+    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual([
+      "manage_flashcards",
+      "publish_groups",
+      "run_polls"
+    ]);
 
     // Nor take it away: removing manage_assignments from the default grader role is refused, since
     // the instructor couldn't give it back. Removing publish_groups, which they hold, still works.
@@ -952,7 +986,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("capability");
     expect(removeError).toBeNull();
     expect(removed, "removing a capability the instructor holds").toHaveLength(1);
-    expect(await roleCapabilities(roleX("grader"))).toEqual(["manage_assignments"]);
+    expect(await roleCapabilities(roleX("grader"))).toEqual(
+      [...GRADER_SEEDED_CAPABILITIES, "manage_assignments"].sort()
+    );
   });
 });
 
@@ -1012,13 +1048,21 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
 
   test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
     expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
+      `${classF.id}:manage_flashcards`,
       `${classF.id}:manage_review_assignments`,
-      `${classF.id}:publish_groups`
+      `${classF.id}:publish_groups`,
+      `${classF.id}:run_polls`
     ]);
     expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
-      `${classF.id}:publish_groups`
+      `${classF.id}:manage_flashcards`,
+      `${classF.id}:publish_groups`,
+      `${classF.id}:run_polls`
     ]);
-    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([]);
+    // graderG holds grader-seeded capabilities in classG, not anything from classF.
+    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([
+      `${classG.id}:manage_flashcards`,
+      `${classG.id}:run_polls`
+    ]);
     expect(await capabilitiesOf(studentF), "a student gets nothing from the grader role").toEqual([]);
   });
 
@@ -1049,8 +1093,71 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
     );
 
     try {
+      const name = `Broadcast role ${Date.now()}`;
+      const { data: role, error } = await instructor
+        .from("class_roles")
+        .insert({ class_id: classF.id, name })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      const roleNotes = (operation: string) =>
+        notes.filter((n) => n.table === "class_roles" && n.operation === operation);
+      await expect.poll(() => roleNotes("INSERT").length).toBe(1);
+      expect(
+        (
+          await instructor
+            .from("class_roles")
+            .update({ name: `${name} renamed` })
+            .eq("id", role!.id)
+        ).error
+      ).toBeNull();
+      await expect.poll(() => roleNotes("UPDATE").length).toBe(1);
+      // Make sure the role holds at least one capability, so the loop below checks a DELETE note.
+      expect(
+        (
+          await instructor
+            .from("role_capabilities")
+            .upsert(
+              { role_id: role!.id, capability: "manage_assignments" },
+              { onConflict: "role_id,capability", ignoreDuplicates: true }
+            )
+        ).error
+      ).toBeNull();
+      const { data: copied, error: copiedError } = await instructor
+        .from("role_capabilities")
+        .select("capability")
+        .eq("role_id", role!.id);
+      expect(copiedError).toBeNull();
+      expect(copied?.length ?? 0).toBeGreaterThan(0);
+      expect((await instructor.from("class_roles").delete().eq("id", role!.id)).error).toBeNull();
+      for (const row of copied ?? []) {
+        await expect
+          .poll(() =>
+            notes.some(
+              (note) =>
+                note.table === "role_capabilities" &&
+                note.operation === "DELETE" &&
+                (note.data as { role_id: number; capability: string })?.role_id === role!.id &&
+                (note.data as { capability: string }).capability === row.capability
+            )
+          )
+          .toBe(true);
+      }
+      await expect.poll(() => roleNotes("DELETE").length).toBe(1);
+      for (const note of [...roleNotes("INSERT"), ...roleNotes("UPDATE"), ...roleNotes("DELETE")]) {
+        expect(note).toMatchObject({ type: "staff_data_change", class_id: classF.id, row_id: String(role!.id) });
+        expect(note.data).toMatchObject({ id: role!.id });
+      }
+
+      // Leave out the role created and deleted above, which also sent role_capabilities notes.
       const capabilityNotes = (operation: string) =>
-        notes.filter((n) => n.table === "role_capabilities" && n.operation === operation);
+        notes.filter(
+          (n) =>
+            n.table === "role_capabilities" &&
+            n.operation === operation &&
+            (n.data as { role_id?: number })?.role_id !== role!.id &&
+            (n.data as { capability?: string })?.capability === "manage_assignments"
+        );
 
       expect(
         (await instructor.from("role_capabilities").insert({ role_id: headTaRoleId, capability: "manage_assignments" }))
@@ -1604,5 +1711,1571 @@ test.describe("review assignments follow manage_review_assignments (#1010, step 
     const { data: reviews } = await client.from("review_assignments").select("id").eq("id", review!.id);
     expect(reviews ?? [], "the other class's review assignment").toHaveLength(0);
     expect(await visibleRubricParts(headTa, review!.id), "the other class's rubric parts").toEqual([]);
+  });
+});
+
+test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () => {
+  let classH: Awaited<ReturnType<typeof createClass>>;
+  let instructorH: TestingUser;
+  let plainGrader: TestingUser;
+  let headTa: TestingUser;
+  let withoutCap: TestingUser;
+  let withCapRoleId: number;
+  let withoutCapRoleId: number;
+
+  test.beforeAll(async () => {
+    classH = await createClass({ name: "E2E Flashcards H" });
+    instructorH = await createUserInClass({ role: "instructor", class_id: classH.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classH.id });
+    headTa = await createUserInClass({ role: "grader", class_id: classH.id });
+    withoutCap = await createUserInClass({ role: "grader", class_id: classH.id });
+
+    const { data: withCapRole, error: withError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "Flashcard TA" })
+      .select("id")
+      .single();
+    expect(withError).toBeNull();
+    withCapRoleId = withCapRole!.id;
+    // Copied from the default grader role, so it already has grader-seeded capabilities.
+    expect(await roleCapabilities(withCapRoleId)).toEqual(GRADER_SEEDED_CAPABILITIES);
+    const headTaRow = await userRole(headTa);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withCapRoleId }).eq("id", headTaRow.id)).error
+    ).toBeNull();
+
+    const { data: withoutRole, error: withoutError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classH.id, name: "No Flashcards TA" })
+      .select("id")
+      .single();
+    expect(withoutError).toBeNull();
+    withoutCapRoleId = withoutRole!.id;
+    const { data: removed, error: removeError } = await supabase
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", withoutCapRoleId)
+      .eq("capability", "manage_flashcards")
+      .select("capability");
+    expect(removeError).toBeNull();
+    expect(removed, "manage_flashcards turned off").toHaveLength(1);
+    const withoutRow = await userRole(withoutCap);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withoutCapRoleId }).eq("id", withoutRow.id)).error
+    ).toBeNull();
+  });
+
+  async function deckFor(creator: TestingUser, name: string) {
+    const { data, error } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: creator.user_id,
+        name,
+        description: "e2e deck"
+      })
+      .select("id, name")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  async function cardFor(deck_id: number, title: string) {
+    const { data, error } = await supabase
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id,
+        title,
+        prompt: "prompt",
+        answer: "answer",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  async function deckExists(id: number) {
+    const { data, error } = await supabase.from("flashcard_decks").select("id").eq("id", id);
+    expect(error).toBeNull();
+    return (data ?? []).length === 1;
+  }
+
+  test("an instructor creates, edits and deletes flashcard decks and cards", async () => {
+    const instructor = await createAuthenticatedClient(instructorH);
+    const { data: deck, error: createError } = await instructor
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: instructorH.user_id,
+        name: "Instructor deck",
+        description: "by instructor"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await instructor
+      .from("flashcard_decks")
+      .update({ description: "edited" })
+      .eq("id", deck!.id)
+      .select("description");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ description: "edited" }]);
+
+    const { data: card, error: cardError } = await instructor
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "Card 1",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(cardError).toBeNull();
+
+    const { data: deletedCard, error: deleteCardError } = await instructor
+      .from("flashcards")
+      .delete()
+      .eq("id", card!.id)
+      .select("id");
+    expect(deleteCardError).toBeNull();
+    expect(deletedCard).toHaveLength(1);
+
+    const { data: deleted, error: deleteError } = await instructor
+      .from("flashcard_decks")
+      .delete()
+      .eq("id", deck!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+    expect(await deckExists(deck!.id)).toBe(false);
+  });
+
+  test("a default grader still creates, edits and deletes flashcard decks", async () => {
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { data: deck, error: createError } = await grader
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: plainGrader.user_id,
+        name: "Default grader deck",
+        description: "unchanged day one"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await grader
+      .from("flashcard_decks")
+      .update({ description: "grader edit" })
+      .eq("id", deck!.id)
+      .select("description");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ description: "grader edit" }]);
+
+    const { data: deleted, error: deleteError } = await grader
+      .from("flashcard_decks")
+      .delete()
+      .eq("id", deck!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a grader on a custom role with manage_flashcards creates and deletes decks and cards", async () => {
+    const client = await createAuthenticatedClient(headTa);
+    const { data: deck, error: createError } = await client
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: headTa.user_id,
+        name: "Head TA deck",
+        description: "with capability"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: card, error: cardError } = await client
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "Head TA card",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(cardError).toBeNull();
+
+    const { data: deletedCard, error: deleteCardError } = await client
+      .from("flashcards")
+      .delete()
+      .eq("id", card!.id)
+      .select("id");
+    expect(deleteCardError).toBeNull();
+    expect(deletedCard).toHaveLength(1);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("flashcard_decks")
+      .delete()
+      .eq("id", deck!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a grader on a custom role with manage_flashcards turned off is refused", async () => {
+    const existing = await deckFor(instructorH, "Staff deck for refusal");
+    const existingCard = await cardFor(existing.id, "Staff card");
+    const client = await createAuthenticatedClient(withoutCap);
+
+    expectRlsBlocked(
+      await client.from("flashcard_decks").insert({
+        class_id: classH.id,
+        creator_id: withoutCap.user_id,
+        name: "Should fail",
+        description: "no capability"
+      }),
+      "creating a deck without manage_flashcards"
+    );
+
+    expectBlocked(
+      await client.from("flashcard_decks").update({ description: "nope" }).eq("id", existing.id).select("id"),
+      "editing a deck without manage_flashcards"
+    );
+    expect(await deckExists(existing.id), "the deck is unchanged").toBe(true);
+
+    expectBlocked(
+      await client.from("flashcard_decks").delete().eq("id", existing.id).select("id"),
+      "deleting a deck without manage_flashcards"
+    );
+    expect(await deckExists(existing.id)).toBe(true);
+
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: existing.id,
+        title: "Should fail",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "creating a card without manage_flashcards"
+    );
+
+    expectBlocked(
+      await client.from("flashcards").update({ title: "nope" }).eq("id", existingCard.id).select("id"),
+      "editing a card without manage_flashcards"
+    );
+
+    expectBlocked(
+      await client.from("flashcards").delete().eq("id", existingCard.id).select("id"),
+      "deleting a card without manage_flashcards"
+    );
+  });
+
+  test("a grader without manage_flashcards cannot manage a deck they created", async () => {
+    // Service role sets creator_id; the old creator OR on UPDATE/DELETE is gone, so capability alone decides.
+    const ownDeck = await deckFor(withoutCap, "Creator without capability");
+    const ownCard = await cardFor(ownDeck.id, "Creator card");
+    const client = await createAuthenticatedClient(withoutCap);
+
+    expectBlocked(
+      await client.from("flashcard_decks").update({ description: "creator edit" }).eq("id", ownDeck.id).select("id"),
+      "updating own deck without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcard_decks").delete().eq("id", ownDeck.id).select("id"),
+      "deleting own deck without manage_flashcards"
+    );
+    expect(await deckExists(ownDeck.id)).toBe(true);
+
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: ownDeck.id,
+        title: "Creator insert",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "inserting a card on own deck without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcards").update({ title: "creator card edit" }).eq("id", ownCard.id).select("id"),
+      "updating a card on own deck without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcards").delete().eq("id", ownCard.id).select("id"),
+      "deleting a card on own deck without manage_flashcards"
+    );
+  });
+
+  test("a demoted grader loses management of decks they created but can still study them", async () => {
+    const creator = await createUserInClass({ role: "grader", class_id: classH.id });
+    const asGrader = await createAuthenticatedClient(creator);
+    const { data: deck, error: createError } = await asGrader
+      .from("flashcard_decks")
+      .insert({
+        class_id: classH.id,
+        creator_id: creator.user_id,
+        name: "Created before demotion",
+        description: "had capability"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+    const { data: card, error: cardError } = await asGrader
+      .from("flashcards")
+      .insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "Study card",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(cardError).toBeNull();
+
+    const row = await userRole(creator);
+    expect((await supabase.from("user_roles").update({ role: "student" }).eq("id", row.id)).error).toBeNull();
+
+    const asStudent = await createAuthenticatedClient(creator);
+    const { data: decks, error: readError } = await asStudent.from("flashcard_decks").select("id").eq("id", deck!.id);
+    expect(readError).toBeNull();
+    expect(decks ?? [], "still reads the deck").toHaveLength(1);
+    const { data: cards, error: cardsReadError } = await asStudent.from("flashcards").select("id").eq("id", card!.id);
+    expect(cardsReadError).toBeNull();
+    expect(cards ?? [], "still reads the card").toHaveLength(1);
+
+    const { error: progressError } = await asStudent.from("student_flashcard_deck_progress").insert({
+      student_id: creator.user_id,
+      class_id: classH.id,
+      card_id: card!.id,
+      is_mastered: false
+    });
+    expect(progressError, "can still study the deck").toBeNull();
+
+    expectBlocked(
+      await asStudent.from("flashcard_decks").update({ description: "demoted" }).eq("id", deck!.id).select("id"),
+      "demoted creator cannot update deck"
+    );
+    expectBlocked(
+      await asStudent.from("flashcard_decks").delete().eq("id", deck!.id).select("id"),
+      "demoted creator cannot delete deck"
+    );
+    expectRlsBlocked(
+      await asStudent.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: deck!.id,
+        title: "demoted insert",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "demoted creator cannot insert cards"
+    );
+    expectBlocked(
+      await asStudent.from("flashcards").update({ title: "demoted" }).eq("id", card!.id).select("id"),
+      "demoted creator cannot update cards"
+    );
+    expectBlocked(
+      await asStudent.from("flashcards").delete().eq("id", card!.id).select("id"),
+      "demoted creator cannot delete cards"
+    );
+  });
+
+  test("students still read decks and write their own progress", async () => {
+    const student = await createUserInClass({ role: "student", class_id: classH.id });
+    const deck = await deckFor(instructorH, "Student-visible deck");
+    const card = await cardFor(deck.id, "Practice card");
+    const client = await createAuthenticatedClient(student);
+
+    const { data: decks, error: readError } = await client.from("flashcard_decks").select("id").eq("id", deck.id);
+    expect(readError).toBeNull();
+    expect(decks ?? []).toHaveLength(1);
+
+    const { error: progressError } = await client.from("student_flashcard_deck_progress").insert({
+      student_id: student.user_id,
+      class_id: classH.id,
+      card_id: card.id,
+      is_mastered: false
+    });
+    expect(progressError, "students keep writing their own progress").toBeNull();
+
+    expectRlsBlocked(
+      await client.from("flashcard_decks").insert({
+        class_id: classH.id,
+        creator_id: student.user_id,
+        name: "Student must not create",
+        description: "no"
+      }),
+      "students still cannot create decks"
+    );
+  });
+
+  test("a card whose class_id does not match its deck's class is refused", async () => {
+    const otherClass = await createClass({ name: "E2E Flashcards Mismatch" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const { data: otherDeck, error } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: otherClass.id,
+        creator_id: otherInstructor.user_id,
+        name: "Foreign deck",
+        description: "for mismatch"
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+
+    const otherMembership = await createUserInClass({ email: headTa.email, role: "grader", class_id: otherClass.id });
+    expect(otherMembership.user_id).toBe(headTa.user_id);
+    const client = await createAuthenticatedClient(headTa);
+    const { data: matching, error: matchingError } = await client
+      .from("flashcards")
+      .insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Matching class",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(matchingError).toBeNull();
+    expect(matching).not.toBeNull();
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: classH.id,
+        deck_id: otherDeck!.id,
+        title: "Mismatched class",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      }),
+      "card class_id must match the deck's class"
+    );
+  });
+
+  test("moving a deck or card to another class without the capability there is refused", async () => {
+    const otherClass = await createClass({ name: "E2E Flashcards Move Target" });
+    await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const deck = await deckFor(instructorH, "Move source deck");
+    const card = await cardFor(deck.id, "Move source card");
+    const client = await createAuthenticatedClient(headTa);
+
+    expectBlocked(
+      await client.from("flashcard_decks").update({ class_id: otherClass.id }).eq("id", deck.id).select("id"),
+      "moving a deck to a class without manage_flashcards"
+    );
+    expectBlocked(
+      await client.from("flashcards").update({ class_id: otherClass.id }).eq("id", card.id).select("id"),
+      "moving a card to a class without manage_flashcards"
+    );
+    const { data: deckRow } = await supabase.from("flashcard_decks").select("class_id").eq("id", deck.id).single();
+    expect(deckRow?.class_id).toBe(classH.id);
+    const { data: cardRow } = await supabase.from("flashcards").select("class_id").eq("id", card.id).single();
+    expect(cardRow?.class_id).toBe(classH.id);
+  });
+
+  test("manage_flashcards in one class doesn't reach another class", async () => {
+    const otherClass = await createClass({ name: "E2E Flashcards Other" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const { data: otherDeck, error } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: otherClass.id,
+        creator_id: otherInstructor.user_id,
+        name: "Other class deck",
+        description: "not this class"
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    const { data: otherCard, error: otherCardError } = await supabase
+      .from("flashcards")
+      .insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Other class card",
+        prompt: "p",
+        answer: "a",
+        order: 1
+      })
+      .select("id")
+      .single();
+    expect(otherCardError).toBeNull();
+
+    const client = await createAuthenticatedClient(headTa);
+    expectRlsBlocked(
+      await client.from("flashcard_decks").insert({
+        class_id: otherClass.id,
+        creator_id: headTa.user_id,
+        name: "Cross-class insert",
+        description: "no"
+      }),
+      "inserting a deck in another class"
+    );
+    expectBlocked(
+      await client.from("flashcard_decks").update({ description: "cross-class" }).eq("id", otherDeck!.id).select("id"),
+      "editing another class's deck"
+    );
+    expectBlocked(
+      await client.from("flashcard_decks").delete().eq("id", otherDeck!.id).select("id"),
+      "deleting another class's deck"
+    );
+    expectRlsBlocked(
+      await client.from("flashcards").insert({
+        class_id: otherClass.id,
+        deck_id: otherDeck!.id,
+        title: "Cross-class card",
+        prompt: "p",
+        answer: "a",
+        order: 2
+      }),
+      "inserting a card in another class"
+    );
+    expectBlocked(
+      await client.from("flashcards").update({ title: "cross" }).eq("id", otherCard!.id).select("id"),
+      "editing another class's card"
+    );
+    expectBlocked(
+      await client.from("flashcards").delete().eq("id", otherCard!.id).select("id"),
+      "deleting another class's card"
+    );
+    // The rows are hidden from headTa, so check with the service role that nothing changed.
+    const { data: stillThere, error: checkError } = await supabase
+      .from("flashcard_decks")
+      .select("id, description")
+      .eq("id", otherDeck!.id);
+    expect(checkError).toBeNull();
+    expect(stillThere ?? []).toEqual([{ id: otherDeck!.id, description: "not this class" }]);
+    const { data: cardStillThere, error: cardCheckError } = await supabase
+      .from("flashcards")
+      .select("id, title")
+      .eq("id", otherCard!.id);
+    expect(cardCheckError).toBeNull();
+    expect(cardStillThere ?? []).toEqual([{ id: otherCard!.id, title: "Other class card" }]);
+  });
+});
+
+test.describe("surveys follow manage_surveys (#1010, area 11)", () => {
+  let classS: Awaited<ReturnType<typeof createClass>>;
+  let instructorS: TestingUser;
+  let plainGrader: TestingUser;
+  let withCap: TestingUser;
+  let withoutCap: TestingUser;
+  let withCapRoleId: number;
+
+  const surveyJson = { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Q1" }] }] };
+
+  test.beforeAll(async () => {
+    classS = await createClass({ name: "E2E Surveys S" });
+    instructorS = await createUserInClass({ role: "instructor", class_id: classS.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classS.id });
+    withCap = await createUserInClass({ role: "grader", class_id: classS.id });
+    withoutCap = await createUserInClass({ role: "grader", class_id: classS.id });
+
+    const { data: withCapRole, error: withError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classS.id, name: "Survey TA" })
+      .select("id")
+      .single();
+    expect(withError).toBeNull();
+    withCapRoleId = withCapRole!.id;
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: withCapRoleId, capability: "manage_surveys" })).error
+    ).toBeNull();
+    const withRow = await userRole(withCap);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withCapRoleId }).eq("id", withRow.id)).error
+    ).toBeNull();
+
+    const { data: withoutRole, error: withoutError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classS.id, name: "No Surveys TA" })
+      .select("id")
+      .single();
+    expect(withoutError).toBeNull();
+    const withoutRow = await userRole(withoutCap);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withoutRole!.id }).eq("id", withoutRow.id)).error
+    ).toBeNull();
+  });
+
+  async function surveyFor(title: string, created_by: string) {
+    const { data, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: classS.id,
+        created_by,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title
+      })
+      .select("id, survey_id, title, status")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  test("an instructor creates, edits and soft-deletes surveys", async () => {
+    const instructor = await createAuthenticatedClient(instructorS);
+    const { data: survey, error: createError } = await instructor
+      .from("surveys")
+      .insert({
+        class_id: classS.id,
+        created_by: instructorS.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Instructor survey"
+      })
+      .select("id, survey_id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await instructor
+      .from("surveys")
+      .update({ title: "Instructor survey edited" })
+      .eq("id", survey!.id)
+      .select("title");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ title: "Instructor survey edited" }]);
+
+    const { error: deleteError } = await instructor.rpc("soft_delete_survey", {
+      p_survey_id: survey!.id,
+      p_survey_logical_id: survey!.survey_id
+    });
+    expect(deleteError).toBeNull();
+    const { data: after } = await supabase.from("surveys").select("deleted_at").eq("id", survey!.id).single();
+    expect(after?.deleted_at).not.toBeNull();
+  });
+
+  test("a default grader still cannot manage surveys", async () => {
+    const grader = await createAuthenticatedClient(plainGrader);
+    expectRlsBlocked(
+      await grader.from("surveys").insert({
+        class_id: classS.id,
+        created_by: plainGrader.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Grader should fail"
+      }),
+      "default grader creating a survey"
+    );
+  });
+
+  test("a grader on a custom role with manage_surveys creates and updates surveys", async () => {
+    const client = await createAuthenticatedClient(withCap);
+    const { data: survey, error: createError } = await client
+      .from("surveys")
+      .insert({
+        class_id: classS.id,
+        created_by: withCap.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Head TA survey"
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await client
+      .from("surveys")
+      .update({ title: "Head TA survey edited" })
+      .eq("id", survey!.id)
+      .select("title");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ title: "Head TA survey edited" }]);
+  });
+
+  test("a grader on a custom role without manage_surveys is refused", async () => {
+    const existing = await surveyFor("Staff survey for refusal", instructorS.public_profile_id);
+    const client = await createAuthenticatedClient(withoutCap);
+
+    expectRlsBlocked(
+      await client.from("surveys").insert({
+        class_id: classS.id,
+        created_by: withoutCap.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Should fail"
+      }),
+      "creating a survey without manage_surveys"
+    );
+
+    const { data: updateData, error: updateError } = await client
+      .from("surveys")
+      .update({ title: "nope" })
+      .eq("id", existing.id)
+      .select("id");
+    expect(updateError).toBeNull();
+    expect(updateData ?? [], "editing a survey without manage_surveys").toHaveLength(0);
+    const { data: unchanged } = await supabase.from("surveys").select("title").eq("id", existing.id).single();
+    expect(unchanged?.title).toBe(existing.title);
+
+    const { error: softDeleteError } = await client.rpc("soft_delete_survey", {
+      p_survey_id: existing.id,
+      p_survey_logical_id: existing.survey_id
+    });
+    expect(softDeleteError?.message ?? "", "soft-deleting without manage_surveys").toMatch(
+      /Permission denied: manage_surveys required/
+    );
+    const { data: stillDraft } = await supabase.from("surveys").select("deleted_at").eq("id", existing.id).single();
+    expect(stillDraft?.deleted_at).toBeNull();
+  });
+
+  test("a student can still submit a survey response", async () => {
+    const student = await createUserInClass({ role: "student", class_id: classS.id });
+    const { data: survey, error } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: classS.id,
+        created_by: instructorS.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "published",
+        title: "Student-visible survey"
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+
+    const client = await createAuthenticatedClient(student);
+    const { error: responseError } = await client.from("survey_responses").insert({
+      survey_id: survey!.id,
+      profile_id: student.private_profile_id,
+      response: { q1: "answer" },
+      is_submitted: true,
+      submitted_at: new Date().toISOString()
+    });
+    expect(responseError, "student can still submit").toBeNull();
+  });
+
+  test("manage_surveys in one class doesn't reach another class", async () => {
+    const otherClass = await createClass({ name: "E2E Surveys Other" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const otherSurvey = await supabase
+      .from("surveys")
+      .insert({
+        class_id: otherClass.id,
+        created_by: otherInstructor.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Other class survey"
+      })
+      .select("id, title")
+      .single();
+    expect(otherSurvey.error).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+    expectRlsBlocked(
+      await client.from("surveys").insert({
+        class_id: otherClass.id,
+        created_by: withCap.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Cross-class insert"
+      }),
+      "inserting a survey in another class"
+    );
+    const { data: crossUpdate, error: crossUpdateError } = await client
+      .from("surveys")
+      .update({ title: "cross" })
+      .eq("id", otherSurvey.data!.id)
+      .select("id");
+    expect(crossUpdateError).toBeNull();
+    expect(crossUpdate ?? [], "editing another class's survey").toHaveLength(0);
+    const { data: stillThere } = await supabase.from("surveys").select("title").eq("id", otherSurvey.data!.id).single();
+    expect(stillThere?.title).toBe("Other class survey");
+  });
+
+  test("a survey cannot move to another class, even for a manager of both", async () => {
+    const survey = await surveyFor("Stays in its class", instructorS.public_profile_id);
+    const otherClass = await createClass({ name: "E2E Surveys Move Target" });
+    const { error } = await supabase.from("surveys").update({ class_id: otherClass.id }).eq("id", survey.id);
+    expect(error?.message ?? "").toMatch(/Cannot move a survey to another class/);
+    const { data: still } = await supabase.from("surveys").select("class_id").eq("id", survey.id).single();
+    expect(still?.class_id).toBe(classS.id);
+  });
+
+  test("a grader with manage_surveys manages assignments for a survey in the same class", async () => {
+    const survey = await surveyFor("Assignable survey", instructorS.public_profile_id);
+    const student = await createUserInClass({ role: "student", class_id: classS.id });
+    const client = await createAuthenticatedClient(withCap);
+
+    const { data: assignment, error: insertError } = await client
+      .from("survey_assignments")
+      .insert({
+        survey_id: survey.id,
+        class_id: classS.id,
+        profile_id: student.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(insertError).toBeNull();
+
+    const { data: updated, error: updateError } = await client
+      .from("survey_assignments")
+      .update({ profile_id: student.public_profile_id })
+      .eq("id", assignment!.id)
+      .select("profile_id");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ profile_id: student.public_profile_id }]);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("survey_assignments")
+      .delete()
+      .eq("id", assignment!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a dual-enrolled grader cannot point a class A assignment at a class B survey", async () => {
+    // Same user: manage_surveys in class S, ordinary grader in class B (can read B's rows).
+    const classB = await createClass({ name: "E2E Surveys Cross-Assign B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const { data: privB, error: privError } = await supabase
+      .from("profiles")
+      .insert({ name: "Cross-assign private", class_id: classB.id, is_private_profile: true })
+      .select("id")
+      .single();
+    expect(privError).toBeNull();
+    const { data: pubB, error: pubError } = await supabase
+      .from("profiles")
+      .insert({ name: "Cross-assign public", class_id: classB.id, is_private_profile: false })
+      .select("id")
+      .single();
+    expect(pubError).toBeNull();
+    expect(
+      (
+        await supabase.from("user_roles").insert({
+          user_id: withCap.user_id,
+          class_id: classB.id,
+          private_profile_id: privB!.id,
+          public_profile_id: pubB!.id,
+          role: "grader"
+        })
+      ).error
+    ).toBeNull();
+
+    const surveyA = await surveyFor("Class A survey for assign", instructorS.public_profile_id);
+    const surveyB = (
+      await supabase
+        .from("surveys")
+        .insert({
+          class_id: classB.id,
+          created_by: instructorB.public_profile_id,
+          assigned_to_all: true,
+          json: surveyJson,
+          version: 1,
+          status: "draft",
+          title: "Class B survey for assign"
+        })
+        .select("id")
+        .single()
+    ).data!;
+    expect(surveyB).toBeTruthy();
+
+    const studentA = await createUserInClass({ role: "student", class_id: classS.id });
+    const { data: assignmentA, error: seedError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyA.id,
+        class_id: classS.id,
+        profile_id: studentA.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(seedError).toBeNull();
+    const { data: assignmentB, error: seedBError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyB.id,
+        class_id: classB.id,
+        profile_id: studentB.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(seedBError).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+    expectRlsBlocked(
+      await client.from("survey_assignments").insert({
+        survey_id: surveyB.id,
+        class_id: classS.id,
+        profile_id: studentB.private_profile_id
+      }),
+      "inserting class_id=A pointing at a B survey"
+    );
+
+    // WITH CHECK on a row the caller can see raises 42501; the survey_id must stay unchanged.
+    const retarget = await client
+      .from("survey_assignments")
+      .update({ survey_id: surveyB.id })
+      .eq("id", assignmentA!.id)
+      .select("id");
+    expect((retarget.error as { code?: string } | null)?.code, "retargeting an A assignment to a B survey").toBe(
+      "42501"
+    );
+    const { data: stillA } = await supabase
+      .from("survey_assignments")
+      .select("survey_id")
+      .eq("id", assignmentA!.id)
+      .single();
+    expect(stillA?.survey_id).toBe(surveyA.id);
+
+    expectRlsBlocked(
+      await client.from("survey_assignments").insert({
+        survey_id: surveyB.id,
+        class_id: classB.id,
+        profile_id: studentB.public_profile_id
+      }),
+      "writing a B assignment without manage_surveys in B"
+    );
+    const { data: updateB, error: updateBError } = await client
+      .from("survey_assignments")
+      .update({ profile_id: studentB.public_profile_id })
+      .eq("id", assignmentB!.id)
+      .select("id");
+    expect(updateBError).toBeNull();
+    expect(updateB ?? [], "updating a B assignment without manage_surveys in B").toHaveLength(0);
+    const { data: deleteB, error: deleteBError } = await client
+      .from("survey_assignments")
+      .delete()
+      .eq("id", assignmentB!.id)
+      .select("id");
+    expect(deleteBError).toBeNull();
+    expect(deleteB ?? [], "deleting a B assignment without manage_surveys in B").toHaveLength(0);
+    const { data: stillB, error: stillBError } = await supabase
+      .from("survey_assignments")
+      .select("id, profile_id")
+      .eq("id", assignmentB!.id);
+    expect(stillBError).toBeNull();
+    expect(stillB ?? []).toHaveLength(1);
+    expect(stillB?.[0].profile_id).toBe(studentB.private_profile_id);
+  });
+
+  test("a manage_surveys holder can repair or delete a legacy mismatched assignment", async () => {
+    // Production may already have class_id=A rows pointing at a B survey; nothing
+    // prevented that before. Service-role seeds two such rows (no same-class CHECK).
+    const classB = await createClass({ name: "E2E Surveys Legacy-Mismatch B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const { data: surveyB, error: surveyBError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: classB.id,
+        created_by: instructorB.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Legacy mismatch B survey"
+      })
+      .select("id")
+      .single();
+    expect(surveyBError).toBeNull();
+
+    const surveyA = await surveyFor("Legacy mismatch A survey", instructorS.public_profile_id);
+    const studentDelete = await createUserInClass({ role: "student", class_id: classS.id });
+    const studentRepair = await createUserInClass({ role: "student", class_id: classS.id });
+
+    const { data: toDelete, error: deleteSeedError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyB!.id,
+        class_id: classS.id,
+        profile_id: studentDelete.private_profile_id
+      })
+      .select("id")
+      .single();
+    expect(deleteSeedError).toBeNull();
+
+    const { data: toRepair, error: repairSeedError } = await supabase
+      .from("survey_assignments")
+      .insert({
+        survey_id: surveyB!.id,
+        class_id: classS.id,
+        profile_id: studentRepair.private_profile_id
+      })
+      .select("id, survey_id")
+      .single();
+    expect(repairSeedError).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("survey_assignments")
+      .delete()
+      .eq("id", toDelete!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+    const { data: gone } = await supabase.from("survey_assignments").select("id").eq("id", toDelete!.id);
+    expect(gone ?? []).toHaveLength(0);
+
+    const { data: repaired, error: repairError } = await client
+      .from("survey_assignments")
+      .update({ survey_id: surveyA.id })
+      .eq("id", toRepair!.id)
+      .select("survey_id");
+    expect(repairError).toBeNull();
+    expect(repaired).toEqual([{ survey_id: surveyA.id }]);
+  });
+
+  test("create_survey_assignments replaces only the survey's own class rows", async () => {
+    // A legacy row can sit in class B while pointing at a class A survey. A manager in A must
+    // not delete it through the SECURITY DEFINER function, and must hear about it if it blocks.
+    const classB = await createClass({ name: "E2E Surveys Replace-Scope B" });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const studentA = await createUserInClass({ role: "student", class_id: classS.id });
+    const survey = await surveyFor("Replace scope survey", instructorS.public_profile_id);
+    const { data: legacy, error: legacyError } = await supabase
+      .from("survey_assignments")
+      .insert({ survey_id: survey.id, class_id: classB.id, profile_id: studentB.private_profile_id })
+      .select("id")
+      .single();
+    expect(legacyError).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+    const { error: replaceError } = await client.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [studentA.private_profile_id]
+    });
+    expect(replaceError).toBeNull();
+    const { data: legacyStill } = await supabase.from("survey_assignments").select("id").eq("id", legacy!.id);
+    expect(legacyStill ?? [], "the class B row survives a class A replacement").toHaveLength(1);
+    const { data: ownRows } = await supabase
+      .from("survey_assignments")
+      .select("profile_id")
+      .eq("survey_id", survey.id)
+      .eq("class_id", classS.id);
+    expect(ownRows).toEqual([{ profile_id: studentA.private_profile_id }]);
+
+    const { error: blockedError } = await client.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [studentB.private_profile_id]
+    });
+    expect(blockedError?.message ?? "").toMatch(/blocks this list/);
+  });
+
+  test("can_manage_survey_in_class returns true only for manage_surveys holders on matching surveys", async () => {
+    const classB = await createClass({ name: "E2E Surveys Helper B" });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+
+    const surveyA = await surveyFor("Helper class A survey", instructorS.public_profile_id);
+    const { data: surveyB, error: surveyBError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: classB.id,
+        created_by: instructorB.public_profile_id,
+        assigned_to_all: true,
+        json: surveyJson,
+        version: 1,
+        status: "draft",
+        title: "Helper class B survey"
+      })
+      .select("id")
+      .single();
+    expect(surveyBError).toBeNull();
+
+    const studentClient = await createAuthenticatedClient(studentB);
+    const { data: studentSeesA, error: studentError } = await studentClient.rpc("can_manage_survey_in_class", {
+      p_survey_id: surveyA.id,
+      p_class_id: classS.id
+    });
+    expect(studentError).toBeNull();
+    expect(studentSeesA, "student of B must not learn that an A survey belongs to A").toBe(false);
+
+    const manager = await createAuthenticatedClient(withCap);
+    const { data: managerSeesA, error: managerAError } = await manager.rpc("can_manage_survey_in_class", {
+      p_survey_id: surveyA.id,
+      p_class_id: classS.id
+    });
+    expect(managerAError).toBeNull();
+    expect(managerSeesA).toBe(true);
+
+    const { data: managerSeesBAsA, error: managerBError } = await manager.rpc("can_manage_survey_in_class", {
+      p_survey_id: surveyB!.id,
+      p_class_id: classS.id
+    });
+    expect(managerBError).toBeNull();
+    expect(managerSeesBAsA, "A manager must not treat a B survey as belonging to A").toBe(false);
+  });
+
+  test("survey templates and series follow manage_surveys; template delete stays creator-only", async () => {
+    const client = await createAuthenticatedClient(withCap);
+    const without = await createAuthenticatedClient(withoutCap);
+
+    const { data: template, error: createTemplateError } = await client
+      .from("survey_templates")
+      .insert({
+        class_id: classS.id,
+        created_by: withCap.private_profile_id,
+        title: "With-cap template",
+        description: "owned by withCap",
+        template: surveyJson
+      })
+      .select("id, title")
+      .single();
+    expect(createTemplateError).toBeNull();
+
+    const { data: updatedTemplate, error: updateTemplateError } = await client
+      .from("survey_templates")
+      .update({ title: "With-cap template edited" })
+      .eq("id", template!.id)
+      .select("title");
+    expect(updateTemplateError).toBeNull();
+    expect(updatedTemplate).toEqual([{ title: "With-cap template edited" }]);
+
+    expectRlsBlocked(
+      await without.from("survey_templates").insert({
+        class_id: classS.id,
+        created_by: withoutCap.private_profile_id,
+        title: "No-cap template",
+        description: "should fail",
+        template: surveyJson
+      }),
+      "creating a template without manage_surveys"
+    );
+    const { data: refusedUpdate, error: refusedUpdateError } = await without
+      .from("survey_templates")
+      .update({ title: "nope" })
+      .eq("id", template!.id)
+      .select("id");
+    expect(refusedUpdateError).toBeNull();
+    expect(refusedUpdate ?? [], "updating a template without manage_surveys").toHaveLength(0);
+
+    const { data: othersTemplate, error: othersError } = await supabase
+      .from("survey_templates")
+      .insert({
+        class_id: classS.id,
+        created_by: instructorS.private_profile_id,
+        title: "Instructor template",
+        description: "not owned by withCap",
+        template: surveyJson
+      })
+      .select("id")
+      .single();
+    expect(othersError).toBeNull();
+    // Delete is creator-only, so a manage_surveys holder must not be able to become the creator.
+    const { error: takeOverError } = await client
+      .from("survey_templates")
+      .update({ created_by: withCap.private_profile_id })
+      .eq("id", othersTemplate!.id);
+    expect(takeOverError?.message ?? "", "changing created_by on someone else's template").toMatch(
+      /Cannot change created_by of a survey template/
+    );
+    const { data: stillCreator } = await supabase
+      .from("survey_templates")
+      .select("created_by")
+      .eq("id", othersTemplate!.id)
+      .single();
+    expect(stillCreator?.created_by).toBe(instructorS.private_profile_id);
+    const { data: nonCreatorDelete, error: nonCreatorDeleteError } = await client
+      .from("survey_templates")
+      .delete()
+      .eq("id", othersTemplate!.id)
+      .select("id");
+    expect(nonCreatorDeleteError).toBeNull();
+    expect(nonCreatorDelete ?? [], "deleting someone else's template with manage_surveys").toHaveLength(0);
+    const { data: stillOthers } = await supabase.from("survey_templates").select("id").eq("id", othersTemplate!.id);
+    expect(stillOthers ?? []).toHaveLength(1);
+
+    const { data: ownDelete, error: ownDeleteError } = await client
+      .from("survey_templates")
+      .delete()
+      .eq("id", template!.id)
+      .select("id");
+    expect(ownDeleteError).toBeNull();
+    expect(ownDelete).toHaveLength(1);
+
+    const { data: series, error: createSeriesError } = await client
+      .from("survey_series")
+      .insert({
+        class_id: classS.id,
+        name: "With-cap series",
+        created_by: withCap.private_profile_id
+      })
+      .select("id, name")
+      .single();
+    expect(createSeriesError).toBeNull();
+    const { data: updatedSeries, error: updateSeriesError } = await client
+      .from("survey_series")
+      .update({ name: "With-cap series edited" })
+      .eq("id", series!.id)
+      .select("name");
+    expect(updateSeriesError).toBeNull();
+    expect(updatedSeries).toEqual([{ name: "With-cap series edited" }]);
+
+    expectRlsBlocked(
+      await without.from("survey_series").insert({
+        class_id: classS.id,
+        name: "No-cap series",
+        created_by: withoutCap.private_profile_id
+      }),
+      "creating a series without manage_surveys"
+    );
+  });
+
+  test("management RPCs require manage_surveys and raise the specific error", async () => {
+    const survey = await surveyFor("RPC survey", instructorS.public_profile_id);
+    const student = await createUserInClass({ role: "student", class_id: classS.id });
+    const withClient = await createAuthenticatedClient(withCap);
+    const withoutClient = await createAuthenticatedClient(withoutCap);
+
+    const { error: assignOk } = await withClient.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [student.private_profile_id]
+    });
+    expect(assignOk).toBeNull();
+
+    const { error: assignDenied } = await withoutClient.rpc("create_survey_assignments", {
+      p_survey_id: survey.id,
+      p_profile_ids: [student.private_profile_id]
+    });
+    expect(assignDenied?.message ?? "").toMatch(/Permission denied: manage_surveys required/);
+
+    const { data: series, error: seriesError } = await supabase
+      .from("survey_series")
+      .insert({
+        class_id: classS.id,
+        name: "RPC series",
+        created_by: instructorS.private_profile_id
+      })
+      .select("id")
+      .single();
+    expect(seriesError).toBeNull();
+    expect(
+      (await supabase.from("surveys").update({ series_id: series!.id, series_ordinal: 1 }).eq("id", survey.id)).error
+    ).toBeNull();
+
+    const { error: reorderOk } = await withClient.rpc("reorder_surveys_in_series", {
+      p_series_id: series!.id,
+      p_ordinal_updates: [{ id: survey.id, series_ordinal: 1 }]
+    });
+    expect(reorderOk).toBeNull();
+    const { error: reorderDenied } = await withoutClient.rpc("reorder_surveys_in_series", {
+      p_series_id: series!.id,
+      p_ordinal_updates: [{ id: survey.id, series_ordinal: 1 }]
+    });
+    expect(reorderDenied?.message ?? "").toMatch(/Permission denied: manage_surveys required/);
+
+    const { error: softOk } = await withClient.rpc("soft_delete_survey", {
+      p_survey_id: survey.id,
+      p_survey_logical_id: survey.survey_id
+    });
+    expect(softOk).toBeNull();
+  });
+});
+
+test.describe("live polls follow run_polls (#1010, area 11)", () => {
+  let classP: Awaited<ReturnType<typeof createClass>>;
+  let instructorP: TestingUser;
+  let plainGrader: TestingUser;
+  let withCap: TestingUser;
+  let withoutCap: TestingUser;
+
+  const question = { elements: [{ type: "text", name: "q1", title: "Live?" }] };
+
+  test.beforeAll(async () => {
+    classP = await createClass({ name: "E2E Polls P" });
+    instructorP = await createUserInClass({ role: "instructor", class_id: classP.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: classP.id });
+    withCap = await createUserInClass({ role: "grader", class_id: classP.id });
+    withoutCap = await createUserInClass({ role: "grader", class_id: classP.id });
+
+    const { data: withCapRole, error: withError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classP.id, name: "Poll TA" })
+      .select("id")
+      .single();
+    expect(withError).toBeNull();
+    expect(await roleCapabilities(withCapRole!.id)).toEqual(GRADER_SEEDED_CAPABILITIES);
+    const withRow = await userRole(withCap);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withCapRole!.id }).eq("id", withRow.id)).error
+    ).toBeNull();
+
+    const { data: withoutRole, error: withoutError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: classP.id, name: "No Polls TA" })
+      .select("id")
+      .single();
+    expect(withoutError).toBeNull();
+    const { data: removed, error: removeError } = await supabase
+      .from("role_capabilities")
+      .delete()
+      .eq("role_id", withoutRole!.id)
+      .eq("capability", "run_polls")
+      .select("capability");
+    expect(removeError).toBeNull();
+    expect(removed, "run_polls turned off").toHaveLength(1);
+    const withoutRow = await userRole(withoutCap);
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withoutRole!.id }).eq("id", withoutRow.id)).error
+    ).toBeNull();
+  });
+
+  async function pollFor(created_by: string, is_live = false) {
+    const { data, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: classP.id,
+        created_by,
+        question,
+        is_live,
+        require_login: true
+      })
+      .select("id, is_live")
+      .single();
+    expect(error).toBeNull();
+    return data!;
+  }
+
+  test("an instructor creates, opens and deletes live polls", async () => {
+    const instructor = await createAuthenticatedClient(instructorP);
+    const { data: poll, error: createError } = await instructor
+      .from("live_polls")
+      .insert({
+        class_id: classP.id,
+        created_by: instructorP.public_profile_id,
+        question,
+        is_live: false,
+        require_login: true
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await instructor
+      .from("live_polls")
+      .update({ is_live: true })
+      .eq("id", poll!.id)
+      .select("is_live");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ is_live: true }]);
+
+    const { data: deleted, error: deleteError } = await instructor
+      .from("live_polls")
+      .delete()
+      .eq("id", poll!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a default grader still creates and closes live polls", async () => {
+    const grader = await createAuthenticatedClient(plainGrader);
+    const { data: poll, error: createError } = await grader
+      .from("live_polls")
+      .insert({
+        class_id: classP.id,
+        created_by: plainGrader.public_profile_id,
+        question,
+        is_live: true,
+        require_login: true
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: updated, error: updateError } = await grader
+      .from("live_polls")
+      .update({ is_live: false })
+      .eq("id", poll!.id)
+      .select("is_live");
+    expect(updateError).toBeNull();
+    expect(updated).toEqual([{ is_live: false }]);
+  });
+
+  test("a grader on a custom role with run_polls creates and deletes polls", async () => {
+    const client = await createAuthenticatedClient(withCap);
+    const { data: poll, error: createError } = await client
+      .from("live_polls")
+      .insert({
+        class_id: classP.id,
+        created_by: withCap.public_profile_id,
+        question,
+        is_live: false,
+        require_login: true
+      })
+      .select("id")
+      .single();
+    expect(createError).toBeNull();
+
+    const { data: deleted, error: deleteError } = await client
+      .from("live_polls")
+      .delete()
+      .eq("id", poll!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted).toHaveLength(1);
+  });
+
+  test("a grader on a custom role with run_polls turned off is refused", async () => {
+    const existing = await pollFor(instructorP.public_profile_id);
+    const client = await createAuthenticatedClient(withoutCap);
+
+    expectRlsBlocked(
+      await client.from("live_polls").insert({
+        class_id: classP.id,
+        created_by: withoutCap.public_profile_id,
+        question,
+        is_live: false,
+        require_login: true
+      }),
+      "creating a poll without run_polls"
+    );
+
+    const { data: opened, error: openError } = await client
+      .from("live_polls")
+      .update({ is_live: true })
+      .eq("id", existing.id)
+      .select("id");
+    expect(openError).toBeNull();
+    expect(opened ?? [], "opening a poll without run_polls").toHaveLength(0);
+    const { data: unchanged } = await supabase.from("live_polls").select("is_live").eq("id", existing.id).single();
+    expect(unchanged?.is_live).toBe(false);
+
+    const { data: deleted, error: deleteError } = await client
+      .from("live_polls")
+      .delete()
+      .eq("id", existing.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted ?? [], "deleting a poll without run_polls").toHaveLength(0);
+    const { data: stillThere } = await supabase.from("live_polls").select("id").eq("id", existing.id);
+    expect(stillThere ?? []).toHaveLength(1);
+  });
+
+  test("a student can still answer a live poll", async () => {
+    const student = await createUserInClass({ role: "student", class_id: classP.id });
+    const poll = await pollFor(instructorP.public_profile_id, true);
+    const client = await createAuthenticatedClient(student);
+    const { error } = await client.from("live_poll_responses").insert({
+      live_poll_id: poll.id,
+      public_profile_id: student.public_profile_id,
+      response: { q1: "yes" },
+      is_submitted: true
+    });
+    expect(error, "student can still answer a live poll").toBeNull();
+  });
+
+  test("a grader without run_polls can read live poll responses but cannot change them", async () => {
+    const student = await createUserInClass({ role: "student", class_id: classP.id });
+    const poll = await pollFor(instructorP.public_profile_id, true);
+    const { data: response, error: seedError } = await supabase
+      .from("live_poll_responses")
+      .insert({
+        live_poll_id: poll.id,
+        public_profile_id: student.public_profile_id,
+        response: { q1: "seed" },
+        is_submitted: true
+      })
+      .select("id, response")
+      .single();
+    expect(seedError).toBeNull();
+
+    const client = await createAuthenticatedClient(withoutCap);
+    const { data: visible, error: readError } = await client
+      .from("live_poll_responses")
+      .select("id, response")
+      .eq("id", response!.id);
+    expect(readError).toBeNull();
+    expect(visible ?? []).toHaveLength(1);
+
+    const { data: updated, error: updateError } = await client
+      .from("live_poll_responses")
+      .update({ response: { q1: "changed" } })
+      .eq("id", response!.id)
+      .select("id");
+    expect(updateError).toBeNull();
+    expect(updated ?? [], "updating a response without run_polls").toHaveLength(0);
+    const { data: unchanged } = await supabase
+      .from("live_poll_responses")
+      .select("response")
+      .eq("id", response!.id)
+      .single();
+    expect(unchanged?.response).toEqual({ q1: "seed" });
+
+    const { data: deleted, error: deleteError } = await client
+      .from("live_poll_responses")
+      .delete()
+      .eq("id", response!.id)
+      .select("id");
+    expect(deleteError).toBeNull();
+    expect(deleted ?? [], "deleting a response without run_polls").toHaveLength(0);
+    const { data: stillThere } = await supabase.from("live_poll_responses").select("id").eq("id", response!.id);
+    expect(stillThere ?? []).toHaveLength(1);
+  });
+
+  test("run_polls in one class doesn't reach another class", async () => {
+    const otherClass = await createClass({ name: "E2E Polls Other" });
+    const otherInstructor = await createUserInClass({ role: "instructor", class_id: otherClass.id });
+    const { data: otherPoll, error } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: otherClass.id,
+        created_by: otherInstructor.public_profile_id,
+        question,
+        is_live: false,
+        require_login: true
+      })
+      .select("id, is_live")
+      .single();
+    expect(error).toBeNull();
+
+    const client = await createAuthenticatedClient(withCap);
+    expectRlsBlocked(
+      await client.from("live_polls").insert({
+        class_id: otherClass.id,
+        created_by: withCap.public_profile_id,
+        question,
+        is_live: false,
+        require_login: true
+      }),
+      "inserting a poll in another class"
+    );
+    const { data: crossUpdate, error: crossUpdateError } = await client
+      .from("live_polls")
+      .update({ is_live: true })
+      .eq("id", otherPoll!.id)
+      .select("id");
+    expect(crossUpdateError).toBeNull();
+    expect(crossUpdate ?? [], "editing another class's poll").toHaveLength(0);
+    const { data: stillThere } = await supabase.from("live_polls").select("is_live").eq("id", otherPoll!.id).single();
+    expect(stillThere?.is_live).toBe(false);
   });
 });

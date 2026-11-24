@@ -4,17 +4,21 @@
  *
  * Run from supabase/functions:  deno test --no-check --allow-read --allow-env --allow-net forgejo-repo-webhook/
  */
-import { assert, assertEquals } from "jsr:@std/assert@^1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { RepoPush } from "../_shared/RepoPush.ts";
 import { fakeSupabase, repositoryRow } from "../_shared/RepoPushFakeClient.ts";
-import {
-  type ForgejoPushPayload,
-  fromForgejoPush,
-  handleForgejoPush,
-  handleForgejoWebhook,
-  verifyForgejoSignature
-} from "./webhook.ts";
+import type { ForgejoPushDeps, ForgejoPushPayload } from "./webhook.ts";
+import type { PushDirectPush } from "../_shared/PushDirectSubmission.ts";
+import type { ForgejoActionRun } from "./actionRun.ts";
+import { actionRunPayload } from "./actionRunFixture.ts";
+
+// webhook.ts reaches GitHubWrapper (through the push-direct submission code), which builds a GitHub
+// App at import time and needs a non-empty private key.
+Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
+const { fromForgejoPush, handleForgejoPush, handleForgejoWebhook, verifyForgejoSignature } = await import(
+  "./webhook.ts"
+);
 
 const SECRET = "test-webhook-secret";
 const FORGEJO_URL = "http://127.0.0.1:3100";
@@ -142,7 +146,8 @@ Deno.test("fromForgejoPush lists commits oldest first, without git's trailing ne
       }
     ],
     totalCommits: 2,
-    pusherName: "alex"
+    pusherName: "alex",
+    before: "ac9fbc2cdcf250451cc21e089b4d3dacbe4f4e10"
   });
 });
 
@@ -154,9 +159,9 @@ Deno.test("fromForgejoPush handles a push with no commits, such as a branch dele
   assertEquals(push.pusherName, "alex");
 });
 
-/** Calls handleForgejoWebhook with a spy push handler. */
 async function deliver(init: { body?: string; headers?: Record<string, string>; method?: string }, config = {}) {
   const pushes: RepoPush[] = [];
+  const runs: ForgejoActionRun[] = [];
   const response = await handleForgejoWebhook(
     new Request("http://localhost/functions/v1/forgejo-repo-webhook", {
       method: init.method ?? "POST",
@@ -170,10 +175,14 @@ async function deliver(init: { body?: string; headers?: Record<string, string>; 
         pushes.push(push);
         return Promise.resolve();
       },
+      handleActionRun: (run) => {
+        runs.push(run);
+        return Promise.resolve();
+      },
       ...config
     }
   );
-  return { status: response.status, body: await response.json(), pushes };
+  return { status: response.status, body: await response.json(), pushes, runs };
 }
 
 async function signedHeaders(body: string, event = "push", secret = SECRET) {
@@ -183,9 +192,14 @@ async function signedHeaders(body: string, event = "push", secret = SECRET) {
 
 Deno.test("handleForgejoWebhook passes a signed push to the push handler", async () => {
   const body = JSON.stringify(forgejoPayload());
+  const before = Date.now();
   const result = await deliver({ body, headers: await signedHeaders(body) });
   assertEquals(result.status, 200);
-  assertEquals(result.pushes, [fromForgejoPush(forgejoPayload())]);
+  assertEquals(result.pushes.length, 1);
+  // The receive time is taken when the request arrives, before the handler runs.
+  const { receivedAt, ...rest } = result.pushes[0];
+  assertEquals(rest, fromForgejoPush(forgejoPayload()));
+  assert(receivedAt instanceof Date && receivedAt.getTime() >= before && receivedAt.getTime() <= Date.now());
 });
 
 Deno.test("handleForgejoWebhook accepts X-Gitea-Signature alone", async () => {
@@ -220,6 +234,50 @@ Deno.test("handleForgejoWebhook acknowledges other events without handling them"
     const result = await deliver({ body, headers: await signedHeaders(body, event) });
     assertEquals([event, result.status, result.pushes.length], [event, 200, 0]);
   }
+});
+
+Deno.test("handleForgejoWebhook passes a finished run to the action run handler", async () => {
+  for (const [event, action] of [
+    ["action_run_failure", "failure"],
+    ["action_run_success", "success"]
+  ]) {
+    const payload = actionRunPayload(FORGEJO_URL, { action, status: action });
+    const body = JSON.stringify(payload);
+    const result = await deliver({ body, headers: await signedHeaders(body, event) });
+    assertEquals([event, result.status, result.pushes.length], [event, 200, 0]);
+    assertEquals(result.runs, [payload.run]);
+  }
+});
+
+Deno.test("handleForgejoWebhook acknowledges action_run_recover, which repeats the success delivery", async () => {
+  const body = JSON.stringify(actionRunPayload(FORGEJO_URL, { action: "recover", status: "success" }));
+  const result = await deliver({ body, headers: await signedHeaders(body, "action_run_recover") });
+  assertEquals([result.status, result.runs.length], [200, 0]);
+});
+
+Deno.test("handleForgejoWebhook refuses an action run that isn't one, or whose links leave the instance", async () => {
+  const notRun = JSON.stringify({ action: "failure", run: { id: "4" } });
+  const bad = await deliver({ body: notRun, headers: await signedHeaders(notRun, "action_run_failure") });
+  assertEquals([bad.status, bad.runs.length], [400, 0]);
+
+  const otherRepo = actionRunPayload(FORGEJO_URL);
+  otherRepo.run.repository.html_url = "https://git.example.com/cs101/hw1-alex";
+  const otherLink = actionRunPayload(FORGEJO_URL);
+  otherLink.run.html_url = "https://evil.example.com/cs101/hw1-alex/actions/runs/3";
+  for (const payload of [otherRepo, otherLink]) {
+    const body = JSON.stringify(payload);
+    const result = await deliver({ body, headers: await signedHeaders(body, "action_run_failure") });
+    assertEquals([result.status, result.runs.length], [403, 0]);
+  }
+});
+
+Deno.test("handleForgejoWebhook answers 500 when recording the run fails, so Forgejo can redeliver", async () => {
+  const body = JSON.stringify(actionRunPayload(FORGEJO_URL));
+  const result = await deliver(
+    { body, headers: await signedHeaders(body, "action_run_failure") },
+    { handleActionRun: () => Promise.reject(new Error("database down")) }
+  );
+  assertEquals(result.status, 500);
 });
 
 Deno.test("handleForgejoWebhook rejects what it can't handle without calling the push handler", async () => {
@@ -398,4 +456,257 @@ Deno.test("handleForgejoPush refuses a name that matches more than one Forgejo r
     errors.some((line) => line.includes("cs101/hw1-alex matches more than one Forgejo repository")),
     errors.join("\n")
   );
+});
+
+// ---- push-direct submissions (push mode, autograder off) ----------------------------------------
+
+const FORGEJO_CONFIG = { url: FORGEJO_URL, authorization: "Basic eA==", authSourceId: 3 };
+
+function pushDirectTables(
+  repo: Record<string, unknown> = {},
+  assignment: Record<string, unknown> = {}
+): Record<string, Record<string, unknown>[]> {
+  return {
+    repositories: [repositoryRow({ id: 7, repository: "cs101/hw1-alex", git_provider: "forgejo", ...repo })],
+    assignments: [
+      {
+        id: 100,
+        git_provider: "forgejo",
+        submission_mode: "push",
+        repo_mode: "individual",
+        has_autograder: false,
+        allow_not_graded_submissions: true,
+        permit_empty_submissions: false,
+        latest_template_sha: "5e1f00d1c0ffee5e1f00d1c0ffee5e1f00d1c0ff",
+        max_late_tokens: 2,
+        require_tokens_before_due_date: false,
+        classes: { late_tokens_per_student: 5 },
+        ...assignment
+      }
+    ],
+    repository_check_runs: []
+  };
+}
+
+type SubmissionCall = { push: PushDirectPush; repoId: number; opts: Record<string, unknown> };
+
+/** Deps with a spy createSubmission, a fixed head and an ordinary student pusher. */
+function pushDirectDeps(overrides: Partial<ForgejoPushDeps> = {}) {
+  const submissions: SubmissionCall[] = [];
+  const standingCalls: unknown[][] = [];
+  const headCalls: string[] = [];
+  const deps: ForgejoPushDeps = {
+    forgejo: FORGEJO_CONFIG,
+    adminLogin: "pawtograder-admin",
+    getHeadSha: (_config, repository, branch) => {
+      headCalls.push(`${repository}@${branch}`);
+      return Promise.resolve(HEAD);
+    },
+    resolvePusherStanding: (_supabase, _repo, login, _scope, instanceUrl) => {
+      standingCalls.push([login, instanceUrl]);
+      return Promise.resolve({ isForeignStaff: false, isOwnerStaff: false });
+    },
+    createSubmission: (_supabase, push, repo, opts) => {
+      submissions.push({ push, repoId: repo.id, opts: opts as unknown as Record<string, unknown> });
+      return Promise.resolve();
+    },
+    ...overrides
+  };
+  return { deps, submissions, standingCalls, headCalls };
+}
+
+function pushBy(login: string, payload = forgejoPayload()): RepoPush {
+  payload.pusher = { login, username: login };
+  payload.sender = { login };
+  return fromForgejoPush(payload);
+}
+
+Deno.test("handleForgejoPush passes the webhook's receive time as the push time", async () => {
+  const { client } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps();
+  const receivedAt = new Date("2026-11-20T23:58:00Z");
+  await handleForgejoPush(client, fromForgejoPush(forgejoPayload(), receivedAt), new Sentry.Scope(), deps);
+  assertEquals(submissions.length, 1);
+  assertEquals(submissions[0].push.pushedAt, receivedAt);
+});
+
+Deno.test("handleForgejoPush creates a push-direct submission for the student's default-branch push", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables());
+  const { deps, submissions, standingCalls, headCalls } = pushDirectDeps();
+  await handleForgejoPush(client, fromForgejoPush(forgejoPayload()), new Sentry.Scope(), deps);
+
+  // The commit history is recorded too, before the submission.
+  assertEquals(recordedShas(inserts), [PARENT, HEAD]);
+  assertEquals(standingCalls, [["alex", FORGEJO_URL]]);
+  assertEquals(headCalls, ["cs101/hw1-alex@main"]);
+  assertEquals(submissions.length, 1);
+  const [{ push, repoId, opts }] = submissions;
+  assertEquals(repoId, 7);
+  assertEquals(
+    { provider: push.provider, repoName: push.repoName, sha: push.sha, message: push.headCommitMessage },
+    { provider: "forgejo", repoName: "cs101/hw1-alex", sha: HEAD, message: "Finish part 1 #submit" }
+  );
+  // Forgejo has no server-side push time. Without a receive time on the push (it was built
+  // directly here, not by handleForgejoWebhook), the shared handler falls back to the check time.
+  assertEquals(push.pushedAt, null);
+  // The re-check before insert reads the head on Forgejo again.
+  assertEquals(await push.getHeadSha(), HEAD);
+  assertEquals(headCalls.length, 2);
+  assertEquals(
+    {
+      allow: opts.allowNotGradedSubmissions,
+      permitEmpty: opts.permitEmptySubmissions,
+      lateTokens: opts.lateTokenPolicy,
+      staffOwner: opts.actorIsStaffOwner
+    },
+    {
+      allow: true,
+      permitEmpty: false,
+      lateTokens: { maxLateTokens: 2, requireTokensBeforeDueDate: false, classLateTokensPerStudent: 5 },
+      staffOwner: false
+    }
+  );
+});
+
+Deno.test("handleForgejoPush leaves submissions to Forgejo Actions when the autograder is on", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables({}, { has_autograder: true }));
+  const { deps, submissions, headCalls } = pushDirectDeps();
+  await handleForgejoPush(client, fromForgejoPush(forgejoPayload()), new Sentry.Scope(), deps);
+  assertEquals(recordedShas(inserts), [PARENT, HEAD]);
+  assertEquals(submissions, []);
+  assertEquals(headCalls, []);
+});
+
+Deno.test(
+  "handleForgejoPush makes no submission for another branch, a pr-mode or a no-repository assignment",
+  async () => {
+    const cases: [string, RepoPush, Record<string, unknown>][] = [
+      ["other branch", { ...fromForgejoPush(forgejoPayload()), ref: "refs/heads/scratch" }, {}],
+      ["pr mode", fromForgejoPush(forgejoPayload()), { submission_mode: "pr" }],
+      ["no repository", fromForgejoPush(forgejoPayload()), { repo_mode: "none" }]
+    ];
+    for (const [label, push, assignment] of cases) {
+      const { client, inserts } = fakeSupabase(pushDirectTables({}, assignment));
+      const { deps, submissions } = pushDirectDeps();
+      await handleForgejoPush(client, push, new Sentry.Scope(), deps);
+      assertEquals(inserts, [], label);
+      assertEquals(submissions, [], label);
+    }
+  }
+);
+
+Deno.test("handleForgejoPush skips Pawtograder's own pushes, recording them in the history", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables());
+  const { deps, submissions, standingCalls } = pushDirectDeps();
+  const scope = new Sentry.Scope();
+  // Matched ignoring case, as Forgejo logins are.
+  await handleForgejoPush(client, pushBy("Pawtograder-Admin"), scope, deps);
+  assertEquals(recordedShas(inserts), [PARENT, HEAD]);
+  assertEquals(submissions, []);
+  assertEquals(standingCalls, []);
+  assertEquals(scope.getScopeData().tags.skipped_reason, "handout_sync_push");
+});
+
+Deno.test("handleForgejoPush drops the admin's push to a repository still being created", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables({ is_github_ready: false }));
+  const { deps, submissions } = pushDirectDeps();
+  const scope = new Sentry.Scope();
+  await handleForgejoPush(client, pushBy("pawtograder-admin"), scope, deps);
+  assertEquals(inserts, []);
+  assertEquals(submissions, []);
+  assertEquals(scope.getScopeData().tags.skipped_reason, "repo_provisioning_push");
+});
+
+Deno.test("handleForgejoPush fails a student's push to an unready repository instead of acknowledging it", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables({ is_github_ready: false }));
+  const { deps, submissions } = pushDirectDeps();
+  const scope = new Sentry.Scope();
+  await assertRejects(
+    () => handleForgejoPush(client, fromForgejoPush(forgejoPayload()), scope, deps),
+    Error,
+    "is not marked ready yet"
+  );
+  assertEquals(inserts, []);
+  assertEquals(submissions, []);
+  // A push onto existing history can't be the repository's creation.
+  assertEquals(scope.getScopeData().tags.repo_not_ready_kind, "readiness_write_failed");
+  assertEquals(scope.getScopeData().tags.repo_not_ready_reason, "not_ref_creating");
+});
+
+Deno.test("handleForgejoPush skips a staff member's push to a student's repository", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps({
+    resolvePusherStanding: () => Promise.resolve({ isForeignStaff: true, isOwnerStaff: false })
+  });
+  await handleForgejoPush(client, pushBy("ta-jordan"), new Sentry.Scope(), deps);
+  assertEquals(recordedShas(inserts), [PARENT, HEAD]);
+  assertEquals(submissions, []);
+});
+
+Deno.test("handleForgejoPush passes a staff owner's push on with the staff exemptions", async () => {
+  const { client } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps({
+    resolvePusherStanding: () => Promise.resolve({ isForeignStaff: false, isOwnerStaff: true })
+  });
+  await handleForgejoPush(client, pushBy("prof-lee"), new Sentry.Scope(), deps);
+  assertEquals(submissions.length, 1);
+  assertEquals(submissions[0].opts.actorIsStaffOwner, true);
+});
+
+Deno.test("handleForgejoPush skips a delivery the repository head has moved past", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps({ getHeadSha: () => Promise.resolve("f".repeat(40)) });
+  const scope = new Sentry.Scope();
+  await handleForgejoPush(client, fromForgejoPush(forgejoPayload()), scope, deps);
+  assertEquals(recordedShas(inserts), [PARENT, HEAD]);
+  assertEquals(submissions, []);
+  assertEquals(scope.getScopeData().tags.skipped_reason, "push_superseded");
+});
+
+Deno.test("handleForgejoPush fails rather than guessing when the head can't be read", async () => {
+  const { client } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps({
+    getHeadSha: () => Promise.reject(new Error("Forgejo commit lookup failed: 502"))
+  });
+  await assertRejects(
+    () => handleForgejoPush(client, fromForgejoPush(forgejoPayload()), new Sentry.Scope(), deps),
+    Error,
+    "Could not resolve the current head of cs101/hw1-alex"
+  );
+  assertEquals(submissions, []);
+});
+
+Deno.test("handleForgejoPush skips a push whose commit is the handout sync's", async () => {
+  const payload = forgejoPayload();
+  payload.head_commit!.message = "Sync handout updates to 5e1f00d\n";
+  const { client } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps();
+  const scope = new Sentry.Scope();
+  await handleForgejoPush(client, fromForgejoPush(payload), scope, deps);
+  assertEquals(submissions, []);
+  assertEquals(scope.getScopeData().tags.skipped_reason, "handout_sync_push");
+
+  // The same words naming a sha that isn't the handout's are the student's own commit.
+  const own = forgejoPayload();
+  own.head_commit!.message = "Sync handout updates to abcdef0\n";
+  const other = pushDirectDeps();
+  await handleForgejoPush(
+    fakeSupabase(pushDirectTables()).client,
+    fromForgejoPush(own),
+    new Sentry.Scope(),
+    other.deps
+  );
+  assertEquals(other.submissions.length, 1);
+});
+
+Deno.test("handleForgejoPush fails after recording the history when the admin API isn't configured", async () => {
+  const { client, inserts } = fakeSupabase(pushDirectTables());
+  const { deps, submissions } = pushDirectDeps({ forgejo: null });
+  await assertRejects(
+    () => handleForgejoPush(client, fromForgejoPush(forgejoPayload()), new Sentry.Scope(), deps),
+    Error,
+    "Forgejo admin settings are not configured"
+  );
+  assertEquals(recordedShas(inserts), [PARENT, HEAD]);
+  assertEquals(submissions, []);
 });

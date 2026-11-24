@@ -196,9 +196,27 @@ for (const provider of ["github", "forgejo"] as const) {
             p_class_id: f.course.id,
             p_enqueue_github_archives: true
           });
-      if (provider === "github") expect(result.error).toBeNull();
-      else expect(result.error?.code).toBe("0A000");
-      expect(await ok(reposFor(f.assignment.id))).toHaveLength(provider === "github" ? 0 : 1);
+      expect(result.error).toBeNull();
+      expect(await ok(reposFor(f.assignment.id))).toHaveLength(0);
+      // A Forgejo repo is queued for forgejo-reconciler to archive, and never sent to GitHub.
+      const archives = await ok(
+        supabase.from("forgejo_repo_archives").select("repository").eq("class_id", f.course.id).is("archived_at", null)
+      );
+      expect(archives.map((a) => a.repository)).toEqual(provider === "forgejo" ? [repo.repository!.toLowerCase()] : []);
+      const githubArchives = await ok(
+        supabase
+          .from("api_gateway_calls")
+          .select("id")
+          .eq("class_id", f.course.id)
+          .eq("method", "archive_repo_and_lock")
+      );
+      expect(githubArchives).toHaveLength(provider === "github" && !direct ? 1 : 0);
+      if (!direct) {
+        const deleted = result.data as { github_repositories: unknown[]; forgejo_repositories: unknown[] };
+        const target = [{ kind: "student", full_name: repo.repository!.toLowerCase() }];
+        expect(deleted.forgejo_repositories).toEqual(provider === "forgejo" ? target : []);
+        expect(deleted.github_repositories).toHaveLength(provider === "github" ? 1 : 0);
+      }
     });
   }
   test(`${provider} fork sources stay provider-consistent`, async () => {
@@ -242,36 +260,55 @@ test("GitHub enqueue RPCs remain inaccessible to anonymous callers", async () =>
   });
   expect(result.error?.code).toBe("42501");
 });
-test("course deletion explains the restriction and preserves the course", async () => {
-  const { course, assignment } = await fixture("forgejo");
-  // Remove rubrics so their restrictive FK does not mask the assignment cascade.
-  await ok(
-    supabase
-      .from("assignments")
-      .update({ grading_rubric_id: null, self_review_rubric_id: null, meta_grading_rubric_id: null })
-      .eq("id", assignment.id)
-  );
-  await ok(supabase.from("rubrics").delete().eq("class_id", course.id));
-  const result = await supabase.from("classes").delete().eq("id", course.id);
-  expect(result.error?.code).toBe("0A000");
-  expect(result.error?.message).toContain("Deleting Forgejo assignments or their course");
-  expect(result.error?.message).toContain("If no repositories exist, switch the assignment to GitHub");
-  expect(await ok(supabase.from("assignments").select("id").eq("id", assignment.id))).toHaveLength(1);
-  expect(await ok(supabase.from("classes").select("id").eq("id", course.id))).toHaveLength(1);
-  await ok(switchHost(assignment.id, "github"));
-  await ok(
-    supabase.rpc("delete_assignment_with_all_data", {
-      p_assignment_id: assignment.id,
-      p_class_id: course.id,
-      p_enqueue_github_archives: true
-    })
-  );
-  expect(await ok(supabase.from("assignments").select("id").eq("id", assignment.id))).toHaveLength(0);
-});
+for (const provider of ["github", "forgejo"] as const) {
+  test(`deleting a ${provider} assignment outside the RPC queues only a Forgejo handout for archiving`, async () => {
+    const { course, assignment } = await fixture(provider);
+    const handout = `${provider === "forgejo" ? course.slug : "e2e-ignore"}/Handout-${crypto.randomUUID()}`;
+    // Remove rubrics so their restrictive FK does not mask the assignment delete.
+    await ok(
+      supabase
+        .from("assignments")
+        .update({
+          template_repo: handout,
+          grading_rubric_id: null,
+          self_review_rubric_id: null,
+          meta_grading_rubric_id: null
+        })
+        .eq("id", assignment.id)
+    );
+    await ok(supabase.from("rubrics").delete().eq("class_id", course.id));
+    // Class deletion still fails on either host: assignment_self_review_settings.class_id references
+    // classes with NO ACTION while assignments.self_review_setting_id is NOT NULL. Both hosts fail
+    // with 23503 now that the Forgejo-specific assignment delete guard is gone.
+    expect((await supabase.from("classes").delete().eq("id", course.id)).error?.code).toBe("23503");
+    expect(await ok(supabase.from("classes").select("id").eq("id", course.id))).toHaveLength(1);
+    // Deleting the assignment outside the RPC fires its AFTER DELETE trigger with the course still present.
+    //
+    // Its autograder row is in the way, and so are the autograder's own children: creating an assignment
+    // seeds a regression-test row, and `autograder_regression_test.autograder_id` references `autograder`
+    // with NO ACTION, so deleting the autograder alone fails with 23503. The restrictive children are
+    // whatever this reports, which is where this order comes from:
+    //
+    //   SELECT conrelid::regclass, confrelid::regclass, confdeltype FROM pg_constraint
+    //   WHERE confrelid IN ('public.autograder'::regclass, 'public.assignments'::regclass)
+    //     AND contype = 'f' AND confdeltype IN ('a', 'r');
+    //
+    // The rest of that list (submissions, groups, repositories, and so on) stays empty in this fixture,
+    // so clearing the autograder subtree is enough to reach the assignment row.
+    await ok(supabase.from("autograder_regression_test").delete().eq("autograder_id", assignment.id));
+    await ok(supabase.from("autograder_commits").delete().eq("autograder_id", assignment.id));
+    await ok(supabase.from("autograder").delete().eq("id", assignment.id));
+    await ok(supabase.from("assignments").delete().eq("id", assignment.id));
+    expect(await ok(supabase.from("assignments").select("id").eq("id", assignment.id))).toHaveLength(0);
+    const archives = await ok(
+      supabase.from("forgejo_repo_archives").select("repository").eq("class_id", course.id).is("archived_at", null)
+    );
+    expect(archives.map((a) => a.repository)).toEqual(provider === "forgejo" ? [handout.toLowerCase()] : []);
+  });
+}
 for (const endpoint of [
   "assignment-create-all-repos",
   "assignment-create-solution-repo",
-  "assignment-sync-autograder-workflow",
   "github-repo-configure-webhook"
 ]) {
   test(`${endpoint} rejects a Forgejo assignment`, async () => {
@@ -300,6 +337,27 @@ for (const endpoint of [
     expect(await ok(reposFor(assignment.id))).toHaveLength(0);
   });
 }
+
+test("assignment-sync-autograder-workflow takes the Forgejo path instead of refusing the assignment", async () => {
+  // CI has no Forgejo settings, so the Forgejo path answers 503 instead of the GitHub refusal.
+  const { course, assignment } = await fixture("forgejo");
+  const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });
+  await ok(
+    supabase
+      .from("assignments")
+      .update({ release_date: new Date(Date.now() - 60_000).toISOString(), template_repo: "e2e-ignore/staff" })
+      .eq("id", assignment.id)
+  );
+  const { error } = await supabase.functions.invoke("assignment-sync-autograder-workflow", {
+    headers: { Authorization: `Bearer ${await getAuthTokenForUser(instructor)}` },
+    body: { class_id: course.id, assignment_id: assignment.id }
+  });
+  expect(error?.context.status).toBe(503);
+  const body = await error.context.text();
+  expect(body).toContain("Forgejo is not set up on this deployment");
+  expect(body).not.toContain("This assignment uses Forgejo");
+  expect(await ok(reposFor(assignment.id))).toHaveLength(0);
+});
 test("github-repo-configure-webhook reads a Forgejo assignment's grader repo, which stays on GitHub", async () => {
   const { course, assignment } = await fixture("forgejo");
   const instructor = await createUserInClass({ class_id: course.id, role: "instructor" });

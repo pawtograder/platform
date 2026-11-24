@@ -939,6 +939,14 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   // A group repo's owner/name, as repositories.repository.
   "forgejo_group_repo_revocations.repository": "handle",
   "forgejo_group_repo_revocations.repository_id": "none",
+  "forgejo_repo_archives.archived_as": "free_text",
+  "forgejo_repo_archives.archived_at": "none",
+  "forgejo_repo_archives.claimed_at": "none",
+  "forgejo_repo_archives.class_id": "none",
+  "forgejo_repo_archives.id": "none",
+  "forgejo_repo_archives.queued_at": "none",
+  // Student repo names end in a Forgejo login, and group repo names in a name students choose.
+  "forgejo_repo_archives.repository": "free_text",
   "forgejo_repo_tokens.id": "none",
   "forgejo_repo_tokens.instance_url": "none",
   "forgejo_repo_tokens.recorded_at": "none",
@@ -1496,6 +1504,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "profiles.sortable_name": "name",
   "profiles.time_zone": "none",
   "profiles.updated_at": "none",
+  // Per-submitter promotion counter for push-direct force-pushes; the submitter key is an id.
+  "push_direct_promotion_versions.assignment_id": "none",
+  "push_direct_promotion_versions.submitter": "none",
+  "push_direct_promotion_versions.version": "none",
   "realtime_channel_subscriptions.channel": "none",
   "realtime_channel_subscriptions.class_id": "none",
   "realtime_channel_subscriptions.client_id": "none",
@@ -1903,6 +1915,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "submissions.grading_review_id": "none",
   "submissions.head_sha": "none",
   "submissions.id": "none",
+  // A flag set while a push-direct submission is still being written.
+  "submissions.ingestion_pending": "none",
   "submissions.is_active": "none",
   "submissions.is_empty_submission": "none",
   "submissions.is_not_graded": "none",
@@ -2403,6 +2417,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   can_add_profile_to_help_request: "none",
   // DRAFT: new entry, review and remove this comment
   can_follow_up_help_request: "none",
+  can_manage_survey_in_class: "none",
   can_respond_to_survey: "none",
   channel_has_subscribers: "none",
   check_assignment_deadlines_passed: "none",
@@ -2429,6 +2444,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   claim_discord_invite: { "$[*].claimed": "none", "$[*].winning_invite_url": "none" },
   claim_forgejo_group_repo_revocation: "none",
+  claim_forgejo_repo_archive: "none",
   claim_forgejo_repo_token_revocation: "none",
   claim_git_account: "none",
   class_team_member_usernames: "handle",
@@ -2573,6 +2589,12 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   // void: clears is_github_ready on the groups' Forgejo repos so the reconciler re-grants them.
   forgejo_groups_need_grants: "none",
+  forgejo_repo_archives_due: {
+    "$[*].id": "none",
+    "$[*].class_id": "none",
+    // A student repo name ends in a Forgejo login; a group repo name in a name students choose.
+    "$[*].repository": "free_text"
+  },
   forgejo_repo_token_revocable: "none",
   forgejo_repo_tokens_to_revoke: {
     "$[*].id": "none",
@@ -2967,6 +2989,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   is_instructor_for_class: "none",
   is_instructor_for_student: "none",
   kick_forgejo_reconciler: "none",
+  leave_forgejo_assignment_group: "none",
   log_api_gateway_call: "none",
   log_flashcard_interaction: "none",
   log_help_request_activity: "none",
@@ -3019,8 +3042,11 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   pg_buffercache_pages: "none",
   pg_buffercache_summary: "none",
   pg_buffercache_usage_counts: "none",
+  prepare_forgejo_repo_archive: "none",
   preview_error_pin_matches: { $: "none", "$.recent_submissions[*].student_name": "name" },
   process_calendar_announcements: "none",
+  // Returns a status word: "promoted", "superseded" or "missing".
+  promote_push_direct_submission: "none",
   promote_whatif_grader_result: "none",
   // UNCERTAIN: errors[].group_name is a user-chosen group name (classified free_text); errors[].error is SQLERRM, which can echo the group name or other values
   publish_assignment_group_changes: {
@@ -3028,6 +3054,9 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.errors[*].error": "free_text",
     "$.errors[*].group_name": "free_text"
   },
+  // Returns the submitter's force-push promotion counter.
+  push_direct_promotion_version: "none",
+  queue_forgejo_repo_archives: "none",
   queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
   // DRAFT: new entry, review and remove this comment
   quiz_autograde: "none",

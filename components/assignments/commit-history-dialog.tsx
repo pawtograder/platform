@@ -308,7 +308,13 @@ export function RepositoryCommitHistoryDialog({
                             {getCommitHistorySourceLabel(entry.source)}
                           </Badge>
                           <Text fontSize="xs" color="fg.muted">
-                            {workflowStatusText(entry.status)}
+                            {entry.status.workflow_run_url ? (
+                              <Link href={entry.status.workflow_run_url} target="_blank" rel="noopener noreferrer">
+                                {workflowStatusText(entry.status)}
+                              </Link>
+                            ) : (
+                              workflowStatusText(entry.status)
+                            )}
                           </Text>
                         </Flex>
                       </Table.Cell>

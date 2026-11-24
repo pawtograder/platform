@@ -42,6 +42,7 @@ import { Open as openZip } from "npm:unzipper";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { END_TO_END_REPO_PREFIX, getRepoToCloneConsideringE2E } from "./GitHubWrapper.ts";
+import { ArchiveTooLargeError, downloadArchive, type ForgejoConfig, forgejoConfig } from "./ForgejoWrapper.ts";
 import { getGitProvider } from "./GitProvider.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
 
@@ -50,7 +51,7 @@ import type { Database } from "./SupabaseTypes.d.ts";
 // capped (256MB, matching supabase.com). A repo with committed build
 // artifacts/caches can blow that cap and get the worker killed mid-request.
 // These limits reject the pathological case early. Both are env-tunable.
-const MAX_SUBMISSION_ZIP_MB = Number(Deno.env.get("MAX_SUBMISSION_ZIP_MB")) || 120;
+export const MAX_SUBMISSION_ZIP_MB = Number(Deno.env.get("MAX_SUBMISSION_ZIP_MB")) || 120;
 const MAX_SUBMISSION_UNZIPPED_MB = Number(Deno.env.get("MAX_SUBMISSION_UNZIPPED_MB")) || 300;
 const MAX_SUBMISSION_ZIP_BYTES = MAX_SUBMISSION_ZIP_MB * 1024 * 1024;
 const MAX_SUBMISSION_UNZIPPED_BYTES = MAX_SUBMISSION_UNZIPPED_MB * 1024 * 1024;
@@ -326,7 +327,42 @@ export type IngestFromZipParams = IngestScope & {
 export type IngestFromRepoParams = IngestScope & {
   repo: string; // "owner/name"
   sha: string;
+  /** The repository's host (`repositories.git_provider`). GitHub when omitted. */
+  gitProvider?: "github" | "forgejo";
+  /** Forgejo settings, for tests. Read from the environment when omitted. */
+  forgejo?: ForgejoConfig | null;
 };
+
+/** Thrown for a Forgejo repository on a deployment without the Forgejo settings. */
+export class ForgejoIngestionNotConfiguredError extends Error {
+  constructor() {
+    super("Forgejo is not set up on this deployment, so a Forgejo repository can't be downloaded");
+    this.name = "ForgejoIngestionNotConfiguredError";
+  }
+}
+
+/**
+ * `repo` at `sha` as a zip from Forgejo's archive endpoint, the same shape as GitHub's zipball. An
+ * archive past MAX_SUBMISSION_ZIP_MB stops downloading there and surfaces as the same
+ * SubmissionTooLargeError the GitHub path raises once the zip is in hand, so callers reject both
+ * alike. E2E repositories are GitHub fixtures and never reach this.
+ */
+export async function downloadForgejoSubmissionZip(
+  config: ForgejoConfig | null,
+  repo: string,
+  sha: string
+): Promise<Buffer> {
+  if (!config) throw new ForgejoIngestionNotConfiguredError();
+  try {
+    const archive = await downloadArchive(config, repo, sha, MAX_SUBMISSION_ZIP_BYTES);
+    return Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength);
+  } catch (e) {
+    if (e instanceof ArchiveTooLargeError) {
+      throw new SubmissionTooLargeError("download", Math.ceil(e.bytesRead / (1024 * 1024)), MAX_SUBMISSION_ZIP_MB);
+    }
+    throw e;
+  }
+}
 
 export type IngestResult = {
   combinedHash: string;
@@ -603,12 +639,18 @@ export async function ingestSubmissionFilesFromZip(params: IngestFromZipParams):
 }
 
 /**
- * Download `repo` at `sha` via cloneRepository, then ingest its files. Mirrors
- * how PrSubmissionFiles.ts fetched the head fork. `cloneRepository` resolves the
- * ptg GitHub App installation for the repo's own org (handles cross-org forks).
+ * Download `repo` at `sha` from its own host, then ingest its files. On GitHub this
+ * is cloneRepository, mirroring how PrSubmissionFiles.ts fetched the head fork:
+ * it resolves the ptg GitHub App installation for the repo's own org (handles
+ * cross-org forks). On Forgejo it is the admin API's archive download, which
+ * autograder-create-submission also uses.
  */
 export async function ingestSubmissionFilesFromRepo(params: IngestFromRepoParams): Promise<IngestResult> {
-  const { repo, sha, scope, ...rest } = params;
+  const { repo, sha, scope, gitProvider, forgejo, ...rest } = params;
+  if (gitProvider === "forgejo") {
+    const zipBuffer = await downloadForgejoSubmissionZip(forgejo === undefined ? forgejoConfig() : forgejo, repo, sha);
+    return await ingestSubmissionFilesFromZip({ ...rest, scope, zipBuffer });
+  }
   // Resolve E2E repos (`<real>--<suffix>`) to the real fixture repo, matching the
   // autograder, so E2E webhook-direct ingestion clones the real test repo in CI
   // (the E2E_MOCK_GITHUB canned path is handled by the callers for local runs).
