@@ -612,12 +612,17 @@ Deno.test("Auto-extract sends a long template in groups of pages and merges the 
     });
 
     // A group whose answer can't be read must fail the import, not become an empty group that
-    // leaves a gap in the middle of the exam.
+    // leaves a gap in the middle of the exam. So must an answer whose questions or regions the merge
+    // can't read: it would otherwise crash after the failed groups are collected, with no pages named.
     const unreadable: [string, string, string | null][] = [
       ["isn't JSON", "Here are the questions: {", "Here are the questions"],
       ["is {} because Gemini sent no text", "{}", null],
       ["has questions that aren't a list", '{"questions": "Q1", "regions": []}', "Q1"],
-      ["is a list instead of an object", "[]", null]
+      ["is a list instead of an object", "[]", null],
+      ["has a question that is null", '{"questions":[null],"regions":[]}', null],
+      ["has a region that is null", '{"questions":[],"regions":[null]}', null],
+      ["has a question whose label is a number", '{"questions":[{"client_id":"q1","label":7}],"regions":[]}', null],
+      ["has a question with no client_id", '{"questions":[{"label":"Q1"}],"regions":[]}', "Q1"]
     ];
     for (const [what, text, distinctive] of unreadable) {
       await t.step(`an answer for pages 3-4 that ${what} fails the import and names those pages`, async () => {

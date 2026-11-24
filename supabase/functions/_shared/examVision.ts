@@ -131,6 +131,23 @@ function describeFailure(err: unknown): string {
   return "Gemini returned an error";
 }
 
+const isObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+/**
+ * Whether `tree` has what mergeTemplateGroups reads: lists of questions and regions made of
+ * objects, with an id and a label it can use. Other fields are left to the caller.
+ */
+function isQuestionTree(tree: unknown): tree is ProposedTree {
+  if (!isObject(tree) || !Array.isArray(tree.questions) || !Array.isArray(tree.regions)) return false;
+  if (!tree.regions.every(isObject)) return false;
+  return tree.questions.every(
+    (q) =>
+      isObject(q) &&
+      (typeof q.client_id === "number" || (typeof q.client_id === "string" && q.client_id !== "")) &&
+      (q.label == null || typeof q.label === "string")
+  );
+}
+
 const byOrdinal = (a: ProposedQuestion, b: ProposedQuestion) => (a.ordinal ?? 0) - (b.ordinal ?? 0);
 
 // "Problem 2 (continued)" and "Problem 2." are the same question as "Problem 2".
@@ -546,11 +563,8 @@ class GeminiVision {
     } catch {
       throw new TemplateResponseError();
     }
-    const { questions, regions } = (tree ?? {}) as Partial<ProposedTree>;
-    if (typeof tree !== "object" || Array.isArray(tree) || !Array.isArray(questions) || !Array.isArray(regions)) {
-      throw new TemplateResponseError();
-    }
-    return tree as ProposedTree;
+    if (!isQuestionTree(tree)) throw new TemplateResponseError();
+    return tree;
   }
   async readIdentity(page: PageImage, region: NormRect | null): Promise<IdentityResult> {
     const hint = region ? `The identity is within the normalized region ${JSON.stringify(region)}. ` : "";
