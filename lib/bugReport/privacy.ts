@@ -1504,6 +1504,10 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "profiles.sortable_name": "name",
   "profiles.time_zone": "none",
   "profiles.updated_at": "none",
+  // Per-submitter promotion counter for push-direct force-pushes; the submitter key is an id.
+  "push_direct_promotion_versions.assignment_id": "none",
+  "push_direct_promotion_versions.submitter": "none",
+  "push_direct_promotion_versions.version": "none",
   "realtime_channel_subscriptions.channel": "none",
   "realtime_channel_subscriptions.class_id": "none",
   "realtime_channel_subscriptions.client_id": "none",
@@ -3049,6 +3053,8 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
     "$.errors[*].error": "free_text",
     "$.errors[*].group_name": "free_text"
   },
+  // Returns the submitter's force-push promotion counter.
+  push_direct_promotion_version: "none",
   queue_forgejo_repo_archives: "none",
   queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
   // DRAFT: new entry, review and remove this comment

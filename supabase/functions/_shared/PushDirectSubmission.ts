@@ -171,7 +171,7 @@ export async function createPushDirectSubmission(
   // submissions_repository_id_sha_run_unique carries the same key, so the insert below agrees.
   const { data: existing, error: existingErr } = await adminSupabase
     .from("submissions")
-    .select("id, grading_review_id, is_active, is_not_graded, ingestion_pending, created_at")
+    .select("id, is_active, is_not_graded, ingestion_pending, created_at")
     .eq("repository_id", studentRepo.id)
     .eq("repository", repoName)
     .eq("sha", sha)
@@ -183,37 +183,40 @@ export async function createPushDirectSubmission(
     Sentry.captureException(existingErr, scope);
     throw existingErr;
   }
-  // A surviving row from a run whose cleanup ALSO failed is incomplete, not a
-  // completed submission: returning here on redelivery meant ingestion and cleanup
-  // were never retried, so a broken row could persist forever.
+  // Whether the row is a completed submission is read from `ingestion_pending` alone. It is set on
+  // insert and cleared only once the files and the verdict (accepted, or retained as a rejection) are
+  // written; cleanupPushDirectSubmission and a failed deactivateRejectedSubmission set it again in the
+  // same write that unlinks the review, so a row whose cleanup stopped partway is pending too.
   //
-  // The marker is a NULL grading_review_id, not a zero file count. Every completed
-  // submission has a review, assigned by the AFTER-INSERT hook, whereas
-  // cleanupPushDirectSubmission nulls it as its first step — so NULL means "cleanup
-  // started and did not finish". File count cannot be used: a legitimately empty
-  // submission has zero files (permit_empty_submissions=true, or the path where
-  // empty detection is skipped for want of submissionFiles), and treating those as
-  // incomplete would delete an ACCEPTED submission and its grading on redelivery.
+  // The grading review is NOT the marker. The AFTER-INSERT hook provisions one only when the
+  // assignment has a grading rubric, so an accepted submission on an assignment without one is
+  // complete with a NULL review: reading NULL as "incomplete" deleted and re-ingested that accepted
+  // submission on redelivery, and on Forgejo a late redelivery then recorded a deadline rejection in
+  // its place. And the review is provisioned before ingestion starts, so a non-NULL one is no proof
+  // that ingestion finished either. File count cannot be used: a legitimately empty submission has
+  // zero files (permit_empty_submissions=true, or the path where empty detection is skipped for want
+  // of submissionFiles).
   //
-  // A grading review is not proof that ingestion FINISHED, though: the insert trigger provisions it
-  // before ingestion starts, so a worker stopped after the insert left an active, fileless row with
-  // a review, which a redelivery took for a completed submission. `ingestion_pending` is the explicit
-  // marker for that: set on insert, cleared only once the files and the verdict are written. A
-  // pending row older than INGESTION_STALE_MS was abandoned and is reclaimed like any incomplete
-  // row; a younger one may still be in progress in another delivery, so this one asks to be retried
-  // rather than deleting work out from under it.
+  //   - ingestion_pending = false: complete, whatever its review state.
+  //   - pending and younger than INGESTION_STALE_MS: possibly still in progress in another delivery,
+  //     so this one asks to be retried rather than deleting work out from under it (or, worse,
+  //     acknowledging it as a duplicate and losing the retry).
+  //   - pending and older than that: abandoned, or a cleanup that stopped. Reclaimed: deleted and
+  //     re-ingested.
+  // Rows written before ingestion_pending existed got the column's default, false. The migration
+  // that added it (20261124120000) marks the ones the old NULL-review test treated as incomplete
+  // pending, restricted to assignments that would have given them a review; see its step 1.
+  const existingIsPending = existing !== null && existing.ingestion_pending === true;
   const existingIsAbandoned =
-    existing !== null &&
-    existing.ingestion_pending === true &&
-    Date.now() - new Date(existing.created_at).getTime() > INGESTION_STALE_MS;
-  if (existing && existing.ingestion_pending && existing.grading_review_id !== null && !existingIsAbandoned) {
+    existing !== null && existingIsPending && Date.now() - new Date(existing.created_at).getTime() > INGESTION_STALE_MS;
+  if (existing && existingIsPending && !existingIsAbandoned) {
     scope.setTag("push_direct_submission_skipped", "ingestion_in_progress");
     throw new Error(
       `Push-direct submission ${existing.id} for ${repoName}@${sha} is still being ingested by another delivery; ` +
         `rejecting this delivery so it is retried once that one finishes or is abandoned`
     );
   }
-  const existingIsIncomplete = existing !== null && (existing.grading_review_id === null || existingIsAbandoned);
+  const existingIsIncomplete = existingIsAbandoned;
   // Why this row exists, resolved once. Needed before the late-token decision below as well as by
   // the branches further down, and it costs one query either way.
   const existingRejectionType =
@@ -284,7 +287,7 @@ export async function createPushDirectSubmission(
   if (existing && existingIsIncomplete) {
     scope.setTag("push_direct_incomplete_row_resumed", String(existing.id));
     console.log(
-      `Found an incomplete push-direct submission ${existing.id} for ${repoName}@${sha} (no grading review); removing it and retrying`
+      `Found an incomplete push-direct submission ${existing.id} for ${repoName}@${sha} (ingestion never finished); removing it and retrying`
     );
     const removed = await cleanupPushDirectSubmission(adminSupabase, existing.id, scope);
     if (!removed) {
@@ -833,9 +836,9 @@ export async function createPushDirectSubmission(
       if (recordError) {
         // Do NOT acknowledge the delivery. Without this record the retained row is a
         // bare submission with no explanation — the exact silent state retaining it was
-        // meant to replace. And a redelivery could not repair it: the idempotency
-        // pre-check sees the retained row's non-null grading_review_id, reads it as
-        // complete, and returns before reaching this upsert.
+        // meant to replace. And a redelivery could not repair it: a retained row is no
+        // longer ingestion_pending, so the idempotency pre-check reads it as complete and
+        // returns before reaching this upsert.
         //
         // So drop the row and retry from scratch. Either the student gets a row WITH its
         // explanation, or there is no row and the delivery is retried — never a row
@@ -857,9 +860,9 @@ export async function createPushDirectSubmission(
     // but does appear in submission history, and the workflow_run_error below can
     // attach to it, which is the only surface a student can actually reach.
     //
-    // Its review link is deliberately left in place: a NULL grading_review_id is the
-    // marker for "cleanup started and did not finish", and nulling it here would make
-    // a redelivery treat this deliberate row as junk to be deleted and re-ingested.
+    // Its review link is deliberately left in place, and retaining it clears
+    // ingestion_pending, so a redelivery reads this deliberate row as complete rather than
+    // as junk to be deleted and re-ingested.
     const removed = isTooLarge
       ? await deactivateRejectedSubmission(adminSupabase, submissionId, scope)
       : await cleanupPushDirectSubmission(adminSupabase, submissionId, scope);
@@ -1283,11 +1286,23 @@ async function promoteSubmissionForCurrentHead(
   // The caller's head check ran before the existing-row lookup, the late-token decision and the
   // rejection check above, and a newer push can be accepted in that time. Promoting then would
   // demote the newer submission and activate this older one, so the graded commit would not be the
-  // branch head. So: note the newest submission recorded so far, re-read the head, and let the
-  // promotion RPC refuse if anything newer than that note has been recorded by the time it runs.
-  // It demotes and activates in one transaction; see promote_push_direct_submission
-  // (20261124120000) for how it settles a push that lands during the call.
+  // branch head. So: note the newest submission recorded so far and the submitter's promotion
+  // version, re-read the head, and let the promotion RPC refuse if a newer submission has been
+  // recorded or another promotion has committed by the time it runs. The version is what catches two
+  // overlapping force-push deliveries that both find their commit already recorded: neither inserts,
+  // so the id fence alone let the one that read its head first promote a commit that was no longer the
+  // head over the one that was. The RPC demotes, activates and bumps the version in one transaction;
+  // see promote_push_direct_submission (20261124120000) for how it settles a push that lands during
+  // the call.
   const fence = await findNewestSubmissionId(adminSupabase, studentRepo);
+  const { data: promotionVersion, error: versionErr } = await adminSupabase.rpc("push_direct_promotion_version", {
+    p_submission_id: existing.id
+  });
+  if (versionErr) {
+    scope.setTag("force_push_promotion_version_failed", "true");
+    Sentry.captureException(versionErr, scope);
+    throw versionErr;
+  }
   let head: string | undefined;
   try {
     head = await push.getHeadSha();
@@ -1308,7 +1323,8 @@ async function promoteSubmissionForCurrentHead(
 
   const { data: outcome, error: promoteErr } = await adminSupabase.rpc("promote_push_direct_submission", {
     p_submission_id: existing.id,
-    p_newer_than_submission_id: fence ?? 0
+    p_newer_than_submission_id: fence ?? 0,
+    p_expected_promotion_version: promotionVersion ?? 0
   });
   if (promoteErr) {
     // Including a 23505 from a push accepted during the call: the retry finds that newer row and
@@ -1594,10 +1610,10 @@ async function reactivatePreviousSubmission(
  * path creates no Actions run and no check run, so a rejected push was
  * indistinguishable from one that worked.
  *
- * Deactivates the row and clears any files already written, but deliberately keeps
- * `grading_review_id`: that column being NULL is the marker for "cleanup started and
- * did not finish", so nulling it here would make a later redelivery mistake this
- * intentional record for junk and delete it.
+ * Deactivates the row and clears any files already written, keeps its
+ * `grading_review_id`, and clears `ingestion_pending` in the same write as the
+ * deactivation, so a later redelivery reads this intentional record as complete rather
+ * than as junk to delete.
  *
  * Returns whether the row is in the intended state, so the caller knows if it can
  * attach a workflow_run_error to it.
@@ -1641,12 +1657,11 @@ async function deactivateRejectedSubmission(
   } catch (e) {
     scope.setTag("deactivate_rejected_submission_failed", "true");
     Sentry.captureException(e, scope);
-    // Leave the row in the INCOMPLETE state so a redelivery retries it. Keeping
-    // grading_review_id populated is right only once the row is safely inactive; if we
-    // failed before that, the row is still ACTIVE and would read as a complete
-    // submission — so the redelivery would return early and an oversized push could
-    // stay the student's active submission indefinitely. Nulling the review is exactly
-    // the marker the idempotency pre-check looks for.
+    // Leave the row in the INCOMPLETE state so a redelivery retries it. If we failed
+    // before the deactivation, the row is still ACTIVE; were it read as complete, the
+    // redelivery would return early and an oversized push could stay the student's active
+    // submission indefinitely. ingestion_pending is what the idempotency pre-check reads,
+    // and the review is unlinked as cleanupPushDirectSubmission does.
     const { error: markErr } = await adminSupabase
       .from("submissions")
       .update({ grading_review_id: null, is_active: false, ingestion_pending: true })
