@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import QrCode from "./QrCode";
 import { useCourseController, useLivePoll } from "@/hooks/useCourseController";
+import { useCapability } from "@/hooks/useClassProfiles";
 
 type PollResponsesHeaderProps = {
   courseID: string;
@@ -18,6 +19,7 @@ export default function PollResponsesHeader({ courseID, pollUrl, onPresent, qrCo
   const { poll_id } = useParams();
   const { livePolls } = useCourseController();
   const poll = useLivePoll(poll_id as string);
+  const canRunPolls = useCapability("run_polls");
 
   const buttonTextColor = useColorModeValue("#4B5563", "#A0AEC0");
   const buttonBorderColor = useColorModeValue("#6B7280", "#4A5568");
@@ -47,27 +49,29 @@ export default function PollResponsesHeader({ courseID, pollUrl, onPresent, qrCo
           <QrCode qrCodeUrl={qrCodeUrl} />
         </HStack>
         <HStack gap={2}>
-          <Button
-            variant="outline"
-            size="sm"
-            bg="transparent"
-            borderColor={buttonBorderColor}
-            color={buttonTextColor}
-            disabled={!poll_id || !poll}
-            _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
-            onClick={async () => {
-              if (!poll_id || !poll) return;
-              try {
-                await livePolls.update(poll_id as string, { is_live: !poll.is_live });
-              } catch (error) {
-                console.error("Failed to update poll:", error);
-              }
-            }}
-            data-testid="toggle-poll-button"
-            aria-label={poll?.is_live ? "Stop Poll" : "Start Poll"}
-          >
-            {poll?.is_live ? "Stop Poll" : "Start Poll"}
-          </Button>
+          {canRunPolls && (
+            <Button
+              variant="outline"
+              size="sm"
+              bg="transparent"
+              borderColor={buttonBorderColor}
+              color={buttonTextColor}
+              disabled={!poll_id || !poll}
+              _hover={{ bg: "rgba(160, 174, 192, 0.1)" }}
+              onClick={async () => {
+                if (!poll_id || !poll) return;
+                try {
+                  await livePolls.update(poll_id as string, { is_live: !poll.is_live });
+                } catch (error) {
+                  console.error("Failed to update poll:", error);
+                }
+              }}
+              data-testid="toggle-poll-button"
+              aria-label={poll?.is_live ? "Stop Poll" : "Start Poll"}
+            >
+              {poll?.is_live ? "Stop Poll" : "Start Poll"}
+            </Button>
+          )}
           <Button size="sm" colorPalette="blue" variant="solid" onClick={onPresent}>
             Present
           </Button>

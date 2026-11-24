@@ -13787,6 +13787,10 @@ export type Database = {
         Args: { p_class_id: number; p_followup_to: number };
         Returns: boolean;
       };
+      can_manage_survey_in_class: {
+        Args: { p_class_id: number; p_survey_id: string };
+        Returns: boolean;
+      };
       can_respond_to_survey: {
         Args: { p_profile_id: string; p_survey_id: string };
         Returns: boolean;

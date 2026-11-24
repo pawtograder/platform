@@ -2,21 +2,26 @@
 
 import { Container, Heading, Box, Text, VStack, Button, HStack } from "@chakra-ui/react";
 import NextLink from "next/link";
+import { useCapability } from "@/hooks/useClassProfiles";
 
 type EmptyPollsStateProps = {
   courseId: string;
 };
 
 export default function EmptyPollsState({ courseId }: EmptyPollsStateProps) {
+  const canRunPolls = useCapability("run_polls");
+
   return (
     <Container py={8} maxW="1200px" my={2}>
       <HStack justify="space-between" mb={8}>
         <Heading size="2xl" color="fg.default">
           Manage Polls
         </Heading>
-        <Button size="sm" asChild variant="solid" colorPalette="green">
-          <NextLink href={`/course/${courseId}/manage/polls/new`}>+ Create Poll</NextLink>
-        </Button>
+        {canRunPolls && (
+          <Button size="sm" asChild variant="solid" colorPalette="green">
+            <NextLink href={`/course/${courseId}/manage/polls/new`}>+ Create Poll</NextLink>
+          </Button>
+        )}
       </HStack>
 
       <VStack
@@ -37,13 +42,17 @@ export default function EmptyPollsState({ courseId }: EmptyPollsStateProps) {
             No polls yet
           </Heading>
           <Text fontSize="md" color="fg.muted" mb={8}>
-            Create your first poll to gather quick feedback from students.
+            {canRunPolls
+              ? "Create your first poll to gather quick feedback from students."
+              : "No polls have been created yet."}
           </Text>
-          <VStack p={2}>
-            <Button size="xs" asChild variant="solid" colorPalette="green">
-              <NextLink href={`/course/${courseId}/manage/polls/new`}>+ Create a New Poll</NextLink>
-            </Button>
-          </VStack>
+          {canRunPolls && (
+            <VStack p={2}>
+              <Button size="xs" asChild variant="solid" colorPalette="green">
+                <NextLink href={`/course/${courseId}/manage/polls/new`}>+ Create a New Poll</NextLink>
+              </Button>
+            </VStack>
+          )}
         </Box>
       </VStack>
     </Container>

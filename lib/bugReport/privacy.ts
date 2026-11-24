@@ -2417,6 +2417,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   can_add_profile_to_help_request: "none",
   // DRAFT: new entry, review and remove this comment
   can_follow_up_help_request: "none",
+  can_manage_survey_in_class: "none",
   can_respond_to_survey: "none",
   channel_has_subscribers: "none",
   check_assignment_deadlines_passed: "none",
