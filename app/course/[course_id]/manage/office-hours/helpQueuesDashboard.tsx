@@ -4,7 +4,7 @@ import { Box, Flex, Heading, HStack, Stack, Text, VStack } from "@chakra-ui/reac
 import { Button } from "@/components/ui/button";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useEffect, useMemo, useState } from "react";
@@ -61,6 +61,9 @@ export default function HelpQueuesDashboard({
   const { course } = useCourseController();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
+  // Starting a shift writes help_queue_assignments (help_students). Ending your own open shift
+  // is allowed without it ("Staff can end their own active shift").
+  const canHelpStudents = useCapability("help_students");
 
   // Check if any calendar is configured
   const hasCalendar = !!(course?.office_hours_ics_url || course?.events_ics_url);
@@ -414,14 +417,18 @@ export default function HelpQueuesDashboard({
               </VStack>
             </Box>
             <Flex direction="column" align="flex-end" ml={4} flexShrink={0}>
+              {/* Ending your own shift needs no capability, so a TA whose role loses help_students
+                  can still stop working. Starting a shift needs help_students. */}
               {myAssignment ? (
                 <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
                   Stop Working
                 </Button>
               ) : (
-                <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
-                  Start Working
-                </Button>
+                canHelpStudents && (
+                  <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
+                    Start Working
+                  </Button>
+                )
               )}
               {healthOn && (
                 <Box mt={3}>

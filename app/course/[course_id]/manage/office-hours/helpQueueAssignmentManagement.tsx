@@ -3,6 +3,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { useAllProfilesForClass } from "@/hooks/useCourseController";
@@ -29,6 +30,8 @@ export default function HelpQueueAssignmentManagement() {
   const helpQueues = useHelpQueues();
   const helpQueueAssignments = useHelpQueueAssignments();
   const { isConnected, connectionStatus } = useConnectionStatus();
+  // End / delete assignment writes follow help_students.
+  const canHelpStudents = useCapability("help_students");
 
   // Loading state when any data is still loading
   const realtimeLoading = !helpQueues || !helpQueueAssignments;
@@ -190,7 +193,7 @@ export default function HelpQueueAssignmentManagement() {
           </HStack>
         </Box>
 
-        {showActions && (
+        {showActions && canHelpStudents && (
           <HStack spaceX={2}>
             {assignment.is_active && (
               <Button size="sm" colorPalette="yellow" onClick={async () => await handleEndAssignment(assignment.id)}>

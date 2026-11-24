@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCreate } from "@refinedev/core";
 import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye } from "react-icons/bs";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestModeration } from "@/utils/supabase/DatabaseTypes";
 
@@ -30,6 +30,10 @@ export default function ModerationActions({
   onModerationComplete
 }: ModerationActionsProps) {
   const { private_profile_id } = useClassProfiles();
+  // Moderation INSERT accepts help_students OR manage_office_hours.
+  const canHelpStudents = useCapability("help_students");
+  const canManageOfficeHours = useCapability("manage_office_hours");
+  const canModerate = canHelpStudents || canManageOfficeHours;
   const { mutateAsync: createModerationAction } = useCreate<HelpRequestModeration>();
 
   const handleModerationAction = async (
@@ -125,6 +129,10 @@ export default function ModerationActions({
         return BsShield;
     }
   };
+
+  if (!canModerate) {
+    return null;
+  }
 
   return (
     <Menu.Root>

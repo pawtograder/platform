@@ -10,8 +10,6 @@ const h = (over: Partial<QueueHealth>): QueueHealth => ({
   helping: 0,
   staffed_tas: 1,
   unstaffed_seconds: null,
-  resolved_today: 0,
-  median_wait_seconds_today: 0,
   ...over
 });
 

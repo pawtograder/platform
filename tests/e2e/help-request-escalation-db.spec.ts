@@ -240,7 +240,8 @@ test.describe("help request escalation RPCs", () => {
       (await studentClient.rpc("answer_help_request_check_in", { p_help_request_id: id, p_fixed: false, p_note: "n" }))
         .error
     ).not.toBeNull();
-    await studentClient.from("help_requests").update({ status: "open" }).eq("id", id);
+    const studentReopen = await studentClient.from("help_requests").update({ status: "open" }).eq("id", id);
+    expect(studentReopen.error?.code).toBe("42501");
     expect((await row(id)).status).toBe("closed");
 
     // Staff can't undo it with a direct update either.
@@ -316,7 +317,12 @@ test.describe("help request escalation RPCs", () => {
     await taClient.rpc("escalate_help_request", { p_help_request_id: id, p_note: "Staff-only context" });
 
     const reset = await studentClient.from("help_requests").update({ escalation_count: 0 }).eq("id", id);
-    expect(reset.error).not.toBeNull();
+    expect(reset.error?.code).toBe("42501");
+    const retime = await studentClient
+      .from("help_requests")
+      .update({ last_escalated_at: new Date().toISOString() })
+      .eq("id", id);
+    expect(retime.error?.code).toBe("42501");
     const window = await studentClient
       .from("help_requests")
       .update({ check_in_expires_at: new Date(Date.now() + 3_600_000).toISOString() })
@@ -340,10 +346,28 @@ test.describe("help request escalation RPCs", () => {
     expect(insert.error).not.toBeNull();
   });
 
+  test("students may only move an open or in-progress request to resolved", async () => {
+    const id = await freshRequest("open");
+    const take = await studentClient.from("help_requests").update({ status: "in_progress" }).eq("id", id);
+    expect(take.error?.code).toBe("42501");
+    expect((await row(id)).status).toBe("open");
+    const resolve = await studentClient.from("help_requests").update({ status: "resolved" }).eq("id", id);
+    expect(resolve.error).toBeNull();
+    expect((await row(id)).status).toBe("resolved");
+    const reopen = await studentClient.from("help_requests").update({ status: "open" }).eq("id", id);
+    expect(reopen.error?.code).toBe("42501");
+    expect((await row(id)).status).toBe("resolved");
+  });
+
   test("staff cannot write escalation fields directly either", async () => {
     const id = await freshRequest();
     const bump = await taClient.from("help_requests").update({ escalation_count: 5 }).eq("id", id);
-    expect(bump.error).not.toBeNull();
+    expect(bump.error?.code).toBe("42501");
+    const retime = await taClient
+      .from("help_requests")
+      .update({ last_escalated_at: new Date().toISOString() })
+      .eq("id", id);
+    expect(retime.error?.code).toBe("42501");
     const window = await taClient
       .from("help_requests")
       .update({ check_in_expires_at: new Date(Date.now() + 3_600_000).toISOString() })

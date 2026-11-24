@@ -13,10 +13,10 @@ import { isQueueRed, queuesTurnedRed } from "@/lib/queueHealthAlerts";
  * a queue goes from not-red to red, so a queue that stays red does not keep alerting. Queues that
  * are already red on the first load are not announced.
  *
- * Health is computed in the browser on a 30 second refresh, so this only runs while an instructor
+ * Health is computed in the browser from the office-hours TableControllers, so this only runs while an instructor
  * has the staff office hours page open.
  *
- * byQueue holds only active queues, because office_hours_queue_health filters on is_active. That
+ * byQueue holds only active queues, because computeQueueHealth skips inactive ones. That
  * keeps this loop on the same set of queues the dashboard draws cards for, so an alert always has
  * a card behind it.
  */

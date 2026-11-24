@@ -1,7 +1,7 @@
 "use client";
 
 import { RequestRow } from "@/components/help-queue/request-row";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseFeature } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useQueueHealth } from "@/hooks/useQueueHealth";
@@ -26,8 +26,10 @@ import { compareHelpRequestQueueOrder, latestEscalationNoteByRequest } from "@/l
 export default function OfficeHoursAdminPage() {
   const { course_id } = useParams();
   const { private_profile_id } = useClassProfiles();
-  const queueHealthOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
-  const health = useQueueHealth(Number(course_id), queueHealthOn);
+  const canHelpStudents = useCapability("help_students");
+  const queueHealthEnabled = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
+  const queueHealthOn = queueHealthEnabled && canHelpStudents;
+  const health = useQueueHealth(queueHealthOn);
   useQueueRedAlerts(health);
 
   // Get data for working view
