@@ -1,6 +1,6 @@
 /**
  * Retry creation and Fix Permissions on Forgejo repositories
- * (20261123131500_repository_status_forgejo_guards.sql).
+ * (20261124150100_repository_status_forgejo_guards.sql).
  *
  * forgejo-reconciler creates Forgejo repositories and manages access to them, so:
  *   - retry_repository_creation on a Forgejo row clears creation_error and writes no GitHub message;
