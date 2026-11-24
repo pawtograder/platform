@@ -827,4 +827,47 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     expect(sameClass.data).toHaveLength(1);
     expect((await thread(reply)).root).toBe(otherRootA);
   });
+
+  test("a moderator can't move a post between a private and a public thread", async () => {
+    const client = await createAuthenticatedClient(plainGrader);
+    const privateA = await privateRoot(classA.id, student);
+    const privateB = await privateRoot(classA.id, otherStudent);
+    const publicA = await newRoot(classA.id, student);
+    const publicB = await newRoot(classA.id, otherStudent);
+    const privateReply = await servicePost({
+      class_id: classA.id,
+      topic_id: topics[classA.id][0],
+      author: student.private_profile_id,
+      instructors_only: true,
+      parent: privateA,
+      root: privateA
+    });
+    const publicReply = await newReply(classA.id, publicA, student);
+
+    for (const [what, reply, dest] of [
+      ["a private reply under a public thread", privateReply, publicB],
+      ["a public reply under a private thread", publicReply, privateB]
+    ] as const) {
+      const moved = await client.from("discussion_threads").update({ root: dest, parent: dest }).eq("id", reply);
+      expect(moved.error?.code, what).toBe("22023");
+      expect(moved.error?.message).toContain("between a private and a public thread");
+    }
+    expect((await thread(privateReply)).root).toBe(privateA);
+    expect((await thread(publicReply)).root).toBe(publicA);
+
+    // Same visibility: still allowed, both ways.
+    for (const [reply, dest] of [
+      [privateReply, privateB],
+      [publicReply, publicB]
+    ]) {
+      const moved = await client
+        .from("discussion_threads")
+        .update({ root: dest, parent: dest })
+        .eq("id", reply)
+        .select("id");
+      expect(moved.error).toBeNull();
+      expect(moved.data).toHaveLength(1);
+      expect((await thread(reply)).root).toBe(dest);
+    }
+  });
 });

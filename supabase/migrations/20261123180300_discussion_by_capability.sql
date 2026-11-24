@@ -24,9 +24,10 @@
 --      own post, so a student could pin it, set its answer to anything, move it to another topic,
 --      move it under another thread or move it into another class through the API. Now only a
 --      moderator can pin or unpin, change a post's topic, move a post under another thread (its root
---      or parent), or create a pinned post; no new post can start with an answer (it has no replies
---      yet); only the question's author or a moderator can mark or unmark an answer, and the answer
---      must be a reply in that thread; and no signed-in user can move a post to another class.
+--      or parent, in the same class and with the same visibility), or create a pinned post; no new
+--      post can start with an answer (it has no replies yet); only the question's author or a
+--      moderator can mark or unmark an answer, and the answer must be a reply in that thread; and no
+--      signed-in user can move a post to another class.
 --      Also for everyone signed in: a post's topic must be in its class, and its author can only
 --      switch between the same person's named and anonymous profile. mark_discussion_thread_duplicate
 --      refuses to merge a private and a public thread.
@@ -579,8 +580,8 @@ GRANT EXECUTE ON FUNCTION public.set_discussion_thread_visibility(bigint, boolea
 -- ---------------------------------------------------------------------------
 
 -- The author rule above lets an author update every column of their own post. This keeps pinning,
--- topic changes and moving a post under another thread (root or parent, in the same class) to
--- moderators, and marking an answer to the question's author and moderators,
+-- topic changes and moving a post under another thread (root or parent, in the same class and
+-- with the same visibility) to moderators, and marking an answer to the question's author and moderators,
 -- with the answer a reply in the same thread. A new post can start pinned only if its author is a
 -- moderator, and can never start with an answer (it has no replies yet). No signed-in user can move
 -- a post to another class. A new question still gets its root set to itself: the
@@ -693,6 +694,24 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'A post can''t move under a thread in another class'
       USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  -- Moderators included: a post keeps its own visibility when it moves, so it can only move under a
+  -- thread with the same visibility. Otherwise a private post under a public thread could be read by
+  -- anyone who posted in that thread (authorize_for_private_discussion_thread() looks at who posted in
+  -- the thread), and a public post would show up in a private thread. Same rule as merging duplicates.
+  -- mark_discussion_thread_duplicate passes: it gives the moved posts the original's visibility in the
+  -- same UPDATE, and the original itself isn't changed.
+  IF (NEW.root IS DISTINCT FROM OLD.root OR NEW.parent IS DISTINCT FROM OLD.parent)
+     AND NEW.root IS DISTINCT FROM NEW.id
+     AND EXISTS (
+       SELECT 1
+       FROM public.discussion_threads dest
+       WHERE dest.id = NEW.root
+         AND dest.instructors_only IS DISTINCT FROM NEW.instructors_only
+     ) THEN
+    RAISE EXCEPTION 'A post can''t move between a private and a public thread'
+      USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
   IF NEW.answer IS DISTINCT FROM OLD.answer THEN

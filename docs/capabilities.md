@@ -230,11 +230,11 @@ it off a role.
   own thread's visibility.
 - The trigger `discussion_threads_guard_moderation` covers what the author rule would otherwise
   allow: only a moderator can pin or unpin, change a post's topic, move a post under another thread
-  in the same class (its root or parent), or create a pinned post; no new post can start with an
-  answer; only the question's author or a moderator marks an answer, which must be a reply in the
-  same thread; and no signed-in user can move a post to another class. For everyone signed in, a
-  post's topic must be in its class, and its author can only switch between the same person's named
-  and anonymous profile.
+  in the same class with the same visibility (its root or parent), or create a pinned post; no new
+  post can start with an answer; only the question's author or a moderator marks an answer, which
+  must be a reply in the same thread; and no signed-in user can move a post to another class. For
+  everyone signed in, a post's topic must be in its class, and its author can only switch between
+  the same person's named and anonymous profile.
 - The same migration closes older gaps on discussion posts, which aren't capability checks:
   - a private and a public thread can't be merged as duplicates;
   - column privileges keep `created_at`, `likes_count`, `children_count`, `ordinal` and the
