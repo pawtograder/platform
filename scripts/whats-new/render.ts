@@ -39,9 +39,13 @@ export function addDays(from: Date, days: number): string {
   return new Date(from.getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-/** WHATS_NEW_IDS key for a slug, e.g. "queue-health" -> "QUEUE_HEALTH". */
+/**
+ * WHATS_NEW_IDS key for a slug, e.g. "queue-health" -> "QUEUE_HEALTH". A slug that starts with a
+ * digit gets a leading underscore, since `WHATS_NEW_IDS.10_MINUTE` isn't valid TypeScript.
+ */
 export function idKey(slug: string): string {
-  return slug.toUpperCase().replace(/-/g, "_");
+  const key = slug.toUpperCase().replace(/-/g, "_");
+  return /^\d/.test(key) ? `_${key}` : key;
 }
 
 const str = (text: string) => JSON.stringify(text);

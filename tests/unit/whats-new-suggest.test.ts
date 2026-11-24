@@ -123,6 +123,20 @@ describe("renderEntryFile", () => {
     expect(file).toContain("#1287");
   });
 
+  it("keeps a digit-leading slug a valid identifier, and the rendered file still parses", () => {
+    expect(idKey("10-minute-check-in")).toBe("_10_MINUTE_CHECK_IN");
+    const file = renderEntryFile(
+      { ...entry, title: "New in Office Hours: 10-minute check-in" },
+      { slug: "10-minute-check-in", prNumber: 1, mergedAt: new Date("2026-11-23T00:00:00Z") }
+    );
+    expect(file).toContain("id: WHATS_NEW_IDS._10_MINUTE_CHECK_IN,");
+    const { diagnostics } = ts.transpileModule(file, {
+      reportDiagnostics: true,
+      compilerOptions: { jsx: ts.JsxEmit.Preserve, target: ts.ScriptTarget.ES2020 }
+    });
+    expect(diagnostics).toEqual([]);
+  });
+
   it("leaves out feature when there is none", () => {
     const plain = renderEntryFile({ ...entry, feature: null }, { slug: "x", prNumber: 1, mergedAt: new Date() });
     expect(plain).not.toContain("feature:");

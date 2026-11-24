@@ -501,6 +501,8 @@ export function OfficeHoursHeader({
         </HStack>
 
         <HStack gap={3} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
+          {/* Staff viewing the student page get their walkthroughs in the manage header instead. */}
+          {isStudent && <WhatsNew page="office-hours" />}
           <HelpRequestSearch isManageMode={false} />
           <OnboardingPopover
             active={onboardingActive}
