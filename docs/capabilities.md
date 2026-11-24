@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -127,6 +127,28 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+The side menu has three pages:
+
+- Create / Edit Role: create a copy of Grader, or pick a role to rename, delete, or edit its capabilities. The default Grader role cannot be renamed or deleted. Roles with active or disabled members cannot be deleted.
+- Staff & Roles: the Staff tab lists active graders with a role drop-down. Moving a grader requires an instructor. The Roles tab lists Grader and custom roles with active membership counts and any removed members.
+- Roles & Capabilities: pick a role, then toggle capabilities grouped by app area and section. Each info button explains the action and where to find it. Changes save immediately. The selected role is linkable with `?role=<id>`.
+
+The typed catalog in `capabilityCatalog.ts` includes pending capabilities, but shows only rows in the database. Unknown capabilities appear under Other with their database description. `manage_roles` is always hidden. Enrollments shows each grader's staff role using the same live controllers; its Edit Role dialog still changes the app role.
+
+The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
+creation, renames, deletions and capability changes arrive as row updates on the staff channel.
+Enrollments share the course controller's `userRolesWithProfiles` cache. Controllers page through
+all rows and catch up when the staff channel reconnects.
+
+Updates and deletes ask for the rows they changed, because a policy can refuse those without an
+error; the page then reports the change as not saved and puts the control back. A refused insert
+fails with an error, so creating a role does not ask for rows back.
+
 ## A capability that also decides who can see something
 
 Most capabilities are actions, and any staff member can still see what they saw before. One
@@ -149,6 +171,22 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Emailer: send_announcements
+
+`send_announcements` is the Emailer (Course Settings > Emailer). There is no separate announcements
+feature; "Announcements" is only a discussion topic icon. It is on the default instructor role only.
+
+- It covers reading and creating `email_batches` and `emails` (reading too, because the Emailer
+  reads a new batch back to get its id), the Emailer menu item, and the Emailer page, which sends
+  people without it to the course home page.
+- Changing and deleting emails and batches stay instructor-only. The Emailer only creates and
+  reads, and neither table records who sent a batch.
+- A new email must go to someone enrolled in its class (a `user_roles` row in the same
+  class), and its batch must belong to the same class. The `email_notifications()` trigger turns
+  each email into a notification for its recipient. This limits the recipient only: Cc and
+  Reply-to can be any address, as the Emailer allows.
+- Discussion topics are not part of it.
 
 **Pages: hide the button, or send the person away.** A page whose only purpose is one capability's
 action sends people without it somewhere useful: its server `layout.tsx` checks

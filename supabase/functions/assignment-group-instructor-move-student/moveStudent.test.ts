@@ -499,6 +499,24 @@ Deno.test("archive targets the stored owner, not the class github_org", async ()
   assertEquals(archives, [{ class_id: CLASS.id, org: "orgname", repo: "hw1-group-a" }]);
 });
 
+Deno.test(
+  "a Forgejo group repo is deleted without a GitHub archive job: the delete trigger queues its archive",
+  async () => {
+    const db = new FakeDb();
+    db.refuseForgejoDeletes = false;
+    db.addGroup(1, { repo: "cs3100/cs3100-hw1-group-1", provider: "forgejo" });
+    db.addMember(1, "alice");
+    const { deps, archives, reported } = harness(db);
+
+    await moveStudentBetweenGroups(move(1, null), deps);
+
+    assertEquals(db.repoDeleteCalls, [[10]]);
+    assertEquals(archives, []);
+    assertEquals(db.repoOf(1), undefined);
+    assertEquals(reported, []);
+  }
+);
+
 // ---- other members remain ------------------------------------------------
 
 Deno.test("a member leaves a group that still has members: repo synced to the rest, group untouched", async () => {
