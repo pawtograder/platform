@@ -20,7 +20,7 @@
 --   3. Commenting on a regrade request: staff need handle_regrades in the comment's class instead of
 --      authorizeforclassgrader. Students still comment on open requests for their own submission
 --      through authorize_for_submission_regrade_comment.
---   4. Two holes in the same policies are closed:
+--   4. Three holes in the same policies are closed:
 --      - The regrade request SELECT policy's staff branch compared ur.class_id to itself, so a grader
 --        or instructor of any class could read every class's regrade requests. It now checks the
 --        request's own class. Every grader and instructor of that class can still read them, with or
@@ -29,6 +29,9 @@
 --        a grader in one class could file a comment under another class's request. A comment's
 --        class, submission and assignment must now match its request's. The app already copies all
 --        three from the request.
+--      - The same policy never checked the author, so a student on the submission could post a
+--        comment that showed a TA's name. The author must now be the caller's own private or
+--        public profile in the comment's class.
 --
 -- Who gains or loses: instructors, default graders and existing custom roles hold handle_regrades,
 -- so nothing changes for them, except that staff of one class no longer read another class's
@@ -511,7 +514,8 @@ CREATE POLICY "Staff and the submission's students read regrade requests" ON pub
 -- ---------------------------------------------------------------------------
 
 -- The request is read under the caller's own RLS, so it must be one they can see: staff of its
--- class, or a student on its submission.
+-- class, or a student on its submission. The author must be the caller's own profile in the
+-- comment's class, private or public: staff post as their public profile in pseudonymous mode.
 DROP POLICY IF EXISTS "allow_create_if_authorized_for_submission_regrade_comment" ON public.submission_regrade_request_comments;
 DROP POLICY IF EXISTS "Regrade handlers and the submission's students can comment" ON public.submission_regrade_request_comments;
 CREATE POLICY "Regrade handlers and the submission's students can comment" ON public.submission_regrade_request_comments
@@ -523,6 +527,13 @@ CREATE POLICY "Regrade handlers and the submission's students can comment" ON pu
         AND r.class_id = submission_regrade_request_comments.class_id
         AND r.submission_id = submission_regrade_request_comments.submission_id
         AND r.assignment_id = submission_regrade_request_comments.assignment_id
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.user_privileges up
+      WHERE up.user_id = auth.uid()
+        AND up.class_id = submission_regrade_request_comments.class_id
+        AND (up.public_profile_id = submission_regrade_request_comments.author
+             OR up.private_profile_id = submission_regrade_request_comments.author)
     )
     AND (
       class_id IN (SELECT public.user_class_ids_with_capability('handle_regrades'))

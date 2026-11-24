@@ -269,6 +269,37 @@ test.describe("regrade requests follow handle_regrades", () => {
     expect(authors).not.toContain(coordinatorA.private_profile_id);
   });
 
+  test("a comment's author must be the caller's own profile in the class", async () => {
+    const request = await newRequest("opened");
+    const student = await createAuthenticatedClient(studentA);
+    const grader = await createAuthenticatedClient(graderA);
+
+    // The student on the submission posting as a TA, under either of the TA's profiles. Before,
+    // the policy never checked author, so the comment showed the TA's name.
+    for (const [author, who] of [
+      [graderA.private_profile_id, "the student posting as the TA's private profile"],
+      [graderA.public_profile_id, "the student posting as the TA's public profile"]
+    ] as const) {
+      const { error } = await student
+        .from("submission_regrade_request_comments")
+        .insert(commentRow(request.id, author));
+      expect(error?.code, who).toBe("42501");
+    }
+    // Staff can't post as the student either.
+    const { error: asStudentError } = await grader
+      .from("submission_regrade_request_comments")
+      .insert(commentRow(request.id, studentA.private_profile_id));
+    expect(asStudentError?.code, "a TA posting as the student").toBe("42501");
+
+    // A TA in pseudonymous mode posts as their own public profile, which still works.
+    const { error: publicError } = await grader
+      .from("submission_regrade_request_comments")
+      .insert(commentRow(request.id, graderA.public_profile_id));
+    expect(publicError, "a TA posting as their own public profile").toBeNull();
+
+    expect((await commentsOn(request.id)).map((c) => c.author)).toEqual([graderA.public_profile_id]);
+  });
+
   test("a grader in another class can't read this class's regrade requests", async () => {
     const request = await newRequest("opened");
     for (const [user, who] of [
