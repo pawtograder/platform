@@ -7,10 +7,10 @@
  * class. The default instructor and grader roles and every custom role hold it, so nothing changes for
  * them; a custom role that turns it off loses all three. Staff still edit only extensions they created,
  * and only staff with grant_extensions can update an extension. Its assignment, student and group must
- * be in the row's class, so the capability in one class can't reach another. Every grader and instructor of the
- * class can still read extensions, students still use late tokens, and gifting tokens stays
- * instructor-only. Whoever grants an extension, the student's review assignment due dates move with
- * it (#1411).
+ * be in the row's class, and so must a class-wide extension's student, so the capability in one class
+ * can't reach another. Every grader and instructor of the class can still read extensions, students
+ * still use late tokens, and gifting tokens stays instructor-only. Whoever grants an extension, the
+ * student's review assignment due dates move with it (#1411).
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
  */
@@ -491,6 +491,53 @@ test.describe("due date extensions follow grant_extensions", () => {
       .select("hours");
     expect(ownEditError).toBeNull();
     expect(ownEdit).toEqual([{ hours: 6 }]);
+  });
+
+  test("grant_extensions in class A can't add or move a class-wide extension to a class B student", async () => {
+    // A class B student with a class B assignment, so the insert trigger would have something to extend.
+    await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: classB.id,
+      name: "Class-wide extensions, class B"
+    });
+    const studentB = await createUserInClass({ role: "student", class_id: classB.id });
+    const grader = await createAuthenticatedClient(graderA);
+
+    // Labelled class A, where the grader holds grant_extensions. Before, only class_id was checked,
+    // and the trigger then wrote an extension on every class A assignment for the class B student.
+    const { error } = await grader
+      .from("student_deadline_extensions")
+      .insert({ class_id: classA.id, student_id: studentB.private_profile_id, hours: 72 })
+      .select("id");
+    expect(error?.code, "a class A grader adding a class-wide extension for a class B student").toBe("42501");
+
+    // Their own class A extension can't be moved to the class B student either.
+    const studentA2 = await createUserInClass({ role: "student", class_id: classA.id });
+    const { data: own, error: ownError } = await grader
+      .from("student_deadline_extensions")
+      .insert({ class_id: classA.id, student_id: studentA2.private_profile_id, hours: 24 })
+      .select("id")
+      .single();
+    expect(ownError, "a class A grader adding a class-wide extension for a class A student").toBeNull();
+    const { error: moveError } = await grader
+      .from("student_deadline_extensions")
+      .update({ student_id: studentB.private_profile_id })
+      .eq("id", own!.id)
+      .select("id");
+    expect(moveError?.code, "a class A grader moving a class-wide extension to a class B student").toBe("42501");
+
+    const { data: classWide, error: classWideError } = await supabase
+      .from("student_deadline_extensions")
+      .select("id")
+      .eq("student_id", studentB.private_profile_id);
+    expect(classWideError).toBeNull();
+    expect(classWide, "no class-wide extension names the class B student").toEqual([]);
+    const { data: perAssignment, error: perAssignmentError } = await supabase
+      .from("assignment_due_date_exceptions")
+      .select("id")
+      .eq("student_id", studentB.private_profile_id);
+    expect(perAssignmentError).toBeNull();
+    expect(perAssignment, "no assignment extension reaches the class B student").toEqual([]);
   });
 
   test("a student with an unfinished review assignment can spend a late token, and the review's due date moves", async () => {

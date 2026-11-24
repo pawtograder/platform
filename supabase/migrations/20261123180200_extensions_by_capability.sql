@@ -22,8 +22,10 @@
 --        only one they created, as before, with the same class checks before and after. No screen
 --        updates these rows: the app creates and deletes them.
 --      - DELETE: needs grant_extensions in the row's class.
---   3. student_deadline_extensions: writing needs grant_extensions in the row's class. Reading stays
---      with every grader and instructor of the class, and students still read their own.
+--   3. student_deadline_extensions: writing needs grant_extensions in the row's class. Adding and
+--      editing also need the student to be in that class, before and after the edit, since the
+--      insert trigger extends every assignment in the class for that student. Reading stays with
+--      every grader and instructor of the class, and students still read their own.
 --   4. extend_review_assignments_on_due_date_exception (the trigger that moves a student's review
 --      assignment due dates by a new extension) runs as SECURITY DEFINER with search_path ''
 --      (#1411). It ran as the caller, and only instructors can update review_assignments, so when a
@@ -240,6 +242,10 @@ CREATE POLICY "Extension granters can delete extensions" ON public.assignment_du
 -- ---------------------------------------------------------------------------
 
 -- The old policy was FOR ALL, so it also let staff read. Reading isn't gated on grant_extensions.
+-- Adding and editing also check that the student is in the row's class. The insert trigger
+-- (create_assignment_exceptions_from_extension) writes an extension for every assignment in that
+-- class for that student, with full database access, so grant_extensions in class A must not
+-- reach a class B student's profile by labelling the row class A.
 DROP POLICY IF EXISTS "Course staff can CRUD" ON public.student_deadline_extensions;
 DROP POLICY IF EXISTS "Course staff can read class-wide extensions" ON public.student_deadline_extensions;
 DROP POLICY IF EXISTS "Extension granters can add class-wide extensions" ON public.student_deadline_extensions;
@@ -257,12 +263,33 @@ CREATE POLICY "Course staff can read class-wide extensions" ON public.student_de
 
 CREATE POLICY "Extension granters can add class-wide extensions" ON public.student_deadline_extensions
   FOR INSERT TO authenticated
-  WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions')));
+  WITH CHECK (
+    class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions'))
+    AND EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = student_deadline_extensions.student_id
+        AND p.class_id = student_deadline_extensions.class_id
+    )
+  );
 
 CREATE POLICY "Extension granters can edit class-wide extensions" ON public.student_deadline_extensions
   FOR UPDATE TO authenticated
-  USING (class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions')))
-  WITH CHECK (class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions')));
+  USING (
+    class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions'))
+    AND EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = student_deadline_extensions.student_id
+        AND p.class_id = student_deadline_extensions.class_id
+    )
+  )
+  WITH CHECK (
+    class_id IN (SELECT public.user_class_ids_with_capability('grant_extensions'))
+    AND EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = student_deadline_extensions.student_id
+        AND p.class_id = student_deadline_extensions.class_id
+    )
+  );
 
 CREATE POLICY "Extension granters can delete class-wide extensions" ON public.student_deadline_extensions
   FOR DELETE TO authenticated
