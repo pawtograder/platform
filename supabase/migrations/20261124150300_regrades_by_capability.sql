@@ -42,15 +42,18 @@
 -- escalating, closing, editing points, the comment SELECT policy, notifications and Discord posts.
 --
 -- seed_default_class_roles() is re-created in full with the same body as
--- 20261123180000_grading_and_release_by_capability.sql. Its grader list is the one every #1010
+-- 20261124150200_grading_and_release_by_capability.sql. Its grader list is the one every #1010
 -- migration that redefines it writes (moderate_discussion, grade_submissions, handle_regrades,
 -- grant_extensions, help_students, manage_flashcards, run_polls); only the names that are
 -- capabilities yet join.
 --
--- Number: this was 20261122150100 until 2026-11-23, and then 20261123040100, each time right after
--- #1408's migration (20261122150000, then 20261123040000). Later that day #1408's moved to
--- 20261123180000, after every migration on staging and in every open PR. This one stays right after
--- #1408's and before #1410's (20261123180200).
+-- Number: this was 20261122150100 until 2026-11-23, then 20261123040100, and then 20261123180100,
+-- each time right after #1408's migration (20261122150000, 20261123040000, then 20261123180000).
+-- On 2026-11-24 #1299 and #1300 put 20261124130000 and 20261124130100 on staging, and #1408's moved
+-- to 20261124150200, after every migration on staging and in every open PR (the newest is #1428's
+-- 20261124150100). This one stays right after #1408's and before #1410's (20261124150400), so it
+-- also runs after #1299's, #1300's, #1301's and #1429's migrations, which redefine
+-- seed_default_class_roles() too.
 --
 -- Safe to run again: the inserts skip rows that exist, CREATE OR REPLACE gives the same functions,
 -- and each policy is dropped first.
@@ -69,7 +72,7 @@ FROM public.class_roles cr
 WHERE cr.default_for IN ('instructor', 'grader') OR cr.default_for IS NULL
 ON CONFLICT DO NOTHING;
 
--- The same function as 20261123180000_grading_and_release_by_capability.sql: the grader list there
+-- The same function as 20261124150200_grading_and_release_by_capability.sql: the grader list there
 -- already names handle_regrades, which joins now that it exists. Instructors get it from the
 -- CROSS JOIN.
 CREATE OR REPLACE FUNCTION public.seed_default_class_roles(p_class_id bigint)
