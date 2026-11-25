@@ -119,6 +119,16 @@ describe("getUserFacingErrorMessage", () => {
         );
       }
     });
+
+    it("are sent to Sentry unless the caller expects 42501, as the publish handler does", () => {
+      jest.mocked(Sentry.captureException).mockClear();
+      reportUnexpectedError(publishRefused, { operation: "publish" });
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+
+      jest.mocked(Sentry.captureException).mockClear();
+      expect(reportUnexpectedError(publishRefused, { operation: "publish" }, { expected: ["42501"] })).toBeUndefined();
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
   });
 
   describe("23505 and 23514", () => {
@@ -230,6 +240,18 @@ describe("isExpectedUserError", () => {
   it("is false by default for permission, no-row and foreign-key errors", () => {
     for (const code of ["42501", "PGRST116", "23503"]) {
       expect(isExpectedUserError({ code, message: "x" })).toBe(false);
+    }
+  });
+
+  it("is false by default for every 42501, whether Postgres or one of our functions raised it", () => {
+    for (const message of [
+      "permission denied for table assignments",
+      'new row violates row-level security policy for table "assignment_self_review_settings"',
+      "Only instructors can publish group changes",
+      "insufficient permissions: manage_gradebook required for class 12"
+    ]) {
+      expect(isExpectedUserError({ code: "42501", message })).toBe(false);
+      expect(isExpectedUserError({ code: "42501", message }, { expected: ["42501"] })).toBe(true);
     }
   });
 

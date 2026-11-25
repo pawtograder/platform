@@ -26,6 +26,9 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
 - [Office Hours Queue Health](./office-hours-queue-health.md): the queue-health
   gauges, what normal looks like in and out of a session, and how to triage a
   queue that stays red.
+- [User-Facing Errors](./error-surfacing.md): what users see when RLS or a database
+  function refuses a request, which errors reach Sentry and how they are tagged, and
+  how to trace a given message back to its cause (#983).
 - [Incident Response](./incident-response.md): severity definitions, first
   response, and per-component triage.
 - [Data Retention & Storage Sizing](./data-retention.md): where data lives

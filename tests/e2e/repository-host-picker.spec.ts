@@ -1,6 +1,6 @@
 /**
  * #1091 part 2: the Repository host picker on Create/Edit Assignment, Forgejo's disabled options
- * (#1119), and the GitHub link prompt on Forgejo assignments.
+ * (#1119), the GitHub link prompt on Forgejo assignments, and GitHub wording on Forgejo pages.
  *
  * Test users have no linked GitHub identity, so the "Connect to GitHub" banner is the prompt to
  * look for. Screenshots are attached to the test results.
@@ -117,6 +117,19 @@ test.describe("Repository host picker and GitHub prompts", () => {
 
   // The assignment layout renders its page twice, once hidden for narrow screens.
   const visiblePicker = (page: Page) => page.getByLabel("Repository host").filter({ visible: true });
+
+  // The edit page renders its form before its queries return. It then resets the form to the saved
+  // row, which overwrites anything chosen before, and seeds the self-evaluation fields from a second
+  // query. Until those are seeded the form refuses to save. So wait for the row's title and for the
+  // fixture's self-evaluation setting, which insertAssignment turns on.
+  async function waitForEditFormLoaded(page: Page, assignment: { title: string }) {
+    await expect(page.locator('input[name="title"]').filter({ visible: true })).toHaveValue(assignment.title, {
+      timeout: 30_000
+    });
+    await expect(page.getByLabel("Require self-evaluation").filter({ visible: true })).toHaveValue("use_eval", {
+      timeout: 30_000
+    });
+  }
 
   // Fill the create form's other required fields, so only the host rules can block the save.
   async function fillRequiredFields(page: Page, title: string, slug: string) {
@@ -267,11 +280,11 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await loginAsUser(page, instructorOn, flagOn);
     await page.goto(`/course/${flagOn.id}/manage/assignments/${emptyAssignment.id}/edit`);
     await expect(page.getByRole("heading", { name: "Edit Assignment" })).toBeVisible();
+    // The picker reads github and is enabled before the row loads too, so wait for the row first.
+    await waitForEditFormLoaded(page, emptyAssignment);
     await expect(visiblePicker(page)).toHaveValue("github", { timeout: 30_000 });
     await expect(visiblePicker(page)).toBeEnabled({ timeout: 30_000 });
 
-    // The edit page resets the form whenever its query refetches, so let loading settle first.
-    await page.waitForLoadState("networkidle");
     await visiblePicker(page).selectOption("forgejo");
     await expect(visiblePicker(page)).toHaveValue("forgejo");
     await page.getByRole("button", { name: "Save" }).filter({ visible: true }).click();
@@ -298,16 +311,23 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(repoMode.locator('option[value="no_submission"]')).toBeDisabled();
 
     const newTitle = `Forgejo Handout Renamed ${suffix}`;
-    await page.waitForLoadState("networkidle");
+    await waitForEditFormLoaded(page, forgejoWithHandout);
     // The edit route mounts the form twice; type into the copy on screen. The row read below shows
     // the form state took it.
     const title = page.locator('input[name="title"]').filter({ visible: true });
     await title.fill(newTitle);
     await expect(title).toHaveValue(newTitle);
+    const githubCalls: string[] = [];
+    page.on("request", (request) => {
+      if (/\/functions\/v1\/(github-|assignment-sync-autograder-workflow)/.test(request.url())) {
+        githubCalls.push(request.url());
+      }
+    });
     await page.getByRole("button", { name: "Save" }).filter({ visible: true }).click();
     // Playwright reports Chakra's toast as hidden, so check that it was rendered.
     await expect(page.getByText("Assignment Updated").first()).toBeAttached({ timeout: 30_000 });
     await expect(page.getByText("Update Error")).toHaveCount(0);
+    expect(githubCalls).toEqual([]);
     const { data: row } = await supabase
       .from("assignments")
       .select("title, git_provider, template_repo, has_autograder")
@@ -363,5 +383,57 @@ test.describe("Repository host picker and GitHub prompts", () => {
     });
     await expect(page.getByText(/rate-limited by GitHub/)).toHaveCount(0);
     await expect(page.getByText("GitHub Ready", { exact: true })).toHaveCount(0);
+  });
+
+  test("a student's assignment list labels the repository column without naming GitHub", async ({ page }) => {
+    const repository = `e2e-ignore/fj-student-${suffix}`;
+    expect(
+      (
+        await supabase.from("repositories").insert({
+          class_id: flagOn.id,
+          assignment_id: forgejoAssignment.id,
+          profile_id: student.private_profile_id,
+          repository,
+          git_provider: "forgejo",
+          is_github_ready: true
+        })
+      ).error
+    ).toBeNull();
+    await loginAsUser(page, student, flagOn);
+    await page.goto(`/course/${flagOn.id}/assignments`);
+    await expect(page.getByRole("cell", { name: repository, exact: true }).first()).toBeVisible({ timeout: 60_000 });
+    // The header row's cells have the cell role, not columnheader.
+    await expect(page.getByRole("cell", { name: "Repository", exact: true }).first()).toBeVisible();
+    await expect(page.getByText("GitHub Repository")).toHaveCount(0);
+  });
+
+  test("Rerun Autograder explains a missing grader repo, then describes Forgejo runs", async ({ page }) => {
+    await loginAsUser(page, instructorOn, flagOn);
+    // forgejoWithHandout has no grader repository.
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/rerun-autograder`);
+    const noGrader = page.getByTestId("rerun-autograder-no-grader-repo").filter({ visible: true });
+    await expect(noGrader).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Assignment not found")).toHaveCount(0);
+    await expect(noGrader.getByRole("link", { name: "Autograder" })).toHaveAttribute(
+      "href",
+      `/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/autograder`
+    );
+
+    expect(
+      (
+        await supabase
+          .from("autograder")
+          .update({ grader_repo: `e2e-ignore/fj-grader-${suffix}` })
+          .eq("id", forgejoAssignment.id)
+      ).error
+    ).toBeNull();
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoAssignment.id}/rerun-autograder`);
+    await expect(page.getByText(/Each run happens in Forgejo Actions/).filter({ visible: true })).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(page.getByText(/received by GitHub/)).toHaveCount(0);
+    await expect(
+      page.getByText(/in the grader repository, which stays on GitHub/).filter({ visible: true })
+    ).toBeVisible();
   });
 });

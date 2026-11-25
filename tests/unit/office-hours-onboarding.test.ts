@@ -73,7 +73,7 @@ describe("countTextQueues", () => {
 });
 
 describe("queueListShown", () => {
-  const shown = { browseView: true, loading: false, connectionError: false, disconnected: false };
+  const shown = { browseView: true, loading: false, connectionError: false };
 
   it("is true in the browse view once the page is past its loading and error messages", () => {
     expect(queueListShown(shown)).toBe(true);
@@ -83,7 +83,6 @@ describe("queueListShown", () => {
     // The page doesn't ask for the queue hint then, so the hint never points at a missing list.
     expect(queueListShown({ ...shown, loading: true })).toBe(false);
     expect(queueListShown({ ...shown, connectionError: true })).toBe(false);
-    expect(queueListShown({ ...shown, disconnected: true })).toBe(false);
     expect(queueListShown({ ...shown, browseView: false })).toBe(false);
   });
 });

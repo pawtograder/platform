@@ -1471,6 +1471,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
                   profileId={submission.profile_id}
                   assignmentGroupId={submission.assignment_group_id}
                   currentSubmissionId={submission.id}
+                  gitProvider={assignment.git_provider}
                 />
               ) : (
                 <Text fontSize="sm" color="fg.muted">

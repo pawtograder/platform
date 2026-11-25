@@ -249,7 +249,9 @@ function permissionHelp(role: ErrorAudienceRole | undefined): string {
  *
  * 42501, PGRST116 and 23503 are not here. On a read they usually mean our bug (a missing GRANT,
  * `.single()` matching several rows, an ID for a row that is gone), so a caller that expects them,
- * such as a save handler blocked by RLS, passes them in `expected`.
+ * such as a save handler blocked by RLS, passes them in `expected`. That includes a 42501 a
+ * database function raised on purpose: a page that offered the action to someone the function
+ * refuses is our bug too, so only a caller that expects the refusal (Manage Groups' publish) opts in.
  */
 const DEFAULT_EXPECTED_ERROR_CODES: readonly string[] = ["PGRST301", "23505", "23514", "P0001"];
 
