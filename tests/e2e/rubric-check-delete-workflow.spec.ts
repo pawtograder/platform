@@ -681,6 +681,16 @@ test.describe("Rubric check deletion workflow (DB & RPC)", () => {
     const preview3 = parseRubricCheckDeletionPreview(preview3Raw);
     expect(preview3.checks[0].comment_count).toBe(2);
 
+    // Confirmed call that omits p_expected_active_item_keys is rejected even with matching count & timestamp
+    const { error: missingKeysErr } = await instructorClient.rpc("update_rubric_full_with_report", {
+      p_rubric: payload as never,
+      p_confirm_delete_check_ids: [checkToctouId],
+      p_previewed_at: preview3.previewed_at,
+      p_expected_active_comment_count: 2
+    });
+    expect(missingKeysErr?.code).toBe("23503");
+    expect(missingKeysErr?.hint).toBe("rubric_checks_in_use");
+
     const { error: okErr } = await instructorClient.rpc("update_rubric_full_with_report", {
       p_rubric: payload as never,
       p_confirm_delete_check_ids: [checkToctouId],

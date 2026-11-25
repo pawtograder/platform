@@ -820,38 +820,41 @@ BEGIN
         ) INTO v_has_newer_activity;
       END IF;
 
-      IF p_expected_active_item_keys IS NOT NULL THEN
-        SELECT COALESCE(array_agg(k ORDER BY k), ARRAY[]::text[])
-        INTO v_actual_active_item_keys
-        FROM (
-          SELECT 'submission:' || id::text AS k
-          FROM public.submission_comments
-          WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
-          UNION ALL
-          SELECT 'file:' || id::text AS k
-          FROM public.submission_file_comments
-          WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
-          UNION ALL
-          SELECT 'artifact:' || id::text AS k
-          FROM public.submission_artifact_comments
-          WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
-          UNION ALL
-          SELECT 'bare_regrade:' || id::text AS k
-          FROM public.submission_regrade_requests
-          WHERE rubric_check_id = ANY(v_in_use_check_ids)
-            AND submission_comment_id IS NULL
-            AND submission_file_comment_id IS NULL
-            AND submission_artifact_comment_id IS NULL
-            AND status IN ('draft', 'opened', 'escalated')
-        ) actual_items;
+      IF p_expected_active_item_keys IS NULL THEN
+        RAISE EXCEPTION 'Confirmed rubric check deletion requires expected active item keys from preview_rubric_check_deletions.'
+          USING ERRCODE = 'foreign_key_violation', HINT = 'rubric_checks_in_use';
+      END IF;
 
-        SELECT COALESCE(array_agg(DISTINCT k ORDER BY k), ARRAY[]::text[])
-        INTO v_expected_active_item_keys
-        FROM unnest(p_expected_active_item_keys) AS k;
+      SELECT COALESCE(array_agg(k ORDER BY k), ARRAY[]::text[])
+      INTO v_actual_active_item_keys
+      FROM (
+        SELECT 'submission:' || id::text AS k
+        FROM public.submission_comments
+        WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+        UNION ALL
+        SELECT 'file:' || id::text AS k
+        FROM public.submission_file_comments
+        WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+        UNION ALL
+        SELECT 'artifact:' || id::text AS k
+        FROM public.submission_artifact_comments
+        WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+        UNION ALL
+        SELECT 'bare_regrade:' || id::text AS k
+        FROM public.submission_regrade_requests
+        WHERE rubric_check_id = ANY(v_in_use_check_ids)
+          AND submission_comment_id IS NULL
+          AND submission_file_comment_id IS NULL
+          AND submission_artifact_comment_id IS NULL
+          AND status IN ('draft', 'opened', 'escalated')
+      ) actual_items;
 
-        IF v_actual_active_item_keys IS DISTINCT FROM v_expected_active_item_keys THEN
-          v_has_newer_activity := true;
-        END IF;
+      SELECT COALESCE(array_agg(DISTINCT k ORDER BY k), ARRAY[]::text[])
+      INTO v_expected_active_item_keys
+      FROM unnest(p_expected_active_item_keys) AS k;
+
+      IF v_actual_active_item_keys IS DISTINCT FROM v_expected_active_item_keys THEN
+        v_has_newer_activity := true;
       END IF;
 
       IF v_has_newer_activity
