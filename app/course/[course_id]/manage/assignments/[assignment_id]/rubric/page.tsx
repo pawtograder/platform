@@ -35,18 +35,29 @@ import {
   setRubricUnsavedChangesFlag
 } from "@/lib/rubricUnsavedChanges";
 import {
+  computeDeletionTotals,
   computeRubricPointsBreakdown,
+  findRemovedRubricCheckIds,
   HydratedRubricToYamlRubric,
   maxPointsForCriterion,
   NEGATIVE_POINTS_REJECTED_MESSAGE,
   NegativePointsError,
+  parseDeletedRubricChecksReport,
+  parseRubricCheckDeletionPreview,
   resolveReferences,
   sanitizeHydratedRubricPoints,
   YamlRubricToHydratedRubric,
-  type PointsValidationWarning
+  type DeletedRubricChecksReport,
+  type PointsValidationWarning,
+  type RubricCheckDeletionPreview
 } from "@/lib/rubric";
 import type { RubricPointsBreakdown } from "@/lib/rubric";
-import { RubricGuiEditor, type RubricGuiEditorHandle } from "@/components/rubric-editor";
+import {
+  ConfirmRubricCheckDeleteDialog,
+  DeletedChecksReportDialog,
+  RubricGuiEditor,
+  type RubricGuiEditorHandle
+} from "@/components/rubric-editor";
 import { createClient } from "@/utils/supabase/client";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
@@ -80,6 +91,44 @@ const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
 class RubricSaveConflictError extends Error {}
 // update_rubric_full raises the round conflict as a unique_violation with this hint.
 const RUBRIC_ROUND_CONFLICT_HINT = "rubric_round_conflict";
+// update_rubric_full_with_report raises foreign_key_violation with this hint when deleting
+// applied rubric checks without an up-to-date confirmation.
+const RUBRIC_CHECKS_IN_USE_HINT = "rubric_checks_in_use";
+
+type PendingRubricDeleteSave = {
+  rubricId: number;
+  savedRound: NonNullable<HydratedRubric["review_round"]>;
+  payload: Record<string, unknown>;
+  removedCheckIds: number[];
+  preview: RubricCheckDeletionPreview;
+  staleNotice?: string | null;
+};
+
+type SaveRubricResult =
+  | { status: "saved"; summary: string; report: DeletedRubricChecksReport | null }
+  | { status: "needs_confirmation" };
+
+function extractKeptCheckIdsFromPayload(payload: Record<string, unknown>): Set<number> {
+  const kept = new Set<number>();
+  const parts = Array.isArray(payload.parts) ? payload.parts : [];
+  for (const part of parts) {
+    const criteria =
+      part && typeof part === "object" && Array.isArray((part as { criteria?: unknown }).criteria)
+        ? (part as { criteria: unknown[] }).criteria
+        : [];
+    for (const crit of criteria) {
+      const checks =
+        crit && typeof crit === "object" && Array.isArray((crit as { checks?: unknown }).checks)
+          ? (crit as { checks: unknown[] }).checks
+          : [];
+      for (const check of checks) {
+        const id = check && typeof check === "object" ? Number((check as { id?: unknown }).id) : NaN;
+        if (Number.isFinite(id) && id > 0) kept.add(id);
+      }
+    }
+  }
+  return kept;
+}
 
 function hydrateRubricTree(
   rubric: Omit<HydratedRubric, "rubric_parts">,
@@ -353,6 +402,11 @@ function InnerRubricPage() {
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
   const [pointsWarnings, setPointsWarnings] = useState<PointsValidationWarning[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const [pendingDeleteConfirmation, setPendingDeleteConfirmation] = useState<PendingRubricDeleteSave | null>(null);
+  const [isRefreshingDeletePreview, setIsRefreshingDeletePreview] = useState<boolean>(false);
+  const [lastDeletionReport, setLastDeletionReport] = useState<DeletedRubricChecksReport | null>(null);
+  const [isReportDialogOpen, setIsReportDialogOpen] = useState<boolean>(false);
+  const [isReportBannerDismissed, setIsReportBannerDismissed] = useState<boolean>(false);
   // Points summary state
   const gradingRubricFromDb = useRubric("grading-review");
 
@@ -1279,8 +1333,131 @@ function InnerRubricPage() {
     };
   }, [isRubricPageInstanceVisible]);
 
+  const fetchLiveRemovedCheckIds = useCallback(
+    async (rubricId: number, payload: Record<string, unknown>, fallbackRemovedIds: number[]): Promise<number[]> => {
+      if (rubricId <= 0) return fallbackRemovedIds;
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("rubric_checks")
+        .select("id, rubric_criteria!inner(rubric_id)")
+        .eq("rubric_criteria.rubric_id", rubricId);
+      if (error || !data) return fallbackRemovedIds;
+      const kept = extractKeptCheckIdsFromPayload(payload);
+      const removed = new Set<number>(fallbackRemovedIds);
+      for (const row of data) {
+        if (row.id > 0 && !kept.has(row.id)) {
+          removed.add(row.id);
+        }
+      }
+      return Array.from(removed);
+    },
+    []
+  );
+
+  const finalizeSavedRubric = useCallback(
+    async (
+      savedRound: NonNullable<HydratedRubric["review_round"]>,
+      data: unknown
+    ): Promise<{ status: "saved"; summary: string; report: DeletedRubricChecksReport | null }> => {
+      // Clear what belongs to the saved round. If the user switched to another round while the save
+      // ran, that round's draft, unsaved flag and base rubric stay as they are.
+      setUnsavedStatusPerTab((prev) => ({ ...prev, [savedRound]: false }));
+      setStashedEditorStates((prev) => {
+        const newState = { ...prev };
+        delete newState[savedRound];
+        return newState;
+      });
+      delete draftBaseRubricIdRef.current[savedRound];
+      if (currentRoundRef.current === savedRound) setHasUnsavedChanges(false);
+
+      invalidate({ resource: "assignments", invalidates: ["all"] });
+      await refetchCurrentRubric();
+
+      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, savedRound);
+      // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
+      // only manage_rubrics, not manage_assignments.
+      if (freshRubric && currentRoundRef.current === savedRound) {
+        syncEditorFromSavedRubric(freshRubric);
+      }
+
+      const parsedResponse =
+        data && typeof data === "object" ? (data as { summary?: unknown; deleted_checks_report?: unknown }) : null;
+      const summary = typeof parsedResponse?.summary === "string" ? parsedResponse.summary : "Saved rubric.";
+      const report = parseDeletedRubricChecksReport(parsedResponse?.deleted_checks_report);
+      return { status: "saved", summary, report };
+    },
+    [assignmentController, invalidate, refetchCurrentRubric, syncEditorFromSavedRubric]
+  );
+
+  const executeRubricSaveRpc = useCallback(
+    async (args: {
+      rubricId: number;
+      savedRound: NonNullable<HydratedRubric["review_round"]>;
+      payload: Record<string, unknown>;
+      removedCheckIds: number[];
+      confirmDeleteCheckIds?: number[];
+      previewedAt?: string;
+      expectedActiveCommentCount?: number;
+    }): Promise<SaveRubricResult> => {
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("update_rubric_full_with_report", {
+        p_rubric: args.payload as never,
+        ...(args.confirmDeleteCheckIds !== undefined ? { p_confirm_delete_check_ids: args.confirmDeleteCheckIds } : {}),
+        ...(args.previewedAt !== undefined ? { p_previewed_at: args.previewedAt } : {}),
+        ...(args.expectedActiveCommentCount !== undefined
+          ? { p_expected_active_comment_count: args.expectedActiveCommentCount }
+          : {})
+      });
+
+      if (error) {
+        // Round conflict is an expected refusal, not a fault.
+        if (error.code === "23505" && error.hint === RUBRIC_ROUND_CONFLICT_HINT) {
+          throw new RubricSaveConflictError(error.message);
+        }
+        // Applied rubric check deletion needs confirmation (or usage changed while reviewing).
+        if (error.code === "23503" && error.hint === RUBRIC_CHECKS_IN_USE_HINT && args.rubricId > 0) {
+          const liveRemovedIds = await fetchLiveRemovedCheckIds(args.rubricId, args.payload, args.removedCheckIds);
+          const { data: previewRaw, error: previewError } = await supabase.rpc("preview_rubric_check_deletions", {
+            p_rubric_id: args.rubricId,
+            p_removed_check_ids: liveRemovedIds
+          });
+          if (previewError) {
+            throw new Error(previewError.message);
+          }
+          const refreshedPreview = parseRubricCheckDeletionPreview(previewRaw);
+          if (refreshedPreview.checks.length > 0) {
+            setPendingDeleteConfirmation({
+              rubricId: args.rubricId,
+              savedRound: args.savedRound,
+              payload: args.payload,
+              removedCheckIds: liveRemovedIds,
+              preview: refreshedPreview,
+              staleNotice:
+                args.confirmDeleteCheckIds !== undefined
+                  ? "Grading activity changed while you were reviewing this dialog. Please review the updated list of affected submissions before confirming."
+                  : null
+            });
+            return { status: "needs_confirmation" };
+          }
+          // All active comments were cleared between the rejection and preview; retry once cleanly.
+          const { data: retryData, error: retryError } = await supabase.rpc("update_rubric_full_with_report", {
+            p_rubric: args.payload as never
+          });
+          if (retryError) {
+            throw new Error(retryError.message);
+          }
+          return finalizeSavedRubric(args.savedRound, retryData);
+        }
+        throw new Error(error.message);
+      }
+
+      return finalizeSavedRubric(args.savedRound, data);
+    },
+    [fetchLiveRemovedCheckIds, finalizeSavedRubric]
+  );
+
   const saveRubric = useCallback(
-    async (yamlStringValue: string): Promise<string> => {
+    async (yamlStringValue: string): Promise<SaveRubricResult> => {
       if (!assignmentDetails || !activeReviewRound) {
         throw new Error("Cannot save: Missing assignment details or active review round.");
       }
@@ -1493,54 +1670,175 @@ function InnerRubricPage() {
         }))
       };
 
-      const supabase = createClient();
-      const { data, error } = await supabase.rpc("update_rubric_full", {
-        p_rubric: payload as never
-      });
-      if (error) {
-        // Only the round conflict is an expected refusal. Any other duplicate key is a fault and
-        // goes to Sentry like other save errors.
-        if (error.code === "23505" && error.hint === RUBRIC_ROUND_CONFLICT_HINT) {
-          throw new RubricSaveConflictError(error.message);
+      // Pre-flight check: if any existing DB rubric checks are being removed, inspect whether they
+      // have active comments (or bare active regrade requests). Checks with zero active comments
+      // (including checks with ONLY soft-deleted comments) bypass confirmation and save cleanly.
+      const existingRubricForDiff =
+        allHydratedRubrics.find((r) => r.id === rubricId) ?? existingRubricForRound ?? initialActiveRubricSnapshot;
+      const removedCheckIds =
+        rubricId > 0 ? findRemovedRubricCheckIds(existingRubricForDiff, parsedRubricFromEditor) : [];
+
+      if (rubricId > 0 && removedCheckIds.length > 0) {
+        const supabase = createClient();
+        const { data: previewRaw, error: previewError } = await supabase.rpc("preview_rubric_check_deletions", {
+          p_rubric_id: rubricId,
+          p_removed_check_ids: removedCheckIds
+        });
+        if (previewError) {
+          throw new Error(previewError.message);
         }
-        throw new Error(error.message);
+        const preview = parseRubricCheckDeletionPreview(previewRaw);
+        if (preview.checks.length > 0) {
+          setPendingDeleteConfirmation({
+            rubricId,
+            savedRound,
+            payload,
+            removedCheckIds,
+            preview,
+            staleNotice: null
+          });
+          return { status: "needs_confirmation" };
+        }
       }
 
-      // Clear what belongs to the saved round. If the user switched to another round while the save
-      // ran, that round's draft, unsaved flag and base rubric stay as they are.
-      setUnsavedStatusPerTab((prev) => ({ ...prev, [savedRound]: false }));
-      setStashedEditorStates((prev) => {
-        const newState = { ...prev };
-        delete newState[savedRound];
-        return newState;
+      return executeRubricSaveRpc({
+        rubricId,
+        savedRound,
+        payload,
+        removedCheckIds
       });
-      delete draftBaseRubricIdRef.current[savedRound];
-      if (currentRoundRef.current === savedRound) setHasUnsavedChanges(false);
-
-      invalidate({ resource: "assignments", invalidates: ["all"] });
-      await refetchCurrentRubric();
-
-      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, savedRound);
-      // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
-      // only manage_rubrics, not manage_assignments.
-      if (freshRubric && currentRoundRef.current === savedRound) {
-        syncEditorFromSavedRubric(freshRubric);
-      }
-
-      return typeof data === "string" ? data : "Saved rubric.";
     },
     [
       assignmentDetails,
       activeReviewRound,
       assignment_id,
-      assignmentController,
-      refetchCurrentRubric,
-      syncEditorFromSavedRubric,
-      invalidate,
       allHydratedRubrics,
       unsavedStatusPerTab,
-      activeRubric
+      activeRubric,
+      initialActiveRubricSnapshot,
+      executeRubricSaveRpc
     ]
+  );
+
+  const handleSaveError = useCallback((saveError: unknown) => {
+    if (saveError instanceof NegativePointsError || saveError instanceof RubricSaveConflictError) {
+      // A rubric-authoring mistake or a save conflict, not a fault: show the message and
+      // do not report it to Sentry as "an unexpected error occurred".
+      toaster.error({
+        title: "Cannot save rubric",
+        description: saveError.message,
+        duration: 15000,
+        meta: { closable: true }
+      });
+    } else {
+      Sentry.captureException(saveError);
+      console.error(saveError);
+      toaster.error({
+        title: "Failed to save rubric",
+        description:
+          saveError instanceof Error
+            ? `An unexpected error occurred: ${saveError.message}`
+            : "An unknown error occurred during the save process.",
+        duration: 15000,
+        meta: { closable: true }
+      });
+    }
+  }, []);
+
+  const handleSaveSuccess = useCallback((result: { summary: string; report: DeletedRubricChecksReport | null }) => {
+    // Long-lived toast so the instructor has time to read what
+    // changed (including how many submission reviews were
+    // recomputed). The closable meta flag adds an X button so
+    // they can dismiss before the timer expires.
+    toaster.success({
+      title: "Rubric Saved",
+      description: result.summary,
+      duration: 15000,
+      meta: { closable: true }
+    });
+    if (result.report) {
+      setLastDeletionReport(result.report);
+      setIsReportBannerDismissed(false);
+      setIsReportDialogOpen(true);
+    }
+  }, []);
+
+  const handleRefreshDeletePreview = useCallback(async () => {
+    if (!pendingDeleteConfirmation) return;
+    setIsRefreshingDeletePreview(true);
+    try {
+      const supabase = createClient();
+      const liveRemovedIds = await fetchLiveRemovedCheckIds(
+        pendingDeleteConfirmation.rubricId,
+        pendingDeleteConfirmation.payload,
+        pendingDeleteConfirmation.removedCheckIds
+      );
+      const { data: previewRaw, error: previewError } = await supabase.rpc("preview_rubric_check_deletions", {
+        p_rubric_id: pendingDeleteConfirmation.rubricId,
+        p_removed_check_ids: liveRemovedIds
+      });
+      if (previewError) {
+        throw new Error(previewError.message);
+      }
+      const preview = parseRubricCheckDeletionPreview(previewRaw);
+      if (preview.checks.length === 0) {
+        setPendingDeleteConfirmation(null);
+        toaster.create({
+          title: "No active comments remain",
+          description:
+            "No active grading comments or regrade requests remain on the removed checks. Click Save to save your rubric.",
+          type: "info",
+          duration: 8000
+        });
+        return;
+      }
+      setPendingDeleteConfirmation((prev) =>
+        prev
+          ? {
+              ...prev,
+              removedCheckIds: liveRemovedIds,
+              preview,
+              staleNotice: null
+            }
+          : null
+      );
+    } catch (err) {
+      handleSaveError(err);
+    } finally {
+      setIsRefreshingDeletePreview(false);
+    }
+  }, [pendingDeleteConfirmation, fetchLiveRemovedCheckIds, handleSaveError]);
+
+  const handleConfirmDeleteAndSave = useCallback(async () => {
+    if (!pendingDeleteConfirmation) return;
+    const current = pendingDeleteConfirmation;
+    setIsSaving(true);
+    try {
+      const confirmIds = current.preview.checks.map((c) => c.check_id);
+      const expectedActiveComments = computeDeletionTotals(current.preview.checks).commentCount;
+      const result = await executeRubricSaveRpc({
+        rubricId: current.rubricId,
+        savedRound: current.savedRound,
+        payload: current.payload,
+        removedCheckIds: current.removedCheckIds,
+        confirmDeleteCheckIds: confirmIds,
+        previewedAt: current.preview.previewed_at,
+        expectedActiveCommentCount: expectedActiveComments
+      });
+      if (result.status === "saved") {
+        setPendingDeleteConfirmation(null);
+        handleSaveSuccess(result);
+      }
+    } catch (err) {
+      handleSaveError(err);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [pendingDeleteConfirmation, executeRubricSaveRpc, handleSaveSuccess, handleSaveError]);
+
+  const lastReportTotals = useMemo(
+    () => (lastDeletionReport ? computeDeletionTotals(lastDeletionReport.checks) : null),
+    [lastDeletionReport]
   );
 
   if (isLoadingAssignment || (!activeRubric && isLoadingCurrentRubric && !initialActiveRubricSnapshot)) {
@@ -1603,6 +1901,28 @@ function InnerRubricPage() {
           </Button>
         </VStack>
       </HStack>
+      {lastDeletionReport && lastReportTotals && !isReportBannerDismissed && !isReportDialogOpen && (
+        <Alert
+          status="info"
+          variant="surface"
+          closable
+          onClose={() => setIsReportBannerDismissed(true)}
+          title="Deleted applied rubric checks — follow-up report available"
+          mb={2}
+        >
+          <HStack justify="space-between" align="center" flexWrap="wrap" gap={2} mt={1}>
+            <Text fontSize="sm">
+              Last save deleted {lastReportTotals.checkCount} applied rubric check
+              {lastReportTotals.checkCount === 1 ? "" : "s"} ({lastReportTotals.commentCount} comment
+              {lastReportTotals.commentCount === 1 ? "" : "s"} across {lastReportTotals.distinctSubmissionCount}{" "}
+              submission{lastReportTotals.distinctSubmissionCount === 1 ? "" : "s"}).
+            </Text>
+            <Button size="xs" variant="outline" onClick={() => setIsReportDialogOpen(true)}>
+              View Follow-Up Report
+            </Button>
+          </HStack>
+        </Alert>
+      )}
       <HStack
         role="tablist"
         aria-label="Review round"
@@ -1700,40 +2020,12 @@ function InnerRubricPage() {
                 try {
                   setIsSaving(true);
                   const yamlToSave = viewMode === "gui" ? flushPendingGuiSync() : value;
-                  const summary = await saveRubric(yamlToSave);
-                  // Long-lived toast so the instructor has time to read what
-                  // changed (including how many submission reviews were
-                  // recomputed). The closable meta flag adds an X button so
-                  // they can dismiss before the timer expires.
-                  toaster.success({
-                    title: "Rubric Saved",
-                    description: summary,
-                    duration: 15000,
-                    meta: { closable: true }
-                  });
-                } catch (error) {
-                  if (error instanceof NegativePointsError || error instanceof RubricSaveConflictError) {
-                    // A rubric-authoring mistake or a save conflict, not a fault: show the message and
-                    // do not report it to Sentry as "an unexpected error occurred".
-                    toaster.error({
-                      title: "Cannot save rubric",
-                      description: error.message,
-                      duration: 15000,
-                      meta: { closable: true }
-                    });
-                  } else {
-                    Sentry.captureException(error);
-                    console.error(error);
-                    toaster.error({
-                      title: "Failed to save rubric",
-                      description:
-                        error instanceof Error
-                          ? `An unexpected error occurred: ${error.message}`
-                          : "An unknown error occurred during the save process.",
-                      duration: 15000,
-                      meta: { closable: true }
-                    });
+                  const result = await saveRubric(yamlToSave);
+                  if (result.status === "saved") {
+                    handleSaveSuccess(result);
                   }
+                } catch (saveError) {
+                  handleSaveError(saveError);
                 } finally {
                   setIsSaving(false);
                 }
@@ -2003,6 +2295,26 @@ function InnerRubricPage() {
           </Box>
         </Flex>
       </VStack>
+      <ConfirmRubricCheckDeleteDialog
+        open={pendingDeleteConfirmation !== null}
+        preview={pendingDeleteConfirmation?.preview ?? null}
+        courseId={assignmentDetails.class_id}
+        assignmentId={assignment_id}
+        isSubmitting={isSaving}
+        isRefreshing={isRefreshingDeletePreview}
+        staleNotice={pendingDeleteConfirmation?.staleNotice}
+        onRefresh={handleRefreshDeletePreview}
+        onCancel={() => setPendingDeleteConfirmation(null)}
+        onConfirm={handleConfirmDeleteAndSave}
+      />
+      <DeletedChecksReportDialog
+        open={isReportDialogOpen && lastDeletionReport !== null}
+        report={lastDeletionReport}
+        courseId={assignmentDetails.class_id}
+        assignmentId={assignment_id}
+        assignmentTitle={assignmentDetails.title ?? undefined}
+        onClose={() => setIsReportDialogOpen(false)}
+      />
     </Flex>
   );
 }

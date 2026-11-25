@@ -30,3 +30,25 @@ export {
   sanitizeHydratedRubricPoints,
   type PointsValidationWarning
 } from "@/lib/rubric/pointsSanitize";
+export {
+  buildSubmissionHref,
+  computeDeletionTotals,
+  findRemovedRubricCheckIds,
+  formatCommentLocation,
+  formatDeletedChecksCsv,
+  formatFullDeletionReportMarkdown,
+  formatGraderFollowUpMessage,
+  groupDeletionsByGrader,
+  parseDeletedRubricChecksReport,
+  parseRubricCheckDeletionPreview,
+  type DeletedRubricChecksReport,
+  type DeletionImpactTotals,
+  type GraderFollowUpGroup,
+  type GraderFollowUpItem,
+  type RubricCheckBareRegradeRequest,
+  type RubricCheckCommentApplication,
+  type RubricCheckCommentType,
+  type RubricCheckDeletionImpact,
+  type RubricCheckDeletionPreview,
+  type RubricSaveWithReportResponse
+} from "@/lib/rubric/deletionReport";

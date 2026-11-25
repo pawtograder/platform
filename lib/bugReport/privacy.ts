@@ -2244,6 +2244,17 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // DRAFT: new entry, review and remove this comment
   _calculate_effective_due_date: "free_text",
   _cli_resolve_submission_file_id: "none",
+  _collect_rubric_check_usage: {
+    $: "none",
+    "$[*].applications[*].student_or_group_name": "name",
+    "$[*].applications[*].grader_name": "name",
+    "$[*].applications[*].grader_email": "email",
+    "$[*].applications[*].comment_text": "free_text",
+    "$[*].applications[*].points": "grade",
+    "$[*].bare_regrade_requests[*].student_or_group_name": "name",
+    "$[*].bare_regrade_requests[*].assignee_name": "name",
+    "$[*].bare_regrade_requests[*].assignee_email": "email"
+  },
   // DRAFT: new entry, review and remove this comment
   _due_date_lookup_allowed: "none",
   _eval_rubric_report_filter: "none",
@@ -3044,6 +3055,17 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   pg_buffercache_usage_counts: "none",
   prepare_forgejo_repo_archive: "none",
   preview_error_pin_matches: { $: "none", "$.recent_submissions[*].student_name": "name" },
+  preview_rubric_check_deletions: {
+    $: "none",
+    "$.checks[*].applications[*].student_or_group_name": "name",
+    "$.checks[*].applications[*].grader_name": "name",
+    "$.checks[*].applications[*].grader_email": "email",
+    "$.checks[*].applications[*].comment_text": "free_text",
+    "$.checks[*].applications[*].points": "grade",
+    "$.checks[*].bare_regrade_requests[*].student_or_group_name": "name",
+    "$.checks[*].bare_regrade_requests[*].assignee_name": "name",
+    "$.checks[*].bare_regrade_requests[*].assignee_email": "email"
+  },
   process_calendar_announcements: "none",
   // Returns a status word: "promoted", "superseded" or "missing".
   promote_push_direct_submission: "none",
@@ -3165,6 +3187,17 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   update_regrade_request_points: "none",
   update_regrade_request_status: "none",
   update_rubric_full: "none",
+  update_rubric_full_with_report: {
+    $: "none",
+    "$.deleted_checks_report.checks[*].applications[*].student_or_group_name": "name",
+    "$.deleted_checks_report.checks[*].applications[*].grader_name": "name",
+    "$.deleted_checks_report.checks[*].applications[*].grader_email": "email",
+    "$.deleted_checks_report.checks[*].applications[*].comment_text": "free_text",
+    "$.deleted_checks_report.checks[*].applications[*].points": "grade",
+    "$.deleted_checks_report.checks[*].bare_regrade_requests[*].student_or_group_name": "name",
+    "$.deleted_checks_report.checks[*].bare_regrade_requests[*].assignee_name": "name",
+    "$.deleted_checks_report.checks[*].bare_regrade_requests[*].assignee_email": "email"
+  },
   update_sis_sync_status: "none",
   upsert_assignment_leaderboard_entry: "none",
   upsert_github_deployment: "none",
