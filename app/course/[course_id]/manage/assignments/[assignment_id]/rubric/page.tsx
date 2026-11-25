@@ -37,6 +37,7 @@ import {
 import {
   computeDeletionTotals,
   computeRubricPointsBreakdown,
+  extractActiveItemKeys,
   findRemovedRubricCheckIds,
   HydratedRubricToYamlRubric,
   maxPointsForCriterion,
@@ -100,6 +101,7 @@ type PendingRubricDeleteSave = {
   savedRound: NonNullable<HydratedRubric["review_round"]>;
   payload: Record<string, unknown>;
   removedCheckIds: number[];
+  capturedRevision: number;
   preview: RubricCheckDeletionPreview;
   staleNotice?: string | null;
 };
@@ -403,6 +405,15 @@ function InnerRubricPage() {
   const [pointsWarnings, setPointsWarnings] = useState<PointsValidationWarning[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [pendingDeleteConfirmation, setPendingDeleteConfirmation] = useState<PendingRubricDeleteSave | null>(null);
+  const pendingDeleteConfirmationRef = useRef<PendingRubricDeleteSave | null>(null);
+  useLayoutEffect(() => {
+    pendingDeleteConfirmationRef.current = pendingDeleteConfirmation;
+  }, [pendingDeleteConfirmation]);
+  const editorRevisionByRoundRef = useRef<Record<string, number>>({});
+  const bumpEditorRevision = useCallback((round: string | undefined) => {
+    if (!round) return;
+    editorRevisionByRoundRef.current[round] = (editorRevisionByRoundRef.current[round] ?? 0) + 1;
+  }, []);
   const [isRefreshingDeletePreview, setIsRefreshingDeletePreview] = useState<boolean>(false);
   const [lastDeletionReport, setLastDeletionReport] = useState<DeletedRubricChecksReport | null>(null);
   const [isReportDialogOpen, setIsReportDialogOpen] = useState<boolean>(false);
@@ -873,6 +884,7 @@ function InnerRubricPage() {
         // Monaco stays mounted while hidden; programmatic setValue from GUI sync must not
         // drive YAML debounce / "preview paused" state.
         if (viewModeRef.current === "gui") return;
+        bumpEditorRevision(currentRoundRef.current);
         setValue(value);
         if (debounceTimeoutRef.current) {
           clearTimeout(debounceTimeoutRef.current);
@@ -885,7 +897,7 @@ function InnerRubricPage() {
         }, 1000);
       }
     },
-    [debouncedParseYaml, errorMarkers.length]
+    [bumpEditorRevision, debouncedParseYaml, errorMarkers.length]
   );
 
   const applyGuiUnsavedStatus = useCallback(
@@ -935,24 +947,26 @@ function InnerRubricPage() {
 
   const handleGuiDraftActivity = useCallback(
     (rubric: HydratedRubric) => {
+      bumpEditorRevision(activeReviewRound);
       pendingGuiRubricRef.current = rubric;
       setUpdatePaused(true);
       setHasUnsavedChanges(true);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
     },
-    [activeReviewRound]
+    [activeReviewRound, bumpEditorRevision]
   );
 
   const handleGuiCommit = useCallback(
     (rubric: HydratedRubric) => {
+      bumpEditorRevision(currentRoundRef.current);
       skipActiveRubricYamlSyncRef.current = true;
       pendingGuiRubricRef.current = rubric;
       setActiveRubric(rubric);
       setError(undefined);
       syncGuiRubricToYamlAndPreview(rubric);
     },
-    [syncGuiRubricToYamlAndPreview]
+    [bumpEditorRevision, syncGuiRubricToYamlAndPreview]
   );
 
   const guiReferenceContext = useMemo(
@@ -1049,6 +1063,7 @@ function InnerRubricPage() {
   );
 
   const handleResetEditor = useCallback(async () => {
+    bumpEditorRevision(activeReviewRound);
     if (initialActiveRubricSnapshot) {
       setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
       setGuiEditorEpoch((e) => e + 1);
@@ -1095,6 +1110,7 @@ function InnerRubricPage() {
     assignmentDetails,
     activeReviewRound,
     assignment_id,
+    bumpEditorRevision,
     createMinimalNewHydratedRubric
   ]);
 
@@ -1357,33 +1373,62 @@ function InnerRubricPage() {
   const finalizeSavedRubric = useCallback(
     async (
       savedRound: NonNullable<HydratedRubric["review_round"]>,
-      data: unknown
+      data: unknown,
+      capturedRevision: number
     ): Promise<{ status: "saved"; summary: string; report: DeletedRubricChecksReport | null }> => {
-      // Clear what belongs to the saved round. If the user switched to another round while the save
-      // ran, that round's draft, unsaved flag and base rubric stay as they are.
-      setUnsavedStatusPerTab((prev) => ({ ...prev, [savedRound]: false }));
-      setStashedEditorStates((prev) => {
-        const newState = { ...prev };
-        delete newState[savedRound];
-        return newState;
-      });
-      delete draftBaseRubricIdRef.current[savedRound];
-      if (currentRoundRef.current === savedRound) setHasUnsavedChanges(false);
-
-      invalidate({ resource: "assignments", invalidates: ["all"] });
-      await refetchCurrentRubric();
-
-      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, savedRound);
-      // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
-      // only manage_rubrics, not manage_assignments.
-      if (freshRubric && currentRoundRef.current === savedRound) {
-        syncEditorFromSavedRubric(freshRubric);
-      }
-
       const parsedResponse =
         data && typeof data === "object" ? (data as { summary?: unknown; deleted_checks_report?: unknown }) : null;
       const summary = typeof parsedResponse?.summary === "string" ? parsedResponse.summary : "Saved rubric.";
       const report = parseDeletedRubricChecksReport(parsedResponse?.deleted_checks_report);
+
+      const hasNewerEdits = () => (editorRevisionByRoundRef.current[savedRound] ?? 0) !== capturedRevision;
+
+      // Clear what belongs to the saved round only if the user has not made newer edits after
+      // the payload was captured. If the user switched to another round while the save ran, that
+      // round's draft, unsaved flag and base rubric stay as they are.
+      if (!hasNewerEdits()) {
+        setUnsavedStatusPerTab((prev) => ({ ...prev, [savedRound]: false }));
+        setStashedEditorStates((prev) => {
+          const newState = { ...prev };
+          delete newState[savedRound];
+          return newState;
+        });
+        delete draftBaseRubricIdRef.current[savedRound];
+        if (currentRoundRef.current === savedRound) setHasUnsavedChanges(false);
+      }
+
+      invalidate({ resource: "assignments", invalidates: ["all"] });
+      let refetchSucceeded = true;
+      try {
+        await refetchCurrentRubric();
+      } catch (refetchErr) {
+        refetchSucceeded = false;
+        Sentry.captureException(refetchErr);
+        console.error("Failed to refresh rubric after save:", refetchErr);
+        toaster.create({
+          title: "Rubric saved, but refresh failed",
+          description:
+            "Your rubric changes were saved, but reloading the latest rubric state did not complete. Reload the page to refresh.",
+          type: "warning",
+          duration: 12000
+        });
+      }
+
+      if (refetchSucceeded) {
+        const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, savedRound);
+        // update_rubric_full links a new rubric to the assignment itself (#1010), so saving needs
+        // only manage_rubrics, not manage_assignments.
+        if (freshRubric && currentRoundRef.current === savedRound) {
+          if (!hasNewerEdits()) {
+            syncEditorFromSavedRubric(freshRubric);
+          } else {
+            // Preserve newer unsaved edits while advancing the saved baseline.
+            setInitialActiveRubricSnapshot(freshRubric);
+            draftBaseRubricIdRef.current[savedRound] = freshRubric.id;
+          }
+        }
+      }
+
       return { status: "saved", summary, report };
     },
     [assignmentController, invalidate, refetchCurrentRubric, syncEditorFromSavedRubric]
@@ -1395,9 +1440,11 @@ function InnerRubricPage() {
       savedRound: NonNullable<HydratedRubric["review_round"]>;
       payload: Record<string, unknown>;
       removedCheckIds: number[];
+      capturedRevision: number;
       confirmDeleteCheckIds?: number[];
       previewedAt?: string;
       expectedActiveCommentCount?: number;
+      expectedActiveItemKeys?: string[];
     }): Promise<SaveRubricResult> => {
       const supabase = createClient();
       const { data, error } = await supabase.rpc("update_rubric_full_with_report", {
@@ -1406,6 +1453,9 @@ function InnerRubricPage() {
         ...(args.previewedAt !== undefined ? { p_previewed_at: args.previewedAt } : {}),
         ...(args.expectedActiveCommentCount !== undefined
           ? { p_expected_active_comment_count: args.expectedActiveCommentCount }
+          : {}),
+        ...(args.expectedActiveItemKeys !== undefined
+          ? { p_expected_active_item_keys: args.expectedActiveItemKeys }
           : {})
       });
 
@@ -1431,6 +1481,7 @@ function InnerRubricPage() {
               savedRound: args.savedRound,
               payload: args.payload,
               removedCheckIds: liveRemovedIds,
+              capturedRevision: args.capturedRevision,
               preview: refreshedPreview,
               staleNotice:
                 args.confirmDeleteCheckIds !== undefined
@@ -1446,12 +1497,12 @@ function InnerRubricPage() {
           if (retryError) {
             throw new Error(retryError.message);
           }
-          return finalizeSavedRubric(args.savedRound, retryData);
+          return finalizeSavedRubric(args.savedRound, retryData, args.capturedRevision);
         }
         throw new Error(error.message);
       }
 
-      return finalizeSavedRubric(args.savedRound, data);
+      return finalizeSavedRubric(args.savedRound, data, args.capturedRevision);
     },
     [fetchLiveRemovedCheckIds, finalizeSavedRubric]
   );
@@ -1462,6 +1513,7 @@ function InnerRubricPage() {
         throw new Error("Cannot save: Missing assignment details or active review round.");
       }
       const savedRound = activeReviewRound;
+      const capturedRevision = editorRevisionByRoundRef.current[savedRound] ?? 0;
 
       let parsedRubricFromEditor: HydratedRubric;
       let negativePointsWarnings: PointsValidationWarning[];
@@ -1694,6 +1746,7 @@ function InnerRubricPage() {
             savedRound,
             payload,
             removedCheckIds,
+            capturedRevision,
             preview,
             staleNotice: null
           });
@@ -1705,7 +1758,8 @@ function InnerRubricPage() {
         rubricId,
         savedRound,
         payload,
-        removedCheckIds
+        removedCheckIds,
+        capturedRevision
       });
     },
     [
@@ -1764,25 +1818,29 @@ function InnerRubricPage() {
   }, []);
 
   const handleRefreshDeletePreview = useCallback(async () => {
-    if (!pendingDeleteConfirmation) return;
+    const targetConfirmation = pendingDeleteConfirmation;
+    if (!targetConfirmation) return;
     setIsRefreshingDeletePreview(true);
     try {
       const supabase = createClient();
       const liveRemovedIds = await fetchLiveRemovedCheckIds(
-        pendingDeleteConfirmation.rubricId,
-        pendingDeleteConfirmation.payload,
-        pendingDeleteConfirmation.removedCheckIds
+        targetConfirmation.rubricId,
+        targetConfirmation.payload,
+        targetConfirmation.removedCheckIds
       );
       const { data: previewRaw, error: previewError } = await supabase.rpc("preview_rubric_check_deletions", {
-        p_rubric_id: pendingDeleteConfirmation.rubricId,
+        p_rubric_id: targetConfirmation.rubricId,
         p_removed_check_ids: liveRemovedIds
       });
       if (previewError) {
         throw new Error(previewError.message);
       }
+      if (pendingDeleteConfirmationRef.current !== targetConfirmation) {
+        return;
+      }
       const preview = parseRubricCheckDeletionPreview(previewRaw);
       if (preview.checks.length === 0) {
-        setPendingDeleteConfirmation(null);
+        setPendingDeleteConfirmation((prev) => (prev === targetConfirmation ? null : prev));
         toaster.create({
           title: "No active comments remain",
           description:
@@ -1793,17 +1851,19 @@ function InnerRubricPage() {
         return;
       }
       setPendingDeleteConfirmation((prev) =>
-        prev
+        prev === targetConfirmation
           ? {
               ...prev,
               removedCheckIds: liveRemovedIds,
               preview,
               staleNotice: null
             }
-          : null
+          : prev
       );
     } catch (err) {
-      handleSaveError(err);
+      if (pendingDeleteConfirmationRef.current === targetConfirmation) {
+        handleSaveError(err);
+      }
     } finally {
       setIsRefreshingDeletePreview(false);
     }
@@ -1816,14 +1876,17 @@ function InnerRubricPage() {
     try {
       const confirmIds = current.preview.checks.map((c) => c.check_id);
       const expectedActiveComments = computeDeletionTotals(current.preview.checks).commentCount;
+      const expectedActiveItemKeys = extractActiveItemKeys(current.preview);
       const result = await executeRubricSaveRpc({
         rubricId: current.rubricId,
         savedRound: current.savedRound,
         payload: current.payload,
         removedCheckIds: current.removedCheckIds,
+        capturedRevision: current.capturedRevision,
         confirmDeleteCheckIds: confirmIds,
         previewedAt: current.preview.previewed_at,
-        expectedActiveCommentCount: expectedActiveComments
+        expectedActiveCommentCount: expectedActiveComments,
+        expectedActiveItemKeys
       });
       if (result.status === "saved") {
         setPendingDeleteConfirmation(null);
@@ -1871,8 +1934,10 @@ function InnerRubricPage() {
           <Button
             variant="surface"
             size="xs"
+            disabled={isSaving || pendingDeleteConfirmation !== null}
             onClick={() => {
               if (assignmentDetails && activeReviewRound) {
+                bumpEditorRevision(activeReviewRound);
                 const existingId =
                   resolveExistingRubricIdForRound(assignmentDetails, activeReviewRound, allHydratedRubrics) ?? 0;
                 const demoTemplate = createNewRubricTemplate(
@@ -1907,15 +1972,17 @@ function InnerRubricPage() {
           variant="surface"
           closable
           onClose={() => setIsReportBannerDismissed(true)}
-          title="Deleted applied rubric checks — follow-up report available"
+          title="Deleted applied rubric checks: follow-up report available"
           mb={2}
         >
           <HStack justify="space-between" align="center" flexWrap="wrap" gap={2} mt={1}>
             <Text fontSize="sm">
-              Last save deleted {lastReportTotals.checkCount} applied rubric check
-              {lastReportTotals.checkCount === 1 ? "" : "s"} ({lastReportTotals.commentCount} comment
-              {lastReportTotals.commentCount === 1 ? "" : "s"} across {lastReportTotals.distinctSubmissionCount}{" "}
-              submission{lastReportTotals.distinctSubmissionCount === 1 ? "" : "s"}).
+              Most recent deletion report: deleted {lastReportTotals.checkCount} applied rubric check
+              {lastReportTotals.checkCount === 1 ? "" : "s"} (
+              {lastReportTotals.commentCount > 0
+                ? `${lastReportTotals.commentCount} comment${lastReportTotals.commentCount === 1 ? "" : "s"} across ${lastReportTotals.distinctSubmissionCount} submission${lastReportTotals.distinctSubmissionCount === 1 ? "" : "s"}`
+                : `${lastReportTotals.bareRegradeCount} auto-resolved regrade request${lastReportTotals.bareRegradeCount === 1 ? "" : "s"}`}
+              ).
             </Text>
             <Button size="xs" variant="outline" onClick={() => setIsReportDialogOpen(true)}>
               View Follow-Up Report
@@ -1983,6 +2050,7 @@ function InnerRubricPage() {
             <Button
               size="xs"
               variant={viewMode === "gui" ? "solid" : "ghost"}
+              disabled={isSaving || pendingDeleteConfirmation !== null}
               onClick={() => handleViewModeChange("gui")}
             >
               GUI
@@ -1990,6 +2058,7 @@ function InnerRubricPage() {
             <Button
               size="xs"
               variant={viewMode === "source" ? "solid" : "ghost"}
+              disabled={isSaving || pendingDeleteConfirmation !== null}
               onClick={() => handleViewModeChange("source")}
             >
               YAML source
@@ -2006,7 +2075,12 @@ function InnerRubricPage() {
               }
               onConfirm={handleResetEditor}
               trigger={
-                <Button variant="ghost" colorPalette="red" size="xs">
+                <Button
+                  variant="ghost"
+                  colorPalette="red"
+                  size="xs"
+                  disabled={isSaving || pendingDeleteConfirmation !== null}
+                >
                   Reset
                 </Button>
               }
@@ -2015,11 +2089,14 @@ function InnerRubricPage() {
               colorPalette="green"
               loadingText="Saving..."
               loading={isSaving}
-              disabled={isSaving || !hasUnsavedChanges}
+              disabled={isSaving || pendingDeleteConfirmation !== null || !hasUnsavedChanges}
               onClick={async () => {
                 try {
-                  setIsSaving(true);
                   const yamlToSave = viewMode === "gui" ? flushPendingGuiSync() : value;
+                  if (document.activeElement instanceof HTMLElement) {
+                    document.activeElement.blur();
+                  }
+                  setIsSaving(true);
                   const result = await saveRubric(yamlToSave);
                   if (result.status === "saved") {
                     handleSaveSuccess(result);
@@ -2044,17 +2121,41 @@ function InnerRubricPage() {
                 </Center>
               )}
               {viewMode === "gui" && activeRubric && (
-                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto" role="region" aria-label="Rubric GUI">
-                  <RubricGuiEditor
-                    key={`${activeReviewRound}-${activeRubric.id}-${guiEditorEpoch}`}
-                    ref={guiEditorRef}
-                    rubric={activeRubric}
-                    onCommit={handleGuiCommit}
-                    onDraftActivity={handleGuiDraftActivity}
-                    assignmentMaxPoints={assignmentMaxPoints}
-                    autograderPoints={autograderPoints}
-                    referenceContext={guiReferenceContext}
-                  />
+                <Box position="relative" w="100%" h="calc(100vh - 150px)">
+                  <Box
+                    w="100%"
+                    h="100%"
+                    overflowY="auto"
+                    pointerEvents={isSaving || pendingDeleteConfirmation !== null ? "none" : undefined}
+                    aria-busy={isSaving}
+                    role="region"
+                    aria-label="Rubric GUI"
+                  >
+                    <RubricGuiEditor
+                      key={`${activeReviewRound}-${activeRubric.id}-${guiEditorEpoch}`}
+                      ref={guiEditorRef}
+                      rubric={activeRubric}
+                      onCommit={handleGuiCommit}
+                      onDraftActivity={handleGuiDraftActivity}
+                      assignmentMaxPoints={assignmentMaxPoints}
+                      autograderPoints={autograderPoints}
+                      referenceContext={guiReferenceContext}
+                    />
+                  </Box>
+                  {isSaving && (
+                    <Center
+                      position="absolute"
+                      top={0}
+                      left={0}
+                      width="100%"
+                      height="100%"
+                      bg="bg.surface"
+                      opacity={0.7}
+                      zIndex={2}
+                    >
+                      <Spinner size="xl" />
+                    </Center>
+                  )}
                 </Box>
               )}
               {viewMode === "gui" && !activeRubric && !isLoadingCurrentRubric && (

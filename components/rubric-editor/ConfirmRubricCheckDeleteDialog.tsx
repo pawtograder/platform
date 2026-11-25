@@ -107,6 +107,14 @@ export function ConfirmRubricCheckDeleteDialog({
     return checks.filter((check) => matchesSearch(check, searchQuery));
   }, [checks, searchQuery]);
 
+  const handleSearchChange = (nextQuery: string) => {
+    setSearchQuery(nextQuery);
+    if (nextQuery.trim().length > 0) {
+      const matchingIds = checks.filter((check) => matchesSearch(check, nextQuery)).map((c) => c.check_id);
+      setExpandedCheckIds(new Set(matchingIds));
+    }
+  };
+
   const toggleCheck = (checkId: number) => {
     setExpandedCheckIds((prev) => {
       const next = new Set(prev);
@@ -213,21 +221,29 @@ export function ConfirmRubricCheckDeleteDialog({
               </VStack>
             </Alert>
 
-            <HStack justify="space-between" gap={2} flexWrap="wrap">
-              <Input
-                size="sm"
-                maxW="sm"
-                placeholder="Filter by grader, student/group, file, or check..."
-                aria-label="Filter affected submissions"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {filteredChecks.length > 1 && (
-                <Button size="xs" variant="ghost" onClick={toggleAll}>
-                  {allExpanded ? "Collapse all" : "Expand all"}
-                </Button>
+            <VStack align="stretch" gap={1.5}>
+              <HStack justify="space-between" gap={2} flexWrap="wrap">
+                <Input
+                  size="sm"
+                  maxW="sm"
+                  placeholder="Filter by grader, student/group, file, or check..."
+                  aria-label="Filter affected submissions"
+                  value={searchQuery}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                />
+                {filteredChecks.length > 1 && (
+                  <Button size="xs" variant="ghost" onClick={toggleAll}>
+                    {allExpanded ? "Collapse all" : "Expand all"}
+                  </Button>
+                )}
+              </HStack>
+              {searchQuery.trim().length > 0 && (
+                <Text fontSize="xs" color="fg.muted">
+                  Filtering only narrows this preview list. Confirming still deletes all {totals.checkCount} applied
+                  rubric check{totals.checkCount === 1 ? "" : "s"} summarized above.
+                </Text>
               )}
-            </HStack>
+            </VStack>
 
             {filteredChecks.length === 0 ? (
               <Text fontSize="sm" color="fg.muted" py={4} textAlign="center">
@@ -236,7 +252,7 @@ export function ConfirmRubricCheckDeleteDialog({
             ) : (
               <VStack align="stretch" gap={3}>
                 {filteredChecks.map((check) => {
-                  const isOpen = searchQuery.trim().length > 0 || expandedCheckIds.has(check.check_id);
+                  const isOpen = expandedCheckIds.has(check.check_id);
                   const q = searchQuery.trim().toLowerCase();
                   const visibleApps =
                     q &&
@@ -390,7 +406,7 @@ export function ConfirmRubricCheckDeleteDialog({
                                       <Table.Cell maxW="sm">
                                         <VStack align="start" gap={0.5}>
                                           <Text fontSize="xs" fontFamily="mono" color="fg.muted">
-                                            {formatCommentLocation(app)}
+                                            <ReportBlock>{formatCommentLocation(app)}</ReportBlock>
                                           </Text>
                                           {app.comment_text && (
                                             <Text fontSize="xs" lineClamp={2}>

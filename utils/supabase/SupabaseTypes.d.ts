@@ -16132,6 +16132,7 @@ export type Database = {
         Args: {
           p_confirm_delete_check_ids?: number[];
           p_expected_active_comment_count?: number;
+          p_expected_active_item_keys?: string[];
           p_previewed_at?: string;
           p_rubric: Json;
         };

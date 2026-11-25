@@ -17,7 +17,7 @@
 --   3. Adds public.preview_rubric_check_deletions(p_rubric_id, p_removed_check_ids) so the rubric
 --      editor can inspect affected submissions and graders before confirming deletion.
 --   4. Adds public.update_rubric_full_with_report(p_rubric, p_confirm_delete_check_ids,
---      p_previewed_at, p_expected_active_comment_count) which:
+--      p_previewed_at, p_expected_active_comment_count, p_expected_active_item_keys) which:
 --        - refuses with 23503 (HINT = 'rubric_checks_in_use') if any removed check has active
 --          comments or active bare-check regrade requests that were not confirmed (or if new
 --          applications arrived since preview);
@@ -49,10 +49,13 @@ ALTER TABLE public.submission_regrade_requests
       OR submission_comment_id IS NOT NULL
       OR submission_artifact_comment_id IS NOT NULL
       OR rubric_check_id IS NOT NULL
-      OR status IN ('resolved', 'closed')
-      OR resolution_reason = 'rubric_check_deleted'
+      OR COALESCE(status IN ('resolved', 'closed'), false)
+      OR (status IS NOT DISTINCT FROM 'escalated' AND resolution_reason IS NOT DISTINCT FROM 'rubric_check_deleted')
     )
-  );
+  ) NOT VALID;
+
+ALTER TABLE public.submission_regrade_requests
+  VALIDATE CONSTRAINT submission_regrade_requests_target_check;
 
 -- ---------------------------------------------------------------------------
 -- 2. Internal helper: collect active usage for a set of rubric checks
@@ -266,7 +269,17 @@ AS $function$
       tc.part_id,
       tc.part_name,
       tc.part_ordinal,
-      COALESCE((SELECT count(DISTINCT ec.submission_id)::int FROM enriched_comments ec WHERE ec.check_id = tc.check_id), 0) AS submission_count,
+      COALESCE(
+        (
+          SELECT count(DISTINCT affected_sub.submission_id)::int
+          FROM (
+            SELECT ec.submission_id FROM enriched_comments ec WHERE ec.check_id = tc.check_id
+            UNION
+            SELECT br.submission_id FROM bare_regrades br WHERE br.check_id = tc.check_id
+          ) affected_sub
+        ),
+        0
+      ) AS submission_count,
       COALESCE((SELECT count(*)::int FROM enriched_comments ec WHERE ec.check_id = tc.check_id), 0) AS comment_count,
       COALESCE((SELECT count(DISTINCT ec.submission_id)::int FROM enriched_comments ec WHERE ec.check_id = tc.check_id AND ec.review_released), 0) AS released_submission_count,
       COALESCE(ar.active_regrade_request_count, 0) AS active_regrade_request_count,
@@ -390,7 +403,8 @@ BEGIN
   IF p_removed_check_ids IS NULL OR COALESCE(array_length(p_removed_check_ids, 1), 0) = 0 THEN
     RETURN jsonb_build_object(
       'previewed_at', now(),
-      'checks', '[]'::jsonb
+      'checks', '[]'::jsonb,
+      'active_item_keys', '[]'::jsonb
     );
   END IF;
 
@@ -398,7 +412,22 @@ BEGIN
 
   RETURN jsonb_build_object(
     'previewed_at', now(),
-    'checks', v_checks
+    'checks', v_checks,
+    'active_item_keys', COALESCE(
+      (
+        SELECT jsonb_agg(k ORDER BY k)
+        FROM (
+          SELECT (app->>'comment_type') || ':' || (app->>'comment_id') AS k
+          FROM jsonb_array_elements(v_checks) chk,
+               jsonb_array_elements(COALESCE(chk->'applications', '[]'::jsonb)) app
+          UNION
+          SELECT 'bare_regrade:' || (br->>'regrade_request_id') AS k
+          FROM jsonb_array_elements(v_checks) chk,
+               jsonb_array_elements(COALESCE(chk->'bare_regrade_requests', '[]'::jsonb)) br
+        ) keys
+      ),
+      '[]'::jsonb
+    )
   );
 END;
 $function$;
@@ -416,7 +445,8 @@ CREATE OR REPLACE FUNCTION public.update_rubric_full_with_report(
   p_rubric jsonb,
   p_confirm_delete_check_ids bigint[] DEFAULT ARRAY[]::bigint[],
   p_previewed_at timestamptz DEFAULT NULL,
-  p_expected_active_comment_count int DEFAULT NULL
+  p_expected_active_comment_count int DEFAULT NULL,
+  p_expected_active_item_keys text[] DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -498,6 +528,9 @@ DECLARE
   v_in_use_check_ids bigint[] := ARRAY[]::bigint[];
   v_affected_review_ids bigint[] := ARRAY[]::bigint[];
   v_actual_active_comment_count int := 0;
+  v_actual_active_item_keys text[] := ARRAY[]::text[];
+  v_expected_active_item_keys text[] := ARRAY[]::text[];
+  v_open_comment_regrade_ids bigint[] := ARRAY[]::bigint[];
   v_has_newer_activity boolean := false;
   v_actor_profile_id uuid;
   v_deleted_checks_report jsonb := NULL;
@@ -726,6 +759,15 @@ BEGIN
     AND id NOT IN (SELECT id FROM input_check_ids);
 
   IF array_length(v_removed_check_ids, 1) > 0 THEN
+    -- Lock removed rubric_checks rows in deterministic order so concurrent comment or regrade
+    -- inserts referencing these checks wait until this save completes, and any already-running
+    -- FK-holding transactions commit before we inspect active_usage.
+    PERFORM 1
+    FROM public.rubric_checks
+    WHERE id = ANY(v_removed_check_ids)
+    ORDER BY id
+    FOR UPDATE;
+
     -- Identify which removed checks currently have active comments or active bare-check regrade requests.
     WITH active_usage AS (
       SELECT rubric_check_id AS id FROM public.submission_comments
@@ -778,9 +820,43 @@ BEGIN
         ) INTO v_has_newer_activity;
       END IF;
 
+      IF p_expected_active_item_keys IS NOT NULL THEN
+        SELECT COALESCE(array_agg(k ORDER BY k), ARRAY[]::text[])
+        INTO v_actual_active_item_keys
+        FROM (
+          SELECT 'submission:' || id::text AS k
+          FROM public.submission_comments
+          WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+          UNION ALL
+          SELECT 'file:' || id::text AS k
+          FROM public.submission_file_comments
+          WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+          UNION ALL
+          SELECT 'artifact:' || id::text AS k
+          FROM public.submission_artifact_comments
+          WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+          UNION ALL
+          SELECT 'bare_regrade:' || id::text AS k
+          FROM public.submission_regrade_requests
+          WHERE rubric_check_id = ANY(v_in_use_check_ids)
+            AND submission_comment_id IS NULL
+            AND submission_file_comment_id IS NULL
+            AND submission_artifact_comment_id IS NULL
+            AND status IN ('draft', 'opened', 'escalated')
+        ) actual_items;
+
+        SELECT COALESCE(array_agg(DISTINCT k ORDER BY k), ARRAY[]::text[])
+        INTO v_expected_active_item_keys
+        FROM unnest(p_expected_active_item_keys) AS k;
+
+        IF v_actual_active_item_keys IS DISTINCT FROM v_expected_active_item_keys THEN
+          v_has_newer_activity := true;
+        END IF;
+      END IF;
+
       IF v_has_newer_activity
          OR (p_expected_active_comment_count IS NOT NULL AND v_actual_active_comment_count > p_expected_active_comment_count) THEN
-        RAISE EXCEPTION 'New comments or regrade requests were added to a rubric check being deleted while you were reviewing. Review the updated list and confirm again.'
+        RAISE EXCEPTION 'Comments or regrade requests on a rubric check being deleted changed while you were reviewing. Review the updated list and confirm again.'
           USING ERRCODE = 'foreign_key_violation', HINT = 'rubric_checks_in_use';
       END IF;
 
@@ -791,6 +867,28 @@ BEGIN
         'rubric_name', v_new_name,
         'checks', public._collect_rubric_check_usage(v_rubric_id, v_class_id, v_in_use_check_ids)
       );
+
+      -- Capture open/draft comment-backed regrade requests on the checks being soft-deleted
+      -- BEFORE updating the comments so we can relabel ONLY the requests resolved by this save
+      -- (and leave earlier comment_deleted history untouched).
+      SELECT COALESCE(array_agg(srr.id), ARRAY[]::bigint[])
+      INTO v_open_comment_regrade_ids
+      FROM public.submission_regrade_requests srr
+      WHERE srr.status IN ('draft', 'opened')
+        AND (
+          srr.submission_comment_id IN (
+            SELECT id FROM public.submission_comments
+            WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+          )
+          OR srr.submission_file_comment_id IN (
+            SELECT id FROM public.submission_file_comments
+            WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+          )
+          OR srr.submission_artifact_comment_id IN (
+            SELECT id FROM public.submission_artifact_comments
+            WHERE rubric_check_id = ANY(v_in_use_check_ids) AND deleted_at IS NULL
+          )
+        );
 
       -- Soft-delete confirmed active comments across all three comment tables and detach rubric_check_id.
       UPDATE public.submission_comments
@@ -864,7 +962,7 @@ BEGIN
         END,
         resolution_reason = CASE
           WHEN status IN ('draft', 'opened')
-               OR (status = 'resolved' AND resolution_reason = 'comment_deleted' AND resolved_at >= now() - interval '5 seconds')
+               OR (id = ANY(v_open_comment_regrade_ids) AND status = 'resolved' AND resolution_reason = 'comment_deleted')
             THEN 'rubric_check_deleted'
           ELSE resolution_reason
         END,
@@ -1429,11 +1527,11 @@ BEGIN
 END;
 $function$;
 
-COMMENT ON FUNCTION public.update_rubric_full_with_report(jsonb, bigint[], timestamptz, int) IS
+COMMENT ON FUNCTION public.update_rubric_full_with_report(jsonb, bigint[], timestamptz, int, text[]) IS
   'Atomically creates or updates a rubric (parts, criteria, checks, references), optionally soft-deleting and detaching comments on confirmed in-use rubric checks, recomputes affected submission_reviews, and returns { summary, deleted_checks_report }. Requires manage_rubrics.';
 
-REVOKE ALL ON FUNCTION public.update_rubric_full_with_report(jsonb, bigint[], timestamptz, int) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.update_rubric_full_with_report(jsonb, bigint[], timestamptz, int) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.update_rubric_full_with_report(jsonb, bigint[], timestamptz, int, text[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_rubric_full_with_report(jsonb, bigint[], timestamptz, int, text[]) TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- 5. Backwards-compatible wrapper for update_rubric_full(p_rubric jsonb)
@@ -1448,7 +1546,7 @@ AS $function$
 DECLARE
   v_result jsonb;
 BEGIN
-  v_result := public.update_rubric_full_with_report(p_rubric, ARRAY[]::bigint[], NULL, NULL);
+  v_result := public.update_rubric_full_with_report(p_rubric, ARRAY[]::bigint[], NULL, NULL, NULL);
   RETURN v_result->>'summary';
 END;
 $function$;

@@ -1,6 +1,7 @@
 import {
   buildSubmissionHref,
   computeDeletionTotals,
+  extractActiveItemKeys,
   findRemovedRubricCheckIds,
   formatCommentLocation,
   formatDeletedChecksCsv,
@@ -31,6 +32,7 @@ function makeRubric(checkIdsByPart: number[][][]): HydratedRubric {
       class_id: 2,
       assignment_id: 9,
       rubric_id: 42,
+      exam_question_id: null,
       name: `Part ${pIdx + 1}`,
       description: null,
       ordinal: pIdx,
@@ -44,6 +46,7 @@ function makeRubric(checkIdsByPart: number[][][]): HydratedRubric {
         assignment_id: 9,
         rubric_id: 42,
         rubric_part_id: pIdx + 1,
+        exam_question_id: null,
         name: `Criterion ${cIdx + 1}`,
         description: null,
         ordinal: cIdx,
@@ -58,7 +61,9 @@ function makeRubric(checkIdsByPart: number[][][]): HydratedRubric {
           id,
           class_id: 2,
           assignment_id: 9,
+          rubric_id: 42,
           rubric_criteria_id: pIdx * 10 + cIdx + 1,
+          exam_question_id: null,
           name: `Check ${id}`,
           description: null,
           ordinal: kIdx,
@@ -147,7 +152,7 @@ const sampleImpactChecks: RubricCheckDeletionImpact[] = [
     criterion_name: "Documentation",
     part_id: 1,
     part_name: "Part 1",
-    submission_count: 1,
+    submission_count: 2,
     comment_count: 1,
     released_submission_count: 1,
     active_regrade_request_count: 0,
@@ -215,6 +220,25 @@ describe("lib/rubric/deletionReport", () => {
       const existing = makeRubric([[[10, 11]]]);
       const demo = makeRubric([[[-1, -2]]]);
       expect(findRemovedRubricCheckIds(existing, demo)).toEqual([10, 11]);
+    });
+  });
+
+  describe("extractActiveItemKeys", () => {
+    it("derives sorted unique keys across all comment types and bare regrade requests", () => {
+      const keys = extractActiveItemKeys({
+        previewed_at: "2026-11-25T18:00:00Z",
+        checks: sampleImpactChecks
+      });
+      expect(keys).toEqual(["artifact:703", "bare_regrade:88", "file:701", "submission:702"]);
+    });
+
+    it("prefers server-supplied active_item_keys when present", () => {
+      const parsed = parseRubricCheckDeletionPreview({
+        previewed_at: "2026-11-25T18:00:00Z",
+        checks: sampleImpactChecks,
+        active_item_keys: ["submission:702", "file:701", "submission:702"]
+      });
+      expect(extractActiveItemKeys(parsed)).toEqual(["file:701", "submission:702"]);
     });
   });
 
@@ -297,8 +321,28 @@ describe("lib/rubric/deletionReport", () => {
       });
       expect(msg).toContain("Hi Grace Grader,");
       expect(msg).toContain("2 grading comment(s) you previously applied across 1 submission(s)");
-      expect(msg).toContain("Alice Student (#3) [Released] — Missing unit tests (5 pts), PDF diagram unclear (2 pts)");
+      expect(msg).toContain(
+        "Alice Student (#3) [Released] \u2014 Missing unit tests (5 pts), PDF diagram unclear (2 pts)"
+      );
       expect(msg).toContain("https://app.pawtograder.com/course/2/assignments/9/submissions/500");
+    });
+
+    it("marks a submission [Released] in grader follow-up message when any item on that submission is released", () => {
+      const [grace] = groupDeletionsByGrader(sampleImpactChecks);
+      const mixedGroup = {
+        ...grace,
+        items: [
+          { ...grace.items[0], review_released: false },
+          { ...grace.items[1], review_released: true }
+        ]
+      };
+      const msg = formatGraderFollowUpMessage(mixedGroup, {
+        assignmentTitle: "HW1",
+        rubricName: "HW1 Grading Rubric",
+        courseId: 2,
+        assignmentId: 9
+      });
+      expect(msg).toContain("Alice Student (#3) [Released]");
     });
 
     it("formats full markdown report including grader sections, checks, and bare regrade requests", () => {
@@ -315,18 +359,46 @@ describe("lib/rubric/deletionReport", () => {
       expect(md).toContain("Bob Student");
     });
 
-    it("formats CSV export with proper escaping and full submission URLs", () => {
-      const csv = formatDeletedChecksCsv(report, {
+    it("formats CSV export with comment and bare regrade rows, full submission URLs, and formula escaping", () => {
+      const formulaReport: DeletedRubricChecksReport = {
+        ...report,
+        checks: [
+          {
+            ...sampleImpactChecks[0],
+            applications: [
+              {
+                ...sampleImpactChecks[0].applications[0],
+                student_or_group_name: "=CMD('calc')",
+                file_name: "+evil.ts",
+                comment_text: "@SUM(A1:A5)",
+                points: -5
+              },
+              sampleImpactChecks[0].applications[1]
+            ]
+          },
+          sampleImpactChecks[1]
+        ]
+      };
+      const csv = formatDeletedChecksCsv(formulaReport, {
         courseId: 2,
         assignmentId: 9,
         origin: "https://app.pawtograder.com"
       });
       const lines = csv.trim().split(/\r?\n/);
-      expect(lines).toHaveLength(4); // header + 3 comment rows
+      expect(lines).toHaveLength(5); // header + 3 comment rows + 1 bare regrade row
+      expect(lines[0]).toContain("record_type");
       expect(lines[0]).toContain("rubric_check_name");
+      expect(lines[0]).toContain("regrade_request_id");
       expect(lines[0]).toContain("submission_url");
-      expect(csv).toContain("https://app.pawtograder.com/course/2/assignments/9/submissions/500");
-      expect(csv).toContain("src/App.ts:42");
+      // Formula-prefixed strings are neutralized while numeric negative points remain unescaped numbers
+      expect(csv).toContain("'=CMD('calc')");
+      expect(csv).toContain("'+evil.ts:42");
+      expect(csv).toContain("'@SUM(A1:A5)");
+      expect(lines[1]).toContain(",-5,");
+      // Bare regrade request row is emitted distinctly
+      expect(csv).toContain("bare_regrade_request");
+      expect(csv).toContain("Bob Student");
+      expect(csv).toContain("https://app.pawtograder.com/course/2/assignments/9/submissions/502");
       expect(csv).toContain("Artifact: design.pdf");
     });
 

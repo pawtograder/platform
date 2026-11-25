@@ -2246,12 +2246,13 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   _cli_resolve_submission_file_id: "none",
   _collect_rubric_check_usage: {
     $: "none",
-    "$[*].applications[*].student_or_group_name": "name",
+    "$[*].applications[*].student_or_group_name": "free_text",
+    "$[*].applications[*].file_name": "free_text",
     "$[*].applications[*].grader_name": "name",
     "$[*].applications[*].grader_email": "email",
     "$[*].applications[*].comment_text": "free_text",
     "$[*].applications[*].points": "grade",
-    "$[*].bare_regrade_requests[*].student_or_group_name": "name",
+    "$[*].bare_regrade_requests[*].student_or_group_name": "free_text",
     "$[*].bare_regrade_requests[*].assignee_name": "name",
     "$[*].bare_regrade_requests[*].assignee_email": "email"
   },
@@ -3057,12 +3058,13 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   preview_error_pin_matches: { $: "none", "$.recent_submissions[*].student_name": "name" },
   preview_rubric_check_deletions: {
     $: "none",
-    "$.checks[*].applications[*].student_or_group_name": "name",
+    "$.checks[*].applications[*].student_or_group_name": "free_text",
+    "$.checks[*].applications[*].file_name": "free_text",
     "$.checks[*].applications[*].grader_name": "name",
     "$.checks[*].applications[*].grader_email": "email",
     "$.checks[*].applications[*].comment_text": "free_text",
     "$.checks[*].applications[*].points": "grade",
-    "$.checks[*].bare_regrade_requests[*].student_or_group_name": "name",
+    "$.checks[*].bare_regrade_requests[*].student_or_group_name": "free_text",
     "$.checks[*].bare_regrade_requests[*].assignee_name": "name",
     "$.checks[*].bare_regrade_requests[*].assignee_email": "email"
   },
@@ -3189,12 +3191,13 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   update_rubric_full: "none",
   update_rubric_full_with_report: {
     $: "none",
-    "$.deleted_checks_report.checks[*].applications[*].student_or_group_name": "name",
+    "$.deleted_checks_report.checks[*].applications[*].student_or_group_name": "free_text",
+    "$.deleted_checks_report.checks[*].applications[*].file_name": "free_text",
     "$.deleted_checks_report.checks[*].applications[*].grader_name": "name",
     "$.deleted_checks_report.checks[*].applications[*].grader_email": "email",
     "$.deleted_checks_report.checks[*].applications[*].comment_text": "free_text",
     "$.deleted_checks_report.checks[*].applications[*].points": "grade",
-    "$.deleted_checks_report.checks[*].bare_regrade_requests[*].student_or_group_name": "name",
+    "$.deleted_checks_report.checks[*].bare_regrade_requests[*].student_or_group_name": "free_text",
     "$.deleted_checks_report.checks[*].bare_regrade_requests[*].assignee_name": "name",
     "$.deleted_checks_report.checks[*].bare_regrade_requests[*].assignee_email": "email"
   },

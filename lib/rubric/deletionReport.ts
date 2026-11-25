@@ -55,6 +55,7 @@ export type RubricCheckDeletionImpact = {
 export type RubricCheckDeletionPreview = {
   previewed_at: string;
   checks: RubricCheckDeletionImpact[];
+  active_item_keys?: string[];
 };
 
 export type DeletedRubricChecksReport = {
@@ -143,6 +144,28 @@ export function findRemovedRubricCheckIds(
     }
   }
   return removed;
+}
+
+/**
+ * Returns the sorted, deduplicated set of active comment and bare-check regrade keys
+ * (`submission:<id>`, `file:<id>`, `artifact:<id>`, `bare_regrade:<id>`) represented in a preview.
+ * Sent back on confirmation so the RPC rejects stale previews even if a concurrent replacement
+ * comment keeps the count unchanged.
+ */
+export function extractActiveItemKeys(preview: RubricCheckDeletionPreview): string[] {
+  if (Array.isArray(preview.active_item_keys)) {
+    return Array.from(new Set(preview.active_item_keys)).sort();
+  }
+  const keys = new Set<string>();
+  for (const check of preview.checks) {
+    for (const app of check.applications) {
+      keys.add(`${app.comment_type}:${app.comment_id}`);
+    }
+    for (const req of check.bare_regrade_requests) {
+      keys.add(`bare_regrade:${req.regrade_request_id}`);
+    }
+  }
+  return Array.from(keys).sort();
 }
 
 export function computeDeletionTotals(checks: RubricCheckDeletionImpact[]): DeletionImpactTotals {
@@ -304,14 +327,14 @@ export function formatGraderFollowUpMessage(
     const first = items[0];
     const url = buildSubmissionHref(context.courseId, context.assignmentId, submissionId, context.origin);
     const ordinal = first.submission_ordinal != null ? ` (#${first.submission_ordinal})` : "";
-    const releasedTag = first.review_released ? " [Released]" : "";
+    const releasedTag = items.some((i) => i.review_released) ? " [Released]" : "";
     const checkSummary = items
       .map((item) => {
         const pts = item.points != null ? ` (${item.points} pts)` : "";
         return `${item.check_name}${pts}`;
       })
       .join(", ");
-    lines.push(`- ${first.student_or_group_name}${ordinal}${releasedTag} — ${checkSummary}`);
+    lines.push(`- ${first.student_or_group_name}${ordinal}${releasedTag} \u2014 ${checkSummary}`);
     lines.push(`  ${url}`);
   }
 
@@ -329,7 +352,9 @@ export function formatFullDeletionReportMarkdown(
 ): string {
   const totals = computeDeletionTotals(report.checks);
   const byGrader = groupDeletionsByGrader(report.checks);
-  const title = context.assignmentTitle ? `${context.assignmentTitle} — ${report.rubric_name}` : report.rubric_name;
+  const title = context.assignmentTitle
+    ? `${context.assignmentTitle} \u2014 ${report.rubric_name}`
+    : report.rubric_name;
 
   const lines: string[] = [
     `# Deleted Rubric Checks Follow-Up Report`,
@@ -359,7 +384,7 @@ export function formatFullDeletionReportMarkdown(
       const pts = item.points != null ? ` (${item.points} pts)` : "";
       const location = formatCommentLocation(item);
       lines.push(
-        `- [${item.student_or_group_name}${ordinal}](${url})${releasedTag} — **${item.check_name}**${pts} · ${location}`
+        `- [${item.student_or_group_name}${ordinal}](${url})${releasedTag} \u2014 **${item.check_name}**${pts} \u00b7 ${location}`
       );
     }
     lines.push(``);
@@ -368,7 +393,7 @@ export function formatFullDeletionReportMarkdown(
   lines.push(`## Deleted Rubric Checks`, ``);
   for (const check of report.checks) {
     lines.push(
-      `- **${check.part_name} › ${check.criterion_name} › ${check.check_name}** (${check.check_points ?? 0} pts): ${check.submission_count} submission(s), ${check.comment_count} comment(s)`
+      `- **${check.part_name} \u203a ${check.criterion_name} \u203a ${check.check_name}** (${check.check_points ?? 0} pts): ${check.submission_count} submission(s), ${check.comment_count} comment(s)`
     );
   }
 
@@ -378,7 +403,7 @@ export function formatFullDeletionReportMarkdown(
     for (const { check, req } of allBareRegrades) {
       const url = buildSubmissionHref(context.courseId, context.assignmentId, req.submission_id, context.origin);
       lines.push(
-        `- [${req.student_or_group_name}](${url}) — **${check.check_name}** (status was \`${req.status}\`, assignee: ${req.assignee_name})`
+        `- [${req.student_or_group_name}](${url}) \u2014 **${check.check_name}** (status was \`${req.status}\`, assignee: ${req.assignee_name})`
       );
     }
   }
@@ -399,6 +424,7 @@ export function formatDeletedChecksCsv(
   for (const check of report.checks) {
     for (const app of check.applications) {
       rows.push({
+        record_type: "deleted_comment",
         deleted_at: report.deleted_at,
         rubric_name: report.rubric_name,
         part_name: check.part_name,
@@ -416,22 +442,58 @@ export function formatDeletedChecksCsv(
         location: formatCommentLocation(app),
         comment_points: app.points ?? "",
         comment_text: app.comment_text,
+        regrade_request_id: "",
+        regrade_status: "",
+        regrade_assignee_name: "",
+        regrade_assignee_email: "",
         submission_url: buildSubmissionHref(context.courseId, context.assignmentId, app.submission_id, context.origin)
+      });
+    }
+    for (const req of check.bare_regrade_requests) {
+      rows.push({
+        record_type: "bare_regrade_request",
+        deleted_at: report.deleted_at,
+        rubric_name: report.rubric_name,
+        part_name: check.part_name,
+        criterion_name: check.criterion_name,
+        rubric_check_name: check.check_name,
+        check_points: check.check_points ?? "",
+        submission_id: req.submission_id,
+        submission_ordinal: req.submission_ordinal ?? "",
+        is_active_submission: "",
+        student_or_group: req.student_or_group_name,
+        review_released: "",
+        grader_name: "",
+        grader_email: "",
+        comment_type: "",
+        location: "",
+        comment_points: "",
+        comment_text: "",
+        regrade_request_id: req.regrade_request_id,
+        regrade_status: req.status,
+        regrade_assignee_name: req.assignee_name,
+        regrade_assignee_email: req.assignee_email ?? "",
+        submission_url: buildSubmissionHref(context.courseId, context.assignmentId, req.submission_id, context.origin)
       });
     }
   }
 
-  return Papa.unparse(rows);
+  return Papa.unparse(rows, { escapeFormulae: true });
 }
 
 export function parseRubricCheckDeletionPreview(raw: unknown): RubricCheckDeletionPreview {
   if (!raw || typeof raw !== "object") {
-    return { previewed_at: new Date().toISOString(), checks: [] };
+    return { previewed_at: new Date().toISOString(), checks: [], active_item_keys: [] };
   }
-  const obj = raw as { previewed_at?: unknown; checks?: unknown };
+  const obj = raw as { previewed_at?: unknown; checks?: unknown; active_item_keys?: unknown };
+  const checks = Array.isArray(obj.checks) ? (obj.checks as RubricCheckDeletionImpact[]) : [];
+  const active_item_keys = Array.isArray(obj.active_item_keys)
+    ? obj.active_item_keys.filter((k): k is string => typeof k === "string")
+    : undefined;
   return {
     previewed_at: typeof obj.previewed_at === "string" ? obj.previewed_at : new Date().toISOString(),
-    checks: Array.isArray(obj.checks) ? (obj.checks as RubricCheckDeletionImpact[]) : []
+    checks,
+    ...(active_item_keys !== undefined ? { active_item_keys } : {})
   };
 }
 

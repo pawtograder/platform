@@ -12,7 +12,11 @@ import {
   supabase,
   type TestingUser
 } from "./TestingUtils";
-import { parseDeletedRubricChecksReport, parseRubricCheckDeletionPreview } from "@/lib/rubric/deletionReport";
+import {
+  extractActiveItemKeys,
+  parseDeletedRubricChecksReport,
+  parseRubricCheckDeletionPreview
+} from "@/lib/rubric/deletionReport";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -438,11 +442,12 @@ test.describe("Rubric check deletion workflow (DB & RPC)", () => {
     expect(parseDeletedRubricChecksReport(parsed.deleted_checks_report)).toBeNull();
 
     // Check is deleted, and soft-deleted comment was detached (rubric_check_id IS NULL) while staying soft-deleted
-    const { data: checkRow } = await supabase
+    const { data: checkRow, error: checkRowErr } = await supabase
       .from("rubric_checks")
       .select("id")
       .eq("id", checkSoftDeletedOnlyId)
       .maybeSingle();
+    expect(checkRowErr).toBeNull();
     expect(checkRow).toBeNull();
 
     const { data: commentRow } = await supabase
@@ -484,6 +489,7 @@ test.describe("Rubric check deletion workflow (DB & RPC)", () => {
 
     const bareImpact = preview.checks.find((c) => c.check_id === checkBareRegradeId)!;
     expect(bareImpact).toBeDefined();
+    expect(bareImpact.submission_count).toBe(1);
     expect(bareImpact.comment_count).toBe(0);
     expect(bareImpact.bare_regrade_request_count).toBe(1);
     expect(bareImpact.bare_regrade_requests[0].regrade_request_id).toBe(bareRegradeId);
@@ -508,7 +514,8 @@ test.describe("Rubric check deletion workflow (DB & RPC)", () => {
       p_rubric: payload as never,
       p_confirm_delete_check_ids: [checkMultiTableActiveId, checkBareRegradeId],
       p_previewed_at: preview.previewed_at,
-      p_expected_active_comment_count: 3
+      p_expected_active_comment_count: 3,
+      p_expected_active_item_keys: extractActiveItemKeys(preview)
     });
     expect(confirmedErr).toBeNull();
 
@@ -602,21 +609,109 @@ test.describe("Rubric check deletion workflow (DB & RPC)", () => {
     expect(staleErr?.code).toBe("23503");
     expect(staleErr?.hint).toBe("rubric_checks_in_use");
 
-    // Re-preview and confirm with updated count succeeds
-    const { data: preview2Raw } = await instructorClient.rpc("preview_rubric_check_deletions", {
+    // Re-preview sees 2 comments
+    const { data: preview2Raw, error: prev2Err } = await instructorClient.rpc("preview_rubric_check_deletions", {
       p_rubric_id: rubricId,
       p_removed_check_ids: [checkToctouId]
     });
+    expect(prev2Err).toBeNull();
     const preview2 = parseRubricCheckDeletionPreview(preview2Raw);
     expect(preview2.checks[0].comment_count).toBe(2);
+
+    // Simulate a replacement comment: soft-delete one of the previewed comments and insert a new one
+    // with created_at BEFORE preview2.previewed_at (same count=2, older timestamp) -> exact key set still catches it!
+    const firstCommentId = preview2.checks[0].applications[0].comment_id;
+    const { error: delOneErr } = await supabase
+      .from("submission_comments")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", firstCommentId);
+    expect(delOneErr).toBeNull();
+
+    // Also create a historical already-resolved comment_deleted regrade on the soft-deleted comment
+    // so we verify deleting the check does NOT overwrite its resolution_reason.
+    const { data: historicalRegrade, error: histRegradeErr } = await supabase
+      .from("submission_regrade_requests")
+      .insert({
+        class_id: course.id,
+        assignment_id: assignment.id,
+        submission_id: submissionId,
+        submission_comment_id: firstCommentId,
+        rubric_check_id: checkToctouId,
+        created_by: student.private_profile_id,
+        assignee: grader.private_profile_id,
+        status: "resolved",
+        resolved_by: grader.private_profile_id,
+        resolved_at: new Date().toISOString(),
+        resolution_reason: "comment_deleted"
+      })
+      .select("id")
+      .single();
+    expect(histRegradeErr).toBeNull();
+
+    const earlierTimestamp = new Date(Date.parse(preview2.previewed_at) - 60_000).toISOString();
+    const { error: replErr } = await supabase.from("submission_comments").insert({
+      class_id: course.id,
+      submission_id: submissionId,
+      submission_review_id: gradingReviewId,
+      rubric_check_id: checkToctouId,
+      author: grader.private_profile_id,
+      comment: "Replacement comment with earlier created_at",
+      points: 2,
+      released: true,
+      created_at: earlierTimestamp
+    });
+    expect(replErr).toBeNull();
+
+    const { error: replacementStaleErr } = await instructorClient.rpc("update_rubric_full_with_report", {
+      p_rubric: payload as never,
+      p_confirm_delete_check_ids: [checkToctouId],
+      p_previewed_at: preview2.previewed_at,
+      p_expected_active_comment_count: 2,
+      p_expected_active_item_keys: extractActiveItemKeys(preview2)
+    });
+    expect(replacementStaleErr?.code).toBe("23503");
+    expect(replacementStaleErr?.hint).toBe("rubric_checks_in_use");
+
+    // Re-preview again and confirm with exact updated key set -> succeeds
+    const { data: preview3Raw, error: prev3Err } = await instructorClient.rpc("preview_rubric_check_deletions", {
+      p_rubric_id: rubricId,
+      p_removed_check_ids: [checkToctouId]
+    });
+    expect(prev3Err).toBeNull();
+    const preview3 = parseRubricCheckDeletionPreview(preview3Raw);
+    expect(preview3.checks[0].comment_count).toBe(2);
 
     const { error: okErr } = await instructorClient.rpc("update_rubric_full_with_report", {
       p_rubric: payload as never,
       p_confirm_delete_check_ids: [checkToctouId],
-      p_previewed_at: preview2.previewed_at,
-      p_expected_active_comment_count: 2
+      p_previewed_at: preview3.previewed_at,
+      p_expected_active_comment_count: 2,
+      p_expected_active_item_keys: extractActiveItemKeys(preview3)
     });
     expect(okErr).toBeNull();
+
+    // Historical comment_deleted regrade request was detached but kept its original resolution_reason
+    const { data: histAfter, error: histAfterErr } = await supabase
+      .from("submission_regrade_requests")
+      .select("rubric_check_id, status, resolution_reason")
+      .eq("id", historicalRegrade!.id)
+      .single();
+    expect(histAfterErr).toBeNull();
+    expect(histAfter?.rubric_check_id).toBeNull();
+    expect(histAfter?.status).toBe("resolved");
+    expect(histAfter?.resolution_reason).toBe("comment_deleted");
+
+    // Verify target_check rejects targetless opened regrade requests when resolution_reason is NULL
+    const { error: targetlessErr } = await supabase.from("submission_regrade_requests").insert({
+      class_id: course.id,
+      assignment_id: assignment.id,
+      submission_id: submissionId,
+      created_by: student.private_profile_id,
+      assignee: grader.private_profile_id,
+      status: "opened",
+      resolution_reason: null
+    });
+    expect(targetlessErr?.code).toBe("23514");
   });
 
   test("backwards-compatible update_rubric_full(p_rubric) still returns text summary", async () => {
@@ -761,7 +856,7 @@ test.describe("Rubric check deletion workflow (UI)", () => {
     await supabase.from("submission_reviews").update({ released: true }).eq("id", gradingReviewId);
 
     // Soft-deleted-only comment on softOnlyCheckId
-    await supabase.from("submission_comments").insert({
+    const { error: softErr } = await supabase.from("submission_comments").insert({
       class_id: course.id,
       submission_id: submissionId,
       submission_review_id: gradingReviewId,
@@ -772,6 +867,7 @@ test.describe("Rubric check deletion workflow (UI)", () => {
       released: true,
       deleted_at: new Date().toISOString()
     });
+    expect(softErr).toBeNull();
 
     // Active comment (pseudonymous public profile) on appliedCheckId
     const { data: activeRow, error: aErr } = await supabase
@@ -817,7 +913,12 @@ test.describe("Rubric check deletion workflow (UI)", () => {
     await expect
       .poll(
         async () => {
-          const { data } = await supabase.from("rubric_checks").select("id").eq("id", softOnlyCheckId).maybeSingle();
+          const { data, error } = await supabase
+            .from("rubric_checks")
+            .select("id")
+            .eq("id", softOnlyCheckId)
+            .maybeSingle();
+          if (error) throw error;
           return data;
         },
         { timeout: 15000 }
@@ -854,11 +955,12 @@ test.describe("Rubric check deletion workflow (UI)", () => {
     await confirmDialog.getByRole("button", { name: "Cancel" }).click();
     await expect(confirmDialog).toBeHidden();
 
-    const { data: stillThere } = await supabase
+    const { data: stillThere, error: stillThereErr } = await supabase
       .from("rubric_checks")
       .select("id")
       .eq("id", appliedCheckId)
       .maybeSingle();
+    expect(stillThereErr).toBeNull();
     expect(stillThere?.id).toBe(appliedCheckId);
 
     const { data: reviewBefore } = await supabase
@@ -895,11 +997,12 @@ test.describe("Rubric check deletion workflow (UI)", () => {
     await reportDialog.getByRole("button", { name: "Done" }).click();
 
     // Verify DB state: check deleted, comment soft-deleted & detached, score recomputed to 0
-    const { data: deletedCheck } = await supabase
+    const { data: deletedCheck, error: deletedCheckErr } = await supabase
       .from("rubric_checks")
       .select("id")
       .eq("id", appliedCheckId)
       .maybeSingle();
+    expect(deletedCheckErr).toBeNull();
     expect(deletedCheck).toBeNull();
 
     const { data: deletedComment } = await supabase

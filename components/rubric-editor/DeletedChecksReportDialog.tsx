@@ -168,7 +168,7 @@ export function DeletedChecksReportDialog({
                   size="xs"
                   variant="outline"
                   onClick={handleDownloadCsv}
-                  disabled={!report || totals.commentCount === 0}
+                  disabled={!report || (totals.commentCount === 0 && totals.bareRegradeCount === 0)}
                 >
                   <Icon as={LuDownload} />
                   Download CSV
@@ -312,7 +312,7 @@ export function DeletedChecksReportDialog({
                                   </Table.Cell>
                                   <Table.Cell>
                                     <Text fontSize="xs" fontFamily="mono" color="fg.muted">
-                                      {formatCommentLocation(item)}
+                                      <ReportBlock>{formatCommentLocation(item)}</ReportBlock>
                                     </Text>
                                   </Table.Cell>
                                   <Table.Cell textAlign="end" whiteSpace="nowrap">
@@ -425,7 +425,7 @@ export function DeletedChecksReportDialog({
                                 </Table.Cell>
                                 <Table.Cell>
                                   <Text fontSize="xs" fontFamily="mono" color="fg.muted">
-                                    {formatCommentLocation(app)}
+                                    <ReportBlock>{formatCommentLocation(app)}</ReportBlock>
                                   </Text>
                                 </Table.Cell>
                                 <Table.Cell textAlign="end" whiteSpace="nowrap">

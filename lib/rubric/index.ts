@@ -33,6 +33,7 @@ export {
 export {
   buildSubmissionHref,
   computeDeletionTotals,
+  extractActiveItemKeys,
   findRemovedRubricCheckIds,
   formatCommentLocation,
   formatDeletedChecksCsv,
