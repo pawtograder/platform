@@ -58,7 +58,7 @@ BEGIN
       )
     );
     UPDATE public.gradebook_row_recalc_state s
-    SET dirty = true, version = s.version + 1, updated_at = now()
+    SET dirty = true, is_recalculating = true, version = s.version + 1, updated_at = now()
     WHERE s.class_id = p_class_id
       AND s.gradebook_id = p_gradebook_id
       AND s.student_id = p_student_id

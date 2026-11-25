@@ -1083,47 +1083,14 @@ function ConvertMissingToZeroDialog({ columnId, onClose }: { columnId: number; o
                     onClick={async () => {
                       setIsConverting(true);
                       try {
-                        // Write through the recalculating RPC, like every other gradebook edit. A plain
-                        // UPDATE enqueues no recalculation, so averages and topic standings that read
-                        // this column kept their old values (and their "not final" marker).
-                        // An assignment-backed column is recomputed from submissions on every pass, so a
-                        // converted 0 has to be an override or the next recalculation sets it back to
-                        // missing. A manual column is never recomputed, so its score is the value.
-                        const isCalculated = !!column?.score_expression;
-                        const updates = isCalculated
-                          ? {
-                              score_override: 0,
-                              is_missing: false,
-                              score_override_note: "Missing value converted to 0"
-                            }
-                          : { score: 0, is_missing: false, score_override_note: "Missing value converted to 0" };
-                        // Page through the matches: one select returns at most the API's max_rows.
-                        const ids: number[] = [];
-                        const pageSize = 1000;
-                        for (let from = 0; ; from += pageSize) {
-                          const { data: page, error: readError } = await supabase
-                            .from("gradebook_column_students")
-                            .select("id")
-                            .eq("gradebook_column_id", columnId)
-                            .eq("is_private", true)
-                            .or("is_missing.eq.true,and(score.is.null,score_override.is.null)")
-                            .order("id")
-                            .range(from, from + pageSize - 1);
-                          if (readError) throw readError;
-                          ids.push(...(page ?? []).map((c) => c.id));
-                          if (!page || page.length < pageSize) break;
-                        }
-                        for (let i = 0; i < ids.length; i += 25) {
-                          await Promise.all(
-                            ids.slice(i, i + 25).map(async (id) => {
-                              const { error } = await supabase.rpc("update_gradebook_column_student_with_recalc", {
-                                p_id: id,
-                                p_updates: updates
-                              });
-                              if (error) throw error;
-                            })
-                          );
-                        }
+                        // One server-side statement: it converts only cells that are still missing when
+                        // it writes them (a grade entered meanwhile is kept), writes an override on
+                        // assignment-backed columns so recalculation keeps the 0, and queues the
+                        // recalculation of averages and topic standings that read this column.
+                        const { error } = await supabase.rpc("convert_gradebook_column_missing_to_zero", {
+                          p_column_id: columnId
+                        });
+                        if (error) throw error;
 
                         toaster.success({
                           title: "Success",

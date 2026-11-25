@@ -13964,6 +13964,10 @@ export type Database = {
         Args: { p_assignment_id: number };
         Returns: number;
       };
+      convert_gradebook_column_missing_to_zero: {
+        Args: { p_column_id: number };
+        Returns: number;
+      };
       copy_groups_from_assignment: {
         Args: {
           p_class_id: number;
