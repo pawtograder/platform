@@ -12,6 +12,8 @@ import { createClient } from "@/utils/supabase/client";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, Flex, Heading, HStack, Input, NativeSelect, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type NormRect = { x: number; y: number; width: number; height: number };
 type TemplatePage = { page_number: number; image_path: string; width: number; height: number };
@@ -110,6 +112,7 @@ export default function RegionEditor({
    */
   onDirtyChange?: (dirty: boolean) => void;
 }) {
+  const errorRole = useStaffErrorRole();
   const [pages, setPages] = useState<TemplatePage[]>([]);
   const [urls, setUrls] = useState<Record<number, string>>({});
   const [questions, setQuestions] = useState<EditorQuestion[]>([]);
@@ -213,10 +216,10 @@ export default function RegionEditor({
     load().catch((e) => {
       toaster.error({
         title: "Failed to load exam structure",
-        description: e instanceof Error ? e.message : String(e)
+        description: getUserFacingErrorMessage(e, { role: errorRole })
       });
     });
-  }, [examId, reloadKey]);
+  }, [examId, reloadKey, errorRole]);
 
   // Whether the rubric still matches the SAVED questions (#1190). Only while there are no submissions:
   // after that Build no longer refreshes points, so it couldn't clear the notice, and a different
@@ -449,11 +452,11 @@ export default function RegionEditor({
         toaster.success({ title: "Saved exam structure" });
       }
     } catch (e) {
-      toaster.error({ title: "Save failed", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Save failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     } finally {
       setSaving(false);
     }
-  }, [examId, gradingRubricId, questions, regions]);
+  }, [examId, gradingRubricId, questions, regions, errorRole]);
 
   const autoExtract = useCallback(async () => {
     // Auto-extraction replaces the whole tree with proposed questions carrying id: null and no
@@ -528,9 +531,9 @@ export default function RegionEditor({
       );
       toaster.success({ title: "Imported proposed structure — review and save" });
     } catch (e) {
-      toaster.error({ title: "Auto-extract failed", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Auto-extract failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     }
-  }, [examId, questions]);
+  }, [examId, questions, errorRole]);
 
   const buildRubric = useCallback(async () => {
     if (!gradingRubricId) {

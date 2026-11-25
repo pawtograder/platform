@@ -1,5 +1,6 @@
 "use client";
 
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { WorkspaceClient, WorkspaceState } from "@/lib/workspaceStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -8,7 +9,7 @@ export const POLL_MIN_MS = 2000;
 export const POLL_MAX_MS = 10_000;
 
 function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  return getUserFacingErrorMessage(e);
 }
 
 /**

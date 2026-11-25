@@ -56,7 +56,8 @@ export default function StudentRegradeRequestsPage() {
       } catch (error) {
         const errorMessage = getStudentFacingErrorMessage(error);
 
-        // Sentry gets unexpected failures only, tagged with their error code; permission errors are expected.
+        // Sentry gets unexpected failures only, tagged with their error code. That includes 42501: RLS
+        // filters rows on a read instead of refusing it, so a 42501 here means a missing GRANT.
         reportUnexpectedError(error, { operation: "regrade_requests_fetch", course_id: Number(course_id) });
 
         // Show user-friendly error message

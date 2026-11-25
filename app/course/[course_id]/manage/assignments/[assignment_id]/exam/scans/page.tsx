@@ -11,12 +11,15 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MatchReview from "../MatchReview";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type Batch = { id: number; status: string; total_pages: number; pages_per_exam: number; error: string | null };
 
 const POLL_MS = 4000;
 
 function ExamScansPageContent() {
+  const errorRole = useStaffErrorRole();
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -147,11 +150,11 @@ function ExamScansPageContent() {
       toaster.success({ title: `Uploaded ${totalPages} page(s) as batch #${batchId}` });
       await loadBatches(examId);
     } catch (e) {
-      toaster.error({ title: "Upload failed", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Upload failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     } finally {
       setUploading(false);
     }
-  }, [examId, courseId, pagesPerExam, loadBatches]);
+  }, [examId, courseId, pagesPerExam, loadBatches, errorRole]);
 
   const process = useCallback(
     async (batchId: number) => {

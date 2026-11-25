@@ -12,6 +12,37 @@ const FORBIDDEN_PALETTE_BG_WITH_WHITE =
   PALETTE_SHADE_RE +
   "/]):has(JSXAttribute[name.name='color'][value.value='white'])";
 
+// Bans `e instanceof Error ? e.message : "Unknown error"` and its "An unexpected error occurred"
+// variant. refine and supabase-js reject with plain PostgREST objects, so this pattern hides the
+// real reason (#983). Use getUserFacingErrorMessage from lib/studentFacingErrorMessages instead.
+const GENERIC_ERROR_FALLBACK =
+  "ConditionalExpression[test.operator='instanceof'][test.right.name='Error'][alternate.type='Literal'][alternate.value=/^(Unknown error|An unexpected error occurred)/]";
+
+// Bans `e instanceof Error ? e.message : String(e)`, and the `e instanceof X || e instanceof Error`
+// form of the test. For a PostgREST error, a plain object, the String() branch shows
+// "[object Object]" (#983). Only checked in app/ (not app/api), components/ and hooks/: lib/ and
+// API routes mostly write errors to logs, not users, and the user-facing mapper is the wrong fix
+// there.
+const STRING_ERROR_FALLBACK =
+  "ConditionalExpression:matches(" +
+  "[test.operator='instanceof'][test.right.name='Error']," +
+  "[test.operator='||'][test.left.operator='instanceof'][test.left.right.name='Error']," +
+  "[test.operator='||'][test.right.operator='instanceof'][test.right.right.name='Error']" +
+  ")[alternate.type='CallExpression'][alternate.callee.name='String']";
+
+const RESTRICTED_SYNTAX = [
+  {
+    selector: FORBIDDEN_PALETTE_BG_WITH_WHITE,
+    message:
+      'Don\'t pair a raw `bg="<palette>.500|600|…"` with `color="white"` — it bypasses the theme and typically fails WCAG 1.4.3 (e.g. green.600 + white = 3.29:1). Use `colorPalette="<hue>" variant="solid"` so the AA-bumped solid/contrast tokens apply.'
+  },
+  {
+    selector: GENERIC_ERROR_FALLBACK,
+    message:
+      'This hides PostgREST errors, which are plain objects, not Errors (#983). Use getUserFacingErrorMessage(error) from "@/lib/studentFacingErrorMessages".'
+  }
+];
+
 const eslintConfig = [
   // design-sync inputs are tooling artifacts (esbuild-compiled, never imported by
   // the app, regenerated each sync, intentionally full of `any`/mock shims).
@@ -28,12 +59,33 @@ const eslintConfig = [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }
       ],
+      "no-restricted-syntax": ["error", ...RESTRICTED_SYNTAX]
+    }
+  },
+  {
+    // Edge functions are Deno: they can't import "@/lib/studentFacingErrorMessages", and their errors
+    // go to logs and HTTP responses, not toasts. So the generic-fallback ban doesn't apply there.
+    files: ["supabase/functions/**"],
+    rules: {
       "no-restricted-syntax": [
         "error",
+        ...RESTRICTED_SYNTAX.filter((restriction) => restriction.selector !== GENERIC_ERROR_FALLBACK)
+      ]
+    }
+  },
+  {
+    // A later no-restricted-syntax replaces the earlier one instead of adding to it, so this block
+    // repeats the shared selectors.
+    files: ["app/**", "components/**", "hooks/**"],
+    ignores: ["app/api/**"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...RESTRICTED_SYNTAX,
         {
-          selector: FORBIDDEN_PALETTE_BG_WITH_WHITE,
+          selector: STRING_ERROR_FALLBACK,
           message:
-            'Don\'t pair a raw `bg="<palette>.500|600|…"` with `color="white"` — it bypasses the theme and typically fails WCAG 1.4.3 (e.g. green.600 + white = 3.29:1). Use `colorPalette="<hue>" variant="solid"` so the AA-bumped solid/contrast tokens apply.'
+            'String() turns a PostgREST error, a plain object, into "[object Object]" (#983). Use getUserFacingErrorMessage(error) from "@/lib/studentFacingErrorMessages".'
         }
       ]
     }

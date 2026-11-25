@@ -81,12 +81,14 @@ export function getUserFacingErrorMessage(error: unknown, context?: StudentFacin
     }
   }
 
+  // The same filter as mapPostgrestOrPostgresCode: Postgres's own text ("Failing row contains (…)"
+  // on a 23502, a constraint or table name) means nothing to the reader.
   const extra = [details, hint].filter((s) => s && s.trim()).join(" ");
-  if (extra.trim()) {
+  if (extra.trim() && !looksLikeInternalNoise(extra)) {
     return extra.trim();
   }
 
-  if (message && message.trim()) {
+  if (message && message.trim() && !looksLikeInternalNoise(message)) {
     return message.trim();
   }
 
@@ -125,16 +127,33 @@ function mapPostgrestOrPostgresCode(
       return "Your session expired or is invalid. Refresh the page and sign in again.";
     case "PGRST116":
       return "Nothing was found for this request. It may have been removed or you may not have access.";
-    case "42501":
+    case "42501": {
+      // A function's own refusal ("students may only resolve an open or in-progress help request")
+      // says what was refused, so keep it. Postgres's RLS and GRANT messages name tables and
+      // policies instead, and a bare "Access denied" says less than the generic wording.
+      const raised = raisedMessage(message);
+      if (raised && !UNINFORMATIVE_REFUSAL.test(raised)) {
+        return `${raised} ${permissionHelp(role)}`;
+      }
       return permissionDeniedMessage(role);
+    }
     case "23505":
-      return "This was already saved or conflicts with existing data. Refresh the page and try again.";
+      return (
+        raisedMessage(message) ??
+        "This was already saved or conflicts with existing data. Refresh the page and try again."
+      );
     case "23503":
-      return "Something this action depends on is missing or was deleted. Refresh the page and try again.";
+      // On a delete, the row is still referenced; on an insert or update, the row it points at is gone.
+      return isStillReferenced(message, details)
+        ? "Other data still uses this, so it can't be deleted. Remove or move what uses it first, then try again."
+        : "Something this action depends on is missing or was deleted. Refresh the page and try again.";
     case "23514":
-      return !role || role === "student"
-        ? "Some entered values are not allowed for this form. Check your answers and try again."
-        : "Some entered values are not allowed for this form. Check what you entered and try again.";
+      return (
+        raisedMessage(message) ??
+        (!role || role === "student"
+          ? "Some entered values are not allowed for this form. Check your answers and try again."
+          : "Some entered values are not allowed for this form. Check what you entered and try again.")
+      );
     case "57014":
       return "The request took too long and was canceled. Try again in a moment.";
     case "P0001":
@@ -158,24 +177,68 @@ function mapPostgrestOrPostgresCode(
   return null;
 }
 
+/**
+ * True for text Postgres wrote rather than one of our database functions: constraint and table
+ * names, a "Failing row contains (…)" detail, and the RLS and GRANT refusals ("permission denied
+ * for table …", "new row violates row-level security policy …", "must be owner of …").
+ */
 function looksLikeInternalNoise(text: string): boolean {
-  const t = text.toLowerCase();
+  const t = text.trim().toLowerCase();
   return (
     t.includes("relation ") ||
     t.includes("violates foreign key") ||
-    t.includes("duplicate key value violates unique constraint")
+    t.includes("duplicate key value violates unique constraint") ||
+    t.includes("violates check constraint") ||
+    t.includes("violates not-null constraint") ||
+    t.includes("failing row contains") ||
+    t.includes("row-level security policy") ||
+    t.startsWith("permission denied for ") ||
+    t.startsWith("permission denied to ") ||
+    t.startsWith("must be owner of ")
+  );
+}
+
+/**
+ * A message one of our database functions raised on purpose (`raise exception '...' using errcode
+ * = ...`), as a sentence: first letter capitalized and a final period. `undefined` when there is no
+ * message or Postgres wrote it.
+ */
+function raisedMessage(message: string | undefined): string | undefined {
+  const t = message?.trim();
+  if (!t || looksLikeInternalNoise(t)) return undefined;
+  const capitalized = t.charAt(0).toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`;
+}
+
+/** Refusals that say nothing beyond "no". The generic wording is clearer than these. */
+const UNINFORMATIVE_REFUSAL = /^(access|permission) denied\.?$/i;
+
+/**
+ * True when a 23503 came from a DELETE (or a key UPDATE) of a row other rows still point at.
+ * Postgres says so in both fields: the message starts "update or delete on table" and the details
+ * say "Key (id)=(…) is still referenced from table …". An insert or update that points at a
+ * missing row says "insert or update on table" and "is not present in table" instead.
+ */
+function isStillReferenced(message: string | undefined, details: string | undefined): boolean {
+  return (
+    /^update or delete on table /i.test(message?.trim() ?? "") || /is still referenced from table/i.test(details ?? "")
   );
 }
 
 function permissionDeniedMessage(role: ErrorAudienceRole | undefined): string {
+  return `You don't have permission to do that. ${permissionHelp(role)}`;
+}
+
+/** Who to ask when a permission error blocks you. */
+function permissionHelp(role: ErrorAudienceRole | undefined): string {
   switch (role) {
     case "grader":
-      return "You don't have permission to do that. If you need access, ask an instructor for this course.";
+      return "If you need access, ask an instructor for this course.";
     case "instructor":
     case "admin":
-      return "You don't have permission to do that. If you think you should, let the Pawtograder team know so we can look into it.";
+      return "If you think you should, let the Pawtograder team know so we can look into it.";
     default:
-      return "You don't have permission to do that. If you need access, contact your instructor.";
+      return "If you need access, contact your instructor.";
   }
 }
 

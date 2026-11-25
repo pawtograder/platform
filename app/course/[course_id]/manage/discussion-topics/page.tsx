@@ -32,6 +32,8 @@ import CreateTopicModal from "./modals/createTopicModal";
 import EditTopicModal from "./modals/editTopicModal";
 import { useCourse } from "@/hooks/useCourseController";
 import { getDiscordChannelUrl } from "@/lib/discordUtils";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Draggable and droppable topic item component.
@@ -204,6 +206,7 @@ function DraggableTopicItem({
  */
 export default function DiscussionTopicsPage() {
   // Modal management using the useModalManager hook pattern
+  const errorRole = useStaffErrorRole();
   const createModal = useModalManager();
   const editModal = useModalManager<DiscussionTopic>();
 
@@ -284,13 +287,11 @@ export default function DiscussionTopicsPage() {
         description: "Discussion topic deleted successfully"
       });
     } catch (error) {
-      // Handle foreign key constraint violation gracefully
-      // This can occur if a thread was created between the check above and the delete operation
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // A thread created between the check above and the delete makes Postgres refuse it with a
+      // foreign key violation (discussion_threads_topic_id_fkey). hardDelete rethrows the PostgREST
+      // error, so check its code: the mapped message never names the constraint.
       const isForeignKeyViolation =
-        errorMessage.includes("foreign key") ||
-        errorMessage.includes("violates foreign key constraint") ||
-        errorMessage.includes("discussion_threads_topic_id_fkey");
+        typeof error === "object" && error !== null && "code" in error && error.code === "23503";
 
       if (isForeignKeyViolation) {
         toaster.error({
@@ -301,7 +302,7 @@ export default function DiscussionTopicsPage() {
       } else {
         toaster.error({
           title: "Error",
-          description: `Failed to delete topic: ${errorMessage}`
+          description: `Failed to delete topic: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
       }
     }
@@ -379,7 +380,7 @@ export default function DiscussionTopicsPage() {
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to update topic order: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to update topic order: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

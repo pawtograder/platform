@@ -12,6 +12,8 @@ import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -38,6 +40,7 @@ interface DayColumnProps {
 }
 
 function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProps) {
+  const errorRole = useViewerErrorRole();
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
   const monthName = format(date, "MMM");
@@ -118,7 +121,7 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to start working on queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

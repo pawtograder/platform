@@ -15,6 +15,7 @@ import { BsPencil, BsPlus, BsTrash } from "react-icons/bs";
 import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
 import DiscordChannelLink from "@/components/discord/discord-channel-link";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Component for managing help queues in a course.
@@ -23,6 +24,7 @@ import DiscordChannelLink from "@/components/discord/discord-channel-link";
  */
 export default function HelpQueueManagement() {
   // Modal management
+  const errorRole = useStaffErrorRole();
   const createModal = useModalManager();
   const editModal = useModalManager<HelpQueue>();
 
@@ -41,7 +43,7 @@ export default function HelpQueueManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to delete help queue",
-        description: getErrorMessage(error)
+        description: getErrorMessage(error, { role: errorRole })
       });
     }
   };

@@ -11,6 +11,8 @@ import { useParams, useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { useMemo } from "react";
 import { FaExternalLinkAlt, FaTrash } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 function getType(n: Notification): string {
   const body = n.body && typeof n.body === "object" ? (n.body as { type?: string }) : undefined;
@@ -82,6 +84,7 @@ type RegradeRequestBody = {
 // }
 
 export default function NotificationsTable() {
+  const errorRole = useViewerErrorRole();
   const { notifications, set_read, dismiss, mark_all_read, delete_all } = useNotifications();
   const { course_id } = useParams();
   const router = useRouter();
@@ -128,7 +131,7 @@ export default function NotificationsTable() {
       }
     } catch (e) {
       Sentry.captureException(e);
-      toaster.error({ title: "Failed to open", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Failed to open", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     }
   }
 
@@ -145,7 +148,7 @@ export default function NotificationsTable() {
       router.push(url);
     } catch (e) {
       Sentry.captureException(e);
-      toaster.error({ title: "Failed to open", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Failed to open", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     }
   }
 
@@ -156,7 +159,7 @@ export default function NotificationsTable() {
       router.push(url);
     } catch (e) {
       Sentry.captureException(e);
-      toaster.error({ title: "Failed to open", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Failed to open", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     }
   }
 

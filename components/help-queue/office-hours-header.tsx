@@ -35,6 +35,8 @@ import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { format } from "date-fns";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 export type OfficeHoursViewMode = "my-requests" | "browse" | "working" | "all-requests" | "dashboard" | "settings";
 
@@ -108,6 +110,7 @@ export function OfficeHoursHeader({
   currentRequest,
   isManageMode = false
 }: OfficeHoursHeaderProps) {
+  const errorRole = useViewerErrorRole();
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -237,7 +240,7 @@ export function OfficeHoursHeader({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to ${isWorking ? "stop" : "start"} working on queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to ${isWorking ? "stop" : "start"} working on queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

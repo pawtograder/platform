@@ -23,6 +23,7 @@ import {
   FaSync
 } from "react-icons/fa";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
 import { AnalyticsChart } from "@/components/ui/repo-analytics-chart";
 
@@ -318,7 +319,7 @@ export default function SubmissionRepoAnalyticsPage() {
       }
       setSubmissionsBySha(shaMap);
     } catch (e) {
-      toaster.error({ title: "Failed to load analytics", description: String(e) });
+      toaster.error({ title: "Failed to load analytics", description: getUserFacingErrorMessage(e) });
     } finally {
       setLoading(false);
     }
@@ -352,7 +353,7 @@ export default function SubmissionRepoAnalyticsPage() {
         setTimeout(() => loadData(), 5000);
       }
     } catch (e) {
-      toaster.error({ title: "Refresh failed", description: String(e) });
+      toaster.error({ title: "Refresh failed", description: getUserFacingErrorMessage(e) });
     } finally {
       setRefreshing(false);
     }
