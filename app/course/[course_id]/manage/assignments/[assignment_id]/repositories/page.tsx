@@ -358,7 +358,7 @@ function RetryRepoCreationButton({
           ? {
               title: "Retry Requested",
               description:
-                "Pawtograder will try to create this repository on Forgejo again within the hour. This page will automatically update."
+                "Pawtograder will try to create this repository on Forgejo again. This page will automatically update."
             }
           : {
               title: "Creation Re-queued",
