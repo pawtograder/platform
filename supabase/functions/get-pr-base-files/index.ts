@@ -92,7 +92,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
   // assignments embed is ambiguous: assignment_id also FKs a view).
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("upstream_repo")
+    .select("upstream_repo, git_provider")
     .eq("id", submission.assignment_id)
     .maybeSingle();
 
@@ -101,6 +101,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GetPrBa
   // Not a pr submission (or not yet snapshotted): nothing to diff against.
   if (!upstreamRepo || !baseSha) {
     return { files: {} };
+  }
+  // The base tree is cloned from GitHub, where a Forgejo repo's owner/name may be someone else's repo.
+  if (assignment?.git_provider !== "github") {
+    throw new UserVisibleError("Pull request submissions are only supported for GitHub assignments", 400);
   }
   scope?.setTag("upstream_repo", upstreamRepo);
   scope?.setTag("base_sha", baseSha);

@@ -38,6 +38,8 @@ type StaffCommitHistoryProps = {
   profileId: string | null;
   assignmentGroupId: number | null;
   currentSubmissionId: number;
+  /** The live commit list is GitHub's, so a Forgejo repository shows only recorded commits. */
+  gitProvider?: string;
 };
 
 function sourceBadgeColor(source: CommitHistoryEntry["source"]) {
@@ -81,7 +83,8 @@ export function StaffCommitHistory({
   repositoryFullName,
   profileId,
   assignmentGroupId,
-  currentSubmissionId
+  currentSubmissionId,
+  gitProvider
 }: StaffCommitHistoryProps) {
   const { assignment } = useAssignmentController();
   const repoHost = useRepoWebHost(assignment.git_provider);
@@ -150,8 +153,11 @@ export function StaffCommitHistory({
     setGithubPage(0);
     setHasMoreGitHubCommits(false);
     setGithubCommitError(null);
+    if (gitProvider === "forgejo") {
+      return;
+    }
     void loadGitHubCommits(1);
-  }, [loadGitHubCommits]);
+  }, [loadGitHubCommits, gitProvider]);
 
   // Clear any pending timers on unmount.
   useEffect(() => {

@@ -101,8 +101,10 @@ async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.S
   //failure for a committed approval and a retry could hit the full-group / duplicate-member paths.
   //Log it instead; the worker's other sync paths (and the org-confirm re-sync) reconcile later.
   const group = data.assignment_groups;
-  const repository = group.repositories?.[0]?.repository;
-  if (group.classes?.github_org && repository) {
+  const groupRepo = group.repositories?.[0];
+  const repository = groupRepo?.repository;
+  // The permission sync acts on GitHub, where a same-named repo may belong to someone else.
+  if (group.classes?.github_org && repository && groupRepo.git_provider === "github") {
     try {
       const { data: members, error: members_error } = await adminSupabase
         .from("assignment_groups_members")
