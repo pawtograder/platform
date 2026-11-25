@@ -2593,7 +2593,7 @@ export async function processEnvelope(
           // Repos: single (UI), explicit batch (bulk enqueue), or all ready for assignment (legacy)
           const query = adminSupabase
             .from("repositories")
-            .select("id, repository, assignment_id, class_id")
+            .select("id, repository, assignment_id, class_id, git_provider")
             .eq("assignment_id", assignment_id)
             .eq("is_github_ready", true);
           if (singleRepoId != null) {
@@ -2604,15 +2604,25 @@ export async function processEnvelope(
           const { data: reposData, error: reposError } = await query;
 
           if (reposError) throw reposError;
-          repos = reposData ?? [];
+          const fetchedRepos = reposData ?? [];
+          repos = fetchedRepos.filter((r) => r.git_provider === "github");
+          const skippedNonGitHubCount = fetchedRepos.length - repos.length;
+          if (skippedNonGitHubCount > 0) {
+            Sentry.addBreadcrumb({
+              message: `Skipped ${skippedNonGitHubCount} non-GitHub repository(ies) in fetch_repo_analytics`,
+              level: "info"
+            });
+          }
           if (repos.length === 0) {
             Sentry.addBreadcrumb({ message: "No repositories found for assignment", level: "info" });
             // Single-repo UI refresh sets repository_analytics_fetch_status to "fetching" in
             // enqueue_repo_analytics_fetch; reconcile if the repo is missing from the worker query
-            // (e.g. not GitHub-ready), so the row does not stay stuck in "fetching".
+            // (e.g. not GitHub-ready or non-GitHub), so the row does not stay stuck in "fetching".
             if (singleRepoId != null) {
               const errMessage =
-                "No GitHub-ready repository matched this request (repository may not be GitHub-ready yet).";
+                skippedNonGitHubCount > 0
+                  ? "Repository analytics are only collected from GitHub."
+                  : "No GitHub-ready repository matched this request (repository may not be GitHub-ready yet).";
               const { error: reconcileErr } = await adminSupabase.from("repository_analytics_fetch_status").upsert(
                 {
                   assignment_id,

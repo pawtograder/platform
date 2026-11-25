@@ -1,9 +1,11 @@
 "use client";
 
 import React from "react";
+import { useAssignmentController } from "@/hooks/useAssignment";
 import { useSubmission } from "@/hooks/useSubmission";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { FORGEJO_UNSUPPORTED_SETTINGS } from "@/lib/gitProviderOptions";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
@@ -174,7 +176,9 @@ function getAuthorColor(author: string): string {
 }
 
 export default function SubmissionRepoAnalyticsPage() {
+  const { assignment } = useAssignmentController();
   const submission = useSubmission();
+  const isForgejo = assignment.git_provider === "forgejo";
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const course = useCourse();
   const { course_id } = useParams();
@@ -330,6 +334,7 @@ export default function SubmissionRepoAnalyticsPage() {
   }, [loadData]);
 
   const handleRefresh = async () => {
+    if (isForgejo) return;
     if (!course.github_org) {
       toaster.error({ title: "No GitHub org configured for this course" });
       return;
@@ -424,10 +429,12 @@ export default function SubmissionRepoAnalyticsPage() {
     <VStack align="stretch" gap={4} p={4}>
       <Flex justify="space-between" align="center" wrap="wrap" gap={3}>
         <HStack gap={3}>
-          <Button onClick={handleRefresh} loading={refreshing} variant="outline" size="sm">
-            <Icon as={FaSync} mr={2} />
-            Refresh
-          </Button>
+          {!isForgejo && (
+            <Button onClick={handleRefresh} loading={refreshing} variant="outline" size="sm">
+              <Icon as={FaSync} mr={2} />
+              Refresh
+            </Button>
+          )}
           <Button onClick={handleExportCsv} variant="outline" size="sm" disabled={items.length === 0}>
             <Icon as={FaDownload} mr={2} />
             Export CSV
@@ -461,7 +468,11 @@ export default function SubmissionRepoAnalyticsPage() {
         </Flex>
       ) : items.length === 0 ? (
         <Box textAlign="center" py={8}>
-          <Text color="fg.muted">No analytics data yet. Click &quot;Refresh&quot; to fetch from GitHub.</Text>
+          <Text color="fg.muted">
+            {isForgejo
+              ? FORGEJO_UNSUPPORTED_SETTINGS.enable_repo_analytics
+              : 'No analytics data yet. Click "Refresh" to fetch from GitHub.'}
+          </Text>
         </Box>
       ) : (
         <Tabs.Root value={activeTab} onValueChange={(d) => setActiveTab(d.value)} variant="line">
