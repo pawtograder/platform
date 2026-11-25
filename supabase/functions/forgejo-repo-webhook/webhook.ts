@@ -1,5 +1,6 @@
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
+import { recordForgejoHandoutPush } from "../_shared/forgejoHandoutCommits.ts";
 import { type ForgejoConfig, getCommit } from "../_shared/ForgejoWrapper.ts";
 import { isHandoutSyncPush } from "../_shared/handoutSyncPush.ts";
 import {
@@ -206,7 +207,7 @@ function isAdminPush(push: RepoPush, adminLogin: string | undefined): boolean {
 }
 
 /**
- * Records a student's push in their commit history. For a push-mode assignment with the autograder
+ * Records a student's push in their commit history, or a push to a handout in the handout's. For a push-mode assignment with the autograder
  * off, a push to the default branch is also the student's submission, created here as
  * github-repo-webhook creates it for GitHub (#1110). With the autograder on, Forgejo Actions runs
  * grade.yml on its own and the workflow creates the submission, so this only records the history.
@@ -219,8 +220,9 @@ export async function handleForgejoPush(
 ): Promise<void> {
   const studentRepo = await findStudentRepository(adminSupabase, push.provider, push.repository, scope);
   if (!studentRepo) {
+    if (await recordForgejoHandoutPush(adminSupabase, push, scope)) return;
     scope.setTag("skipped_reason", "not_a_student_repo");
-    console.log(`[forgejo-repo-webhook] ${push.repository} is not a Forgejo student repository`);
+    console.log(`[forgejo-repo-webhook] ${push.repository} is not a Forgejo student repository or handout`);
     return;
   }
   scope.setTag("student_repo", studentRepo.id.toString());
