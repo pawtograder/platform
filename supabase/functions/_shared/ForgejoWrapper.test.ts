@@ -430,6 +430,51 @@ Deno.test("downloadArchive: refuses an archive past the limit without reading or
   });
 });
 
+Deno.test("downloadArchive: an archive declared past the limit is refused before any of it is read", async () => {
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled++;
+      controller.enqueue(new Uint8Array(10));
+    }
+  });
+  await withForgejo([new Response(body, { status: 200, headers: { "Content-Length": "1000" } })], async () => {
+    const error = await assertRejects(
+      () => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 25),
+      ArchiveTooLargeError
+    );
+    assertEquals(error.bytesRead, 1000);
+  });
+  assert(pulled <= 1, `read ${pulled} chunks`);
+});
+
+Deno.test("downloadArchive: assembles a chunked archive with or without a length, exactly", async () => {
+  const bytes = Uint8Array.from({ length: 3000 }, (_, i) => i % 251);
+  const chunked = () =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 700) controller.enqueue(bytes.slice(i, i + 700));
+        controller.close();
+      }
+    });
+  const variants: Record<string, string>[] = [
+    {},
+    { "Content-Length": String(bytes.length) },
+    { "Content-Length": "100" }
+  ];
+  for (const headers of variants) {
+    await withForgejo([new Response(chunked(), { status: 200, headers })], async () => {
+      const archive = await downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 4000);
+      assertEquals(archive, bytes);
+      assertEquals(archive.byteLength, bytes.length);
+    });
+  }
+  // A stream that passes the limit without declaring a length still stops at it.
+  await withForgejo([new Response(chunked(), { status: 200 })], async () => {
+    await assertRejects(() => downloadArchive(config, "cs4535/hw1-alex.kim", "b275490c", 2000), ArchiveTooLargeError);
+  });
+});
+
 Deno.test("downloadArchive: gives up on a request Forgejo never answers", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) =>

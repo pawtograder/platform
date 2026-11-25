@@ -1,7 +1,7 @@
 /**
  * In-memory stand-in for the admin Supabase client, covering only the calls RepoPush.ts and forgejo-repo-webhook make.
  * `eq` and `ilike` filters are applied to the rows, so a test can tell a provider-scoped lookup from
- * one that ignores the provider, and an escaped ILIKE pattern from a wildcard. Used by RepoPush.test.ts and forgejo-repo-webhook/webhook.test.ts.
+ * one that ignores the provider, and an escaped ILIKE pattern from a wildcard. Used by RepoPush.test.ts, PushDirectSubmission.test.ts and forgejo-repo-webhook/webhook.test.ts.
  */
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "./SupabaseTypes.d.ts";

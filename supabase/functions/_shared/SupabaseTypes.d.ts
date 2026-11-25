@@ -7930,6 +7930,53 @@ export type Database = {
         };
         Relationships: [];
       };
+      push_direct_promotion_versions: {
+        Row: {
+          assignment_id: number;
+          submitter: string;
+          version: number;
+        };
+        Insert: {
+          assignment_id: number;
+          submitter: string;
+          version?: number;
+        };
+        Update: {
+          assignment_id?: number;
+          submitter?: string;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "push_direct_promotion_versions_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "push_direct_promotion_versions_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "push_direct_promotion_versions_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "push_direct_promotion_versions_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          }
+        ];
+      };
       realtime_channel_subscriptions: {
         Row: {
           channel: string;
@@ -11142,6 +11189,7 @@ export type Database = {
           grading_review_id: number | null;
           head_sha: string | null;
           id: number;
+          ingestion_pending: boolean;
           is_active: boolean;
           is_empty_submission: boolean;
           is_not_graded: boolean;
@@ -11167,6 +11215,7 @@ export type Database = {
           grading_review_id?: number | null;
           head_sha?: string | null;
           id?: number;
+          ingestion_pending?: boolean;
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
@@ -11192,6 +11241,7 @@ export type Database = {
           grading_review_id?: number | null;
           head_sha?: string | null;
           id?: number;
+          ingestion_pending?: boolean;
           is_active?: boolean;
           is_empty_submission?: boolean;
           is_not_graded?: boolean;
@@ -13737,6 +13787,10 @@ export type Database = {
         Args: { p_class_id: number; p_followup_to: number };
         Returns: boolean;
       };
+      can_manage_survey_in_class: {
+        Args: { p_class_id: number; p_survey_id: string };
+        Returns: boolean;
+      };
       can_respond_to_survey: {
         Args: { p_profile_id: string; p_survey_id: string };
         Returns: boolean;
@@ -15578,6 +15632,14 @@ export type Database = {
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
+      promote_push_direct_submission: {
+        Args: {
+          p_expected_promotion_version: number;
+          p_newer_than_submission_id: number;
+          p_submission_id: number;
+        };
+        Returns: string;
+      };
       promote_whatif_grader_result: {
         Args: { p_class_id: number; p_grader_result_id: number };
         Returns: Json;
@@ -15590,6 +15652,10 @@ export type Database = {
           p_moves_to_fulfill?: Json;
         };
         Returns: Json;
+      };
+      push_direct_promotion_version: {
+        Args: { p_submission_id: number };
+        Returns: number;
       };
       queue_forgejo_repo_archives: {
         Args: { p_class_ids: number[]; p_repositories: string[] };

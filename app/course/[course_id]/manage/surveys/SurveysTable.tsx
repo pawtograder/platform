@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
-import { useIsGrader, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGrader } from "@/hooks/useClassProfiles";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
@@ -30,7 +30,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
   const controller = useCourseController();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
-  const isInstructor = useIsInstructor();
+  const canManageSurveys = useCapability("manage_surveys");
   const isGrader = useIsGrader();
   const assignments = useAssignments();
   // This table renders the `surveys` prop, which `ManageSurveysBody` fetches on the server —
@@ -380,7 +380,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
             {filteredSurveys.map((survey) => (
               <Table.Row key={survey.id} bg="bg.muted" borderColor="border">
                 <Table.Cell py={4} pl={6}>
-                  {!isInstructor && survey.status === "draft" ? (
+                  {!canManageSurveys && survey.status === "draft" ? (
                     <Text color="fg">{survey.title}</Text>
                   ) : (
                     <Link href={getSurveyLink(survey)} style={{ color: "var(--chakra-colors-blue-fg)" }}>
@@ -443,7 +443,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                       </Button>
                     </MenuTrigger>
                     <MenuContent>
-                      {survey.status === "draft" && isInstructor && (
+                      {survey.status === "draft" && canManageSurveys && (
                         <>
                           <MenuItem value="edit" asChild>
                             <Link href={getEditLink(survey)}>Edit</Link>
@@ -456,7 +456,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                           </MenuItem>
                         </>
                       )}
-                      {survey.status === "draft" && !isInstructor && (
+                      {survey.status === "draft" && !canManageSurveys && (
                         <MenuItem value="no-access" disabled>
                           No Actions Available
                         </MenuItem>
@@ -468,7 +468,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                               View Responses
                             </Link>
                           </MenuItem>
-                          {isInstructor && (
+                          {canManageSurveys && (
                             <>
                               <MenuItem value="edit" asChild>
                                 <Link href={getEditLink(survey)}>Edit (New Version)</Link>
@@ -490,7 +490,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                               View Responses
                             </Link>
                           </MenuItem>
-                          {isInstructor && (
+                          {canManageSurveys && (
                             <>
                               <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
                                 Delete

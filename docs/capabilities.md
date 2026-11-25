@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -195,6 +195,54 @@ action sends people without it somewhere useful: its server `layout.tsx` checks
 things to look at stays open and only hides its action buttons with `useCapability`, as Manage
 Groups does for `publish_groups`. `RequireManageReviews` is an older client-side version of the
 redirect, used by Bulk Assign and Reassign.
+
+## manage_flashcards
+
+`manage_flashcards` covers creating, editing, deleting and copying flashcard decks and cards
+(area 13). Day one, the default instructor role, the default grader role and every existing custom
+role hold it, so instructors and default graders keep the management access graders already had. An
+instructor can then turn it off for the default grader role or a custom role. Before this capability,
+the person who created a deck could still update and delete it and manage its cards without the
+staff check; that creator path is gone so the capability is the only rule for those writes. The
+create / edit / delete controls follow `useCapability("manage_flashcards")`. The Course Settings
+"Flashcard Decks" entry and deck pages remain available to all staff for viewing. Left as views: class members reading decks and cards, students
+writing their own progress and interaction logs, and staff reading class-wide progress and logs for
+analytics.
+
+CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
+decks. It requires `manage_flashcards` only in the target class, through
+`assertUserHasClassCapability(userId, targetClass.id, "manage_flashcards")`, the same capability
+lookup RLS uses. Source read policies do not require `manage_flashcards`.
+
+## manage_surveys and run_polls
+
+`manage_surveys` covers creating, editing, publishing, closing, deleting and assigning surveys,
+plus survey templates (insert/update), survey series writes, and the
+`create_survey_assignments` / `soft_delete_survey` / `reorder_surveys_in_series` RPCs (area 11).
+Day one, only the default instructor role holds it. Create / publish / close / delete / series
+controls follow `useCapability("manage_surveys")`. Left as views or student actions: staff and
+student SELECT on surveys, assignments and responses; student response writes; template SELECT;
+series SELECT; analytics RPCs. Exception: deleting a survey template stays creator-only, so
+`manage_surveys` does not let you delete someone else's template.
+
+`survey_assignments` action policies call `can_manage_survey_in_class` so the parent survey must
+belong to the assignment's class and the caller must hold `manage_surveys` there. The helper is
+SECURITY DEFINER to avoid RLS recursion with `surveys_select_students`, and the capability check
+stops an unrelated signed-in user from learning survey/class membership through `/rpc`.
+
+A survey can reference a series from another class (CLI `surveys.copy` keeps the source
+`series_id`). That predates this capability work and is left for a follow-up.
+
+`run_polls` covers creating, editing, opening, closing and deleting live polls, and staff writes
+on `live_poll_responses` (area 11). Day one, the default instructor role, the default grader role
+and every existing custom role hold it. Create / open / close / delete controls follow
+`useCapability("run_polls")`. Left as views or student/anon actions: live and staff SELECT on
+`live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
+and cannot change them), and the anon/student insert path through `can_access_poll_response`.
+
+CLI `surveys.copy` requires active instructor or grader access in the source class and
+`manage_surveys` in the target class. The target check uses the caller-scoped capability RPC,
+including for dry runs. `assignments.copy` requires instructor access in the target class.
 
 ## Groups: publish_groups and manage_groups
 

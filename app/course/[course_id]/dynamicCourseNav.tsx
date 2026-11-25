@@ -196,7 +196,11 @@ const LinkItems = (courseID: number) => [
         icon: MdOutlineScience,
         target: `/course/${courseID}/manage/course/lab-roster`
       },
-      { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
+      {
+        name: "Flashcard Decks",
+        icon: TbCards,
+        target: `/course/${courseID}/manage/course/flashcard-decks`
+      },
       {
         name: "Discussion Topics",
         icon: FiHash,

@@ -9,9 +9,9 @@ import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal"
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import SurveyForm from "../../new/form";
-import { Box, Text } from "@chakra-ui/react";
+import { Box, Spinner, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapabilityOnceLoaded, useClassProfiles } from "@/hooks/useClassProfiles";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -55,6 +55,8 @@ export default function EditSurveyPage() {
   const revalidateServerCaches = useRevalidateServerCaches(Number(course_id));
   const trackEvent = useTrackEvent();
   const { private_profile_id, role } = useClassProfiles();
+  // Editing a survey needs manage_surveys (#1010); wait until the capability answer is known.
+  const canManageSurveys = useCapabilityOnceLoaded("manage_surveys");
   const [isLoading, setIsLoading] = useState(true);
   const [surveyData, setSurveyData] = useState<SurveyRow>();
   const rawSurveyId = getParam(survey_id, "survey_id");
@@ -107,18 +109,21 @@ export default function EditSurveyPage() {
   const loadingPromise = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
-    if (role.role === "grader") {
+    if (canManageSurveys === false) {
       toaster.create({
         title: "Access Denied",
-        description: "Graders cannot edit surveys. Only instructors have this permission.",
+        description: "You need the manage surveys capability to edit surveys.",
         type: "error"
       });
-      router.push(`/course/${course_id}/manage/surveys`);
+      router.replace(`/course/${course_id}/manage/surveys`);
     }
-  }, [role, router, course_id]);
+  }, [canManageSurveys, router, course_id]);
 
   // Load the survey data when component mounts
   useEffect(() => {
+    if (canManageSurveys !== true) {
+      return;
+    }
     if (hasLoadedSurvey.current || loadingPromise.current) {
       return; // Prevent duplicate loading
     }
@@ -211,7 +216,7 @@ export default function EditSurveyPage() {
 
     // Store the promise to prevent duplicate calls
     loadingPromise.current = loadSurveyData();
-  }, [course_id, rawSurveyId, reset, router, timezone, survey_id]);
+  }, [canManageSurveys, course_id, rawSurveyId, reset, router, timezone, survey_id]);
 
   const saveDraftOnly = useCallback(
     async (values: FieldValues, shouldRedirect: boolean = true) => {
@@ -521,11 +526,11 @@ export default function EditSurveyPage() {
     [errorRole, course_id, trackEvent, rawSurveyId, convertDueDateToISO, revalidateServerCaches]
   );
 
-  if (isLoading) {
+  if (!canManageSurveys || isLoading) {
     return (
       <Box py={8} maxW="1200px" my={2} mx="auto">
         <Box display="flex" alignItems="center" justifyContent="center" p={8}>
-          <Text>Loading survey data...</Text>
+          {canManageSurveys === false ? <Spinner /> : <Text>Loading survey data...</Text>}
         </Box>
       </Box>
     );

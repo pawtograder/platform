@@ -1,15 +1,15 @@
 "use client";
 
-import { Box, Textarea, HStack, VStack, Button, Heading, Checkbox } from "@chakra-ui/react";
+import { Box, Textarea, HStack, VStack, Button, Heading, Checkbox, Spinner } from "@chakra-ui/react";
 import { useForm, Controller } from "react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { Field } from "@/components/ui/field";
 import { Button as UIButton } from "@/components/ui/button";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapabilityOnceLoaded, useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import PollBuilderModal from "@/components/PollBuilderModal";
 import { PollPreviewModal } from "@/components/PollPreviewModal";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
@@ -33,9 +33,22 @@ export default function NewPollPage() {
   const { course_id } = useParams();
   const router = useRouter();
   const { public_profile_id } = useClassProfiles();
+  // Creating a poll needs run_polls (#1010); wait until the capability answer is known.
+  const canRunPolls = useCapabilityOnceLoaded("run_polls");
   const [isSaving, setIsSaving] = useState(false);
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    if (canRunPolls === false) {
+      toaster.create({
+        title: "Access Denied",
+        description: "You need the run polls capability to create polls.",
+        type: "error"
+      });
+      router.replace(`/course/${course_id}/manage/polls`);
+    }
+  }, [canRunPolls, router, course_id]);
 
   const {
     register,
@@ -252,6 +265,14 @@ export default function NewPollPage() {
     // Default to saving when form is submitted
     await savePoll(values, true);
   });
+
+  if (!canRunPolls) {
+    return (
+      <Box py={8} maxW="1200px" my={2} mx="auto" display="flex" justifyContent="center" p={8}>
+        <Spinner />
+      </Box>
+    );
+  }
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">

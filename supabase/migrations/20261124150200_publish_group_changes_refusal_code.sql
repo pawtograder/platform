@@ -20,7 +20,9 @@
 -- On 2026-11-24 staging gained #1299's 20261124130000_flashcards_manage_by_capability.sql and
 -- open PRs reached #1301's 20261124130200_office_hours_by_capability.sql, so it moved to
 -- 20261124140000, leaving room for the capability migrations being renumbered from
--- 20261123180000-20261123180300. None of the migrations it now follows re-creates this function. It never ran on a shared database (fork PR, no preview). To
+-- 20261123180000-20261123180300. Later that evening staging gained #1427's
+-- 20261124150000_enqueue_repo_analytics_skip_forgejo.sql and #1428 took 20261124150100,
+-- so it moved to 20261124150200. None of the migrations it now follows re-creates this function. It never ran on a shared database (fork PR, no preview). To
 -- check the body:
 --   diff <(sed -n '363,780p' supabase/migrations/20261118140200_forgejo_group_repos.sql) \
 --        <(sed -n '/^create or replace function/,$p' <this file>)
