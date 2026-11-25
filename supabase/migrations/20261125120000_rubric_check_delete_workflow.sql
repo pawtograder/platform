@@ -1559,3 +1559,553 @@ COMMENT ON FUNCTION public.update_rubric_full(jsonb) IS
 
 REVOKE ALL ON FUNCTION public.update_rubric_full(jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.update_rubric_full(jsonb) TO authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- 6. Prevent silent no-op point adjustments on detached regrade requests
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.update_regrade_request_status(
+    regrade_request_id bigint,
+    new_status regrade_status,
+    profile_id uuid,
+    resolved_points numeric DEFAULT NULL::numeric,
+    closed_points numeric DEFAULT NULL::numeric,
+    p_submission_file_id bigint DEFAULT NULL::bigint,
+    p_line integer DEFAULT NULL::integer,
+    p_submission_artifact_id bigint DEFAULT NULL::bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+declare
+    current_request public.submission_regrade_requests%ROWTYPE;
+    param_resolved_points numeric;
+    param_closed_points numeric;
+    new_submission_comment_id bigint;
+    new_submission_file_comment_id bigint;
+    new_submission_artifact_comment_id bigint;
+    is_bare_check boolean;
+    has_live_comment_target boolean;
+    is_detached_target boolean;
+begin
+    param_resolved_points := resolved_points;
+    param_closed_points := closed_points;
+
+    -- Lock the request row so two concurrent transitions cannot both observe the same
+    -- pre-transition state and (for bare-check requests) both materialize a backing
+    -- comment, which would double-count points in grade recomputation.
+    select *
+    into current_request
+    from public.submission_regrade_requests
+    where id = regrade_request_id
+    for update;
+
+    if not found then
+        raise exception 'Regrade request not found';
+    end if;
+
+    -- The acting profile must belong to an active member of the request's class. Graders in
+    -- pseudonymous mode act with their public profile, so accept either.
+    if not exists (
+        select 1
+        from public.user_roles ur
+        where ur.class_id = current_request.class_id
+          and (ur.private_profile_id = update_regrade_request_status.profile_id
+               or ur.public_profile_id = update_regrade_request_status.profile_id)
+          and ur.disabled = false
+    ) then
+        raise exception 'Profile is not enrolled in this class';
+    end if;
+
+    -- A "bare check" request targets a rubric check but has no comment yet.
+    is_bare_check := current_request.submission_file_comment_id is null
+        and current_request.submission_comment_id is null
+        and current_request.submission_artifact_comment_id is null
+        and current_request.rubric_check_id is not null;
+
+    has_live_comment_target := (
+        (current_request.submission_file_comment_id is not null and exists (
+            select 1 from public.submission_file_comments
+            where id = current_request.submission_file_comment_id and deleted_at is null
+        ))
+        or (current_request.submission_comment_id is not null and exists (
+            select 1 from public.submission_comments
+            where id = current_request.submission_comment_id and deleted_at is null
+        ))
+        or (current_request.submission_artifact_comment_id is not null and exists (
+            select 1 from public.submission_artifact_comments
+            where id = current_request.submission_artifact_comment_id and deleted_at is null
+        ))
+    );
+
+    -- Detached requests have neither a live backing comment nor a live rubric_check_id to materialize.
+    is_detached_target := not is_bare_check and not has_live_comment_target;
+
+    if new_status = 'resolved' and resolved_points is null and not is_detached_target then
+        raise exception 'resolved_points parameter is required when status is resolved';
+    end if;
+
+    if new_status = 'closed' and closed_points is null and not is_detached_target then
+        raise exception 'closed_points parameter is required when status is closed';
+    end if;
+
+    case new_status
+        when 'opened' then
+            if current_request.status != 'draft' then
+                raise exception 'Can only open regrade requests that are in draft status';
+            end if;
+            if not authorizeforprofile(profile_id) then
+                raise exception 'Only submission owners can open regrade requests';
+            end if;
+            if not exists (
+                select 1
+                from public.submissions s
+                where s.id = current_request.submission_id
+                  and (
+                    s.profile_id = update_regrade_request_status.profile_id
+                    or exists (
+                        select 1
+                        from public.assignment_groups_members agm
+                        where agm.assignment_group_id = s.assignment_group_id
+                          and agm.profile_id = update_regrade_request_status.profile_id
+                    )
+                  )
+            ) then
+                raise exception 'Only submission owners can open regrade requests';
+            end if;
+
+            update public.submission_regrade_requests
+            set status = new_status,
+                opened_at = now(),
+                last_updated_at = now()
+            where id = regrade_request_id;
+
+            -- Notify the assignee. For comment-backed requests the assignee is the comment
+            -- author; for bare-check requests it is the review's grader (stored on creation).
+            insert into public.notifications (class_id, subject, body, style, user_id)
+            select
+                distinct on (ur.user_id)
+                current_request.class_id,
+                '{}'::jsonb as subject,
+                jsonb_build_object(
+                    'type', 'regrade_request',
+                    'action', 'comment_challenged',
+                    'regrade_request_id', regrade_request_id,
+                    'submission_id', current_request.submission_id,
+                    'assignment_id', current_request.assignment_id,
+                    'opened_by', profile_id,
+                    'opened_by_name', (select name from public.profiles where id = profile_id)
+                ) as body,
+                'info' as style,
+                ur.user_id
+            from public.user_roles ur
+            where ur.class_id = current_request.class_id
+              and ur.private_profile_id = (
+                case
+                    when current_request.submission_file_comment_id is not null then
+                        (select author from public.submission_file_comments where id = current_request.submission_file_comment_id)
+                    when current_request.submission_comment_id is not null then
+                        (select author from public.submission_comments where id = current_request.submission_comment_id)
+                    when current_request.submission_artifact_comment_id is not null then
+                        (select author from public.submission_artifact_comments where id = current_request.submission_artifact_comment_id)
+                    else current_request.assignee
+                end
+              );
+
+        when 'resolved' then
+            if current_request.status != 'opened' then
+                raise exception 'Can only resolve regrade requests that are opened';
+            end if;
+            if not authorizeforprofile(profile_id) then
+                raise exception 'Unauthorized to act as this profile';
+            end if;
+            if not authorizeforclassgrader(current_request.class_id) then
+                raise exception 'Only graders can resolve regrade requests';
+            end if;
+
+            if is_detached_target then
+                if param_resolved_points is not null then
+                    raise exception 'Cannot set points on a regrade request whose rubric check or grading comment was deleted. Apply a replacement rubric check or grading comment on the submission, then resolve this request without a point adjustment.'
+                        using errcode = 'invalid_parameter_value';
+                end if;
+
+                update public.submission_regrade_requests
+                set status = new_status,
+                    resolved_by = profile_id,
+                    resolved_at = now(),
+                    resolved_points = NULL,
+                    resolution_reason = 'grader',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+            elsif is_bare_check then
+                -- For a bare-check request, materialize the real comment now so the score
+                -- recompute (which sums comment points by rubric_check_id) picks it up.
+                select
+                    m.o_submission_comment_id,
+                    m.o_submission_file_comment_id,
+                    m.o_submission_artifact_comment_id
+                into
+                    new_submission_comment_id,
+                    new_submission_file_comment_id,
+                    new_submission_artifact_comment_id
+                from public._materialize_bare_check_regrade_comment(
+                    current_request,
+                    profile_id,
+                    param_resolved_points,
+                    regrade_request_id,
+                    p_submission_file_id,
+                    p_line,
+                    p_submission_artifact_id
+                ) as m;
+
+                update public.submission_regrade_requests
+                set status = new_status,
+                    resolved_by = profile_id,
+                    resolved_at = now(),
+                    resolved_points = param_resolved_points,
+                    submission_comment_id = new_submission_comment_id,
+                    submission_file_comment_id = new_submission_file_comment_id,
+                    submission_artifact_comment_id = new_submission_artifact_comment_id,
+                    resolution_reason = 'grader',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+            else
+                update public.submission_regrade_requests
+                set status = new_status,
+                    resolved_by = profile_id,
+                    resolved_at = now(),
+                    resolved_points = param_resolved_points,
+                    resolution_reason = 'grader',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+
+                if current_request.submission_file_comment_id is not null then
+                    update public.submission_file_comments
+                    set points = param_resolved_points
+                    where id = current_request.submission_file_comment_id;
+                elsif current_request.submission_comment_id is not null then
+                    update public.submission_comments
+                    set points = param_resolved_points
+                    where id = current_request.submission_comment_id;
+                elsif current_request.submission_artifact_comment_id is not null then
+                    update public.submission_artifact_comments
+                    set points = param_resolved_points
+                    where id = current_request.submission_artifact_comment_id;
+                end if;
+            end if;
+
+        when 'escalated' then
+            if current_request.status != 'resolved' then
+                raise exception 'Can only escalate regrade requests that are resolved';
+            end if;
+            if not authorizeforprofile(profile_id) then
+                raise exception 'Only submission owners can escalate regrade requests';
+            end if;
+            if not exists (
+                select 1
+                from public.submissions s
+                where s.id = current_request.submission_id
+                  and (
+                    s.profile_id = update_regrade_request_status.profile_id
+                    or exists (
+                        select 1
+                        from public.assignment_groups_members agm
+                        where agm.assignment_group_id = s.assignment_group_id
+                          and agm.profile_id = update_regrade_request_status.profile_id
+                    )
+                  )
+            ) then
+                raise exception 'Only submission owners can escalate regrade requests';
+            end if;
+
+            update public.submission_regrade_requests
+            set status = new_status,
+                escalated_by = profile_id,
+                escalated_at = now(),
+                last_updated_at = now()
+            where id = regrade_request_id;
+
+        when 'closed' then
+            if current_request.status not in ('resolved', 'escalated', 'opened') then
+                raise exception 'Can only close regrade requests that are resolved, escalated, or opened';
+            end if;
+            if not public.authorizeforprofile(profile_id) then
+                raise exception 'Unauthorized to act as this profile';
+            end if;
+            if not public.authorizeforclassinstructor(current_request.class_id) then
+                raise exception 'Only instructors can close regrade requests';
+            end if;
+
+            if is_detached_target then
+                -- Detached requests have no live comment or rubric check to update/materialize, so
+                -- silently recording a closed_points value would mislead the instructor into
+                -- thinking the student's grade changed. Reject numeric point values and require
+                -- replacement grading on the submission before closing without a point adjustment.
+                if param_closed_points is not null then
+                    raise exception 'Cannot set points on a regrade request whose rubric check or grading comment was deleted. Apply a replacement rubric check or grading comment on the submission, then close this request without a point adjustment.'
+                        using errcode = 'invalid_parameter_value';
+                end if;
+
+                update public.submission_regrade_requests
+                set status = new_status,
+                    closed_by = profile_id,
+                    closed_at = now(),
+                    closed_points = NULL,
+                    resolution_reason = 'instructor',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+            elsif is_bare_check and current_request.submission_comment_id is null
+               and current_request.submission_file_comment_id is null
+               and current_request.submission_artifact_comment_id is null then
+                -- A bare-check request can be closed directly from 'opened' without a grader
+                -- having resolved it; materialize the comment in that case too.
+                select
+                    m.o_submission_comment_id,
+                    m.o_submission_file_comment_id,
+                    m.o_submission_artifact_comment_id
+                into
+                    new_submission_comment_id,
+                    new_submission_file_comment_id,
+                    new_submission_artifact_comment_id
+                from public._materialize_bare_check_regrade_comment(
+                    current_request,
+                    profile_id,
+                    param_closed_points,
+                    regrade_request_id,
+                    p_submission_file_id,
+                    p_line,
+                    p_submission_artifact_id
+                ) as m;
+
+                update public.submission_regrade_requests
+                set status = new_status,
+                    closed_by = profile_id,
+                    closed_at = now(),
+                    closed_points = param_closed_points,
+                    submission_comment_id = new_submission_comment_id,
+                    submission_file_comment_id = new_submission_file_comment_id,
+                    submission_artifact_comment_id = new_submission_artifact_comment_id,
+                    resolution_reason = 'instructor',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+            else
+                update public.submission_regrade_requests
+                set status = new_status,
+                    closed_by = profile_id,
+                    closed_at = now(),
+                    closed_points = param_closed_points,
+                    resolution_reason = 'instructor',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+
+                if current_request.submission_file_comment_id is not null then
+                    update public.submission_file_comments
+                    set points = param_closed_points
+                    where id = current_request.submission_file_comment_id;
+                elsif current_request.submission_comment_id is not null then
+                    update public.submission_comments
+                    set points = param_closed_points
+                    where id = current_request.submission_comment_id;
+                elsif current_request.submission_artifact_comment_id is not null then
+                    update public.submission_artifact_comments
+                    set points = param_closed_points
+                    where id = current_request.submission_artifact_comment_id;
+                end if;
+            end if;
+
+        when 'draft' then
+            raise exception 'Cannot transition back to draft status';
+
+        else
+            raise exception 'Invalid status: %', new_status;
+    end case;
+
+    -- Notify all students connected to the submission of the status change.
+    insert into public.notifications (class_id, subject, body, style, user_id)
+    select
+        current_request.class_id,
+        '{}'::jsonb as subject,
+        jsonb_build_object(
+            'type', 'regrade_request',
+            'action', 'status_change',
+            'regrade_request_id', regrade_request_id,
+            'old_status', current_request.status,
+            'new_status', new_status,
+            'submission_id', current_request.submission_id,
+            'assignment_id', current_request.assignment_id,
+            'updated_by', profile_id,
+            'updated_by_name', (select name from public.profiles where id = profile_id)
+        ) as body,
+        'info' as style,
+        ur.user_id
+    from public.user_roles ur
+    where ur.class_id = current_request.class_id
+      and ur.role = 'student'
+      and ur.private_profile_id != profile_id
+      and ur.private_profile_id in (
+        select s.profile_id
+        from public.submissions s
+        where s.id = current_request.submission_id
+
+        union
+
+        select agm.profile_id
+        from public.submissions s
+        inner join public.assignment_groups_members agm
+            on agm.assignment_group_id = s.assignment_group_id
+        where s.id = current_request.submission_id
+          and s.assignment_group_id is not null
+      );
+
+    if new_status = 'escalated' then
+        insert into public.notifications (class_id, subject, body, style, user_id)
+        select
+            current_request.class_id,
+            '{}'::jsonb as subject,
+            jsonb_build_object(
+                'type', 'regrade_request',
+                'action', 'escalated',
+                'regrade_request_id', regrade_request_id,
+                'old_status', current_request.status,
+                'new_status', new_status,
+                'submission_id', current_request.submission_id,
+                'assignment_id', current_request.assignment_id,
+                'escalated_by', profile_id,
+                'escalated_by_name', (select name from public.profiles where id = profile_id)
+            ) as body,
+            'warning' as style,
+            ur.user_id
+        from public.user_roles ur
+        where ur.class_id = current_request.class_id
+          and ur.role = 'instructor';
+    end if;
+
+    return true;
+end;
+$function$;
+
+REVOKE ALL ON FUNCTION public.update_regrade_request_status(bigint, regrade_status, uuid, numeric, numeric, bigint, integer, bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_regrade_request_status(bigint, regrade_status, uuid, numeric, numeric, bigint, integer, bigint) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.update_regrade_request_points(
+    regrade_request_id bigint,
+    profile_id uuid,
+    resolved_points numeric DEFAULT NULL::numeric,
+    closed_points numeric DEFAULT NULL::numeric
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+declare
+    current_request public.submission_regrade_requests%ROWTYPE;
+    param_resolved_points numeric;
+    param_closed_points numeric;
+    has_live_comment_target boolean;
+begin
+    param_resolved_points := resolved_points;
+    param_closed_points := closed_points;
+
+    select *
+    into current_request
+    from public.submission_regrade_requests
+    where id = regrade_request_id
+    for update;
+
+    if not found then
+        raise exception 'Regrade request not found';
+    end if;
+
+    -- Only instructors can edit points
+    if not authorizeforprofile(profile_id) then
+        raise exception 'Unauthorized to act as this profile';
+    end if;
+    if not authorizeforclassinstructor(current_request.class_id) then
+        raise exception 'Only instructors can edit regrade request points';
+    end if;
+
+    -- Validate that we're only updating points for appropriate statuses
+    if resolved_points is not null and current_request.status not in ('resolved', 'escalated', 'closed') then
+        raise exception 'Can only update resolved_points for requests that have been resolved';
+    end if;
+
+    if closed_points is not null and current_request.status != 'closed' then
+        raise exception 'Can only update closed_points for requests that have been closed';
+    end if;
+
+    -- Ensure at least one points parameter is provided
+    if resolved_points is null and closed_points is null then
+        raise exception 'Either resolved_points or closed_points must be provided';
+    end if;
+
+    has_live_comment_target := (
+        (current_request.submission_file_comment_id is not null and exists (
+            select 1 from public.submission_file_comments
+            where id = current_request.submission_file_comment_id and deleted_at is null
+        ))
+        or (current_request.submission_comment_id is not null and exists (
+            select 1 from public.submission_comments
+            where id = current_request.submission_comment_id and deleted_at is null
+        ))
+        or (current_request.submission_artifact_comment_id is not null and exists (
+            select 1 from public.submission_artifact_comments
+            where id = current_request.submission_artifact_comment_id and deleted_at is null
+        ))
+    );
+
+    if not has_live_comment_target then
+        raise exception 'Cannot edit points on a regrade request whose rubric check or grading comment was deleted. Apply a replacement rubric check or grading comment on the submission instead.'
+            using errcode = 'invalid_parameter_value';
+    end if;
+
+    -- Update the regrade request points
+    if resolved_points is not null then
+        update public.submission_regrade_requests
+        set resolved_points = param_resolved_points,
+            last_updated_at = now()
+        where id = regrade_request_id;
+
+        if current_request.submission_file_comment_id is not null then
+            update public.submission_file_comments
+            set points = param_resolved_points
+            where id = current_request.submission_file_comment_id;
+        elsif current_request.submission_comment_id is not null then
+            update public.submission_comments
+            set points = param_resolved_points
+            where id = current_request.submission_comment_id;
+        elsif current_request.submission_artifact_comment_id is not null then
+            update public.submission_artifact_comments
+            set points = param_resolved_points
+            where id = current_request.submission_artifact_comment_id;
+        end if;
+    end if;
+
+    if closed_points is not null then
+        update public.submission_regrade_requests
+        set closed_points = param_closed_points,
+            last_updated_at = now()
+        where id = regrade_request_id;
+
+        if current_request.submission_file_comment_id is not null then
+            update public.submission_file_comments
+            set points = param_closed_points
+            where id = current_request.submission_file_comment_id;
+        elsif current_request.submission_comment_id is not null then
+            update public.submission_comments
+            set points = param_closed_points
+            where id = current_request.submission_comment_id;
+        elsif current_request.submission_artifact_comment_id is not null then
+            update public.submission_artifact_comments
+            set points = param_closed_points
+            where id = current_request.submission_artifact_comment_id;
+        end if;
+    end if;
+
+    return true;
+end;
+$function$;
+
+REVOKE ALL ON FUNCTION public.update_regrade_request_points(bigint, uuid, numeric, numeric) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_regrade_request_points(bigint, uuid, numeric, numeric) TO authenticated, service_role;

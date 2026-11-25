@@ -574,6 +574,81 @@ test.describe("Rubric check deletion workflow (DB & RPC)", () => {
     expect(reviewAfter!.total_score).toBe(reviewBefore!.total_score - 8);
   });
 
+  test("escalated detached regrade requests reject numeric point adjustments and close cleanly without points", async () => {
+    const studentClient = await createAuthenticatedClient(student);
+    const instructorClient = await createAuthenticatedClient(instructor);
+
+    const { data: reviewBefore } = await supabase
+      .from("submission_reviews")
+      .select("total_score")
+      .eq("id", gradingReviewId)
+      .single();
+
+    for (const detachedId of [bareRegradeId, commentRegradeId]) {
+      // Student escalates the auto-resolved detached request
+      const { data: escalated, error: escErr } = await studentClient.rpc("update_regrade_request_status", {
+        regrade_request_id: detachedId,
+        new_status: "escalated",
+        profile_id: student.private_profile_id
+      });
+      expect(escErr).toBeNull();
+      expect(escalated).toBe(true);
+
+      // Instructor attempting to close with a numeric closed_points value must be rejected
+      const { error: nonZeroErr } = await instructorClient.rpc("update_regrade_request_status", {
+        regrade_request_id: detachedId,
+        new_status: "closed",
+        profile_id: instructor.private_profile_id,
+        closed_points: 5
+      });
+      expect(nonZeroErr?.code).toBe("22023");
+      expect(nonZeroErr?.message).toContain("replacement rubric check or grading comment");
+
+      // Even closed_points: 0 must be rejected when no backing target exists
+      const { error: zeroErr } = await instructorClient.rpc("update_regrade_request_status", {
+        regrade_request_id: detachedId,
+        new_status: "closed",
+        profile_id: instructor.private_profile_id,
+        closed_points: 0
+      });
+      expect(zeroErr?.code).toBe("22023");
+
+      // Closing without closed_points succeeds and leaves closed_points null
+      const { data: closed, error: closeErr } = await instructorClient.rpc("update_regrade_request_status", {
+        regrade_request_id: detachedId,
+        new_status: "closed",
+        profile_id: instructor.private_profile_id
+      });
+      expect(closeErr).toBeNull();
+      expect(closed).toBe(true);
+
+      const { data: closedRow } = await supabase
+        .from("submission_regrade_requests")
+        .select("status, closed_points, resolution_reason")
+        .eq("id", detachedId)
+        .single();
+      expect(closedRow?.status).toBe("closed");
+      expect(closedRow?.closed_points).toBeNull();
+      expect(closedRow?.resolution_reason).toBe("instructor");
+
+      // Direct point editing via update_regrade_request_points must also be rejected
+      const { error: editPtsErr } = await instructorClient.rpc("update_regrade_request_points", {
+        regrade_request_id: detachedId,
+        profile_id: instructor.private_profile_id,
+        closed_points: 5
+      });
+      expect(editPtsErr?.code).toBe("22023");
+    }
+
+    // Submission total_score remains unchanged because no backing comment was created or modified
+    const { data: reviewAfter } = await supabase
+      .from("submission_reviews")
+      .select("total_score")
+      .eq("id", gradingReviewId)
+      .single();
+    expect(reviewAfter!.total_score).toBe(reviewBefore!.total_score);
+  });
+
   test("TOCTOU guard rejects confirmation when a new active comment arrives after preview", async () => {
     const instructorClient = await createAuthenticatedClient(instructor);
 

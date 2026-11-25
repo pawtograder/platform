@@ -252,7 +252,8 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   regradeRequest,
   privateProfileId,
   rubricCriteria,
-  rubricCheck
+  rubricCheck,
+  isDetachedFromTarget = false
 }: {
   initialPoints: number | null;
   regradeRequestId: number;
@@ -260,6 +261,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   privateProfileId: string;
   rubricCriteria: RubricCriteria | null | undefined;
   rubricCheck?: RubricCheck | null | undefined;
+  isDetachedFromTarget?: boolean;
 }) {
   const [pointsAdjustment, setPointsAdjustment] = useState<string>("0");
   const [isOpen, setIsOpen] = useState(false);
@@ -325,8 +327,12 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
         regrade_request_id: regradeRequestId,
         new_status: "resolved",
         profile_id: privateProfileId,
-        resolved_points: finalScore,
-        ...(isBareCheck ? buildBareCheckRpcLocationArgs(materializationKind, resolveLocation) : {})
+        ...(isDetachedFromTarget
+          ? {}
+          : {
+              resolved_points: finalScore,
+              ...(isBareCheck ? buildBareCheckRpcLocationArgs(materializationKind, resolveLocation) : {})
+            })
       });
 
       if (error) throw error;
@@ -336,16 +342,21 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
 
       toaster.create({
         title: "Request Resolved",
-        description:
-          pointsAdjustmentNum === 0
+        description: isDetachedFromTarget
+          ? "Request resolved without a score change because the original rubric check or grading comment was deleted."
+          : pointsAdjustmentNum === 0
             ? "Request resolved with no change to the score."
             : `Request resolved. Score adjusted by ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} points.`,
         type: "success"
       });
-    } catch {
+    } catch (error) {
+      const message =
+        typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+          ? error.message
+          : "Failed to resolve request. Please try again.";
       toaster.create({
         title: "Error",
-        description: "Failed to resolve request. Please try again.",
+        description: message,
         type: "error"
       });
     } finally {
@@ -358,6 +369,7 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
     privateProfileId,
     regradeRequests,
     isBareCheck,
+    isDetachedFromTarget,
     materializationKind,
     resolveLocation
   ]);
@@ -380,133 +392,157 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
           <VStack gap={3} align="start">
             <Text fontWeight="semibold">Resolve Regrade Request</Text>
 
-            {/* Current score display */}
-            <Box w="100%">
-              <Text fontSize="sm" color="fg.muted">
-                Current {changeDescription}:{" "}
-                <Text as="span" fontWeight="bold">
-                  {initialPoints || 0} {isAdditive ? "pts" : "pts deducted"}
-                </Text>
-              </Text>
-            </Box>
-
-            {/* Input for points adjustment */}
-            <VStack gap={2} align="start" w="100%">
-              <VStack gap={1} align="start" w="100%">
-                <Text fontSize="sm" fontWeight="medium" id="resolve-grade-adjustment-label">
-                  Grade Adjustment:
-                </Text>
-                <Text fontSize="xs" color="fg.muted" id="resolve-grade-adjustment-description">
-                  Enter +/- points to adjust grade (e.g., +5 to improve, -2 to worsen, 0 for no change)
-                </Text>
-              </VStack>
+            {isDetachedFromTarget ? (
               <Box
-                bg={isSignificantChange(finalScore, initialPoints) ? "bg.warning" : undefined}
-                p={isSignificantChange(finalScore, initialPoints) ? 2 : 0}
-                borderRadius={isSignificantChange(finalScore, initialPoints) ? "md" : undefined}
                 w="100%"
+                p={3}
+                bg="bg.warning"
+                borderRadius="md"
+                borderWidth="1px"
+                borderColor="border.warning"
+                role="status"
               >
-                <Input
-                  type="text"
-                  inputMode="numeric"
-                  value={pointsAdjustment}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    const inputValue = e.target.value;
-
-                    // Allow empty string (treated as 0)
-                    if (inputValue === "") {
-                      setPointsAdjustment("");
-                      return;
-                    }
-
-                    // Allow intermediate states: "-", "+", ".", "-.", "+.", and valid numbers
-                    // This matches: optional +/-, optional digits, optional decimal, optional more digits
-                    if (/^[+-]?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
-                      setPointsAdjustment(inputValue);
-                    }
-                  }}
-                  onFocus={(e) => e.stopPropagation()}
-                  onBlur={(e) => {
-                    e.stopPropagation();
-                    // On blur, clean up the value
-                    const numValue = parseFloat(pointsAdjustment);
-                    if (
-                      isNaN(numValue) ||
-                      pointsAdjustment === "" ||
-                      pointsAdjustment === "-" ||
-                      pointsAdjustment === "+"
-                    ) {
-                      setPointsAdjustment("0");
-                    } else {
-                      // Clean up trailing dots or unnecessary decimals
-                      setPointsAdjustment(numValue.toString());
-                    }
-                  }}
-                  placeholder="0"
-                  size="sm"
-                  w="100%"
-                  aria-label="Grade adjustment points"
-                  aria-labelledby="resolve-grade-adjustment-label"
-                  aria-describedby={`resolve-grade-adjustment-description${wouldBeNegative ? " resolve-negative-score-warning" : ""}`}
-                  aria-invalid={wouldBeNegative}
-                  aria-required="false"
-                />
-
-                {/* Change indicator */}
-                {hasChange && (
-                  <Box mt={2} p={2} bg={pointsAdjustmentNum > 0 ? "green.50" : "red.50"} borderRadius="md">
-                    <VStack align="start" gap={1}>
-                      <Text fontSize="sm" fontWeight="medium" color={pointsAdjustmentNum > 0 ? "green.700" : "red.700"}>
-                        {pointsAdjustmentNum > 0 ? "+" : ""}
-                        {pointsAdjustmentNum} pts adjustment
-                        {pointsAdjustmentNum > 0 ? " (grade increases)" : " (grade decreases)"}
-                      </Text>
-                      <Text fontSize="xs" fontWeight="semibold">
-                        New {changeDescription}: {finalScore} {isAdditive ? "pts awarded" : "pts deducted"}
-                      </Text>
-                    </VStack>
-                  </Box>
-                )}
-
-                {isSignificantChange(finalScore, initialPoints) && (
-                  <Text fontSize="xs" color="fg.warning" mt={1} fontWeight="medium">
-                    ⚠️ This is a significant change ({">"}50%) from the original score
-                  </Text>
-                )}
-
-                {wouldBeNegative && (
-                  <Box
-                    mt={2}
-                    p={2}
-                    bg="red.50"
-                    borderRadius="md"
-                    borderWidth="1px"
-                    borderColor="red.200"
-                    id="resolve-negative-score-warning"
-                    role="alert"
-                    aria-live="polite"
-                  >
-                    <Text fontSize="xs" color="red.700" fontWeight="medium">
-                      ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
-                      {isAdditive
-                        ? ` Maximum negative adjustment is ${maxNegativeAdjustment}.`
-                        : ` Maximum positive adjustment is +${maxPositiveAdjustment}.`}
-                    </Text>
-                  </Box>
-                )}
+                <Text fontSize="xs" fontWeight="medium">
+                  The original rubric check or grading comment was deleted, so resolving this request cannot adjust the
+                  submission score. Apply a replacement rubric check or grading comment on the submission first if a
+                  score change is needed.
+                </Text>
               </Box>
-            </VStack>
+            ) : (
+              <>
+                {/* Current score display */}
+                <Box w="100%">
+                  <Text fontSize="sm" color="fg.muted">
+                    Current {changeDescription}:{" "}
+                    <Text as="span" fontWeight="bold">
+                      {initialPoints || 0} {isAdditive ? "pts" : "pts deducted"}
+                    </Text>
+                  </Text>
+                </Box>
 
-            {isBareCheck && rubricCheck && (
-              <BareCheckResolveLocationFields
-                idPrefix={`resolve-${regradeRequestId}`}
-                rubricCheck={rubricCheck}
-                submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
-                submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
-                location={resolveLocation}
-                onChange={setResolveLocation}
-              />
+                {/* Input for points adjustment */}
+                <VStack gap={2} align="start" w="100%">
+                  <VStack gap={1} align="start" w="100%">
+                    <Text fontSize="sm" fontWeight="medium" id="resolve-grade-adjustment-label">
+                      Grade Adjustment:
+                    </Text>
+                    <Text fontSize="xs" color="fg.muted" id="resolve-grade-adjustment-description">
+                      Enter +/- points to adjust grade (e.g., +5 to improve, -2 to worsen, 0 for no change)
+                    </Text>
+                  </VStack>
+                  <Box
+                    bg={isSignificantChange(finalScore, initialPoints) ? "bg.warning" : undefined}
+                    p={isSignificantChange(finalScore, initialPoints) ? 2 : 0}
+                    borderRadius={isSignificantChange(finalScore, initialPoints) ? "md" : undefined}
+                    w="100%"
+                  >
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      value={pointsAdjustment}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        const inputValue = e.target.value;
+
+                        // Allow empty string (treated as 0)
+                        if (inputValue === "") {
+                          setPointsAdjustment("");
+                          return;
+                        }
+
+                        // Allow intermediate states: "-", "+", ".", "-.", "+.", and valid numbers
+                        // This matches: optional +/-, optional digits, optional decimal, optional more digits
+                        if (/^[+-]?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
+                          setPointsAdjustment(inputValue);
+                        }
+                      }}
+                      onFocus={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        e.stopPropagation();
+                        // On blur, clean up the value
+                        const numValue = parseFloat(pointsAdjustment);
+                        if (
+                          isNaN(numValue) ||
+                          pointsAdjustment === "" ||
+                          pointsAdjustment === "-" ||
+                          pointsAdjustment === "+"
+                        ) {
+                          setPointsAdjustment("0");
+                        } else {
+                          // Clean up trailing dots or unnecessary decimals
+                          setPointsAdjustment(numValue.toString());
+                        }
+                      }}
+                      placeholder="0"
+                      size="sm"
+                      w="100%"
+                      aria-label="Grade adjustment points"
+                      aria-labelledby="resolve-grade-adjustment-label"
+                      aria-describedby={`resolve-grade-adjustment-description${wouldBeNegative ? " resolve-negative-score-warning" : ""}`}
+                      aria-invalid={wouldBeNegative}
+                      aria-required="false"
+                    />
+
+                    {/* Change indicator */}
+                    {hasChange && (
+                      <Box mt={2} p={2} bg={pointsAdjustmentNum > 0 ? "green.50" : "red.50"} borderRadius="md">
+                        <VStack align="start" gap={1}>
+                          <Text
+                            fontSize="sm"
+                            fontWeight="medium"
+                            color={pointsAdjustmentNum > 0 ? "green.700" : "red.700"}
+                          >
+                            {pointsAdjustmentNum > 0 ? "+" : ""}
+                            {pointsAdjustmentNum} pts adjustment
+                            {pointsAdjustmentNum > 0 ? " (grade increases)" : " (grade decreases)"}
+                          </Text>
+                          <Text fontSize="xs" fontWeight="semibold">
+                            New {changeDescription}: {finalScore} {isAdditive ? "pts awarded" : "pts deducted"}
+                          </Text>
+                        </VStack>
+                      </Box>
+                    )}
+
+                    {isSignificantChange(finalScore, initialPoints) && (
+                      <Text fontSize="xs" color="fg.warning" mt={1} fontWeight="medium">
+                        ⚠️ This is a significant change ({">"}50%) from the original score
+                      </Text>
+                    )}
+
+                    {wouldBeNegative && (
+                      <Box
+                        mt={2}
+                        p={2}
+                        bg="red.50"
+                        borderRadius="md"
+                        borderWidth="1px"
+                        borderColor="red.200"
+                        id="resolve-negative-score-warning"
+                        role="alert"
+                        aria-live="polite"
+                      >
+                        <Text fontSize="xs" color="red.700" fontWeight="medium">
+                          ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
+                          {isAdditive
+                            ? ` Maximum negative adjustment is ${maxNegativeAdjustment}.`
+                            : ` Maximum positive adjustment is +${maxPositiveAdjustment}.`}
+                        </Text>
+                      </Box>
+                    )}
+                  </Box>
+                </VStack>
+
+                {isBareCheck && rubricCheck && (
+                  <BareCheckResolveLocationFields
+                    idPrefix={`resolve-${regradeRequestId}`}
+                    rubricCheck={rubricCheck}
+                    submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
+                    submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
+                    location={resolveLocation}
+                    onChange={setResolveLocation}
+                  />
+                )}
+              </>
             )}
 
             <Button
@@ -515,18 +551,20 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
               onClick={handleResolve}
               loading={isUpdating}
               w="100%"
-              disabled={wouldBeNegative || !locationIsValid}
+              disabled={!isDetachedFromTarget && (wouldBeNegative || !locationIsValid)}
               aria-label={
-                wouldBeNegative
+                !isDetachedFromTarget && wouldBeNegative
                   ? "Cannot resolve with negative score"
-                  : !locationIsValid
+                  : !isDetachedFromTarget && !locationIsValid
                     ? "Select annotation location before resolving"
                     : "Resolve regrade request"
               }
             >
-              {hasChange
-                ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Resolve`
-                : "Resolve with No Change"}
+              {isDetachedFromTarget
+                ? "Resolve Without Score Change"
+                : hasChange
+                  ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Resolve`
+                  : "Resolve with No Change"}
             </Button>
           </VStack>
         </PopoverBody>
@@ -601,7 +639,8 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   regradeRequest,
   privateProfileId,
   rubricCriteria,
-  rubricCheck
+  rubricCheck,
+  isDetachedFromTarget = false
 }: {
   initialPoints: number | null;
   resolvedPoints: number | null;
@@ -610,6 +649,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   privateProfileId: string;
   rubricCriteria: RubricCriteria | null | undefined;
   rubricCheck?: RubricCheck | null | undefined;
+  isDetachedFromTarget?: boolean;
 }) {
   const [pointsAdjustment, setPointsAdjustment] = useState<string>("0");
   const [isOpen, setIsOpen] = useState(false);
@@ -677,8 +717,12 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
         regrade_request_id: regradeRequestId,
         new_status: "closed",
         profile_id: privateProfileId,
-        closed_points: finalScore,
-        ...(isBareCheck ? buildBareCheckRpcLocationArgs(materializationKind, resolveLocation) : {})
+        ...(isDetachedFromTarget
+          ? {}
+          : {
+              closed_points: finalScore,
+              ...(isBareCheck ? buildBareCheckRpcLocationArgs(materializationKind, resolveLocation) : {})
+            })
       });
 
       if (error) throw error;
@@ -688,16 +732,21 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
 
       toaster.create({
         title: "Request Closed",
-        description:
-          pointsAdjustmentNum === 0
+        description: isDetachedFromTarget
+          ? "Request closed without a score change because the original rubric check or grading comment was deleted."
+          : pointsAdjustmentNum === 0
             ? "Request closed. Grader's decision upheld."
             : `Request closed. Adjusted by ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts from grader's decision.`,
         type: "success"
       });
-    } catch {
+    } catch (error) {
+      const message =
+        typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+          ? error.message
+          : "Failed to close request. Please try again.";
       toaster.create({
         title: "Error",
-        description: "Failed to close request. Please try again.",
+        description: message,
         type: "error"
       });
     } finally {
@@ -710,6 +759,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
     privateProfileId,
     regradeRequests,
     isBareCheck,
+    isDetachedFromTarget,
     materializationKind,
     resolveLocation
   ]);
@@ -727,157 +777,177 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
           <VStack gap={3} align="start">
             <Text fontWeight="semibold">Decide Escalation</Text>
 
-            {/* Score history */}
-            <Box w="100%" bg="bg.subtle" p={2} borderRadius="md">
-              <VStack align="start" gap={1}>
-                <Text fontSize="xs" fontWeight="semibold" color="fg.muted">
-                  SCORE HISTORY:
-                </Text>
-                <HStack justify="space-between" w="100%">
-                  <Text fontSize="sm">Original {changeDescription}:</Text>
-                  <Text fontSize="sm" fontWeight="bold">
-                    {initialPoints || 0} {isAdditive ? "pts" : "pts deducted"}
-                  </Text>
-                </HStack>
-                <HStack justify="space-between" w="100%">
-                  <Text fontSize="sm">Grader&apos;s revised {changeDescription}:</Text>
-                  <Text fontSize="sm" fontWeight="bold">
-                    {resolvedPoints || 0} {isAdditive ? "pts" : "pts deducted"}
-                  </Text>
-                </HStack>
-              </VStack>
-            </Box>
-
-            {/* Input for adjustment from grader's decision */}
-            <VStack gap={2} align="start" w="100%">
-              <VStack gap={1} align="start" w="100%">
-                <Text fontSize="sm" fontWeight="medium" id="close-grade-adjustment-label">
-                  Grade Adjustment from Grader&apos;s Decision:
-                </Text>
-                <Text fontSize="xs" color="fg.muted" id="close-grade-adjustment-description">
-                  Enter +/- points to adjust grade or 0 to uphold grader&apos;s decision
-                </Text>
-              </VStack>
+            {isDetachedFromTarget ? (
               <Box
-                bg={isSignificantChange(finalScore, initialPoints) ? "bg.warning" : undefined}
-                p={isSignificantChange(finalScore, initialPoints) ? 2 : 0}
-                borderRadius={isSignificantChange(finalScore, initialPoints) ? "md" : undefined}
                 w="100%"
+                p={3}
+                bg="bg.warning"
+                borderRadius="md"
+                borderWidth="1px"
+                borderColor="border.warning"
+                role="status"
               >
-                <Input
-                  type="text"
-                  inputMode="numeric"
-                  value={pointsAdjustment}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    const inputValue = e.target.value;
-
-                    // Allow empty string (treated as 0)
-                    if (inputValue === "") {
-                      setPointsAdjustment("");
-                      return;
-                    }
-
-                    // Allow intermediate states: "-", "+", ".", "-.", "+.", and valid numbers
-                    // This matches: optional +/-, optional digits, optional decimal, optional more digits
-                    if (/^[+-]?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
-                      setPointsAdjustment(inputValue);
-                    }
-                  }}
-                  onFocus={(e) => e.stopPropagation()}
-                  onBlur={(e) => {
-                    e.stopPropagation();
-                    // On blur, clean up the value
-                    const numValue = parseFloat(pointsAdjustment);
-                    if (
-                      isNaN(numValue) ||
-                      pointsAdjustment === "" ||
-                      pointsAdjustment === "-" ||
-                      pointsAdjustment === "+"
-                    ) {
-                      setPointsAdjustment("0");
-                    } else {
-                      // Clean up trailing dots or unnecessary decimals
-                      setPointsAdjustment(numValue.toString());
-                    }
-                  }}
-                  placeholder="0"
-                  size="sm"
-                  w="100%"
-                  aria-label="Instructor grade adjustment from grader decision"
-                  aria-labelledby="close-grade-adjustment-label"
-                  aria-describedby={`close-grade-adjustment-description${wouldBeNegative ? " close-negative-score-warning" : ""}`}
-                  aria-invalid={wouldBeNegative}
-                  aria-required="false"
-                />
-
-                {/* Change indicators */}
-                {hasChange && (
-                  <Box mt={2} p={2} bg="purple.50" borderRadius="md">
-                    <VStack align="start" gap={1}>
-                      <Text fontSize="sm" fontWeight="medium" color="purple.700">
-                        {pointsAdjustmentNum > 0 ? "+" : ""}
-                        {pointsAdjustmentNum} pts from grader&apos;s decision
-                      </Text>
-                      <Text fontSize="xs" fontWeight="semibold">
-                        Final {changeDescription}: {finalScore} {isAdditive ? "pts awarded" : "pts deducted"}
-                      </Text>
-                      <Text
-                        fontSize="xs"
-                        fontWeight="medium"
-                        color={changeFromInitial > 0 ? "green.700" : changeFromInitial < 0 ? "red.700" : "fg.muted"}
-                      >
-                        Overall change from original: {changeFromInitial > 0 ? "+" : ""}
-                        {changeFromInitial} pts
-                        {changeFromInitial !== 0 &&
-                          (changeFromInitial > 0 ? " (grade increases)" : " (grade decreases)")}
-                      </Text>
-                    </VStack>
-                  </Box>
-                )}
-
-                {isSignificantChange(finalScore, initialPoints) && (
-                  <Text fontSize="xs" color="fg.warning" mt={1} fontWeight="medium">
-                    ⚠️ This is a significant change ({">"}50%) from the original score
-                  </Text>
-                )}
-
-                {wouldBeNegative && (
-                  <Box
-                    mt={2}
-                    p={2}
-                    bg="red.50"
-                    borderRadius="md"
-                    borderWidth="1px"
-                    borderColor="red.200"
-                    id="close-negative-score-warning"
-                    role="alert"
-                    aria-live="polite"
-                  >
-                    <Text fontSize="xs" color="red.700" fontWeight="medium">
-                      ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
-                      {isAdditive
-                        ? ` Maximum negative adjustment is ${maxNegativeAdjustment}.`
-                        : ` Maximum positive adjustment is +${maxPositiveAdjustment}.`}
-                    </Text>
-                  </Box>
-                )}
+                <Text fontSize="xs" fontWeight="medium">
+                  The original rubric check or grading comment was deleted, so closing this request cannot adjust the
+                  submission score. Apply a replacement rubric check or grading comment on the submission first if a
+                  score change is needed.
+                </Text>
               </Box>
-            </VStack>
+            ) : (
+              <>
+                {/* Score history */}
+                <Box w="100%" bg="bg.subtle" p={2} borderRadius="md">
+                  <VStack align="start" gap={1}>
+                    <Text fontSize="xs" fontWeight="semibold" color="fg.muted">
+                      SCORE HISTORY:
+                    </Text>
+                    <HStack justify="space-between" w="100%">
+                      <Text fontSize="sm">Original {changeDescription}:</Text>
+                      <Text fontSize="sm" fontWeight="bold">
+                        {initialPoints || 0} {isAdditive ? "pts" : "pts deducted"}
+                      </Text>
+                    </HStack>
+                    <HStack justify="space-between" w="100%">
+                      <Text fontSize="sm">Grader&apos;s revised {changeDescription}:</Text>
+                      <Text fontSize="sm" fontWeight="bold">
+                        {resolvedPoints || 0} {isAdditive ? "pts" : "pts deducted"}
+                      </Text>
+                    </HStack>
+                  </VStack>
+                </Box>
 
-            {isBareCheck && rubricCheck && (
-              <BareCheckResolveLocationFields
-                idPrefix={`close-${regradeRequestId}`}
-                rubricCheck={rubricCheck}
-                submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
-                submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
-                location={resolveLocation}
-                onChange={setResolveLocation}
-              />
+                {/* Input for adjustment from grader's decision */}
+                <VStack gap={2} align="start" w="100%">
+                  <VStack gap={1} align="start" w="100%">
+                    <Text fontSize="sm" fontWeight="medium" id="close-grade-adjustment-label">
+                      Grade Adjustment from Grader&apos;s Decision:
+                    </Text>
+                    <Text fontSize="xs" color="fg.muted" id="close-grade-adjustment-description">
+                      Enter +/- points to adjust grade or 0 to uphold grader&apos;s decision
+                    </Text>
+                  </VStack>
+                  <Box
+                    bg={isSignificantChange(finalScore, initialPoints) ? "bg.warning" : undefined}
+                    p={isSignificantChange(finalScore, initialPoints) ? 2 : 0}
+                    borderRadius={isSignificantChange(finalScore, initialPoints) ? "md" : undefined}
+                    w="100%"
+                  >
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      value={pointsAdjustment}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        const inputValue = e.target.value;
+
+                        // Allow empty string (treated as 0)
+                        if (inputValue === "") {
+                          setPointsAdjustment("");
+                          return;
+                        }
+
+                        // Allow intermediate states: "-", "+", ".", "-.", "+.", and valid numbers
+                        // This matches: optional +/-, optional digits, optional decimal, optional more digits
+                        if (/^[+-]?\d*\.?\d*$/.test(inputValue) && inputValue !== ".") {
+                          setPointsAdjustment(inputValue);
+                        }
+                      }}
+                      onFocus={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        e.stopPropagation();
+                        // On blur, clean up the value
+                        const numValue = parseFloat(pointsAdjustment);
+                        if (
+                          isNaN(numValue) ||
+                          pointsAdjustment === "" ||
+                          pointsAdjustment === "-" ||
+                          pointsAdjustment === "+"
+                        ) {
+                          setPointsAdjustment("0");
+                        } else {
+                          // Clean up trailing dots or unnecessary decimals
+                          setPointsAdjustment(numValue.toString());
+                        }
+                      }}
+                      placeholder="0"
+                      size="sm"
+                      w="100%"
+                      aria-label="Instructor grade adjustment from grader decision"
+                      aria-labelledby="close-grade-adjustment-label"
+                      aria-describedby={`close-grade-adjustment-description${wouldBeNegative ? " close-negative-score-warning" : ""}`}
+                      aria-invalid={wouldBeNegative}
+                      aria-required="false"
+                    />
+
+                    {/* Change indicators */}
+                    {hasChange && (
+                      <Box mt={2} p={2} bg="purple.50" borderRadius="md">
+                        <VStack align="start" gap={1}>
+                          <Text fontSize="sm" fontWeight="medium" color="purple.700">
+                            {pointsAdjustmentNum > 0 ? "+" : ""}
+                            {pointsAdjustmentNum} pts from grader&apos;s decision
+                          </Text>
+                          <Text fontSize="xs" fontWeight="semibold">
+                            Final {changeDescription}: {finalScore} {isAdditive ? "pts awarded" : "pts deducted"}
+                          </Text>
+                          <Text
+                            fontSize="xs"
+                            fontWeight="medium"
+                            color={changeFromInitial > 0 ? "green.700" : changeFromInitial < 0 ? "red.700" : "fg.muted"}
+                          >
+                            Overall change from original: {changeFromInitial > 0 ? "+" : ""}
+                            {changeFromInitial} pts
+                            {changeFromInitial !== 0 &&
+                              (changeFromInitial > 0 ? " (grade increases)" : " (grade decreases)")}
+                          </Text>
+                        </VStack>
+                      </Box>
+                    )}
+
+                    {isSignificantChange(finalScore, initialPoints) && (
+                      <Text fontSize="xs" color="fg.warning" mt={1} fontWeight="medium">
+                        ⚠️ This is a significant change ({">"}50%) from the original score
+                      </Text>
+                    )}
+
+                    {wouldBeNegative && (
+                      <Box
+                        mt={2}
+                        p={2}
+                        bg="red.50"
+                        borderRadius="md"
+                        borderWidth="1px"
+                        borderColor="red.200"
+                        id="close-negative-score-warning"
+                        role="alert"
+                        aria-live="polite"
+                      >
+                        <Text fontSize="xs" color="red.700" fontWeight="medium">
+                          ⚠️ Warning: This adjustment would result in a negative score ({finalScore}).
+                          {isAdditive
+                            ? ` Maximum negative adjustment is ${maxNegativeAdjustment}.`
+                            : ` Maximum positive adjustment is +${maxPositiveAdjustment}.`}
+                        </Text>
+                      </Box>
+                    )}
+                  </Box>
+                </VStack>
+
+                {isBareCheck && rubricCheck && (
+                  <BareCheckResolveLocationFields
+                    idPrefix={`close-${regradeRequestId}`}
+                    rubricCheck={rubricCheck}
+                    submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
+                    submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
+                    location={resolveLocation}
+                    onChange={setResolveLocation}
+                  />
+                )}
+              </>
             )}
 
             <VStack gap={2} w="100%">
-              {!hasChange && (
+              {!isDetachedFromTarget && !hasChange && (
                 <Box bg="bg.info" p={2} borderRadius="md" w="100%">
                   <Text fontSize="xs">ℹ️ You&apos;re upholding the grader&apos;s decision</Text>
                 </Box>
@@ -889,18 +959,20 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
                 onClick={handleClose}
                 loading={isUpdating}
                 w="100%"
-                disabled={wouldBeNegative || !locationIsValid}
+                disabled={!isDetachedFromTarget && (wouldBeNegative || !locationIsValid)}
                 aria-label={
-                  wouldBeNegative
+                  !isDetachedFromTarget && wouldBeNegative
                     ? "Cannot close with negative score"
-                    : !locationIsValid
+                    : !isDetachedFromTarget && !locationIsValid
                       ? "Select annotation location before closing"
                       : "Close regrade request"
                 }
               >
-                {hasChange
-                  ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Close`
-                  : "Uphold Grader's Decision"}
+                {isDetachedFromTarget
+                  ? "Close Without Score Change"
+                  : hasChange
+                    ? `Apply ${pointsAdjustmentNum > 0 ? "+" : ""}${pointsAdjustmentNum} pts and Close`
+                    : "Uphold Grader's Decision"}
               </Button>
             </VStack>
           </VStack>
@@ -1045,17 +1117,32 @@ function EditablePoints({
     </Text>
   );
 }
-function useRegradeRequestRubricCheck(regradeRequest: SubmissionRegradeRequest | undefined | null) {
+function useRegradeRequestTarget(regradeRequest: SubmissionRegradeRequest | undefined | null) {
   // Retrieve the submission comment OR the submission artifact comment OR the submission file comment
   const submissionComment = useSubmissionComment(regradeRequest?.submission_comment_id);
   const submissionArtifactComment = useSubmissionArtifactComment(regradeRequest?.submission_artifact_comment_id);
   const submissionFileComment = useSubmissionFileComment(regradeRequest?.submission_file_comment_id);
-  return useRubricCheck(
+  const rubricCheck = useRubricCheck(
     submissionComment?.rubric_check_id ||
       submissionArtifactComment?.rubric_check_id ||
       submissionFileComment?.rubric_check_id ||
       regradeRequest?.rubric_check_id
   );
+
+  if (!regradeRequest) {
+    return { rubricCheck, isDetachedFromTarget: false };
+  }
+
+  const hasCommentRef =
+    regradeRequest.submission_comment_id != null ||
+    regradeRequest.submission_artifact_comment_id != null ||
+    regradeRequest.submission_file_comment_id != null;
+  const backingComment = submissionComment ?? submissionArtifactComment ?? submissionFileComment;
+  const isDetachedFromTarget = hasCommentRef
+    ? !backingComment || backingComment.deleted_at != null
+    : regradeRequest.rubric_check_id == null;
+
+  return { rubricCheck, isDetachedFromTarget };
 }
 
 /**
@@ -1093,7 +1180,7 @@ export default function RegradeRequestWrapper({
   const escalator = useUserProfile(regradeRequest?.escalated_by);
   const closer = useUserProfile(regradeRequest?.closed_by);
 
-  const rubricCheck = useRegradeRequestRubricCheck(regradeRequest);
+  const { rubricCheck, isDetachedFromTarget } = useRegradeRequestTarget(regradeRequest);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
   // Early return if no regrade request
@@ -1255,32 +1342,43 @@ export default function RegradeRequestWrapper({
                       data-visual-test="transparent"
                       data-visual-placeholder="review-status"
                     >
-                      Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
-                      {isInstructor ? (
-                        <EditablePoints
-                          points={regradeRequest.resolved_points}
-                          regradeRequestId={regradeRequest.id}
-                          type="resolved"
-                          privateProfileId={authorProfileId}
-                          isAdditive={rubricCriteria?.is_additive ?? true}
-                        />
+                      {regradeRequest.resolved_points == null && isDetachedFromTarget ? (
+                        <>
+                          Resolved {formatRelative(regradeRequest.resolved_at, new Date())}
+                          {resolver?.name ? ` by ${resolver.name}` : ""} (original rubric check or comment deleted; no
+                          score change)
+                        </>
                       ) : (
-                        regradeRequest.resolved_points || 0
+                        <>
+                          Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new
+                          score:{" "}
+                          {isInstructor && !isDetachedFromTarget ? (
+                            <EditablePoints
+                              points={regradeRequest.resolved_points}
+                              regradeRequestId={regradeRequest.id}
+                              type="resolved"
+                              privateProfileId={authorProfileId}
+                              isAdditive={rubricCriteria?.is_additive ?? true}
+                            />
+                          ) : (
+                            regradeRequest.resolved_points || 0
+                          )}
+                          {rubricCriteria?.is_additive ? " pts awarded" : " pts deducted"}
+                          {(() => {
+                            const change = (regradeRequest.resolved_points || 0) - (regradeRequest.initial_points || 0);
+                            // For additive: higher is better (green). For deductive: higher is worse (red)
+                            const isPositiveChange = (rubricCriteria?.is_additive ?? true) ? change > 0 : change < 0;
+                            if (change === 0) return " (no change)";
+                            return (
+                              <Text as="span" fontWeight="semibold" color={isPositiveChange ? "green.800" : "red.800"}>
+                                {" "}
+                                ({isPositiveChange ? "+" : "-"}
+                                {Math.abs(change)})
+                              </Text>
+                            );
+                          })()}
+                        </>
                       )}
-                      {rubricCriteria?.is_additive ? " pts awarded" : " pts deducted"}
-                      {(() => {
-                        const change = (regradeRequest.resolved_points || 0) - (regradeRequest.initial_points || 0);
-                        // For additive: higher is better (green). For deductive: higher is worse (red)
-                        const isPositiveChange = (rubricCriteria?.is_additive ?? true) ? change > 0 : change < 0;
-                        if (change === 0) return " (no change)";
-                        return (
-                          <Text as="span" fontWeight="semibold" color={isPositiveChange ? "green.800" : "red.800"}>
-                            {" "}
-                            ({isPositiveChange ? "+" : "-"}
-                            {Math.abs(change)})
-                          </Text>
-                        );
-                      })()}
                     </Text>
                   </ReportBlock>
                 )}
@@ -1302,68 +1400,80 @@ export default function RegradeRequestWrapper({
                       data-visual-test="transparent"
                       data-visual-placeholder="review-status"
                     >
-                      Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
-                      {/* Note: Instructors always sign final decisions with their real identity */}
-                      {isInstructor ? (
-                        <EditablePoints
-                          points={regradeRequest.closed_points}
-                          isAdditive={rubricCriteria?.is_additive ?? true}
-                          regradeRequestId={regradeRequest.id}
-                          type="closed"
-                          privateProfileId={private_profile_id}
-                        />
+                      {regradeRequest.closed_points == null && isDetachedFromTarget ? (
+                        <>
+                          Closed {formatRelative(regradeRequest.closed_at, new Date())}
+                          {closer?.name ? ` by ${closer.name}` : ""} (original rubric check or comment deleted; no score
+                          change)
+                        </>
                       ) : (
-                        regradeRequest.closed_points || 0
-                      )}
-                      {(() => {
-                        const changeFromResolved =
-                          (regradeRequest.closed_points || 0) - (regradeRequest.resolved_points || 0);
-                        const changeFromInitial =
-                          (regradeRequest.closed_points || 0) - (regradeRequest.initial_points || 0);
-                        const isAdditive = rubricCriteria?.is_additive ?? true;
-                        // For additive: higher is better (green). For deductive: higher is worse (red)
-                        const isPositiveChangeFromResolved = isAdditive
-                          ? changeFromResolved > 0
-                          : changeFromResolved < 0;
-                        const isPositiveChangeFromInitial = isAdditive ? changeFromInitial > 0 : changeFromInitial < 0;
+                        <>
+                          Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
+                          {/* Note: Instructors always sign final decisions with their real identity */}
+                          {isInstructor && !isDetachedFromTarget ? (
+                            <EditablePoints
+                              points={regradeRequest.closed_points}
+                              isAdditive={rubricCriteria?.is_additive ?? true}
+                              regradeRequestId={regradeRequest.id}
+                              type="closed"
+                              privateProfileId={private_profile_id}
+                            />
+                          ) : (
+                            regradeRequest.closed_points || 0
+                          )}
+                          {(() => {
+                            const changeFromResolved =
+                              (regradeRequest.closed_points || 0) - (regradeRequest.resolved_points || 0);
+                            const changeFromInitial =
+                              (regradeRequest.closed_points || 0) - (regradeRequest.initial_points || 0);
+                            const isAdditive = rubricCriteria?.is_additive ?? true;
+                            // For additive: higher is better (green). For deductive: higher is worse (red)
+                            const isPositiveChangeFromResolved = isAdditive
+                              ? changeFromResolved > 0
+                              : changeFromResolved < 0;
+                            const isPositiveChangeFromInitial = isAdditive
+                              ? changeFromInitial > 0
+                              : changeFromInitial < 0;
 
-                        if (changeFromResolved !== 0) {
-                          return (
-                            <>
-                              <Text
-                                as="span"
-                                fontWeight="semibold"
-                                color={isPositiveChangeFromResolved ? "green.600" : "red.600"}
-                              >
-                                {" "}
-                                ({changeFromResolved > 0 ? "+" : ""}
-                                {changeFromResolved} from grader
-                              </Text>
-                              <Text
-                                as="span"
-                                fontWeight="semibold"
-                                color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
-                              >
-                                , {changeFromInitial > 0 ? "+" : ""}
-                                {changeFromInitial} overall)
-                              </Text>
-                            </>
-                          );
-                        } else if (changeFromInitial !== 0) {
-                          return (
-                            <Text
-                              as="span"
-                              fontWeight="semibold"
-                              color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
-                            >
-                              {" "}
-                              ({changeFromInitial > 0 ? "+" : ""}
-                              {changeFromInitial} overall)
-                            </Text>
-                          );
-                        }
-                        return null;
-                      })()}
+                            if (changeFromResolved !== 0) {
+                              return (
+                                <>
+                                  <Text
+                                    as="span"
+                                    fontWeight="semibold"
+                                    color={isPositiveChangeFromResolved ? "green.600" : "red.600"}
+                                  >
+                                    {" "}
+                                    ({changeFromResolved > 0 ? "+" : ""}
+                                    {changeFromResolved} from grader
+                                  </Text>
+                                  <Text
+                                    as="span"
+                                    fontWeight="semibold"
+                                    color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
+                                  >
+                                    , {changeFromInitial > 0 ? "+" : ""}
+                                    {changeFromInitial} overall)
+                                  </Text>
+                                </>
+                              );
+                            } else if (changeFromInitial !== 0) {
+                              return (
+                                <Text
+                                  as="span"
+                                  fontWeight="semibold"
+                                  color={isPositiveChangeFromInitial ? "green.600" : "red.600"}
+                                >
+                                  {" "}
+                                  ({changeFromInitial > 0 ? "+" : ""}
+                                  {changeFromInitial} overall)
+                                </Text>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </>
+                      )}
                     </Text>
                   </ReportBlock>
                 )}
@@ -1387,6 +1497,7 @@ export default function RegradeRequestWrapper({
                   privateProfileId={authorProfileId}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
+                  isDetachedFromTarget={isDetachedFromTarget}
                 />
               )}
 
@@ -1411,6 +1522,7 @@ export default function RegradeRequestWrapper({
                   privateProfileId={private_profile_id}
                   rubricCriteria={rubricCriteria}
                   rubricCheck={rubricCheck}
+                  isDetachedFromTarget={isDetachedFromTarget}
                 />
               )}
             </HStack>
