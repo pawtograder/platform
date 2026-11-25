@@ -13,8 +13,11 @@ import { Alert, Box, Button, Heading, Spinner, Text, VStack } from "@chakra-ui/r
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import type { Model } from "survey-core";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 export default function StudentQuizPage() {
+  const errorRole = useViewerErrorRole();
   const { course_id, assignment_id } = useParams();
   const courseId = Number(course_id);
   const assignmentId = Number(assignment_id);
@@ -54,12 +57,12 @@ export default function StudentQuizPage() {
           setSurveyJson(examTreeToSurveyJson(payload.questions));
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(getUserFacingErrorMessage(e, { role: errorRole }));
       } finally {
         setLoading(false);
       }
     })();
-  }, [assignmentId]);
+  }, [assignmentId, errorRole]);
 
   type QuizAnswer = { exam_question_id: number; value: unknown };
   // SurveyJS has already switched to its completion page by the time onComplete fires, and the
@@ -89,12 +92,12 @@ export default function StudentQuizPage() {
         router.push(`/course/${courseId}/assignments/${assignmentId}`);
       } catch (e) {
         setPendingAnswers(answers);
-        toaster.error({ title: "Submit failed", description: e instanceof Error ? e.message : String(e) });
+        toaster.error({ title: "Submit failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
       } finally {
         setSubmitting(false);
       }
     },
-    [assignmentId, courseId, router]
+    [assignmentId, courseId, router, errorRole]
   );
 
   const onComplete = useCallback(

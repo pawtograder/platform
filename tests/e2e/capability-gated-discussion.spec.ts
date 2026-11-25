@@ -1,8 +1,9 @@
 /**
  * #1010: moderation controls on a discussion thread follow moderate_discussion
- * (20261123180300_discussion_by_capability.sql). A default grader holds it and sees Pin, Mark
+ * (20261124150500_discussion_by_capability.sql). A default grader holds it and sees Pin, Mark
  * Duplicate and Edit on a student's post. A TA on a custom role with it turned off sees none of
- * them, but still sees the staff tools (Manage Error Pins), which stay on the staff check.
+ * them, but still sees the staff tools (Manage Error Pins), which stay on the staff check. Mark
+ * Duplicate lists only the threads the database will merge with this one.
  */
 import { expect, test, type Page } from "@playwright/test";
 import {
@@ -25,6 +26,11 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
   let replier: TestingUser;
   let rootId: number;
   let subject: string;
+  /** Extra threads for the Mark Duplicate list: id and subject. */
+  const others: Record<
+    "publicOther" | "askerPrivate" | "askerPrivate2" | "replierPrivate",
+    { id: number; subject: string }
+  > = {} as never;
 
   test.beforeAll(async () => {
     const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -78,6 +84,35 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
     });
     expect(replyError).toBeNull();
 
+    for (const [key, author, instructors_only] of [
+      ["publicOther", replier, false],
+      ["askerPrivate", asker, true],
+      ["askerPrivate2", asker, true],
+      ["replierPrivate", replier, true]
+    ] as const) {
+      const otherSubject = `E2E merge list ${key} ${suffix}`;
+      const { data: other, error } = await supabase
+        .from("discussion_threads")
+        .insert({
+          subject: otherSubject,
+          body: `Body of ${key}`,
+          topic_id: topic!.id,
+          is_question: true,
+          instructors_only,
+          author: author.private_profile_id,
+          class_id: course.id,
+          draft: false,
+          root_class_id: course.id
+        })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      expect(
+        (await supabase.from("discussion_threads").update({ root: other!.id }).eq("id", other!.id)).error
+      ).toBeNull();
+      others[key] = { id: other!.id, subject: otherSubject };
+    }
+
     const { data: role, error: roleError } = await supabase
       .from("class_roles")
       .insert({ class_id: course.id, name: "No Moderation TA" })
@@ -110,9 +145,9 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
   // the lookup fails), and the course page's own lookup can answer while the thread page loads, so
   // only a response that arrives after the browser has switched to the thread page counts. The
   // course page's unfinished requests are cancelled at that switch.
-  async function openThread(page: Page, user: TestingUser) {
+  async function openThread(page: Page, user: TestingUser, id = rootId, title = subject) {
     await loginAsUser(page, user, course);
-    const threadPath = `/course/${course.id}/discussion/${rootId}`;
+    const threadPath = `/course/${course.id}/discussion/${id}`;
     let onThreadPage = false;
     const onNavigated = (frame: ReturnType<Page["mainFrame"]>) => {
       if (frame === page.mainFrame() && new URL(frame.url()).pathname === threadPath) onThreadPage = true;
@@ -121,7 +156,7 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
     const capabilities = page.waitForResponse(
       (r) => onThreadPage && r.url().includes("/rpc/user_class_capabilities") && r.status() === 200
     );
-    await gotoCourseUrlWhenHeadingVisible(page, threadPath, subject);
+    await gotoCourseUrlWhenHeadingVisible(page, threadPath, title);
     await capabilities;
     page.off("framenavigated", onNavigated);
     await expect(page.locator('[data-capabilities-loaded="true"]').first()).toBeAttached();
@@ -169,5 +204,30 @@ test.describe("Discussion moderation controls follow moderate_discussion", () =>
       await expect(page.getByText("Another student's reply").first()).toBeVisible();
       await expect(markAnswer()).toHaveCount(sees ? 1 : 0);
     }
+  });
+
+  test("Mark Duplicate lists only threads the database will merge with this one", async ({ page }) => {
+    const listed = async (expected: string[], hidden: string[]) => {
+      await page.getByRole("button", { name: "Mark duplicate", exact: true }).first().click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      for (const s of expected) await expect(dialog.getByText(s)).toBeVisible();
+      for (const s of hidden) await expect(dialog.getByText(s)).toHaveCount(0);
+      await page.keyboard.press("Escape");
+    };
+
+    // A public thread: other public threads, no private ones.
+    await openThread(page, grader);
+    await listed(
+      [others.publicOther.subject],
+      [others.askerPrivate.subject, others.askerPrivate2.subject, others.replierPrivate.subject]
+    );
+
+    // A private thread: nothing, since the database merges only public threads.
+    await openThread(page, grader, others.askerPrivate.id, others.askerPrivate.subject);
+    await listed(
+      [],
+      [others.askerPrivate2.subject, others.replierPrivate.subject, others.publicOther.subject, subject]
+    );
   });
 });

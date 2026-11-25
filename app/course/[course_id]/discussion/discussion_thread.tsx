@@ -6,7 +6,13 @@ import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
-import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
+import {
+  useCapability,
+  useClassProfiles,
+  useIsGraderOrInstructor,
+  useIsOwnProfile,
+  useIsReadOnly
+} from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
@@ -195,15 +201,15 @@ const DiscussionThreadContent = memo(
     const isReadOnly = useIsReadOnly();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
-    const { private_profile_id, public_profile_id } = useClassProfiles();
+    const { private_profile_id } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
     // canEdit must reflect the current viewer's identity, not the thread's OP. Checking
     // authorProfile?.id === originalPoster exposed the Edit button to any viewer reading
     // the OP's reply because that comparison is between the reply's author and the
     // thread's OP — both populated for every row, regardless of viewer.
-    const canEdit = useMemo(() => {
-      return thread.author === private_profile_id || thread.author === public_profile_id || canModerate;
-    }, [thread.author, private_profile_id, public_profile_id, canModerate]);
+    const isOwnPost = useIsOwnProfile(thread.author);
+    const isOwnQuestion = useIsOwnProfile(root_thread?.author);
+    const canEdit = isOwnPost || canModerate;
 
     // Like functionality
     const likeStatus = useDiscussionThreadLikes(thread.id);
@@ -289,9 +295,7 @@ const DiscussionThreadContent = memo(
     const isAnswered = root_thread?.answer !== undefined && root_thread?.answer !== null;
     // Marking an answer changes the question, so it's for the question's author and moderators,
     // as the database allows (#1010); a reply's own author can't.
-    const canMarkAnswer =
-      !!root_thread &&
-      (root_thread.author === private_profile_id || root_thread.author === public_profile_id || canModerate);
+    const canMarkAnswer = !!root_thread && (isOwnQuestion || canModerate);
     const descendant = thread.children.length > 0;
 
     return (
@@ -445,6 +449,8 @@ const DiscussionThreadContent = memo(
                         size="xs"
                         onClick={toggleLike}
                         loading={likeLoading}
+                        // The database refuses a like on your own post (#1010); an old one can still be removed.
+                        disabled={isOwnPost && !likeStatus}
                         color="fg.muted"
                       >
                         {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />

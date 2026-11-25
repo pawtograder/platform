@@ -8,6 +8,8 @@ import { useEffect } from "react";
 import { BsX } from "react-icons/bs";
 import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type KarmaEntryWithDetails = StudentKarmaNotes & {
   student_profile?: UserProfile;
@@ -31,6 +33,7 @@ type EditKarmaEntryModalProps = {
  * Allows instructors and TAs to modify karma scores and notes.
  */
 export default function EditKarmaEntryModal({ isOpen, onClose, onSuccess, karmaEntry }: EditKarmaEntryModalProps) {
+  const errorRole = useStaffErrorRole();
   const {
     register,
     handleSubmit,
@@ -81,7 +84,7 @@ export default function EditKarmaEntryModal({ isOpen, onClose, onSuccess, karmaE
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to update karma entry: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to update karma entry: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

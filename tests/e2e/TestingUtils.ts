@@ -7,6 +7,7 @@ import {
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { COLUMNS } from "@/lib/bugReport/privacy";
+import { ALL_WHATS_NEW_IDS, type WhatsNewId } from "@/lib/whatsNew/ids";
 import { TZDate } from "@date-fns/tz";
 import { expect, Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
@@ -661,33 +662,34 @@ export async function ensureTimeZonePreferenceInitialized(
   );
 }
 
-// Same item as ESCALATION_TOUR_ITEM in components/help-queue/escalation-tour.tsx. Not imported,
-// because this file runs in Node and the component pulls in React and Chakra.
-const ESCALATION_TOUR_ITEM = "oh-escalation:v1";
-
 /**
- * The escalation "What's new" walkthrough opens once per person for course staff on the office
- * hours page, and its dialog blocks every click behind it. Record it as seen for this user in
- * public.user_whats_new_seen before the app loads. A test of the walkthrough itself should log in
- * with `showWhatsNew: true`, which clears the record instead.
+ * A "What's new" walkthrough opens once per person on its page, and its dialog blocks every click
+ * behind it. Record every registered walkthrough (lib/whatsNew/ids.ts) as seen for this user in
+ * public.user_whats_new_seen before the app loads, except the ones in `except`. A test of a
+ * walkthrough logs in with `showWhatsNew`, which leaves it unseen instead.
  */
-export async function markWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">) {
+export async function markWhatsNewSeen(
+  testingUser: Pick<TestingUser, "user_id">,
+  { except = [] }: { except?: readonly WhatsNewId[] } = {}
+) {
+  const rows = ALL_WHATS_NEW_IDS.filter((item) => !except.includes(item)).map((item) => ({
+    user_id: testingUser.user_id,
+    item
+  }));
+  if (rows.length === 0) return;
   const { error } = await supabase
     .from("user_whats_new_seen")
-    .upsert(
-      { user_id: testingUser.user_id, item: ESCALATION_TOUR_ITEM },
-      { onConflict: "user_id,item", ignoreDuplicates: true }
-    );
+    .upsert(rows, { onConflict: "user_id,item", ignoreDuplicates: true });
   if (error) throw new Error(`markWhatsNewSeen: ${error.message}`);
 }
 
-/** Removes the walkthrough record so it opens on the user's next visit, as on a first visit. */
-export async function clearWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">) {
+/** Removes the records of these walkthroughs so they open on the user's next visit, as on a first visit. */
+export async function clearWhatsNewSeen(testingUser: Pick<TestingUser, "user_id">, items: readonly WhatsNewId[]) {
   const { error } = await supabase
     .from("user_whats_new_seen")
     .delete()
     .eq("user_id", testingUser.user_id)
-    .eq("item", ESCALATION_TOUR_ITEM);
+    .in("item", [...items]);
   if (error) throw new Error(`clearWhatsNewSeen: ${error.message}`);
 }
 
@@ -856,16 +858,22 @@ export async function loginAsUser(
   testingUser: TestingUser,
   course?: Course,
   dismissTimezoneDialog = true,
-  { showWhatsNew = false }: { showWhatsNew?: boolean } = {}
+  {
+    showWhatsNew = false
+  }: {
+    /**
+     * Which "What's new" walkthroughs stay unseen: true for all of them, or a list of ids from
+     * WHATS_NEW_IDS. By default every one is marked seen, so none blocks the test.
+     */
+    showWhatsNew?: boolean | readonly WhatsNewId[];
+  } = {}
 ) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);
   }
-  if (showWhatsNew) {
-    await clearWhatsNewSeen(testingUser);
-  } else {
-    await markWhatsNewSeen(testingUser);
-  }
+  const unseen = showWhatsNew === true ? ALL_WHATS_NEW_IDS : showWhatsNew === false ? [] : showWhatsNew;
+  await markWhatsNewSeen(testingUser, { except: unseen });
+  if (unseen.length > 0) await clearWhatsNewSeen(testingUser, unseen);
 
   await page.goto("/");
   await signInWithMagicLinkAndRetry(page, testingUser);

@@ -11,6 +11,7 @@ import type {
   UpdateMessageArgs,
   CreateChannelArgs,
   DeleteChannelArgs,
+  DeleteMessageArgs,
   CreateRoleArgs,
   DeleteRoleArgs,
   AddMemberRoleArgs,
@@ -28,6 +29,12 @@ import {
   DISCORD_UNKNOWN_GUILD
 } from "../_shared/DiscordErrorClassification.ts";
 import { freshMembershipHintAgeMs } from "../_shared/DiscordMembershipHint.ts";
+import {
+  type DiscussionSendSettleSteps,
+  discussionThreadChangedSince,
+  discussionThreadStillPostable,
+  settleDiscussionThreadSend
+} from "../_shared/DiscordDiscussionDelivery.ts";
 import { discordApiBase, isDiscordApiMocked } from "../_shared/DiscordApiBase.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { waitUntilWithSentryFlush } from "../_shared/SentryInit.ts";
@@ -892,6 +899,149 @@ async function messageEnvelopeStillDeliverable(
     return null;
   }
   return topic !== null;
+}
+
+/**
+ * A discussion thread, read again for its queued Discord work (#1010): whether it is still a public,
+ * published question (the database queues only those, but the thread can change while the envelope
+ * waits), and when it last changed. `null` means the lookup itself failed.
+ */
+async function readDiscussionThreadForDiscord(
+  adminSupabase: SupabaseClient<Database>,
+  threadId: number
+): Promise<{ postable: boolean; updated_at: string | null } | null> {
+  const { data, error } = await adminSupabase
+    .from("discussion_threads")
+    .select("instructors_only, draft, parent, updated_at")
+    .eq("id", threadId)
+    .maybeSingle();
+  if (error) {
+    console.warn(`[readDiscussionThreadForDiscord] Could not read thread ${threadId}:`, error);
+    return null;
+  }
+  return { postable: discussionThreadStillPostable(data), updated_at: data?.updated_at ?? null };
+}
+
+/**
+ * Whether a send or update for a discussion thread is dropped (#1010): the thread was made private,
+ * turned into a draft, merged or deleted while it waited. A failed read delivers, as
+ * messageEnvelopeStillDeliverable does, because the database already refused to queue private posts.
+ */
+async function discussionEnvelopeDropped(
+  adminSupabase: SupabaseClient<Database>,
+  method: string,
+  resourceType: string | undefined,
+  resourceId: number | undefined
+): Promise<boolean> {
+  if (resourceType !== "discussion_thread" || !resourceId) return false;
+  if ((await readDiscussionThreadForDiscord(adminSupabase, resourceId))?.postable !== false) return false;
+  console.log(
+    `[processEnvelope] Dropping ${method} for discussion thread ${resourceId}; it is no longer a public question`
+  );
+  return true;
+}
+
+/** Delete a Discord message and its tracking row (#1010). A message already gone counts as deleted. */
+async function deleteTrackedMessage(
+  adminSupabase: SupabaseClient<Database>,
+  message: { channel_id: string; message_id: string },
+  scope: Sentry.Scope
+): Promise<void> {
+  try {
+    await discord.deleteMessage(message, scope);
+  } catch (error) {
+    if (!isResourceGone(error)) throw error;
+    console.log(`[deleteTrackedMessage] Message ${message.message_id} is already gone`);
+  }
+  const { error } = await adminSupabase
+    .from("discord_messages")
+    .delete()
+    .eq("discord_message_id", message.message_id)
+    .eq("discord_channel_id", message.channel_id);
+  if (error) {
+    console.error(`[deleteTrackedMessage] Failed to remove message tracking:`, error);
+    Sentry.captureException(error, scope);
+  }
+}
+
+/**
+ * Queue a discussion thread's Discord message (#1010). The database sends only for a public,
+ * published question, and updates its message instead if it has one, so after a delete "created"
+ * posts the thread again only if it is public by then.
+ */
+async function enqueueDiscussionThreadMessage(
+  adminSupabase: SupabaseClient<Database>,
+  threadId: number,
+  action: "created" | "updated",
+  scope: Sentry.Scope
+): Promise<void> {
+  const { error } = await adminSupabase.rpc("enqueue_discord_discussion_thread_message", {
+    p_thread_id: threadId,
+    p_action: action
+  });
+  if (error) {
+    console.error(
+      `[enqueueDiscussionThreadMessage] Could not queue the ${action} message for thread ${threadId}:`,
+      error
+    );
+    Sentry.captureException(error, scope);
+  }
+}
+
+/** The real steps for settleDiscussionThreadSend, for a message this worker just sent (#1010). */
+function discussionSendSteps(
+  adminSupabase: SupabaseClient<Database>,
+  envelope: DiscordAsyncEnvelope,
+  enqueuedAt: string,
+  sent: { channel_id: string; message_id: string },
+  scope: Sentry.Scope
+): DiscussionSendSettleSteps {
+  const threadId = envelope.resource_id!;
+  // Read once after the send: postable() and changedSinceQueued() both use it.
+  let thread: Promise<{ postable: boolean; updated_at: string | null } | null> | undefined;
+  const readThread = () => (thread ??= readDiscussionThreadForDiscord(adminSupabase, threadId));
+  const report = (what: string, error: unknown) => {
+    console.error(`[discussionSendSteps] ${what} for thread ${threadId}:`, error);
+    Sentry.captureException(error, scope);
+  };
+  return {
+    // A plain insert, not insert_discord_message's upsert: the thread's unique tracking row tells a
+    // second send in flight that it lost.
+    async track() {
+      const { error } = await adminSupabase.from("discord_messages").insert({
+        class_id: envelope.class_id!,
+        discord_message_id: sent.message_id,
+        discord_channel_id: sent.channel_id,
+        resource_type: "discussion_thread",
+        resource_id: threadId
+      });
+      if (!error) return "tracked";
+      if (error.code === "23505") return "taken";
+      report("Could not record the message", error);
+      return "failed";
+    },
+    postable: async () => (await readThread())?.postable ?? null,
+    // queued_at survives requeues; the queue's own enqueued_at restarts with each one.
+    changedSinceQueued: async () =>
+      discussionThreadChangedSince((await readThread())?.updated_at, envelope.queued_at ?? enqueuedAt),
+    deleteMessage: () => deleteTrackedMessage(adminSupabase, sent, scope),
+    async queueDelete() {
+      const queued = await sendReplacement(
+        adminSupabase,
+        {
+          method: "delete_message",
+          args: sent,
+          class_id: envelope.class_id,
+          resource_type: "discussion_thread",
+          resource_id: threadId
+        },
+        60,
+        scope
+      );
+      if (!queued) report("Could not queue the delete", new Error(`message ${sent.message_id}`));
+    },
+    enqueue: (action) => enqueueDiscussionThreadMessage(adminSupabase, threadId, action, scope)
+  };
 }
 
 /** The guild an envelope's work lands in, or undefined when it is not guild-scoped. */
@@ -1957,6 +2107,12 @@ export async function processEnvelope(
           }
         }
 
+        if (
+          await discussionEnvelopeDropped(adminSupabase, "send_message", envelope.resource_type, envelope.resource_id)
+        ) {
+          return true;
+        }
+
         // Check if a message already exists for this resource (handles race conditions)
         // If so, convert to an update operation instead of creating a duplicate
         if (envelope.resource_type && envelope.resource_id && envelope.class_id) {
@@ -2218,12 +2374,27 @@ export async function processEnvelope(
         const result = await discord.sendMessage(args, scope);
         console.log(`[processEnvelope] Successfully sent message, id=${result.id}, channel_id=${result.channel_id}`);
 
-        // Store message in discord_messages table if resource tracking is provided
-        // Uses RPC with upsert to handle both insert and update cases
-        console.log(
-          `[processEnvelope] Resource tracking check: resource_type=${envelope.resource_type}, resource_id=${envelope.resource_id}, class_id=${envelope.class_id}`
-        );
-        if (envelope.resource_type && envelope.resource_id && envelope.class_id) {
+        // A discussion thread's message is recorded and checked against what happened to the thread
+        // during the send (#1010). Never rethrown: the message is out, and a retry would post it twice.
+        if (envelope.resource_type === "discussion_thread" && envelope.resource_id && envelope.class_id) {
+          try {
+            const outcome = await settleDiscussionThreadSend(
+              discussionSendSteps(
+                adminSupabase,
+                envelope,
+                meta.enqueued_at,
+                { channel_id: result.channel_id, message_id: result.id },
+                scope
+              )
+            );
+            console.log(`[processEnvelope] Discussion thread ${envelope.resource_id} after the send: ${outcome}`);
+          } catch (e) {
+            console.error(`[processEnvelope] Failed to settle discussion thread ${envelope.resource_id}:`, e);
+            Sentry.captureException(e, scope);
+          }
+        } else if (envelope.resource_type && envelope.resource_id && envelope.class_id) {
+          // Store message in discord_messages table if resource tracking is provided
+          // Uses RPC with upsert to handle both insert and update cases
           console.log(
             `[processEnvelope] Storing message tracking via RPC: resource_type=${envelope.resource_type}, resource_id=${envelope.resource_id}, discord_message_id=${result.id}`
           );
@@ -2304,7 +2475,7 @@ export async function processEnvelope(
               .single();
 
             if (!lookupError && messageRecord) {
-              resourceType = messageRecord.resource_type as "help_request" | "regrade_request";
+              resourceType = messageRecord.resource_type as "help_request" | "regrade_request" | "discussion_thread";
               resourceId = messageRecord.resource_id;
               classId = messageRecord.class_id;
               console.log(
@@ -2314,6 +2485,11 @@ export async function processEnvelope(
           } catch (e) {
             console.warn(`[processEnvelope] Could not look up message record for deep link:`, e);
           }
+        }
+
+        // A thread made private has its message deleted instead (#1010).
+        if (await discussionEnvelopeDropped(adminSupabase, "update_message", resourceType, resourceId)) {
+          return true;
         }
 
         // Add deep link URL to embed if we have resource tracking info
@@ -2380,6 +2556,53 @@ export async function processEnvelope(
 
         await discord.updateMessage(args, scope);
         console.log(`[processEnvelope] update_message completed successfully`);
+        return true;
+      }
+
+      case "delete_message": {
+        // A discussion thread's message (#1010): the thread was made private (queue_discussion_discord_deletes),
+        // or a send needs undoing (settleDiscussionThreadSend). Its tracking row goes only once the
+        // message is deleted, so a delete that fails is queued again by the hourly stats job.
+        const args = envelope.args as DeleteMessageArgs;
+        console.log(
+          `[processEnvelope] Processing delete_message: message_id=${args.message_id}, channel_id=${args.channel_id}`
+        );
+        Sentry.addBreadcrumb({
+          message: `Deleting Discord message ${args.message_id} in channel ${args.channel_id}`,
+          level: "info"
+        });
+
+        // Kept if it is still the thread's own message and the thread is a public question again (it
+        // was made public while this waited); retried if the thread can't be read. A duplicate from
+        // two sends at once isn't the thread's own, so it goes.
+        const threadId = envelope.resource_type === "discussion_thread" ? envelope.resource_id : undefined;
+        if (threadId) {
+          const thread = await readDiscussionThreadForDiscord(adminSupabase, threadId);
+          if (!thread) {
+            throw new Error(`Could not read discussion thread ${threadId} before deleting its message`);
+          }
+          if (thread.postable) {
+            const { data: own } = await adminSupabase
+              .from("discord_messages")
+              .select("id")
+              .eq("resource_type", "discussion_thread")
+              .eq("resource_id", threadId)
+              .eq("discord_message_id", args.message_id)
+              .maybeSingle();
+            if (own) {
+              console.log(`[processEnvelope] Keeping message ${args.message_id}; its thread is public again`);
+              return true;
+            }
+          }
+        }
+
+        // Removes the tracking row too. A message already gone counts as deleted.
+        await deleteTrackedMessage(adminSupabase, args, scope);
+        // The thread may have been made public between the read above and the delete: queued again,
+        // it is posted if so (the database sends only for a public question with no message).
+        if (threadId) await enqueueDiscussionThreadMessage(adminSupabase, threadId, "created", scope);
+
+        console.log(`[processEnvelope] delete_message completed successfully`);
         return true;
       }
 

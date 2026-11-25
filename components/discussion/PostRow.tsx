@@ -9,7 +9,8 @@ import {
   useCourseController,
   usePrefetchDiscussionThreadOnHover
 } from "@/hooks/useCourseController";
-import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsOwnProfile, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { unreadDiscussionReplyCount } from "@/lib/discussionReplyCounts";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -59,21 +60,19 @@ function PostRowComponent({
   const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
   const userProfile = useUserProfile(thread?.author);
   const { private_profile_id } = useClassProfiles();
+  // The database refuses a like on your own post (#1010); an old one can still be removed.
+  const isOwnPost = useIsOwnProfile(thread?.author);
 
   const { readStatus } = useDiscussionThreadReadStatus(threadId);
   const childrenReadStatuses = useRootDiscussionThreadReadStatuses(threadId);
-  const numReadDescendants = useMemo(
-    () => childrenReadStatuses?.filter((s) => s.read_at != null).length ?? 0,
-    [childrenReadStatuses]
+  // Unread marks exist only for replies the viewer can read (#1010).
+  const unreadRepliesCount = useMemo(
+    () => unreadDiscussionReplyCount(threadId, childrenReadStatuses),
+    [threadId, childrenReadStatuses]
   );
 
   const isUnread = readStatus === null || readStatus?.read_at === null;
-  const hasUnreadReplies = !isUnread && numReadDescendants < (thread?.children_count ?? 0);
-  const unreadRepliesCount = useMemo(() => {
-    if (!thread?.children_count) return 0;
-    const unread = thread.children_count - numReadDescendants;
-    return Math.max(0, unread);
-  }, [thread?.children_count, numReadDescendants]);
+  const hasUnreadReplies = !isUnread && unreadRepliesCount > 0;
 
   const statusIndicator = isUnread ? (
     <Icon as={FaCircle} color="blue.500" boxSize="2" />
@@ -194,6 +193,7 @@ function PostRowComponent({
                         variant="ghost"
                         size="sm"
                         loading={likeLoading}
+                        disabled={isOwnPost && !likeStatus}
                         onClick={toggleLike}
                       >
                         <Icon as={likeStatus ? FaHeart : FaRegHeart} />
@@ -337,6 +337,7 @@ function PostRowComponent({
                 variant="ghost"
                 size="sm"
                 loading={likeLoading}
+                disabled={isOwnPost && !likeStatus}
                 onClick={toggleLike}
               >
                 <Icon as={likeStatus ? FaHeart : FaRegHeart} />

@@ -16,6 +16,8 @@ import { configureMonacoYaml } from "monaco-yaml";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as YAML from "yaml";
 import { configureMonacoWorkers } from "@/lib/monacoWorkers";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type RepoFileEditorProps = {
   courseId: number;
@@ -115,6 +117,7 @@ export default function RepoFileEditor({
   onSaved,
   gitProvider
 }: RepoFileEditorProps) {
+  const errorRole = useViewerErrorRole();
   const { colorMode } = useColorMode();
   const monacoRef = useRef<Monaco | null>(null);
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
@@ -180,7 +183,8 @@ export default function RepoFileEditor({
       setDirty(false);
       setCommitMessage(`Update ${currentPath} via Pawtograder`);
     } catch (err) {
-      const message = err instanceof EdgeFunctionError || err instanceof Error ? err.message : String(err);
+      // The raw message and details pick the branch. The mapper only words what the user sees.
+      const message = err instanceof Error ? err.message : "";
       const details = err instanceof EdgeFunctionError ? err.details : "";
       // A genuinely-missing file is an editable starting point (create-on-save). But other
       // 404-shaped errors serialize to the same message "Not Found" with the specifics in
@@ -193,12 +197,12 @@ export default function RepoFileEditor({
         setDirty(false);
         setCommitMessage(`Create ${currentPath} via Pawtograder`);
       } else {
-        setLoadError(details || message);
+        setLoadError(getUserFacingErrorMessage(err, { role: errorRole }));
       }
     } finally {
       setLoading(false);
     }
-  }, [courseId, orgName, repoName, currentPath, gitProvider]);
+  }, [courseId, orgName, repoName, currentPath, gitProvider, errorRole]);
 
   useEffect(() => {
     loadFile();
@@ -344,7 +348,7 @@ export default function RepoFileEditor({
     try {
       parsed = YAML.parse(content);
     } catch (err) {
-      return `Invalid YAML: ${err instanceof Error ? err.message : String(err)}`;
+      return `Invalid YAML: ${getUserFacingErrorMessage(err, { role: errorRole })}`;
     }
     if (isPawtograderYml(currentPath)) {
       const result = validatePawtograderConfig(parsed);
@@ -353,7 +357,7 @@ export default function RepoFileEditor({
       }
     }
     return undefined;
-  }, [content, currentPath, loading, loadError]);
+  }, [content, currentPath, loading, loadError, errorRole]);
 
   const blockingErrors = useMemo(() => {
     const errs = [...markerErrors];
@@ -381,7 +385,7 @@ export default function RepoFileEditor({
       });
       onSaved?.(res.content_sha);
     } catch (err) {
-      const message = err instanceof EdgeFunctionError || err instanceof Error ? err.message : String(err);
+      const message = err instanceof Error ? err.message : "";
       if (message.includes("changed since you loaded")) {
         toaster.create({
           title: gitProvider === "forgejo" ? "File changed on Forgejo" : "File changed on GitHub",
@@ -390,12 +394,29 @@ export default function RepoFileEditor({
         });
         await loadFile();
       } else {
-        toaster.create({ title: "Failed to save file", description: message, type: "error" });
+        toaster.create({
+          title: "Failed to save file",
+          description: getUserFacingErrorMessage(err, { role: errorRole }),
+          type: "error"
+        });
       }
     } finally {
       setSaving(false);
     }
-  }, [canSave, courseId, orgName, repoName, currentPath, content, commitMessage, sha, onSaved, loadFile, gitProvider]);
+  }, [
+    canSave,
+    courseId,
+    orgName,
+    repoName,
+    currentPath,
+    content,
+    commitMessage,
+    sha,
+    onSaved,
+    loadFile,
+    gitProvider,
+    errorRole
+  ]);
 
   return (
     <VStack align="stretch" gap={3} data-testid="repo-file-editor">

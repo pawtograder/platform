@@ -62,6 +62,131 @@ describe("getUserFacingErrorMessage", () => {
     }
   });
 
+  describe("refusals a database function raised (42501 with its own message)", () => {
+    // What publish_assignment_group_changes raises for a grader (#996).
+    const publishRefused = {
+      code: "42501",
+      details: null,
+      hint: null,
+      message: "Only instructors can publish group changes"
+    };
+
+    it("keep the function's message and add who to ask", () => {
+      expect(getUserFacingErrorMessage(publishRefused, { role: "grader" })).toBe(
+        "Only instructors can publish group changes. If you need access, ask an instructor for this course."
+      );
+      expect(getUserFacingErrorMessage(publishRefused, { role: "instructor" })).toBe(
+        "Only instructors can publish group changes. If you think you should, let the Pawtograder team know so we can look into it."
+      );
+      expect(getUserFacingErrorMessage(publishRefused)).toBe(
+        "Only instructors can publish group changes. If you need access, contact your instructor."
+      );
+    });
+
+    it("capitalize a lowercase message, as most of our functions raise them", () => {
+      // What the help request trigger raises when a student resolves a request a TA already closed.
+      expect(
+        getUserFacingErrorMessage({
+          code: "42501",
+          message: "students may only resolve an open or in-progress help request"
+        })
+      ).toBe(
+        "Students may only resolve an open or in-progress help request. If you need access, contact your instructor."
+      );
+    });
+
+    it("don't add a second period", () => {
+      expect(
+        getUserFacingErrorMessage({ code: "42501", message: "Only admins can do this." }, { role: "grader" })
+      ).toBe("Only admins can do this. If you need access, ask an instructor for this course.");
+    });
+
+    it("use the generic wording for a bare 'Access denied'", () => {
+      expect(getUserFacingErrorMessage({ code: "42501", message: "Access denied" }, { role: "grader" })).toBe(
+        "You don't have permission to do that. If you need access, ask an instructor for this course."
+      );
+    });
+
+    it("use the generic wording for Postgres's own RLS and GRANT messages", () => {
+      for (const message of [
+        "permission denied for table assignments",
+        "permission denied to set role",
+        'new row violates row-level security policy for table "assignment_self_review_settings"',
+        "must be owner of table objects"
+      ]) {
+        expect(getUserFacingErrorMessage({ code: "42501", message }, { role: "grader" })).toBe(
+          "You don't have permission to do that. If you need access, ask an instructor for this course."
+        );
+      }
+    });
+  });
+
+  describe("23505 and 23514", () => {
+    it("keep a message a database function raised", () => {
+      expect(
+        getUserFacingErrorMessage({
+          code: "23505",
+          message: "you already have a private solo help request in this queue"
+        })
+      ).toBe("You already have a private solo help request in this queue.");
+      expect(
+        getUserFacingErrorMessage({ code: "23514", message: "Can only set topic for root posts" }, { role: "grader" })
+      ).toBe("Can only set topic for root posts.");
+    });
+
+    it("use the generic wording for Postgres's constraint messages", () => {
+      expect(
+        getUserFacingErrorMessage({
+          code: "23505",
+          message: 'duplicate key value violates unique constraint "tags_class_id_name_key"',
+          details: "Key (class_id, name)=(1, x) already exists."
+        })
+      ).toBe("This was already saved or conflicts with existing data. Refresh the page and try again.");
+      expect(
+        getUserFacingErrorMessage({
+          code: "23514",
+          message: 'new row for relation "assignments" violates check constraint "assignments_points_check"',
+          details: "Failing row contains (1, x)."
+        })
+      ).toBe("Some entered values are not allowed for this form. Check your answers and try again.");
+    });
+  });
+
+  describe("23503", () => {
+    it("says the row is still in use when a delete is blocked", () => {
+      expect(
+        getUserFacingErrorMessage({
+          code: "23503",
+          message:
+            'update or delete on table "discussion_topics" violates foreign key constraint "discussion_threads_topic_id_fkey" on table "discussion_threads"',
+          details: 'Key (id)=(5) is still referenced from table "discussion_threads".'
+        })
+      ).toBe("Other data still uses this, so it can't be deleted. Remove or move what uses it first, then try again.");
+    });
+
+    it("says what it points at is missing on an insert or update", () => {
+      expect(
+        getUserFacingErrorMessage({
+          code: "23503",
+          message: 'insert or update on table "discussion_threads" violates foreign key constraint "x_fkey"',
+          details: 'Key (topic_id)=(5) is not present in table "discussion_topics".'
+        })
+      ).toBe("Something this action depends on is missing or was deleted. Refresh the page and try again.");
+    });
+  });
+
+  it("never shows Postgres's 'Failing row contains' detail, as on a 23502", () => {
+    const notNull = {
+      code: "23502",
+      message: 'null value in column "name" of relation "tags" violates not-null constraint',
+      details: "Failing row contains (12, null, 3).",
+      hint: null
+    };
+    expect(getUserFacingErrorMessage(notNull)).toBe("Something went wrong. Please try again.");
+    // Without a code too.
+    expect(getUserFacingErrorMessage({ message: "x", details: "Failing row contains (12, null, 3)." })).toBe("x");
+  });
+
   describe("refused writes (refine data provider or TableController)", () => {
     const refused = refusedWriteError("update");
     const refusedMessage = refused.message;

@@ -44,6 +44,7 @@ import {
   FiMenu,
   FiMessageSquare,
   FiSettings,
+  FiShield,
   FiSliders,
   FiStar,
   FiUsers
@@ -153,6 +154,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/enrollments`
       },
       {
+        name: "Staff Roles",
+        icon: FiShield,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/roles`
+      },
+      {
         name: "LMS (LTI) Sync",
         icon: FiUsers,
         instructors_only: true,
@@ -189,7 +196,11 @@ const LinkItems = (courseID: number) => [
         icon: MdOutlineScience,
         target: `/course/${courseID}/manage/course/lab-roster`
       },
-      { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
+      {
+        name: "Flashcard Decks",
+        icon: TbCards,
+        target: `/course/${courseID}/manage/course/flashcard-decks`
+      },
       {
         name: "Discussion Topics",
         icon: FiHash,

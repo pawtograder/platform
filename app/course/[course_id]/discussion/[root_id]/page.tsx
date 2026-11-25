@@ -14,7 +14,7 @@ import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGraderOrInstructor, useIsOwnProfile, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
@@ -34,6 +34,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -143,7 +145,7 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
   const errorPinModal = useModalManager<number>();
-  const { public_profile_id, private_profile_id } = useClassProfiles();
+  const isOwnPost = useIsOwnProfile(thread.author);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isReadOnly = useIsReadOnly();
   const { discussionThreadTeasers } = useCourseController();
@@ -153,8 +155,7 @@ function ThreadActions({
   // Moderating (editing others' posts, pinning, marking duplicates) needs moderate_discussion
   // (#1010). Error pins and AI Help are staff tools and stay on the staff check.
   const canModerate = useCapability("moderate_discussion");
-  const canEdit =
-    !isReadOnly && (thread.author === public_profile_id || thread.author === private_profile_id || canModerate);
+  const canEdit = !isReadOnly && (isOwnPost || canModerate);
   const canPin = !isReadOnly && canModerate;
   const canUseStaffTools = !isReadOnly && isGraderOrInstructor;
   const isRootThread = thread.root != null && thread.id === thread.root;
@@ -285,6 +286,7 @@ function ThreadFollowButton({ thread }: { thread: DiscussionThreadType }) {
 }
 
 function DiscussionPost({ root_id }: { root_id: number }) {
+  const errorRole = useViewerErrorRole();
   const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
   const rawRootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
@@ -363,21 +365,21 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         } catch (error) {
           toaster.error({
             title: "Error",
-            description: `Failed to update visibility: ${error instanceof Error ? error.message : String(error)}`
+            description: `Failed to update visibility: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
           return;
         }
       }
 
-      // Update body and edited_at (and visibility if it didn't change, to ensure consistency)
+      // Update body and edited_at. Visibility changes only through set_discussion_thread_visibility
+      // above (#1010): the database refuses instructors_only on a question from any other path.
       await discussionThreadTeasers.update(root_id, {
         body: message,
-        edited_at: new Date().toISOString(),
-        instructors_only: newInstructorsOnly
+        edited_at: new Date().toISOString()
       });
       setEditing(false);
     },
-    [root_id, rootThread, discussionThreadTeasers, visibility, supabase]
+    [root_id, rootThread, discussionThreadTeasers, visibility, supabase, errorRole]
   );
 
   const onClose = useCallback(() => {
@@ -415,7 +417,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       } catch (error) {
         toaster.error({
           title: "Error",
-          description: `Failed to toggle anonymity: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to toggle anonymity: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
         // Revert the state on error
         setAnonymity(anonymity);
@@ -423,7 +425,16 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         setIsTogglingAnonymity(false);
       }
     },
-    [rootThread, anonymity, isCurrentlyAnonymous, isTogglingAnonymity, supabase, discussionThreadTeasers, root_id]
+    [
+      rootThread,
+      anonymity,
+      isCurrentlyAnonymous,
+      isTogglingAnonymity,
+      supabase,
+      discussionThreadTeasers,
+      root_id,
+      errorRole
+    ]
   );
 
   const handleStaffActionUpdate = useCallback(() => {

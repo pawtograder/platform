@@ -21,6 +21,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { BsPlus, BsTrash, BsX } from "react-icons/bs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ErrorPinRuleTarget =
   | "grader_output_student"
@@ -90,6 +92,7 @@ export function ErrorPinModal({
   existingPinId,
   defaultAssignmentId
 }: ErrorPinModalProps) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const assignments = useAssignments();
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -269,7 +272,7 @@ export function ErrorPinModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to preview matches: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to preview matches: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     } finally {
       setIsPreviewing(false);
@@ -331,7 +334,7 @@ export function ErrorPinModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to save error pin: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to save error pin: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261123180300_discussion_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`, `20261124150500_discussion_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -127,6 +127,28 @@ Write one migration that:
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
 
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+The side menu has three pages:
+
+- Create / Edit Role: create a copy of Grader, or pick a role to rename, delete, or edit its capabilities. The default Grader role cannot be renamed or deleted. Roles with active or disabled members cannot be deleted.
+- Staff & Roles: the Staff tab lists active graders with a role drop-down. Moving a grader requires an instructor. The Roles tab lists Grader and custom roles with active membership counts and any removed members.
+- Roles & Capabilities: pick a role, then toggle capabilities grouped by app area and section. Each info button explains the action and where to find it. Changes save immediately. The selected role is linkable with `?role=<id>`.
+
+The typed catalog in `capabilityCatalog.ts` includes pending capabilities, but shows only rows in the database. Unknown capabilities appear under Other with their database description. `manage_roles` is always hidden. Enrollments shows each grader's staff role using the same live controllers; its Edit Role dialog still changes the app role.
+
+The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
+creation, renames, deletions and capability changes arrive as row updates on the staff channel.
+Enrollments share the course controller's `userRolesWithProfiles` cache. Controllers page through
+all rows and catch up when the staff channel reconnects.
+
+Updates and deletes ask for the rows they changed, because a policy can refuse those without an
+error; the page then reports the change as not saved and puts the control back. A refused insert
+fails with an error, so creating a role does not ask for rows back.
+
 ## A capability that also decides who can see something
 
 Most capabilities are actions, and any staff member can still see what they saw before. One
@@ -173,6 +195,54 @@ action sends people without it somewhere useful: its server `layout.tsx` checks
 things to look at stays open and only hides its action buttons with `useCapability`, as Manage
 Groups does for `publish_groups`. `RequireManageReviews` is an older client-side version of the
 redirect, used by Bulk Assign and Reassign.
+
+## manage_flashcards
+
+`manage_flashcards` covers creating, editing, deleting and copying flashcard decks and cards
+(area 13). Day one, the default instructor role, the default grader role and every existing custom
+role hold it, so instructors and default graders keep the management access graders already had. An
+instructor can then turn it off for the default grader role or a custom role. Before this capability,
+the person who created a deck could still update and delete it and manage its cards without the
+staff check; that creator path is gone so the capability is the only rule for those writes. The
+create / edit / delete controls follow `useCapability("manage_flashcards")`. The Course Settings
+"Flashcard Decks" entry and deck pages remain available to all staff for viewing. Left as views: class members reading decks and cards, students
+writing their own progress and interaction logs, and staff reading class-wide progress and logs for
+analytics.
+
+CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
+decks. It requires `manage_flashcards` only in the target class, through
+`assertUserHasClassCapability(userId, targetClass.id, "manage_flashcards")`, the same capability
+lookup RLS uses. Source read policies do not require `manage_flashcards`.
+
+## manage_surveys and run_polls
+
+`manage_surveys` covers creating, editing, publishing, closing, deleting and assigning surveys,
+plus survey templates (insert/update), survey series writes, and the
+`create_survey_assignments` / `soft_delete_survey` / `reorder_surveys_in_series` RPCs (area 11).
+Day one, only the default instructor role holds it. Create / publish / close / delete / series
+controls follow `useCapability("manage_surveys")`. Left as views or student actions: staff and
+student SELECT on surveys, assignments and responses; student response writes; template SELECT;
+series SELECT; analytics RPCs. Exception: deleting a survey template stays creator-only, so
+`manage_surveys` does not let you delete someone else's template.
+
+`survey_assignments` action policies call `can_manage_survey_in_class` so the parent survey must
+belong to the assignment's class and the caller must hold `manage_surveys` there. The helper is
+SECURITY DEFINER to avoid RLS recursion with `surveys_select_students`, and the capability check
+stops an unrelated signed-in user from learning survey/class membership through `/rpc`.
+
+A survey can reference a series from another class (CLI `surveys.copy` keeps the source
+`series_id`). That predates this capability work and is left for a follow-up.
+
+`run_polls` covers creating, editing, opening, closing and deleting live polls, and staff writes
+on `live_poll_responses` (area 11). Day one, the default instructor role, the default grader role
+and every existing custom role hold it. Create / open / close / delete controls follow
+`useCapability("run_polls")`. Left as views or student/anon actions: live and staff SELECT on
+`live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
+and cannot change them), and the anon/student insert path through `can_access_poll_response`.
+
+CLI `surveys.copy` requires active instructor or grader access in the source class and
+`manage_surveys` in the target class. The target check uses the caller-scoped capability RPC,
+including for dry runs. `assignments.copy` requires instructor access in the target class.
 
 ## Groups: publish_groups and manage_groups
 
@@ -231,33 +301,76 @@ it off a role.
 - The trigger `discussion_threads_guard_moderation` covers what the author rule would otherwise
   allow: only a moderator can pin or unpin, change a post's topic, or create a pinned post; no new
   post can start with an answer; only the question's author or a moderator marks an answer, which
-  must be a reply in the same thread; and no signed-in user can move a post to another class. For
-  everyone signed in, a post's topic must be in its class, and its author can only switch between
-  the same person's named and anonymous profile.
-- Moving and visibility, for everyone signed in, moderators included:
-  - a post moves to another thread (its root or parent) only through
-    `mark_discussion_thread_duplicate`;
-  - a reply in a private thread is always private;
-  - a private post is made public only by `set_discussion_thread_visibility` on its thread's root,
-    which changes the root and its replies together.
-  - Those two functions set the transaction-local flags `pawtograder.discussion_merge_rpc` and
-    `pawtograder.discussion_visibility_rpc`, which the guard trusts. PostgREST can't call
-    `set_config`, so a client can't set them.
+  must be a reply in the same thread. For everyone signed in, a post's topic must be in its class,
+  and its author can only switch between the same person's named and anonymous profile.
+- Moving and visibility, for everyone signed in, moderators included. Signed-in users have no UPDATE
+  privilege on `root`, `parent`, `class_id`, `instructors_only` or `draft`; only the database's own
+  functions (which run as their owner) change them:
+  - a post moves to another thread only through `mark_discussion_thread_duplicate`, which merges only
+    public threads, and never to another class;
+  - a post's visibility changes only through `set_discussion_thread_visibility` on its thread's root.
+    A reply's visibility is set when it is posted, and a reply in a private thread is always private.
+    Making a thread private hides its public replies and marks them `hidden_with_thread`; making it
+    public again shows only those, so a reply that was private before stays private.
+  - Locks: a new reply, a visibility change, a merge and a topic move each lock the thread's question
+    row first (a merge locks both questions, in id order), so they run one after the other. A reply
+    can't land while its thread is being made private and stay public, and two clicks on the
+    visibility setting can't cross. The migration sets `lock_timeout` to 10 seconds.
+- Reading a private post: staff, its own author and, when the thread's question is private, the
+  question's author, only for the replies private with the thread (`hidden_with_thread`,
+  `authorize_for_private_discussion_thread()`). Before, anyone with a post in the thread could read
+  every private post in it, which a merge could widen. `discussion_private_post_readers()` lists the
+  same readers for what the database sends on someone's behalf (reply notifications, unread marks,
+  the email digest through `discussion_threads_readable_by()`), so change it with the SELECT policy.
+  Realtime follows the same rule: a private row goes to the thread's channel
+  (`discussion_thread:<root>`) as its id only, and each viewer's TableController re-reads it under
+  the read rule, so it only reaches people who may read it; a question made private sends its id to
+  the students' channel, so their lists drop it. Staff get every row in full on the staff channel.
+- Counts: `children_count` counts the replies every reader of the question can read (public ones, or
+  in a private thread the ones private with it), so it tells nobody about replies they can't read;
+  staff see private replies on the thread page. One recount per statement keeps it
+  (`recount_discussion_thread_children()`). "N new" counts the viewer's unread marks, and marks of
+  people who can't read a post are removed (`prune_discussion_thread_read_status()`), including the
+  ones made before this migration.
 - The same migration closes older gaps on discussion posts, which aren't capability checks:
-  - Mark Duplicate refuses a private and a public thread, or two private threads by different
-    people, and keeps a private reply private;
-  - column privileges keep `created_at`, `likes_count`, `children_count`, `ordinal` and the
-    `duplicate_*` fields to the database, and the guard sets `root_class_id` and `edited_at`;
-  - a like goes only on a post the user can see in their class, and can't be moved;
+  - Mark Duplicate merges only public threads (its list offers only those), keeps a private reply
+    private, and has the reply-count trigger recount only the two threads it changed;
+  - column privileges keep `created_at`, `likes_count`, `children_count`, `ordinal`, the
+    `duplicate_*` fields and `hidden_with_thread` to the database, and the guard sets
+    `root_class_id` and `edited_at`;
+  - a like goes only on a post the user can see in their class, is made with their named profile,
+    can't go on their own post, and can't be moved;
   - a turned-on watch must be on a thread the user can see; reply notifications go only to
-    watchers enrolled in the class, and a private reply only to staff;
-  - private posts are never sent to Discord, and the hourly stats update skips them;
-  - a new reply's parent and thread must be posts the user can see in the same class, and its root
-    must be the parent's thread (`discussion_threads_guard_reply_target`, which runs as the user so
-    the read follows the SELECT policy);
+    watchers enrolled in the class, and a private reply only to the watchers who can read it;
+    new-post notifications skip disabled enrollments; a private post's unread rows go only to the
+    people who can read it, and the email digest checks each item's post
+    (`discussion_digest_items.comment_id`);
+  - Discord: a private post isn't queued for the class's channel, the hourly stats update skips
+    private threads, and the Discord worker re-reads the thread before sending or updating a
+    message and drops it unless the thread is still a public question. When a thread that was
+    posted is made private, its Discord message is deleted (`delete_message`, queued by
+    `queue_discussion_discord_deletes()`). The tracking row stays until the worker has deleted the
+    message, and the hourly stats job calls the same function, so a delete that failed or was
+    dead-lettered is queued again; a delete keeps the message if it is still the thread's own and the
+    thread is public again. When a thread is made public it is posted; when its subject, text or shown author changes, the message is updated in
+    the channel it is in (a topic move doesn't move it). After a send, the worker
+    (`settleDiscussionThreadSend`) deletes its message if another send for the thread got there
+    first, deletes it if the thread was made private meanwhile or the message couldn't be recorded
+    (then queues the thread again, which posts it only if it is public), queues a delete if it can't,
+    and queues an update if the thread was edited after the message was first queued (`queued_at`). Messages of threads that were already
+    private when this deployed are deleted once, 15 minutes later, so workers that don't know
+    `delete_message` are replaced first;
+  - a new reply's parent and thread must be posts the user can see in the reply's class, and its
+    root must be the parent's thread (`discussion_threads_guard_reply_target`, which runs as the
+    user so the read follows the SELECT policy);
+  - error-pin matches leave out private threads, and an error pin's thread must be in the pin's
+    class;
+  - a discussion topic can't move to another class;
+  - `discussion_thread_watcher_cache` (which showed who watches each thread) and
+    `discussion_thread_ordinal_counters` (unused, writable by anyone) are dropped;
   - existing public replies in private threads were made private.
-- Not part of it: discussion topics (instructors only), error pins and AI Help (staff tools),
-  posting, follows and read status.
+- Not part of it: discussion topics' other rules (instructors only), error pins' other rules and AI
+  Help (staff tools), posting and follows.
 
 **The default grader role in new classes.** `seed_default_class_roles()` gives the default grader
 role every grader capability, listed by name and joined to `capabilities`, so a name that doesn't

@@ -1,6 +1,7 @@
 export type DiscordAsyncMethod =
   | "send_message"
   | "update_message"
+  | "delete_message"
   | "create_channel"
   | "delete_channel"
   | "create_role"
@@ -94,6 +95,12 @@ export type DeleteChannelArgs = {
   channel_id: string;
 };
 
+// A discussion thread's message, deleted when the thread is made private (#1010).
+export type DeleteMessageArgs = {
+  channel_id: string;
+  message_id: string;
+};
+
 export type CreateRoleArgs = {
   guild_id: string;
   name: string;
@@ -157,6 +164,7 @@ export type DiscordAsyncArgs =
   | UpdateMessageArgs
   | CreateChannelArgs
   | DeleteChannelArgs
+  | DeleteMessageArgs
   | CreateRoleArgs
   | DeleteRoleArgs
   | AddMemberRoleArgs
@@ -172,6 +180,8 @@ export type DiscordAsyncEnvelope = {
   debug_id?: string;
   log_id?: number;
   retry_count?: number;
+  /** When the message was first queued (#1010). Kept across requeues, unlike the queue's enqueued_at. */
+  queued_at?: string;
   /**
    * When the enqueuer last saw this user in the guild, as an ISO timestamp.
    *

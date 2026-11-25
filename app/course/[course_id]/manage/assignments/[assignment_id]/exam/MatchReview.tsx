@@ -26,6 +26,8 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type Scanned = {
   id: number;
@@ -66,6 +68,7 @@ export default function MatchReview({
   /** Asks the parent to reload the batch, after something here changed its status. */
   onBatchChanged: () => Promise<void> | void;
 }) {
+  const errorRole = useStaffErrorRole();
   const [rows, setRows] = useState<Scanned[]>([]);
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -352,11 +355,11 @@ export default function MatchReview({
       await load();
       await onBatchChanged();
     } catch (e) {
-      toaster.error({ title: "Finalize failed", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({ title: "Finalize failed", description: getUserFacingErrorMessage(e, { role: errorRole }) });
     } finally {
       setBusy(false);
     }
-  }, [batchId, batchStatus, load, onBatchChanged]);
+  }, [batchId, batchStatus, load, onBatchChanged, errorRole]);
 
   // Count rows that are not FINALIZED, not rows without a submission id. finalized_at is the
   // worker's single source of truth for "fully finalized" (set last, after the submission row,

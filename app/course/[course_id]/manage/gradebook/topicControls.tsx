@@ -22,6 +22,8 @@ import {
 } from "@chakra-ui/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { LuEllipsisVertical, LuPencil, LuTrash } from "react-icons/lu";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 export type TopicsContextValue = {
   /** The course has the gradebook-topics feature on. */
@@ -310,6 +312,7 @@ const SOURCE_LABEL: Record<Suggestion["topics"][number]["attempts"][number]["sou
  * resolved by unchecking a column.
  */
 export function SuggestTopicsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const errorRole = useStaffErrorRole();
   const gradebookController = useGradebookController();
   const supabase = useMemo(() => createClient(), []);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -385,7 +388,10 @@ export function SuggestTopicsDialog({ open, onClose }: { open: boolean; onClose:
       toaster.success({ title: "Topics created" });
       onClose();
     } catch (e) {
-      toaster.error({ title: "Could not create topics", description: e instanceof Error ? e.message : String(e) });
+      toaster.error({
+        title: "Could not create topics",
+        description: getUserFacingErrorMessage(e, { role: errorRole })
+      });
     } finally {
       setIsSaving(false);
     }

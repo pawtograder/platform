@@ -19,6 +19,8 @@ import { Badge, Box, HStack, Spinner, Stack, Text } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 const MAX_RESULTS = 20;
 const DEBOUNCE_MS = 150;
@@ -69,6 +71,7 @@ export function MarkDuplicateThreadModal({
   duplicateRootId: number;
   onMerged: (originalRootId: number) => void;
 }) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -104,7 +107,11 @@ export function MarkDuplicateThreadModal({
   const isSearching = query.trim() !== "" && query.trim().toLowerCase() !== debouncedQuery;
 
   const results = useMemo(() => {
-    const candidates = teasers.filter((t) => !t.draft && t.id !== duplicateRootId);
+    // The database merges only public threads (#1010), so a private thread gets no list.
+    const isPrivate = teasers.find((t) => t.id === duplicateRootId)?.instructors_only;
+    const candidates = isPrivate
+      ? []
+      : teasers.filter((t) => !t.draft && !t.instructors_only && t.id !== duplicateRootId);
     if (!debouncedQuery) {
       return [...candidates]
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -197,12 +204,12 @@ export function MarkDuplicateThreadModal({
     } catch (e) {
       toaster.error({
         title: "Could not mark duplicate",
-        description: e instanceof Error ? e.message : String(e)
+        description: getUserFacingErrorMessage(e, { role: errorRole })
       });
     } finally {
       setSubmitting(false);
     }
-  }, [course_id, duplicateRootId, selectedId, onClose, onMerged, router, supabase]);
+  }, [course_id, duplicateRootId, selectedId, onClose, onMerged, router, supabase, errorRole]);
 
   const selectedThread = useMemo(
     () => (selectedId !== null ? teasers.find((t) => t.id === selectedId) : undefined),

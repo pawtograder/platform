@@ -1,5 +1,7 @@
 "use client";
 
+import { useTableControllerTableValues } from "@/lib/TableController";
+import { roleDisplayName } from "@/lib/classRoles";
 import { Button } from "@/components/ui/button";
 import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
 import InlineRemoveTag from "@/components/ui/inline-remove-tag";
@@ -8,7 +10,13 @@ import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useCapability, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useClassSections, useCourse, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import {
+  useClassSections,
+  useCourse,
+  useCourseController,
+  useLabSections,
+  useUserRolesWithProfiles
+} from "@/hooks/useCourseController";
 import { useDiscordMembershipStatus, type DiscordMembershipState } from "@/hooks/useDiscordMembershipStatus";
 import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
@@ -70,6 +78,8 @@ import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
 import { selectionKey, setRowChecked } from "./rosterSelection";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -162,12 +172,24 @@ function forgejoUsernameLabel(row: EnrollmentTableRow, logins: ForgejoLogins): s
 }
 
 export default function EnrollmentsTable() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
   const supabase = createClient();
   const labSections = useLabSections();
   const classSections = useClassSections();
   const course = useCourse();
+  const hasGitHubOrg = Boolean(course?.github_org?.trim());
+  const controller = useCourseController();
+  const classRoles = useTableControllerTableValues(controller.classRoles);
+  const staffRoleName = useCallback(
+    (row: EnrollmentTableRow) => {
+      if (row.type !== "enrollment" || row.role !== "grader") return row.role;
+      const role = classRoles.find((role) => role.id === row.class_role_id);
+      return role ? roleDisplayName(role) : "Grader";
+    },
+    [classRoles]
+  );
   const discordServerConfigured = !!course?.discord_server_id;
   const cloudWorkspacesEnabled = courseFeatureEffectiveEnabled(
     (course as CourseWithFeatures | undefined)?.features,
@@ -275,7 +297,7 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error Removing User",
-          description: `Failed to remove user: ${error instanceof Error ? error.message : "Unknown error"}`,
+          description: `Failed to remove user: ${getUserFacingErrorMessage(error, { role: errorRole })}`,
           type: "error"
         });
         closeRemoveStudentModal();
@@ -283,7 +305,7 @@ export default function EnrollmentsTable() {
         setIsDeletingUserRole(false);
       }
     },
-    [disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
+    [errorRole, disableUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
 
   const checkedBoxesRef = useRef(new Set<EnrollmentTableRow>());
@@ -327,11 +349,11 @@ export default function EnrollmentsTable() {
     } catch (error) {
       toaster.create({
         title: "Error fetching invitations",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     }
-  }, [course_id, supabase]);
+  }, [errorRole, course_id, supabase]);
 
   // Cancel invitation
   const cancelInvitation = useCallback(
@@ -357,12 +379,12 @@ export default function EnrollmentsTable() {
       } catch (error) {
         toaster.create({
           title: "Error cancelling invitation",
-          description: error instanceof Error ? error.message : "Unknown error",
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [supabase, fetchInvitations]
+    [errorRole, supabase, fetchInvitations]
   );
 
   // Load invitations on mount
@@ -517,7 +539,7 @@ export default function EnrollmentsTable() {
         header: "Role",
         accessorKey: "role",
         cell: ({ row }) => {
-          return row.original.role;
+          return staffRoleName(row.original);
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
@@ -845,7 +867,7 @@ export default function EnrollmentsTable() {
                   } catch (error) {
                     toaster.create({
                       title: "Failed to update SIS sync override",
-                      description: error instanceof Error ? error.message : "Unknown error",
+                      description: getUserFacingErrorMessage(error, { role: errorRole }),
                       type: "error"
                     });
                   }
@@ -950,7 +972,7 @@ export default function EnrollmentsTable() {
           const userRoleEntry = row.original;
           const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
           const isTargetInstructor = userRoleEntry.role === "instructor";
-          const canDiagnoseGitHub = userRoleEntry.role === "student";
+          const canDiagnoseGitHub = hasGitHubOrg && userRoleEntry.role === "student";
 
           const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
           let editRoleTooltipContent = "Edit user role";
@@ -1047,18 +1069,21 @@ export default function EnrollmentsTable() {
       }
     ],
     [
+      errorRole,
       currentUser,
       course_id,
       openEditProfileModal,
       openEditUserRoleModal,
       openGitHubDiagnosticsModal,
       openRemoveStudentModal,
+      staffRoleName,
       tagData,
       handleSingleCheckboxChange,
       cancelInvitation,
       classSections,
       labSections,
       setSisSyncOptOut,
+      hasGitHubOrg,
       canManageRole,
       isInstructor,
       canManageRoster,
@@ -1710,7 +1735,7 @@ export default function EnrollmentsTable() {
                       } catch (error) {
                         toaster.error({
                           title: "Error adding tag(s)",
-                          description: error instanceof Error ? error.message : "Unknown error"
+                          description: getUserFacingErrorMessage(error, { role: errorRole })
                         });
                       }
                     }}
@@ -1796,7 +1821,7 @@ export default function EnrollmentsTable() {
                         .catch((error: unknown) => {
                           toaster.error({
                             title: "Error removing tags",
-                            description: error instanceof Error ? error.message : "Unknown error"
+                            description: getUserFacingErrorMessage(error, { role: errorRole })
                           });
                         });
                     }}

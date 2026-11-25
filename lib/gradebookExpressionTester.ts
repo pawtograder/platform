@@ -25,6 +25,10 @@ import {
 import type { AssignmentNode, FunctionNode, MathNode } from "mathjs";
 import { minimatch } from "minimatch";
 import type { GradebookController } from "@/hooks/useGradebook";
+// mathjs parse/evaluation errors are shown in the expression builder. getUserFacingErrorMessage
+// returns an Error's message unchanged and keeps a non-Error from showing "[object Object]". No role:
+// these are never permission errors.
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 const CONTEXT_FUNCTIONS = [...COMMON_CONTEXT_FUNCTIONS, "gradebook_columns", "assignments"];
 
@@ -336,7 +340,7 @@ export function validateExpressionString(
     math.parse(trimmed);
   } catch (e) {
     return {
-      parseError: e instanceof Error ? e.message : String(e),
+      parseError: getUserFacingErrorMessage(e),
       dependencyError: null,
       deps: null
     };
@@ -348,7 +352,7 @@ export function validateExpressionString(
   } catch (e) {
     return {
       parseError: null,
-      dependencyError: e instanceof Error ? e.message : String(e),
+      dependencyError: getUserFacingErrorMessage(e),
       deps: null
     };
   }
@@ -580,7 +584,7 @@ export function evaluateRenderExpression(
     }
     return { kind: "ok", rendered: String(unwrapped) };
   } catch (e) {
-    return { kind: "error", message: e instanceof Error ? e.message : String(e) };
+    return { kind: "error", message: getUserFacingErrorMessage(e) };
   }
 }
 
@@ -725,7 +729,7 @@ export function evaluateForStudent(params: {
           // An error in any block stops evaluation — record the message on
           // `evalError` so the UI surfaces it once, and push a sentinel for
           // this block so the block-index alignment stays correct.
-          evalError = blockErr instanceof Error ? blockErr.message : String(blockErr);
+          evalError = getUserFacingErrorMessage(blockErr);
           blockEntries.push(undefined);
           break;
         }
@@ -740,7 +744,7 @@ export function evaluateForStudent(params: {
     }
     resultStr = formatValueForOverlay(rawResult);
   } catch (e) {
-    evalError = e instanceof Error ? e.message : String(e);
+    evalError = getUserFacingErrorMessage(e);
   }
 
   const intermediates: IntermediateValue[] = [];
@@ -836,7 +840,7 @@ export function evaluateForStudent(params: {
       try {
         value = unwrapResultSet(node.evaluate(intermediateEvalScope));
       } catch (e) {
-        nodeError = e instanceof Error ? e.message : String(e);
+        nodeError = getUserFacingErrorMessage(e);
       }
       intermediates.push({
         source: pretty,

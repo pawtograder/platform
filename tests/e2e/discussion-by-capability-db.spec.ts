@@ -1,6 +1,6 @@
 /**
  * #1010: moderating discussions follows moderate_discussion
- * (20261123180300_discussion_by_capability.sql).
+ * (20261124150500_discussion_by_capability.sql).
  *
  * Moderation: pinning, editing someone else's post, marking an answer (discussion_threads UPDATE),
  * and the RPCs set_discussion_thread_topic, mark_discussion_thread_duplicate,
@@ -16,7 +16,15 @@
  */
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
-import { supabase, createClass, createUserInClass, createAuthenticatedClient, type TestingUser } from "./TestingUtils";
+import {
+  supabase,
+  createClass,
+  createUserInClass,
+  createAuthenticatedClient,
+  insertAssignment,
+  insertPreBakedSubmission,
+  type TestingUser
+} from "./TestingUtils";
 
 type Result = { error: { code?: string; message?: string } | null };
 
@@ -377,8 +385,8 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
       .from("discussion_threads")
       .update({ class_id: classB.id, author: inB.private_profile_id })
       .eq("id", post);
+    // Signed-in users can't write class_id at all (column privileges).
     expectRefused(moved, "moving a post to another class together with its author");
-    expect(moved.error?.message, "refused by the class rule").toContain("can't move to another class");
     const { data: still } = await supabase
       .from("discussion_threads")
       .select("class_id, author")
@@ -417,8 +425,8 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
 
     for (const change of [{ root: second, parent: second }, { root: second }, { parent: second }]) {
       const result = await studentClient.from("discussion_threads").update(change).eq("id", reply);
+      // Signed-in users can't write root or parent at all (column privileges).
       expectRefused(result, `a student moving their reply (${Object.keys(change).join(", ")})`);
-      expect(result.error?.message).toContain("by marking its thread a duplicate");
     }
 
     // A moderator can't either: posts only move through Mark Duplicate.
@@ -481,19 +489,20 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
       instructors_only: true
     });
 
-  test("a private and a public thread can't be merged as duplicates, either way", async () => {
+  test("a private thread can't be merged as a duplicate, either way, even with the same person's", async () => {
     const client = await createAuthenticatedClient(plainGrader);
     for (const [dupPrivate, origPrivate] of [
       [true, false],
-      [false, true]
+      [false, true],
+      [true, true]
     ]) {
       const dup = dupPrivate ? await privateRoot(classA.id, student) : await newRoot(classA.id, student);
-      const orig = origPrivate ? await privateRoot(classA.id, otherStudent) : await newRoot(classA.id, otherStudent);
+      const orig = origPrivate ? await privateRoot(classA.id, student) : await newRoot(classA.id, otherStudent);
       const result = await client.rpc("mark_discussion_thread_duplicate", {
         p_duplicate_root_id: dup,
         p_original_root_id: orig
       });
-      expect(result.error?.code, `merging a ${dupPrivate ? "private" : "public"} thread into the other`).toBe("22023");
+      expect(result.error?.code, `merging ${dupPrivate}/${origPrivate} (private duplicate/original)`).toBe("22023");
       const row = await thread(dup);
       expect(row.root, "the duplicate stays its own thread").toBe(dup);
       expect(row.instructors_only).toBe(dupPrivate);
@@ -566,7 +575,10 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     for (const values of [
       { likes_count: 999 },
       { created_at: "2000-01-01T00:00:00Z" },
-      { duplicate_marked_by_display_name: "Prof. Fake" }
+      { duplicate_marked_by_display_name: "Prof. Fake" },
+      // The app never publishes or unpublishes a post by updating it (a published reply changed its
+      // question's count with the reply locked first).
+      { draft: true }
     ]) {
       expectRefused(
         await studentClient.from("discussion_threads").update(values).eq("id", post),
@@ -874,16 +886,17 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
       );
     }
 
-    // A reply in a public thread can be made private by its author, and setting the thread's
-    // visibility to what it already is doesn't make it public again.
-    const madePrivate = await (await createAuthenticatedClient(otherStudent))
-      .from("discussion_threads")
-      .update({ instructors_only: true })
-      .eq("id", publicReply)
-      .select("instructors_only")
-      .single();
-    expect(madePrivate.error).toBeNull();
-    expect(madePrivate.data!.instructors_only).toBe(true);
+    // A reply's visibility is set when it is posted: its author can't make it private later. And
+    // setting the thread's visibility to what it already is doesn't make a private reply public.
+    expectRefused(
+      await (await createAuthenticatedClient(otherStudent))
+        .from("discussion_threads")
+        .update({ instructors_only: true })
+        .eq("id", publicReply),
+      "making a reply private later"
+    );
+    expect((await thread(publicReply)).instructors_only).toBe(false);
+    const privateReply = await replyAs(otherStudent, publicThread, { instructors_only: true });
     expect(
       (
         await studentClient.rpc("set_discussion_thread_visibility", {
@@ -892,7 +905,7 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
         })
       ).error
     ).toBeNull();
-    expect((await thread(publicReply)).instructors_only, "the private reply stays private").toBe(true);
+    expect((await thread(privateReply)).instructors_only, "the private reply stays private").toBe(true);
 
     // The visibility setting still changes the thread and its replies together.
     expect(
@@ -907,7 +920,7 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     expect((await thread(reply!.id)).instructors_only).toBe(false);
   });
 
-  test("a merge keeps private replies private, and two people's private threads don't merge", async () => {
+  test("a merge keeps private replies private", async () => {
     const client = await createAuthenticatedClient(plainGrader);
 
     // A public duplicate with one private reply, merged into a public original.
@@ -930,31 +943,6 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
     expect(await thread(privateReply)).toMatchObject({ root: orig, instructors_only: true });
     expect(await thread(publicReply)).toMatchObject({ root: orig, instructors_only: false });
     expect(await thread(dup)).toMatchObject({ root: orig, instructors_only: false });
-
-    // Two private threads by different people: refused either way.
-    const mine = await privateRoot(classA.id, student);
-    const theirs = await privateRoot(classA.id, otherStudent);
-    for (const [d, o] of [
-      [mine, theirs],
-      [theirs, mine]
-    ]) {
-      const result = await client.rpc("mark_discussion_thread_duplicate", {
-        p_duplicate_root_id: d,
-        p_original_root_id: o
-      });
-      expect(result.error?.code).toBe("22023");
-      expect(result.error?.message).toContain("different people");
-      expect((await thread(d)).root).toBe(d);
-    }
-
-    // Two private threads by the same person still merge.
-    const mineAgain = await privateRoot(classA.id, student);
-    const sameAuthor = await client.rpc("mark_discussion_thread_duplicate", {
-      p_duplicate_root_id: mineAgain,
-      p_original_root_id: mine
-    });
-    expect(sameAuthor.error).toBeNull();
-    expect(await thread(mineAgain)).toMatchObject({ root: mine, instructors_only: true });
   });
 
   test("a private reply in a public thread notifies only staff watchers", async () => {
@@ -990,5 +978,487 @@ test.describe("Discussion moderation follows moderate_discussion (#1010)", () =>
       ).data!.length;
     expect(await notified(instructor), "a staff watcher").toBe(1);
     expect(await notified(otherStudent), "a student watcher").toBe(0);
+  });
+
+  /** The ids among `ids` that `user` can read, signed in as them. */
+  async function readable(user: TestingUser, ids: number[]) {
+    const { data, error } = await (await createAuthenticatedClient(user))
+      .from("discussion_threads")
+      .select("id")
+      .in("id", ids);
+    expect(error).toBeNull();
+    return data!.map((r) => r.id).sort((a, b) => a - b);
+  }
+
+  /** A reply written as `user`, signed in. */
+  async function replyAs(
+    user: TestingUser,
+    root: number,
+    values: { parent?: number; instructors_only?: boolean } = {}
+  ) {
+    const { data, error } = await (
+      await createAuthenticatedClient(user)
+    )
+      .from("discussion_threads")
+      .insert({
+        subject: "Re",
+        body: `E2E reply ${++unique}`,
+        topic_id: topics[classA.id][0],
+        author: user.private_profile_id,
+        class_id: classA.id,
+        parent: values.parent ?? root,
+        root,
+        instructors_only: values.instructors_only ?? false
+      })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    return data!.id;
+  }
+
+  test("hiding a thread and showing it again keeps a reply that was private before private", async () => {
+    const studentClient = await createAuthenticatedClient(student);
+    const root = await newRoot(classA.id, student);
+    const publicReply = await newReply(classA.id, root, otherStudent);
+    const ownPrivateReply = await replyAs(otherStudent, root, { instructors_only: true });
+
+    const setVisibility = (p_instructors_only: boolean) =>
+      studentClient.rpc("set_discussion_thread_visibility", { p_thread_id: root, p_instructors_only });
+    expect((await setVisibility(true)).error).toBeNull();
+    expect((await thread(publicReply)).instructors_only, "hidden with the thread").toBe(true);
+    // A staff reply posted while the thread is private.
+    const staffReply = await replyAs(plainGrader, root);
+    expect((await thread(staffReply)).instructors_only).toBe(true);
+
+    expect((await setVisibility(false)).error).toBeNull();
+    expect((await thread(publicReply)).instructors_only, "shown again with the thread").toBe(false);
+    expect((await thread(staffReply)).instructors_only, "a reply posted while hidden is shown too").toBe(false);
+    expect((await thread(ownPrivateReply)).instructors_only, "private before, so it stays private").toBe(true);
+  });
+
+  test("a private post is readable only by staff, its author, and a private thread's question author", async () => {
+    const third = await createUserInClass({ role: "student", class_id: classA.id });
+
+    // A public question by `student`, with a public reply by otherStudent and private replies by a
+    // grader and by `third`. Before, everyone with a post in the thread could read the private ones.
+    const publicRoot = await newRoot(classA.id, student);
+    const publicReply = await newReply(classA.id, publicRoot, otherStudent);
+    const staffPrivate = await replyAs(plainGrader, publicRoot, { instructors_only: true });
+    const thirdPrivate = await replyAs(third, publicRoot, { instructors_only: true });
+    const all = [publicRoot, publicReply, staffPrivate, thirdPrivate].sort((a, b) => a - b);
+    const publicOnly = [publicRoot, publicReply].sort((a, b) => a - b);
+
+    expect(await readable(student, all), "the public question's author").toEqual(publicOnly);
+    expect(await readable(otherStudent, all), "someone with a post in the thread").toEqual(publicOnly);
+    expect(await readable(third, all), "a private reply's own author").toEqual(
+      [...publicOnly, thirdPrivate].sort((a, b) => a - b)
+    );
+    expect(await readable(instructor, all), "staff").toEqual(all);
+    expect(await readable(plainGrader, all), "staff").toEqual(all);
+
+    // The question's author makes their thread private for a moment: the replies that were private on
+    // their own stay unreadable to them (only replies hidden with the thread are theirs to read).
+    const studentClient = await createAuthenticatedClient(student);
+    expect(
+      (
+        await studentClient.rpc("set_discussion_thread_visibility", {
+          p_thread_id: publicRoot,
+          p_instructors_only: true
+        })
+      ).error
+    ).toBeNull();
+    expect(await readable(student, all), "the author of a thread made private").toEqual(publicOnly);
+    expect(
+      (
+        await studentClient.rpc("set_discussion_thread_visibility", {
+          p_thread_id: publicRoot,
+          p_instructors_only: false
+        })
+      ).error
+    ).toBeNull();
+    expect((await thread(staffPrivate)).instructors_only, "still private").toBe(true);
+
+    // A private question by `student`: they read the staff replies; another student reads nothing.
+    const privateQuestion = await privateRoot(classA.id, student);
+    const staffAnswer = await replyAs(plainGrader, privateQuestion);
+    const privateIds = [privateQuestion, staffAnswer].sort((a, b) => a - b);
+    expect(await readable(student, privateIds), "the private question's author").toEqual(privateIds);
+    expect(await readable(otherStudent, privateIds), "another student").toEqual([]);
+  });
+
+  test("a merge doesn't let a student with a post in the duplicate read the original's private replies", async () => {
+    const orig = await newRoot(classA.id, otherStudent);
+    const origPrivate = await replyAs(plainGrader, orig, { instructors_only: true });
+    const dup = await newRoot(classA.id, student);
+    const merged = await (
+      await createAuthenticatedClient(plainGrader)
+    ).rpc("mark_discussion_thread_duplicate", { p_duplicate_root_id: dup, p_original_root_id: orig });
+    expect(merged.error).toBeNull();
+    expect((await thread(dup)).root).toBe(orig);
+    // `student` now has a post in the original's thread, which used to unlock its private posts.
+    expect(await readable(student, [orig, dup, origPrivate]), "signed in as the student").toEqual(
+      [orig, dup].sort((a, b) => a - b)
+    );
+  });
+
+  /** Watches `root` for each user, as the service role. */
+  async function watch(root: number, ...users: TestingUser[]) {
+    for (const user of users) {
+      const { error } = await supabase
+        .from("discussion_thread_watchers")
+        .upsert(
+          { user_id: user.user_id, class_id: classA.id, discussion_thread_root_id: root, enabled: true },
+          { onConflict: "user_id,discussion_thread_root_id" }
+        );
+      expect(error).toBeNull();
+    }
+  }
+
+  /** Reply notifications `user` got about post `postId`. */
+  async function replyNotices(user: TestingUser, postId: number) {
+    const { data, error } = await supabase
+      .from("notifications")
+      .select("id")
+      .eq("user_id", user.user_id)
+      .eq("body->>new_comment_id", String(postId))
+      .eq("body->>action", "reply");
+    expect(error).toBeNull();
+    return data!.length;
+  }
+
+  /** The users with an unread mark row for post `postId`. */
+  async function markedFor(postId: number) {
+    const { data, error } = await supabase
+      .from("discussion_thread_read_status")
+      .select("user_id")
+      .eq("discussion_thread_id", postId);
+    expect(error).toBeNull();
+    return data!.map((r) => r.user_id);
+  }
+
+  /** The digest's copy of the read rule must say exactly what reading as `user` says. */
+  async function expectDigestRuleMatches(user: TestingUser, ids: number[]) {
+    const { data, error } = await supabase.rpc("discussion_threads_readable_by", {
+      p_user_id: user.user_id,
+      p_thread_ids: ids
+    });
+    expect(error).toBeNull();
+    expect(
+      ((data ?? []) as number[]).sort((a, b) => a - b),
+      "discussion_threads_readable_by matches the read policy"
+    ).toEqual(await readable(user, ids));
+  }
+
+  test("a reply's author can't make it private later and read the private replies under it", async () => {
+    // A public question by otherStudent; `third` replies publicly, and `student` answers that reply
+    // privately. Making their reply private would have let `third` read what's under it.
+    const third = await createUserInClass({ role: "student", class_id: classA.id });
+    const root = await newRoot(classA.id, otherStudent);
+    const thirdReply = await replyAs(third, root);
+    const privateUnder = await replyAs(student, root, { parent: thirdReply, instructors_only: true });
+    expectRefused(
+      await (await createAuthenticatedClient(third))
+        .from("discussion_threads")
+        .update({ instructors_only: true })
+        .eq("id", thirdReply),
+      "making their reply private"
+    );
+    const all = [root, thirdReply, privateUnder].sort((a, b) => a - b);
+    expect(await readable(third, all)).toEqual([root, thirdReply].sort((a, b) => a - b));
+    expect(await replyNotices(third, privateUnder), "watching the thread, but can't read it").toBe(0);
+    expect(await markedFor(privateUnder)).not.toContain(third.user_id);
+    for (const user of [third, student, otherStudent, plainGrader]) {
+      await expectDigestRuleMatches(user, all);
+    }
+  });
+
+  test("a private question's author is notified of the staff answers, and other watchers aren't", async () => {
+    const question = await privateRoot(classA.id, student);
+    await watch(question, student, otherStudent);
+    const answer = await replyAs(plainGrader, question);
+    expect((await thread(answer)).instructors_only).toBe(true);
+    expect(await replyNotices(student, answer), "the question's author").toBe(1);
+    expect(await replyNotices(otherStudent, answer), "another student watching").toBe(0);
+    await expectDigestRuleMatches(student, [question, answer]);
+    await expectDigestRuleMatches(otherStudent, [question, answer]);
+  });
+
+  test("the reply count and unread marks show only replies every reader of the question can read", async () => {
+    const third = await createUserInClass({ role: "student", class_id: classA.id });
+    const root = await newRoot(classA.id, student);
+    const publicReply = await newReply(classA.id, root, otherStudent);
+    const thirdPrivate = await replyAs(third, root, { instructors_only: true });
+    // Read as a student, the way every list and realtime row carries it.
+    const count = async () => {
+      const { data, error } = await (await createAuthenticatedClient(otherStudent))
+        .from("discussion_threads")
+        .select("children_count")
+        .eq("id", root)
+        .single();
+      expect(error).toBeNull();
+      return data!.children_count;
+    };
+    expect(await count(), "a private reply isn't counted").toBe(1);
+
+    // A mark made before #1010 for a private reply its owner can't read: the cleanup the migration
+    // runs once removes it.
+    expect(
+      (
+        await supabase.from("discussion_thread_read_status").insert({
+          user_id: otherStudent.user_id,
+          discussion_thread_id: thirdPrivate,
+          discussion_thread_root_id: root
+        })
+      ).error
+    ).toBeNull();
+    expect((await supabase.rpc("prune_discussion_thread_read_status", { p_root: root })).error).toBeNull();
+    expect(await markedFor(thirdPrivate)).not.toContain(otherStudent.user_id);
+    expect(await markedFor(thirdPrivate), "its author keeps theirs").toContain(third.user_id);
+
+    // `third` had unread marks for the question and the public reply while they were public.
+    expect(await markedFor(root)).toContain(third.user_id);
+    expect(await markedFor(publicReply)).toContain(third.user_id);
+
+    // Hidden: the public reply is now private with the thread, which its question's author reads.
+    const studentClient = await createAuthenticatedClient(student);
+    expect(
+      (await studentClient.rpc("set_discussion_thread_visibility", { p_thread_id: root, p_instructors_only: true }))
+        .error
+    ).toBeNull();
+    const asStaff = async () =>
+      (await supabase.from("discussion_threads").select("children_count").eq("id", root).single()).data!.children_count;
+    expect(await asStaff(), "hidden with the thread, so its author still counts it").toBe(1);
+    // `third` can't read the question or that reply now, so their marks for them are gone; their own
+    // private reply keeps its mark.
+    expect(await markedFor(root)).not.toContain(third.user_id);
+    expect(await markedFor(publicReply)).not.toContain(third.user_id);
+    expect(await markedFor(publicReply), "its author keeps theirs").toContain(otherStudent.user_id);
+    expect(await markedFor(thirdPrivate)).toContain(third.user_id);
+
+    // A staff reply while hidden counts; showing the thread again keeps the count.
+    await replyAs(plainGrader, root);
+    expect(await asStaff()).toBe(2);
+    expect(
+      (await studentClient.rpc("set_discussion_thread_visibility", { p_thread_id: root, p_instructors_only: false }))
+        .error
+    ).toBeNull();
+    expect(await count()).toBe(2);
+  });
+
+  test("a merge recounts only the original's thread", async () => {
+    const orig = await newRoot(classA.id, otherStudent);
+    await newReply(classA.id, orig, student);
+    const dup = await newRoot(classA.id, student);
+    await newReply(classA.id, dup, otherStudent);
+    await newReply(classA.id, dup, otherStudent);
+    // Another thread in the class with a wrong count: the old class-wide recount would have fixed it,
+    // so it staying wrong shows the merge only recounted the original's thread.
+    const bystander = await newRoot(classA.id, otherStudent);
+    expect(
+      (await supabase.from("discussion_threads").update({ children_count: 99 }).eq("id", bystander)).error
+    ).toBeNull();
+    const merged = await (
+      await createAuthenticatedClient(plainGrader)
+    ).rpc("mark_discussion_thread_duplicate", { p_duplicate_root_id: dup, p_original_root_id: orig });
+    expect(merged.error).toBeNull();
+    const { data } = await supabase.from("discussion_threads").select("children_count").eq("id", orig).single();
+    expect(data!.children_count, "its reply, the duplicate and the duplicate's two replies").toBe(4);
+    const { data: other } = await supabase
+      .from("discussion_threads")
+      .select("children_count")
+      .eq("id", bystander)
+      .single();
+    expect(other!.children_count, "another thread in the class isn't recounted").toBe(99);
+  });
+
+  test("a reply's thread must be in the reply's class, even for someone in both classes", async () => {
+    // One person enrolled in both classes, so both threads are visible to them.
+    const both = await createUserInClass({ role: "student", class_id: classA.id });
+    const bothB = await createUserInClass({ role: "student", class_id: classB.id, email: both.email });
+    expect(bothB.user_id).toBe(both.user_id);
+    const rootB = await newRoot(classB.id, studentB);
+    // Inconsistent old data, written as the service role: a class A post whose thread is in class B.
+    const strayA = await servicePost({
+      class_id: classA.id,
+      topic_id: topics[classA.id][0],
+      author: otherStudent.private_profile_id,
+      parent: rootB,
+      root: rootB
+    });
+    expectRefused(
+      await (await createAuthenticatedClient(both)).from("discussion_threads").insert({
+        subject: "Re",
+        body: `E2E cross-class reply ${++unique}`,
+        topic_id: topics[classA.id][0],
+        author: both.private_profile_id,
+        class_id: classA.id,
+        parent: strayA,
+        root: rootB
+      }),
+      "a class A reply in a class B thread"
+    );
+  });
+
+  test("new-post notifications skip disabled enrollments, and a private post's unread rows go only to its readers", async () => {
+    const follower = await createUserInClass({ role: "student", class_id: classA.id });
+    const disabledFollower = await createUserInClass({ role: "student", class_id: classA.id });
+    const topic = topics[classA.id][1];
+    for (const user of [follower, disabledFollower]) {
+      expect(
+        (
+          await supabase
+            .from("discussion_topic_followers")
+            .insert({ user_id: user.user_id, class_id: classA.id, topic_id: topic, following: true })
+        ).error
+      ).toBeNull();
+    }
+    expect(
+      (
+        await supabase
+          .from("user_roles")
+          .update({ disabled: true })
+          .eq("user_id", disabledFollower.user_id)
+          .eq("class_id", classA.id)
+      ).error
+    ).toBeNull();
+
+    const post = async (instructors_only: boolean) => {
+      const { data, error } = await (
+        await createAuthenticatedClient(student)
+      )
+        .from("discussion_threads")
+        .insert({
+          subject: `E2E followed post ${++unique}`,
+          body: "Body",
+          topic_id: topic,
+          author: student.private_profile_id,
+          class_id: classA.id,
+          is_question: true,
+          instructors_only
+        })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      return data!.id;
+    };
+    const publicPost = await post(false);
+    const newPostNotices = async (user: TestingUser) =>
+      (
+        await supabase
+          .from("notifications")
+          .select("id")
+          .eq("user_id", user.user_id)
+          .eq("body->>root_thread_id", String(publicPost))
+          .eq("body->>action", "new_post")
+      ).data!.length;
+    expect(await newPostNotices(follower), "an enrolled follower").toBe(1);
+    expect(await newPostNotices(disabledFollower), "a disabled enrollment").toBe(0);
+
+    // A private question: unread rows only for staff (and not for other students).
+    const privatePost = await post(true);
+    const unreadFor = async (threadId: number) =>
+      (
+        await supabase.from("discussion_thread_read_status").select("user_id").eq("discussion_thread_id", threadId)
+      ).data!.map((r) => r.user_id);
+    const privateRows = await unreadFor(privatePost);
+    expect(privateRows).toEqual(expect.arrayContaining([instructor.user_id, plainGrader.user_id, student.user_id]));
+    expect(privateRows).not.toContain(otherStudent.user_id);
+    expect(privateRows).not.toContain(follower.user_id);
+    // A staff reply in it: the question's author gets a row, other students don't.
+    const staffReply = await replyAs(plainGrader, privatePost);
+    const replyRows = await unreadFor(staffReply);
+    expect(replyRows).toContain(student.user_id);
+    expect(replyRows).not.toContain(otherStudent.user_id);
+    // A public post still marks everyone.
+    expect(await unreadFor(publicPost)).toEqual(expect.arrayContaining([otherStudent.user_id, follower.user_id]));
+  });
+
+  test("a like uses your named profile and can't go on your own post", async () => {
+    const studentClient = await createAuthenticatedClient(student);
+    const like = (discussion_thread: number, creator: string) =>
+      studentClient.from("discussion_thread_likes").insert({ discussion_thread, creator, emoji: "👍" });
+    const others = await newRoot(classA.id, otherStudent);
+    expectRefused(await like(others, student.public_profile_id), "a like with the anonymous profile");
+    const own = await newRoot(classA.id, student);
+    expectRefused(await like(own, student.private_profile_id), "a like on your own post");
+    expect((await like(others, student.private_profile_id)).error, "a like as the app sends it").toBeNull();
+  });
+
+  test("a topic stays in its class, and an error pin's thread must be in the pin's class", async () => {
+    // One instructor of both classes.
+    const instructorA = await createUserInClass({ role: "instructor", class_id: classA.id });
+    const instructorB = await createUserInClass({ role: "instructor", class_id: classB.id, email: instructorA.email });
+    expect(instructorB.user_id).toBe(instructorA.user_id);
+    const client = await createAuthenticatedClient(instructorA);
+
+    const topicId = topics[classA.id][1];
+    expectRefused(
+      await client.from("discussion_topics").update({ class_id: classB.id }).eq("id", topicId),
+      "moving a topic to another class"
+    );
+    const { data: topicRow } = await supabase.from("discussion_topics").select("class_id").eq("id", topicId).single();
+    expect(topicRow!.class_id).toBe(classA.id);
+    const renamed = await client
+      .from("discussion_topics")
+      .update({ description: `E2E description ${++unique}` })
+      .eq("id", topicId)
+      .select("id");
+    expect(renamed.data, "other topic edits still work").toHaveLength(1);
+
+    const threadB = await newRoot(classB.id, studentB);
+    const threadA = await newRoot(classA.id, student);
+    const pin = (discussion_thread_id: number) =>
+      client
+        .from("error_pins")
+        .insert({ discussion_thread_id, class_id: classA.id, created_by: instructorA.private_profile_id });
+    expectRefused(await pin(threadB), "a class A pin on a class B thread");
+    expect((await pin(threadA)).error, "a pin on its own class's thread").toBeNull();
+  });
+
+  test("error-pin matches leave out private threads", async () => {
+    const assignment = await insertAssignment({
+      class_id: classA.id,
+      due_date: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      assignment_slug: `e2e-pins-${Date.now().toString(36)}`
+    });
+    const { submission_id } = await insertPreBakedSubmission({
+      student_profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: classA.id
+    });
+    const publicThread = await newRoot(classA.id, otherStudent);
+    const privateThread = await privateRoot(classA.id, otherStudent);
+    for (const discussion_thread_id of [publicThread, privateThread]) {
+      const { data: pin, error } = await supabase
+        .from("error_pins")
+        .insert({
+          discussion_thread_id,
+          class_id: classA.id,
+          assignment_id: assignment.id,
+          created_by: instructor.private_profile_id
+        })
+        .select("id")
+        .single();
+      expect(error).toBeNull();
+      expect(
+        (await supabase.from("error_pin_submission_matches").insert({ error_pin_id: pin!.id, submission_id })).error
+      ).toBeNull();
+    }
+    const { data, error } = await (
+      await createAuthenticatedClient(student)
+    ).rpc("get_error_pin_matches_for_submission", { p_submission_id: submission_id });
+    expect(error).toBeNull();
+    const threads = (data as { discussion_thread_id: number }[]).map((m) => m.discussion_thread_id);
+    expect(threads, "the student sees the public thread's pin only").toEqual([publicThread]);
+  });
+
+  test("the unused watcher cache and ordinal counter tables are gone", async () => {
+    for (const table of ["discussion_thread_watcher_cache", "discussion_thread_ordinal_counters"]) {
+      const { error } = await supabase
+        .from(table as "discussion_threads")
+        .select("*")
+        .limit(1);
+      expect(error, `${table} no longer exists`).not.toBeNull();
+    }
   });
 });

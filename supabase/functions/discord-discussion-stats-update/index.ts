@@ -168,6 +168,20 @@ async function runStatsUpdate(
 
   const stats = { processed: 0, updated: 0, skipped: 0, errors: 0 };
 
+  // A private thread whose Discord message is still up (its delete failed, or a worker from before
+  // delete_message dead-lettered it during a rollout) gets its delete queued again (#1010). The
+  // tracking row stays until the worker has deleted the message, so this stops once it has.
+  const { data: deletesQueued, error: deletesError } = await supabase.rpc("queue_discussion_discord_deletes", {});
+  if (deletesError) {
+    console.error(
+      "[discord-discussion-stats-update] Could not queue deletes of private threads' messages:",
+      deletesError
+    );
+    Sentry.captureException(deletesError, scope);
+  } else if (deletesQueued) {
+    console.log(`[discord-discussion-stats-update] Queued ${deletesQueued} deletes of private threads' messages`);
+  }
+
   // Process messages in batches using offset-based pagination
   const batchSize = 500;
   let offset = 0;
@@ -209,8 +223,9 @@ async function runStatsUpdate(
           "id, class_id, topic_id, subject, body, is_question, answer, author, likes_count, children_count, created_at"
         )
         .in("id", threadIdChunk)
-        // A thread made private after it was posted keeps its Discord message; don't refresh it with
-        // the private post's text (#1010).
+        // A thread made private has its Discord message deleted (#1010), but its tracking row can
+        // still be here for a moment (a send in flight, a delete still queued). Don't refresh that
+        // message with the private post's text.
         .eq("instructors_only", false);
 
       if (threadsError) {

@@ -18,8 +18,11 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
 import AssignmentForm from "../../new/form";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 export default function EditAssignment() {
+  const errorRole = useStaffErrorRole();
   const { course_id, assignment_id } = useParams();
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
@@ -313,8 +316,7 @@ export default function EditAssignment() {
                 supabase
               );
             } catch (graderValidationError) {
-              const detail =
-                graderValidationError instanceof Error ? graderValidationError.message : String(graderValidationError);
+              const detail = getUserFacingErrorMessage(graderValidationError, { role: errorRole });
               throw new Error(
                 `The autograder could not be enabled: its grader repository ${graderRow.grader_repo} could not be ` +
                   `read (${detail}). Check that the repository still exists and contains a valid pawtograder.yml, ` +
@@ -674,7 +676,7 @@ export default function EditAssignment() {
               .eq("id", syncTarget.assignmentId)
               .eq("has_autograder", values.has_autograder);
             if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
-            const detail = syncError instanceof Error ? syncError.message : String(syncError);
+            const detail = getUserFacingErrorMessage(syncError, { role: errorRole });
             if (rollbackError) {
               toastAutograderSyncFailed(detail, syncTarget);
             } else {
@@ -726,7 +728,8 @@ export default function EditAssignment() {
       updateAsync,
       queryData?.has_autograder,
       queryData?.git_provider,
-      revalidateServerCaches
+      revalidateServerCaches,
+      errorRole
     ]
   );
 
