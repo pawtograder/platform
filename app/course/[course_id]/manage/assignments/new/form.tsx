@@ -42,12 +42,16 @@ import { useFeatureEnabled, useSuggestedDueDateEmphasisEnabled } from "@/hooks/u
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import {
+  FORGEJO_AUTOGRADER_REQUIRED_REASON,
   FORGEJO_UNSUPPORTED_SETTINGS,
+  forgejoAutograderLockedOn,
   forgejoSettingState,
   repoModeUnavailableReason,
   submissionModeUnavailableReason
 } from "@/lib/gitProviderOptions";
 import RepositoryHostPicker, { useSavedAssignment, useSelectedGitProvider } from "./repositoryHostPicker";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Form-local Field wrapper. For `orientation="horizontal"` it lays the field out as a
@@ -639,7 +643,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   // to 'none' and back left it false with the checkbox re-enabled and unchecked, silently
   // turning a mode experiment into a repo-only assignment. Both save paths already coerce
   // the persisted value, so display is all that is needed here.
-  const autograderChecked = !autograderDisabled && watch("has_autograder") !== false;
+  // Forgejo has no push-direct submissions yet, so its autograder is held on (both save paths write true).
+  const autograderLockedOn = !autograderDisabled && forgejoAutograderLockedOn(provider, saved);
+  const autograderChecked = !autograderDisabled && (autograderLockedOn || watch("has_autograder") !== false);
   // Forgejo runs grade.yml in Forgejo Actions (#1239), so the GitHub wording below doesn't apply.
   const isForgejo = provider === "forgejo";
   // fork-from-prior adopts the SOURCE assignment's handout repo and forks each
@@ -730,11 +736,13 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
           <Fieldset.Content>
             <Field
               helperText={
-                autograderDisabled || isForgejo
-                  ? undefined
-                  : autograderChecked
-                    ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
-                    : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
+                autograderLockedOn
+                  ? FORGEJO_AUTOGRADER_REQUIRED_REASON
+                  : autograderDisabled || isForgejo
+                    ? undefined
+                    : autograderChecked
+                      ? "Handout and student repositories include the grading workflow (.github/workflows/grade.yml), and a push with #submit in the commit message runs it."
+                      : "Handout and student repositories are created WITHOUT the grading workflow, so no GitHub Actions run and students never see a failing check. Every push to the student repository creates a submission for you to grade by hand — no #submit needed. A solution repository is still created for your reference solution and grading notes."
               }
             >
               {forkAutograderMismatch && (
@@ -753,7 +761,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                 render={({ field }) => (
                   <Checkbox.Root
                     checked={autograderChecked}
-                    disabled={autograderDisabled}
+                    disabled={autograderDisabled || autograderLockedOn}
                     onCheckedChange={(checked) => field.onChange(!!checked.checked)}
                   >
                     <Checkbox.HiddenInput />
@@ -1030,6 +1038,7 @@ export default function AssignmentForm({
   form: UseFormReturnType<Assignment>;
   onSubmit: (values: FieldValues) => void;
 }) {
+  const errorRole = useStaffErrorRole();
   const {
     handleSubmit,
     register,
@@ -1138,14 +1147,14 @@ export default function AssignmentForm({
           description: "An error occurred while saving the assignment. Please try again."
         });
         toaster.error({
-          title: "Error creating assignment: " + (error instanceof Error ? error.name : "Unknown"),
-          description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
+          title: "Error creating assignment",
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setIsSubmitting(false);
       }
     },
-    [onSubmit, timezone]
+    [errorRole, onSubmit, timezone]
   );
 
   return (

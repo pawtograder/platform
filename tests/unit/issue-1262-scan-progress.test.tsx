@@ -29,6 +29,7 @@ jest.mock("@/utils/supabase/client", () => ({
 jest.mock("@/components/ui/toaster", () => ({ toaster: { success: jest.fn(), error: jest.fn() } }));
 jest.mock("next/navigation", () => ({ useParams: () => ({ course_id: "7", assignment_id: "9" }) }));
 jest.mock("@/lib/exam/examClient", () => ({ uploadExamScanBatch: jest.fn() }));
+jest.mock("@/hooks/useStaffErrorRole", () => ({ useStaffErrorRole: () => "instructor" }));
 jest.mock("@/app/course/[course_id]/manage/assignments/[assignment_id]/exam/ExamFeatureGate", () => ({
   ExamFeatureGate: ({ children }: { children: React.ReactNode }) => <>{children}</>
 }));

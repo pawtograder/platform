@@ -9,6 +9,8 @@ import { IoIosThumbsUp, IoIosThumbsDown } from "react-icons/io";
 import { useState } from "react";
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestFeedback } from "@/utils/supabase/DatabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 type HelpRequestFeedbackModalProps = {
   isOpen: boolean;
@@ -33,6 +35,7 @@ export default function HelpRequestFeedbackModal({
   classId,
   studentProfileId
 }: HelpRequestFeedbackModalProps) {
+  const errorRole = useViewerErrorRole();
   const [selectedRating, setSelectedRating] = useState<boolean | null>(null);
 
   const {
@@ -86,7 +89,7 @@ export default function HelpRequestFeedbackModal({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to submit feedback: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to submit feedback: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

@@ -13,6 +13,7 @@ import { DEFAULT_QUEUE_HEALTH_THRESHOLDS } from "@/hooks/useQueueHealth";
 import { parseQueueHealthThresholds } from "@/lib/queueHealthThresholds";
 import { useCourse } from "@/hooks/useCourseController";
 import { toaster } from "@/components/ui/toaster";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type OfficeHoursDescriptionFormData = {
   office_hours_description: string;
@@ -120,6 +121,7 @@ function QueueHealthColorsSection({ classId }: { classId: number | undefined }) 
 }
 
 export default function QueuesSettingsPage() {
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   const course = courseController?.course;
   const queueHealthOn = useCourseFeature(COURSE_FEATURES.OFFICE_HOURS_QUEUE_HEALTH, false);
@@ -164,7 +166,7 @@ export default function QueuesSettingsPage() {
     } catch (error) {
       toaster.error({
         title: "Failed to update office hours description",
-        description: getErrorMessage(error)
+        description: getErrorMessage(error, { role: errorRole })
       });
     }
   };

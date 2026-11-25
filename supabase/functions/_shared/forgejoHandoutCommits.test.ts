@@ -7,10 +7,15 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno@10.10.0";
-import { fromForgejoPush, handleForgejoPush, type ForgejoPushPayload } from "../forgejo-repo-webhook/webhook.ts";
+import type { ForgejoPushPayload } from "../forgejo-repo-webhook/webhook.ts";
 import type { ForgejoConfig } from "./ForgejoWrapper.ts";
 import { recordForgejoHandoutPush, recordHandoutCommits, recordInitialHandoutCommit } from "./forgejoHandoutCommits.ts";
 import type { Database } from "./SupabaseTypes.d.ts";
+
+// webhook.ts imports GitHubWrapper (through PushDirectSubmission), which builds a GitHub App at import time
+// and needs a non-empty private key.
+Deno.env.set("GITHUB_PRIVATE_KEY_STRING", Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "test-placeholder-key");
+const { fromForgejoPush, handleForgejoPush } = await import("../forgejo-repo-webhook/webhook.ts");
 
 type Row = Record<string, unknown>;
 type Upsert = { table: string; rows: Row[]; options: unknown };

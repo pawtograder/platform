@@ -1,12 +1,15 @@
 "use client";
+import RepoLink from "@/components/ui/link";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { confirmPrLink } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SubmissionPrLink } from "@/utils/supabase/DatabaseTypes";
-import { Alert, Badge, Box, Heading, HStack, Link, Spinner, Stack, Table, Text } from "@chakra-ui/react";
+import { Alert, Badge, Box, Heading, HStack, Spinner, Stack, Table, Text } from "@chakra-ui/react";
 import { CrudFilter, useList } from "@refinedev/core";
 import { useMemo, useState } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 /**
  * Student-facing panel for pr-mode assignments: explains how to submit (open a
@@ -30,6 +33,7 @@ export default function PrSubmissionPanel({
   profileId?: string;
   onConfirmed?: () => void;
 }) {
+  const repoHost = useRepoWebHost(assignment.git_provider);
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
 
   const filters = useMemo(() => {
@@ -68,7 +72,7 @@ export default function PrSubmissionPanel({
     } catch (e) {
       toaster.error({
         title: "Could not confirm pull request",
-        description: e instanceof Error ? e.message : "Unknown error"
+        description: getUserFacingErrorMessage(e)
       });
     } finally {
       setConfirmingId(null);
@@ -85,9 +89,9 @@ export default function PrSubmissionPanel({
       {assignment.upstream_repo ? (
         <Text fontSize="sm" color="fg.muted" mb={3}>
           Submit by opening a pull request against{" "}
-          <Link href={`https://github.com/${assignment.upstream_repo}`} target="_blank" rel="noopener noreferrer">
+          <RepoLink href={repoWebUrl(repoHost, assignment.upstream_repo)} target="_blank" rel="noopener noreferrer">
             {assignment.upstream_repo}
-          </Link>{" "}
+          </RepoLink>{" "}
           targeting the <code>{baseBranch}</code> branch
           {assignment.pr_identification === "branch_convention" && assignment.pr_branch_convention ? (
             <>
@@ -140,13 +144,13 @@ export default function PrSubmissionPanel({
               {links.map((link) => (
                 <Table.Row key={link.id}>
                   <Table.Cell>
-                    <Link
-                      href={`https://github.com/${link.pr_repo}/pull/${link.pr_number}`}
+                    <RepoLink
+                      href={repoWebUrl(repoHost, link.pr_repo, `/pull/${link.pr_number}`)}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       {link.pr_repo}#{link.pr_number}
-                    </Link>
+                    </RepoLink>
                   </Table.Cell>
                   <Table.Cell>
                     {link.confirmed ? (

@@ -5,6 +5,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, IconButton, Input, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useDelete, useList } from "@refinedev/core";
@@ -115,6 +116,7 @@ function UserName({ userId, courseId }: UserNameProps) {
 }
 
 export default function FlashCardDecksTable({ courseId, onDeckDeleted }: FlashcardDecksTableProps) {
+  const canManageFlashcards = useCapability("manage_flashcards");
   const { mutateAsync: deleteDeck, isLoading: isDeleting } = useDelete();
 
   const handleDeleteDeck = useCallback(
@@ -256,37 +258,41 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
           return formattedDate.toLowerCase().includes(filterString);
         }
       },
-      {
-        id: "actions",
-        header: "Actions",
-        cell: function render({ row }: { row: Row<FlashcardDeckRow> }) {
-          const deck = row.original;
+      ...(canManageFlashcards
+        ? [
+            {
+              id: "actions",
+              header: "Actions",
+              cell: function render({ row }: { row: Row<FlashcardDeckRow> }) {
+                const deck = row.original;
 
-          return (
-            <HStack gap={2} justifyContent="center">
-              <PopConfirm
-                triggerLabel="Delete deck"
-                trigger={
-                  <IconButton
-                    aria-label="Delete deck"
-                    size="sm"
-                    variant="ghost"
-                    colorPalette="red"
-                    loading={isDeleting}
-                  >
-                    <FaTrash />
-                  </IconButton>
-                }
-                confirmHeader="Delete Flashcard Deck"
-                confirmText={`Are you sure you want to delete the deck "${deck.name}"? This action cannot be undone.`}
-                onConfirm={async () => await handleDeleteDeck(deck.id, deck.name)}
-              />
-            </HStack>
-          );
-        }
-      }
+                return (
+                  <HStack gap={2} justifyContent="center">
+                    <PopConfirm
+                      triggerLabel="Delete deck"
+                      trigger={
+                        <IconButton
+                          aria-label="Delete deck"
+                          size="sm"
+                          variant="ghost"
+                          colorPalette="red"
+                          loading={isDeleting}
+                        >
+                          <FaTrash />
+                        </IconButton>
+                      }
+                      confirmHeader="Delete Flashcard Deck"
+                      confirmText={`Are you sure you want to delete the deck "${deck.name}"? This action cannot be undone.`}
+                      onConfirm={async () => await handleDeleteDeck(deck.id, deck.name)}
+                    />
+                  </HStack>
+                );
+              }
+            } satisfies ColumnDef<FlashcardDeckRow>
+          ]
+        : [])
     ],
-    [handleDeleteDeck, isDeleting, courseId]
+    [handleDeleteDeck, isDeleting, courseId, canManageFlashcards]
   );
 
   const table = useTable<FlashcardDeckRow>({

@@ -1,12 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import {
-  archiveRepoAndLock,
-  enqueueGithubArchiveRepo,
-  enqueueSyncRepoPermissions,
-  syncRepoPermissions
-} from "../_shared/GitHubWrapper.ts";
+import { enqueueGithubArchiveRepo, enqueueSyncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
@@ -50,6 +45,22 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
     throw new IllegalArgumentError("You are not a member of any group for this assignment");
   }
 
+  if (assignment.git_provider === "forgejo") {
+    // Membership removal, readiness, and archive queueing must commit together.
+    // function-grants: service-role
+    const { data: removed, error } = await adminSupabase.rpc("leave_forgejo_assignment_group", {
+      p_membership_id: membership.id
+    });
+    if (error) {
+      console.error(error);
+      throw new Error("Failed to remove member from group");
+    }
+    if (!removed) {
+      throw new IllegalArgumentError("You are not a member of any group for this assignment");
+    }
+    return { message: "You have left the group" };
+  }
+
   //OK I guess we can do it!
   const { error: remove_member_error } = await adminSupabase
     .from("assignment_groups_members")
@@ -72,7 +83,9 @@ async function handleAssignmentGroupLeave(req: Request, scope: Sentry.Scope): Pr
     throw new Error("Failed to get remaining members");
   }
   const repository = membership.assignment_groups!.repositories[0];
-  if (repository) {
+  if (repository?.git_provider === "github") {
+    // Only a GitHub row gets these jobs: a Forgejo repo's owner/name could also name a GitHub repo, which they
+    // would change.
     if (remaining_members.length === 0) {
       //Archive
       await enqueueGithubArchiveRepo(membership.class_id, membership.classes!.github_org!, repository.repository);

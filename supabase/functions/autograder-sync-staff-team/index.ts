@@ -38,10 +38,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!classData) {
       throw new UserVisibleError("No class found for course");
     }
-    scope?.setTag("github_org", classData.github_org!);
+    const githubOrg = classData.github_org?.trim();
+    if (!githubOrg) {
+      throw new UserVisibleError("Class does not have a GitHub organization", 400);
+    }
+    scope?.setTag("github_org", githubOrg);
     scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(
-      classData.github_org!,
+      githubOrg,
       classData.slug!,
       async () => {
         const { data: staff, error: staffError } = await adminSupabase
@@ -77,10 +81,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (!classData) {
       throw new UserVisibleError("No class found for course");
     }
-    scope?.setTag("github_org", classData.github_org!);
+    const githubOrg = classData.github_org?.trim();
+    if (!githubOrg) {
+      throw new UserVisibleError("Class does not have a GitHub organization", 400);
+    }
+    scope?.setTag("github_org", githubOrg);
     scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(
-      classData.github_org!,
+      githubOrg,
       classData.slug!,
       async () => {
         const { data: staff, error: staffError } = await supabase

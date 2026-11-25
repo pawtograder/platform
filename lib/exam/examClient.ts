@@ -7,6 +7,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeAnswerType } from "./answerTypes";
 import { generateExamPdf, type GeneratedQuestion } from "./pdfGenerate";
 import { rasterizePdf, type RasterPage } from "./pdfRasterize";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 export type UploadedTemplate = {
   examId: number;
@@ -267,7 +268,9 @@ export async function uploadExamScanBatch(
       if (insErr) throw new Error(`insert scan page failed: ${insErr.message}`);
     }
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    // Shown to staff on the scans page (exam_scan_batches.error). No role: lib/ has no hooks, and the
+    // errors here are wrapped in Error, so the role-specific 42501 wording can't apply.
+    const message = getUserFacingErrorMessage(e);
     await supabase
       .from("exam_scan_batches")
       .update({ status: "error", error: `incomplete upload: ${message}` })

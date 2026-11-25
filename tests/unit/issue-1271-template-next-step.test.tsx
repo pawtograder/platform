@@ -35,6 +35,13 @@ jest.mock("@/utils/supabase/client", () => ({
 
 jest.mock("@/components/ui/toaster", () => ({ toaster: { error: jest.fn(), success: jest.fn() } }));
 
+// Staff error messages pick their wording from useIsInstructor (useStaffErrorRole), which needs a
+// ClassProfileProvider; this renders the page without one.
+jest.mock("@/hooks/useClassProfiles", () => ({
+  ...jest.requireActual("@/hooks/useClassProfiles"),
+  useIsInstructor: () => true
+}));
+
 // The feature flag has its own tests (#1196); here it must not hide the page under test.
 jest.mock("@/app/course/[course_id]/manage/assignments/[assignment_id]/exam/ExamFeatureGate", () => ({
   ExamFeatureGate: ({ children }: { children: React.ReactNode }) => <>{children}</>

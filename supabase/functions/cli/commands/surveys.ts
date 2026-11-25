@@ -1,12 +1,12 @@
 /**
- * Surveys commands — copy between classes.
+ * Surveys commands - copy between classes.
  */
 
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveSurvey, resolveAssignment } from "../utils/resolvers.ts";
-import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { assertUserCanAccessClass, assertUserHasClassCapability } from "../utils/auth.ts";
 import {
   copySurveyToClass,
   fetchLatestSurveysForClass,
@@ -37,10 +37,9 @@ async function handleSurveysCopy(ctx: MCPAuthContext, params: Record<string, unk
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
-  // Both sides: reading the source and writing the target each need access, or a
-  // grader in one class could copy content into a class they do not belong to.
+  // Reading the source needs staff access; creating the copy needs manage_surveys in the target.
   await assertUserCanAccessClass(supabase, ctx.userId, sourceClass.id);
-  await assertUserCanAccessClass(supabase, ctx.userId, targetClass.id);
+  await assertUserHasClassCapability(ctx.userId, targetClass.id, "manage_surveys");
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");

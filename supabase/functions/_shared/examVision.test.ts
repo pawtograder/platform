@@ -43,9 +43,17 @@ Deno.test("a center exactly on the edge counts as inside", () => {
 });
 
 Deno.test("words come back in reading order: top to bottom, then left to right", () => {
-  // Deliberately shuffled: the first row is y = 0.3, the second is y = 0.4.
-  const words = [word("world", 0.4, 0.3), word("line", 0.4, 0.4), word("hello", 0.25, 0.3), word("second", 0.25, 0.4)];
-  assertEquals(wordsInRegion(words, REGION), "hello world second line");
+  // Deliberately shuffled across three lines at y = 0.3, 0.4 and 0.5. Catches rows emitted in the
+  // order their first word was seen rather than top to bottom.
+  const words = [
+    word("world", 0.4, 0.3),
+    word("third", 0.25, 0.5),
+    word("line", 0.4, 0.4),
+    word("hello", 0.25, 0.3),
+    word("row", 0.4, 0.5),
+    word("second", 0.25, 0.4)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "hello world second line third row");
 });
 
 Deno.test("words on one line sort left to right", () => {
@@ -53,11 +61,137 @@ Deno.test("words on one line sort left to right", () => {
   assertEquals(wordsInRegion(words, REGION), "a b c");
 });
 
-Deno.test("rows are bucketed, so a small vertical wobble stays on one line", () => {
-  // Both centers round into the same 0.02-tall band, so x decides the order.
-  // A larger tilt can split one printed line across two bands and reorder it: see #1089.
-  const words = [word("right", 0.45, 0.3005), word("left", 0.25, 0.3)];
-  assertEquals(wordsInRegion(words, REGION), "left right");
+// Each case is one printed line that has to come back left to right.
+const ONE_LINE: { name: string; words: WordBox[]; text: string }[] = [
+  {
+    // Centers 0.311 and 0.309 straddle the old 0.31 band edge. Catches rows cut at fixed
+    // positions, which read "right left".
+    name: "centers either side of a fixed band edge",
+    words: [word("right", 0.45, 0.299), word("left", 0.25, 0.301)],
+    text: "left right"
+  },
+  {
+    // Both centers sit at y 0.301; the tall box (a long word on a tilted scan) has its top edge
+    // higher. Catches rows keyed on the top edge (#1292).
+    name: "boxes of different heights on one center line",
+    words: [word("long", 0.45, 0.281, 0.15, 0.04), word("short", 0.25, 0.291, 0.05, 0.02)],
+    text: "short long"
+  },
+  {
+    // Centers rise 0.004 across the line, the noise left after a scan is lined up. Catches a
+    // tolerance so tight that OCR jitter splits a line.
+    name: "a line drifting slightly upward",
+    words: [word("d", 0.5, 0.296), word("b", 0.3, 0.2987), word("a", 0.2, 0.3), word("c", 0.4, 0.2973)],
+    text: "a b c d"
+  }
+];
+for (const c of ONE_LINE) {
+  Deno.test(`one line stays in order: ${c.name}`, () => {
+    assertEquals(wordsInRegion(c.words, REGION), c.text);
+  });
+}
+
+// Short glyphs (punctuation, quote marks) sit inside a line without sharing its center line.
+const MARKS: { name: string; words: WordBox[]; text: string }[] = [
+  {
+    // All three boxes end at y 0.311, CodeRabbit's example on #1331. Catches a baseline comma
+    // forced onto its own row, which read "first second ,".
+    name: "a comma on the baseline",
+    words: [word("second", 0.4, 0.291), word(",", 0.33, 0.307, 0.01, 0.004), word("first", 0.25, 0.291)],
+    text: "first , second"
+  },
+  {
+    // The comma's center is 0.001 below the line's bottom edge. Catches requiring a mark to sit
+    // strictly inside a line, which would put it on a row of its own and read "first second ,".
+    name: "a comma hanging just below the baseline",
+    words: [word("second", 0.4, 0.291), word(",", 0.33, 0.31, 0.01, 0.004), word("first", 0.25, 0.291)],
+    text: "first , second"
+  },
+  {
+    // The quote mark hangs from the top of the second line, nearer the first line's bottom edge than
+    // the second's. Catches marks measured only against the edge below them, which read "a ' b it s".
+    name: "a quote mark at the top of the line",
+    words: [
+      word("s", 0.4, 0.315),
+      word("'", 0.33, 0.315, 0.01, 0.006),
+      word("it", 0.25, 0.315),
+      word("b", 0.45, 0.291),
+      word("a", 0.25, 0.291)
+    ],
+    text: "a b it ' s"
+  },
+  {
+    // Nothing full-size to attach to. Catches dropping marks when no row has a word.
+    name: "a region holding only punctuation",
+    words: [word("!", 0.4, 0.3, 0.01, 0.004), word("?", 0.25, 0.3, 0.01, 0.004)],
+    text: "? !"
+  }
+];
+for (const c of MARKS) {
+  Deno.test(`short glyphs stay on their line: ${c.name}`, () => {
+    assertEquals(wordsInRegion(c.words, REGION), c.text);
+  });
+}
+
+Deno.test("lines of smaller text stay lines of their own", () => {
+  // CodeRabbit's example on #1331: two lines of smaller text, each under half the region's median
+  // height, below one line of full-size words. Catches small words glued onto the nearest full-size
+  // line however far away it is, which read "A two B one C", and the two small lines merging,
+  // which read "A B C two one".
+  const words = [
+    word("A", 0.22, 0.25, 0.05, 0.04),
+    word("B", 0.34, 0.25, 0.05, 0.04),
+    word("C", 0.46, 0.25, 0.05, 0.04),
+    word("one", 0.42, 0.4, 0.05, 0.015),
+    word("two", 0.28, 0.44, 0.05, 0.015)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "A B C one two");
+});
+
+Deno.test("punctuation stays on its line when it outnumbers the words", () => {
+  // CodeRabbit's example on #1331: four marks and three words, so the region's median height is a
+  // mark's. Catches marks judged only against that median, which put the punctuation on a row of
+  // its own and read "a b c , , , .".
+  const words = [
+    word("a", 0.22, 0.291),
+    word(",", 0.28, 0.307, 0.01, 0.004),
+    word("b", 0.3, 0.291),
+    word(",", 0.36, 0.307, 0.01, 0.004),
+    word("c", 0.38, 0.291),
+    word(",", 0.44, 0.307, 0.01, 0.004),
+    word(".", 0.46, 0.307, 0.01, 0.004)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "a , b , c , .");
+});
+
+Deno.test("a line of smaller text just below full-size words stays its own line", () => {
+  // CodeRabbit's example on #1331: "note" sits 0.0175 below the line, inside half the line's height
+  // but not half its own. Catches a tolerance taken from the line alone, which read "note A B C".
+  const words = [
+    word("A", 0.25, 0.25, 0.05, 0.04),
+    word("B", 0.35, 0.25, 0.05, 0.04),
+    word("C", 0.45, 0.25, 0.05, 0.04),
+    word("note", 0.21, 0.3, 0.05, 0.015)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "A B C note");
+});
+
+Deno.test("a line of smaller text above full-size words is read first", () => {
+  // Catches the smaller line's row being appended after the full-size rows instead of being put
+  // back in page order, which would read "A B note".
+  const words = [
+    word("A", 0.25, 0.4, 0.05, 0.04),
+    word("B", 0.35, 0.4, 0.05, 0.04),
+    word("note", 0.45, 0.3, 0.05, 0.015)
+  ];
+  assertEquals(wordsInRegion(words, REGION), "note A B");
+});
+
+Deno.test("lines 1.2 word heights apart stay separate", () => {
+  // Line two's words sit between line one's across the page. Catches a tolerance loose enough to
+  // merge neighbouring lines, which would read "a c b d".
+  const words = [word("d", 0.5, 0.324), word("b", 0.45, 0.3), word("c", 0.3, 0.324), word("a", 0.25, 0.3)];
+  assertEquals(wordsInRegion(words, REGION), "a b c d");
 });
 
 Deno.test("an empty word list returns empty text", () => {

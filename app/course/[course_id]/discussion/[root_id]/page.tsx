@@ -34,6 +34,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -282,6 +284,7 @@ function ThreadFollowButton({ thread }: { thread: DiscussionThreadType }) {
 }
 
 function DiscussionPost({ root_id }: { root_id: number }) {
+  const errorRole = useViewerErrorRole();
   const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
   const rawRootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
@@ -359,7 +362,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         } catch (error) {
           toaster.error({
             title: "Error",
-            description: `Failed to update visibility: ${error instanceof Error ? error.message : String(error)}`
+            description: `Failed to update visibility: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
           return;
         }
@@ -373,7 +376,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       });
       setEditing(false);
     },
-    [root_id, rootThread, discussionThreadTeasers, visibility, supabase]
+    [root_id, rootThread, discussionThreadTeasers, visibility, supabase, errorRole]
   );
 
   const onClose = useCallback(() => {
@@ -411,7 +414,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       } catch (error) {
         toaster.error({
           title: "Error",
-          description: `Failed to toggle anonymity: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to toggle anonymity: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
         // Revert the state on error
         setAnonymity(anonymity);
@@ -419,7 +422,16 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         setIsTogglingAnonymity(false);
       }
     },
-    [rootThread, anonymity, isCurrentlyAnonymous, isTogglingAnonymity, supabase, discussionThreadTeasers, root_id]
+    [
+      rootThread,
+      anonymity,
+      isCurrentlyAnonymous,
+      isTogglingAnonymity,
+      supabase,
+      discussionThreadTeasers,
+      root_id,
+      errorRole
+    ]
   );
 
   const handleStaffActionUpdate = useCallback(() => {

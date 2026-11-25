@@ -11,8 +11,11 @@ import { useCallback } from "react";
 import type { FieldValues } from "react-hook-form";
 import CreateAssignment from "./form";
 import { Box, Heading, Text } from "@chakra-ui/react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 export default function NewAssignmentPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "create" },
@@ -219,7 +222,9 @@ export default function NewAssignmentPage() {
               // it's the instructor's choice: unchecking it gives a "repo only" assignment (#895),
               // where the handout is created without grade.yml so no Actions ever run. Instructors
               // can still toggle this later on the autograder config page.
-              has_autograder: !isNoRepo && !isPr && getValues("has_autograder") !== false,
+              // A Forgejo assignment always has one: without push-direct submissions on Forgejo, a
+              // push only becomes a submission through a grading run (FORGEJO_AUTOGRADER_REQUIRED_REASON).
+              has_autograder: !isNoRepo && !isPr && (isForgejo || getValues("has_autograder") !== false),
               has_handgrader: true,
               class_id: Number.parseInt(course_id as string),
               // Pinned to individual for quiz/exam/survey, for the same reason repo_mode is
@@ -340,13 +345,13 @@ export default function NewAssignmentPage() {
           toaster.dismiss(loadingToast);
           toaster.error({
             title: "Error creating assignment",
-            description: error instanceof Error ? error.message : "An unexpected error occurred"
+            description: getUserFacingErrorMessage(error, { role: errorRole })
           });
         }
       }
       await create();
     },
-    [course_id, getValues, mutateAsync, revalidateServerCaches]
+    [errorRole, course_id, getValues, mutateAsync, revalidateServerCaches]
   );
   return (
     <Box p={4}>

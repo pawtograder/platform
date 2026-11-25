@@ -68,6 +68,8 @@ import NotificationPermissionWarning, {
 import { formatDistanceToNow } from "date-fns";
 import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Office hours form and UI helper types
@@ -170,6 +172,7 @@ const HelpingTimer = ({ startTime }: { startTime: string }) => {
  */
 const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequest; compact?: boolean }) => {
   const { private_profile_id } = useClassProfiles();
+  const errorRole = useViewerErrorRole();
   const profiles = useAllProfilesForClass();
 
   // Get student data using individual hooks
@@ -204,12 +207,12 @@ const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequ
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData, errorRole]
   );
 
   // Disable assignment actions for resolved/closed requests
@@ -834,6 +837,7 @@ const HelpRequestStudents = ({
   const { course_id } = useParams();
 
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  const errorRole = useViewerErrorRole();
 
   // Get student associations for activity logging
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -860,12 +864,12 @@ const HelpRequestStudents = ({
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData, errorRole]
   );
 
   // Initialize selected students when editing mode is entered
@@ -975,6 +979,7 @@ const HelpRequestStudents = ({
  * @returns JSX element for the chat interface with controls
  */
 export default function HelpRequestChat({ request_id }: { request_id: number }) {
+  const errorRole = useViewerErrorRole();
   const request = useHelpRequest(request_id);
   const { private_profile_id } = useClassProfiles();
   const isStudent = useIsStudent();
@@ -1030,12 +1035,12 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         } catch (error) {
           toaster.error({
             title: "Failed to log activity",
-            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+            description: `Failed to log ${activityType} activity for student: ${getUserFacingErrorMessage(error, { role: errorRole })}`
           });
         }
       }
     },
-    [params.course_id, request_id, studentHelpActivity, helpRequestStudentData]
+    [params.course_id, request_id, studentHelpActivity, helpRequestStudentData, errorRole]
   );
 
   // Note: helpRequestMessages and helpRequestStudentData are already defined above
@@ -1168,11 +1173,11 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       } catch (error) {
         toaster.error({
           title: "Action Failed",
-          description: `Failed to resolve the request: ${error instanceof Error ? error.message : String(error)}`
+          description: `Failed to resolve the request: ${getUserFacingErrorMessage(error, { role: errorRole })}`
         });
       }
     },
-    [helpRequests, request, private_profile_id, logActivityForAllStudents, resolutionModal]
+    [helpRequests, request, private_profile_id, logActivityForAllStudents, resolutionModal, errorRole]
   );
 
   const resolveRequest = useCallback(async () => {

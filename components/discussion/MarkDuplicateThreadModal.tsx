@@ -19,6 +19,8 @@ import { Badge, Box, HStack, Spinner, Stack, Text } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 const MAX_RESULTS = 20;
 const DEBOUNCE_MS = 150;
@@ -69,6 +71,7 @@ export function MarkDuplicateThreadModal({
   duplicateRootId: number;
   onMerged: (originalRootId: number) => void;
 }) {
+  const errorRole = useViewerErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -197,12 +200,12 @@ export function MarkDuplicateThreadModal({
     } catch (e) {
       toaster.error({
         title: "Could not mark duplicate",
-        description: e instanceof Error ? e.message : String(e)
+        description: getUserFacingErrorMessage(e, { role: errorRole })
       });
     } finally {
       setSubmitting(false);
     }
-  }, [course_id, duplicateRootId, selectedId, onClose, onMerged, router, supabase]);
+  }, [course_id, duplicateRootId, selectedId, onClose, onMerged, router, supabase, errorRole]);
 
   const selectedThread = useMemo(
     () => (selectedId !== null ? teasers.find((t) => t.id === selectedId) : undefined),

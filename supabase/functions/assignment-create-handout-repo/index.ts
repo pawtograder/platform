@@ -9,7 +9,7 @@ import {
   publicSupabaseUrl,
   updateAutograderWorkflowHash
 } from "../_shared/GitHubWrapper.ts";
-import { ensureHandoutRepo, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { classForgejoOrg, ensureHandoutRepo, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { forgejoGradeWorkflow } from "../_shared/forgejoGradeWorkflow.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
@@ -125,7 +125,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const config = forgejoConfig();
     if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
     // Lowercased like every Forgejo repository Pawtograder stores (#1093), since Forgejo names are case-insensitive.
-    const org = (assignment.classes.forgejo_org || assignment.classes.slug).toLowerCase();
+    const org = classForgejoOrg(assignment.classes);
     const name = `${assignment.classes.slug}-handout-${assignment.slug}`.toLowerCase();
     scope.setTag("handout_repo_name", name);
     scope.setTag("handout_repo_org", org);

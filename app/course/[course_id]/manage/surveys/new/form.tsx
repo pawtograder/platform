@@ -47,6 +47,8 @@ import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
 import { createClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SurveyTemplateInsert = Database["public"]["Tables"]["survey_templates"]["Insert"];
 
@@ -138,6 +140,7 @@ export default function SurveyForm({
   isEdit?: boolean;
   privateProfileId: string;
 }) {
+  const errorRole = useStaffErrorRole();
   const {
     handleSubmit,
     register,
@@ -193,11 +196,11 @@ export default function SurveyForm({
     } catch (error) {
       toaster.create({
         title: "JSON Validation Failed",
-        description: `Invalid JSON: ${error instanceof Error ? error.message : "Unknown error"}`,
+        description: `Invalid JSON: ${getUserFacingErrorMessage(error, { role: errorRole })}`,
         type: "error"
       });
     }
-  }, [getValues]);
+  }, [errorRole, getValues]);
 
   const loadSampleTemplate = useCallback(() => {
     // Open Template Library modal instead of loading hardcoded sample

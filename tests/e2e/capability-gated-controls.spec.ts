@@ -4,11 +4,21 @@
  *
  * - Manage Review Assignments: its actions, and the Bulk Assign and Reassign pages, need
  *   manage_review_assignments. Without it those two pages send you back to the reviews page.
- * - Manage Groups: every change needs publish_groups; without it the page is read-only.
+ * - Manage Groups: staging changes and publishing need publish_groups; Copy Groups and the mentor
+ *   drop-down need manage_groups. Without either the page is read-only. capability-gated-groups.spec.ts
+ *   covers a role with only one of the two.
+ * - Flashcard Decks: create / delete need manage_flashcards. The default grader role holds it; a
+ *   custom role with it turned off keeps the nav entry and hides list controls and deck-detail add / edit /
+ *   delete card controls.
+ * - Manage Surveys: create / publish / delete need manage_surveys (instructor-only by default).
+ * - Manage Polls: create / open / close / delete need run_polls. The default grader role holds it; a
+ *   custom role with it turned off hides those controls.
  *
- * Default roles only: the instructor role holds both capabilities, the grader role holds neither,
- * until the last test gives the default grader role manage_review_assignments (instructors can edit
- * it since 20261119120000_custom_roles_copy_grader_role.sql).
+ * Default roles only for the review and groups checks: the instructor role holds every capability,
+ * the grader role none of these, until the last review test gives the default grader role
+ * manage_review_assignments (instructors can edit it since 20261119120000_custom_roles_copy_grader_role.sql).
+ * The flashcard, survey and poll checks use their own custom roles so they do not change the default
+ * grader role.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
@@ -24,6 +34,21 @@ import {
 } from "./TestingUtils";
 
 test.describe.configure({ mode: "serial" });
+
+// useCapability is false while loading, and the provider also renders its loaded marker after a
+// failed lookup, with no capabilities. So "hidden" only means something once a lookup for this
+// class has succeeded. The listener goes on before navigating so a fast reply isn't missed.
+async function gotoWhenCapabilitiesLoaded(page: Page, classId: number, url: string, heading: string) {
+  const lookup = page.waitForResponse(
+    (response) =>
+      response.url().includes("/rpc/user_class_capabilities") &&
+      response.url().includes(`class_id=eq.${classId}`) &&
+      response.ok()
+  );
+  await gotoCourseUrlWhenHeadingVisible(page, url, heading);
+  await lookup;
+  await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+}
 
 const REVIEW_LINKS = ["Bulk Assign Grading", "Reassign Grading by Grader"];
 const REVIEW_ACTIONS = [
@@ -99,11 +124,8 @@ test.describe("controls gated by capabilities", () => {
 
   const reviewsUrl = () => `/course/${course.id}/manage/assignments/${assignmentId}/reviews`;
 
-  // useCapability is false while loading, so "hidden" only means something once the answer is in.
   async function gotoWithCapabilities(page: Page, url: string, heading: string) {
-    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
-    await gotoCourseUrlWhenHeadingVisible(page, url, heading);
-    await capabilities;
+    await gotoWhenCapabilitiesLoaded(page, course.id, url, heading);
   }
 
   async function openReviewsTable(page: Page) {
@@ -197,7 +219,7 @@ test.describe("controls gated by capabilities", () => {
     await expect(page.getByRole("button", { name: "Publish Changes" })).toBeEnabled();
   });
 
-  // Runs last: it changes the default grader role, which every other test reads.
+  // Runs last among the review checks: it changes the default grader role, which every other test reads.
   test("a grader sees the review-assignment actions once the default grader role has manage_review_assignments", async ({
     page
   }) => {
@@ -231,5 +253,351 @@ test.describe("controls gated by capabilities", () => {
         .eq("capability", "manage_review_assignments");
       expect(error).toBeNull();
     }
+  });
+});
+
+test.describe("flashcard controls gated by manage_flashcards", () => {
+  test.describe.configure({ timeout: 180_000 });
+  let course: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let graderWithout: TestingUser;
+  // On the default grader role, which holds manage_flashcards.
+  let plainGrader: TestingUser;
+  let deckId: number;
+  let deckName: string;
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    course = await createClass({ name: `E2E Flashcard Gates ${suffix}` });
+    instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
+
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "No Flashcards TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").delete().eq("role_id", role!.id).eq("capability", "manage_flashcards"))
+        .error
+    ).toBeNull();
+
+    const { data: row, error: rowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWithout.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+
+    deckName = `E2E Flashcard Deck ${suffix}`;
+    const { data: deck, error: deckError } = await supabase
+      .from("flashcard_decks")
+      .insert({
+        class_id: course.id,
+        creator_id: instructor.user_id,
+        name: deckName,
+        description: "for gating"
+      })
+      .select("id")
+      .single();
+    expect(deckError).toBeNull();
+    deckId = deck!.id;
+    expect(
+      (
+        await supabase.from("flashcards").insert({
+          class_id: course.id,
+          deck_id: deckId,
+          title: "Gating card",
+          prompt: "prompt",
+          answer: "answer",
+          order: 1
+        })
+      ).error
+    ).toBeNull();
+  });
+
+  test("a grader without manage_flashcards can view decks through the nav without management controls", async ({
+    page
+  }) => {
+    await loginAsUser(page, graderWithout, course);
+    await gotoWhenCapabilitiesLoaded(
+      page,
+      course.id,
+      `/course/${course.id}/manage/course/flashcard-decks`,
+      "Flashcard Decks"
+    );
+
+    const deckRow = page.getByRole("row").filter({ hasText: deckName });
+    await expect(deckRow).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create New Deck" })).toHaveCount(0);
+    await expect(deckRow.getByRole("button", { name: "Delete deck" })).toHaveCount(0);
+
+    // Viewing decks stays available to staff without the capability.
+    await page.getByRole("button", { name: "Course Settings menu" }).click();
+    await expect(page.getByRole("menuitem", { name: /Flashcard Decks/ })).toBeVisible();
+  });
+
+  test("a grader without manage_flashcards does not see add, edit or delete card controls on the deck page", async ({
+    page
+  }) => {
+    await loginAsUser(page, graderWithout, course);
+    await gotoWhenCapabilitiesLoaded(
+      page,
+      course.id,
+      `/course/${course.id}/manage/course/flashcard-decks/${deckId}`,
+      "Edit Flashcard Deck"
+    );
+
+    const cardRow = page.getByRole("group", { name: "Gating card", exact: true });
+    await expect(cardRow).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add Flashcard" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toHaveCount(0);
+    await expect(cardRow.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+    await expect(cardRow.getByRole("button", { name: /Delete flashcard/ })).toHaveCount(0);
+  });
+
+  test("a default grader with manage_flashcards sees the deck and card controls", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    await gotoWhenCapabilitiesLoaded(
+      page,
+      course.id,
+      `/course/${course.id}/manage/course/flashcard-decks`,
+      "Flashcard Decks"
+    );
+    const deckRow = page.getByRole("row").filter({ hasText: deckName });
+    await expect(deckRow).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create New Deck" })).toBeVisible();
+    await expect(deckRow.getByRole("button", { name: "Delete deck" })).toBeVisible();
+
+    await gotoWhenCapabilitiesLoaded(
+      page,
+      course.id,
+      `/course/${course.id}/manage/course/flashcard-decks/${deckId}`,
+      "Edit Flashcard Deck"
+    );
+    const cardRow = page.getByRole("group", { name: "Gating card", exact: true });
+    await expect(cardRow).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add Flashcard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit Deck (YAML)" })).toBeVisible();
+    await expect(cardRow.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    await expect(cardRow.getByRole("button", { name: /Delete flashcard/ })).toBeVisible();
+  });
+});
+
+test.describe("survey controls gated by manage_surveys", () => {
+  test.describe.configure({ timeout: 180_000 });
+  let course: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let plainGrader: TestingUser;
+  let graderWithout: TestingUser;
+  let graderWith: TestingUser;
+  let surveyId: string;
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    course = await createClass({ name: `E2E Survey Gates ${suffix}` });
+    instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
+    graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
+    graderWith = await createUserInClass({ role: "grader", class_id: course.id });
+
+    // Custom role without manage_surveys: explicit negative case beside the default grader role.
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "No Surveys TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    const { data: row, error: rowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWithout.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+
+    const { data: withRole, error: withRoleError } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "Surveys TA" })
+      .select("id")
+      .single();
+    expect(withRoleError).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").insert({ role_id: withRole!.id, capability: "manage_surveys" })).error
+    ).toBeNull();
+    const { data: withRow, error: withRowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWith.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(withRowError).toBeNull();
+    expect(
+      (await supabase.from("user_roles").update({ class_role_id: withRole!.id }).eq("id", withRow!.id)).error
+    ).toBeNull();
+
+    const { data: survey, error: surveyError } = await supabase
+      .from("surveys")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        assigned_to_all: true,
+        json: { pages: [{ name: "page1", elements: [{ type: "text", name: "q1", title: "Q1" }] }] },
+        version: 1,
+        status: "draft",
+        title: `E2E Survey ${suffix}`
+      })
+      .select("id")
+      .single();
+    expect(surveyError).toBeNull();
+    surveyId = survey!.id;
+  });
+
+  test("a grader without manage_surveys does not see Create New Survey or Manage Series", async ({ page }) => {
+    await loginAsUser(page, graderWithout, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/manage/surveys`, "Manage Surveys");
+    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+
+    await expect(page.getByRole("row").filter({ hasText: "E2E Survey" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Create New Survey/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /Manage Series/ })).toHaveCount(0);
+  });
+
+  test("a default grader is redirected from the new-survey and edit pages", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));
+
+    await page.goto(`/course/${course.id}/manage/surveys/${surveyId}/edit`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));
+  });
+
+  test("a custom-role grader without manage_surveys is redirected from the new-survey and edit pages", async ({
+    page
+  }) => {
+    await loginAsUser(page, graderWithout, course);
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));
+
+    await page.goto(`/course/${course.id}/manage/surveys/${surveyId}/edit`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/?$`));
+  });
+
+  test("a grader with manage_surveys can open the new-survey and edit pages", async ({ page }) => {
+    await loginAsUser(page, graderWith, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/surveys/new`);
+    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+    await expect(page.getByRole("heading", { name: "Create New Survey" })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/new`));
+
+    const editCapabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/surveys/${surveyId}/edit`);
+    await editCapabilities;
+    await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${surveyId}/edit`));
+  });
+});
+
+test.describe("poll controls gated by run_polls", () => {
+  test.describe.configure({ timeout: 180_000 });
+  let course: Awaited<ReturnType<typeof createClass>>;
+  let instructor: TestingUser;
+  let graderWithout: TestingUser;
+  let plainGrader: TestingUser;
+  let pollId: string;
+
+  test.beforeAll(async () => {
+    const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    course = await createClass({ name: `E2E Poll Gates ${suffix}` });
+    instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+    graderWithout = await createUserInClass({ role: "grader", class_id: course.id });
+    plainGrader = await createUserInClass({ role: "grader", class_id: course.id });
+
+    const { data: role, error } = await supabase
+      .from("class_roles")
+      .insert({ class_id: course.id, name: "No Polls TA" })
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    expect(
+      (await supabase.from("role_capabilities").delete().eq("role_id", role!.id).eq("capability", "run_polls")).error
+    ).toBeNull();
+
+    const { data: row, error: rowError } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", graderWithout.user_id)
+      .eq("class_id", course.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect((await supabase.from("user_roles").update({ class_role_id: role!.id }).eq("id", row!.id)).error).toBeNull();
+
+    const { data: poll, error: pollError } = await supabase
+      .from("live_polls")
+      .insert({
+        class_id: course.id,
+        created_by: instructor.public_profile_id,
+        question: { elements: [{ type: "text", name: "q1", title: "Gate poll?" }] },
+        is_live: false,
+        require_login: true
+      })
+      .select("id")
+      .single();
+    expect(pollError).toBeNull();
+    pollId = poll!.id;
+  });
+
+  test("a grader without run_polls does not see Create Poll or Open/Delete actions", async ({ page }) => {
+    await loginAsUser(page, graderWithout, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await gotoCourseUrlWhenHeadingVisible(page, `/course/${course.id}/manage/polls`, "Manage Polls");
+    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+
+    await expect(page.getByRole("row").filter({ hasText: "Gate poll?" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Create Poll/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Poll actions" }).click();
+    await expect(page.getByRole("menuitem", { name: /View Poll/ })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /Open Poll|Close Poll/ })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /Delete Poll/ })).toHaveCount(0);
+  });
+
+  test("a grader without run_polls does not see Start/Stop and is redirected from new poll", async ({ page }) => {
+    await loginAsUser(page, graderWithout, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/polls/${pollId}/responses`);
+    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+    // Header always shows Present for staff with view access; wait for it so a
+    // still-loading page cannot pass the Start/Stop absence check below.
+    await expect(page.getByRole("button", { name: "Present" })).toBeVisible();
+    await expect(page.getByTestId("toggle-poll-button")).toHaveCount(0);
+
+    await page.goto(`/course/${course.id}/manage/polls/new`);
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/polls/?$`));
+  });
+
+  test("a default grader with run_polls sees Start/Stop and can open the new-poll page", async ({ page }) => {
+    await loginAsUser(page, plainGrader, course);
+    const capabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/polls/${pollId}/responses`);
+    await capabilities;
+    await expect(page.locator('[data-capabilities-loaded="true"]')).toBeAttached();
+    await expect(page.getByTestId("toggle-poll-button")).toBeVisible();
+
+    const newCapabilities = page.waitForResponse((r) => r.url().includes("/rpc/user_class_capabilities") && r.ok());
+    await page.goto(`/course/${course.id}/manage/polls/new`);
+    await newCapabilities;
+    await expect(page.getByRole("heading", { name: "Create Poll" })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/polls/new`));
   });
 });

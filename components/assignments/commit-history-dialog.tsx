@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -20,6 +21,7 @@ import { Badge, Box, CloseButton, Code, Dialog, Flex, HStack, Icon, Skeleton, Ta
 import { useList } from "@refinedev/core";
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { FaGitAlt, FaPlay } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 type RepositoryCommitHistoryDialogProps = {
   courseId: number;
@@ -103,6 +105,7 @@ export function RepositoryCommitHistoryDialog({
   trigger
 }: RepositoryCommitHistoryDialogProps) {
   const [open, setOpen] = useState(false);
+  const repoHost = useRepoWebHost(gitProvider);
   const [githubCommits, setGithubCommits] = useState<Awaited<ReturnType<typeof repositoryListCommits>>["commits"]>([]);
   const [githubPage, setGithubPage] = useState(0);
   const [hasMoreGitHubCommits, setHasMoreGitHubCommits] = useState(false);
@@ -208,7 +211,7 @@ export function RepositoryCommitHistoryDialog({
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error)
         });
       } finally {
         // Refetch in both branches: even on error the function may have updated
@@ -281,8 +284,8 @@ export function RepositoryCommitHistoryDialog({
                   {entries.map((entry) => (
                     <Table.Row key={entry.sha}>
                       <Table.Cell>
-                        {entry.htmlUrl || gitProvider !== "forgejo" ? (
-                          <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                        {repoHost ? (
+                          <Link href={repoWebUrl(repoHost, repositoryFullName, `/commit/${entry.sha}`)}>
                             <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
                           </Link>
                         ) : (
@@ -306,7 +309,13 @@ export function RepositoryCommitHistoryDialog({
                             {getCommitHistorySourceLabel(entry.source)}
                           </Badge>
                           <Text fontSize="xs" color="fg.muted">
-                            {workflowStatusText(entry.status)}
+                            {entry.status.workflow_run_url ? (
+                              <Link href={entry.status.workflow_run_url} target="_blank" rel="noopener noreferrer">
+                                {workflowStatusText(entry.status)}
+                              </Link>
+                            ) : (
+                              workflowStatusText(entry.status)
+                            )}
                           </Text>
                         </Flex>
                       </Table.Cell>

@@ -7,13 +7,17 @@ import { ClassRealTimeController } from "./ClassRealTimeController";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
 import { bugReportIngest, registerRowSource, unregisterRowSource } from "@/lib/bugReport/ingestGate";
+import { refusedWriteError } from "@/lib/refusedWriteError";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
-export type TablesThatHaveAnIDField = {
-  [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
-}[keyof DatabaseTableTypes];
+export type TablesThatHaveAnIDField =
+  | {
+      [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
+    }[keyof DatabaseTableTypes]
+  | "role_capabilities"
+  | "capabilities";
 
-type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
+type ExtractIdType<T extends TablesThatHaveAnIDField> = (DatabaseTableTypes[T]["Row"] & { id: string | number })["id"];
 
 /**
  * Channel types that broadcast table changes.
@@ -137,6 +141,9 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   student_deadline_extensions: ["staff"],
   tags: ["staff"],
   user_roles: ["staff"],
+  class_roles: ["staff"],
+  role_capabilities: ["staff"],
+  capabilities: [],
   discussion_threads: ["staff", "students", "discussion_thread_root"],
   discussion_topics: ["staff", "students"],
   gradebook_columns: ["staff", "students"],
@@ -970,13 +977,34 @@ export default class TableController<
     };
   }
 
+  private _onError?: (error: unknown) => void;
+  private _keyColumns?: string[];
+
+  private _keyedRow<Row>(row: Row): Row {
+    if (!this._keyColumns || !row) return row;
+    const values = row as Record<string, unknown>;
+    return { ...row, id: JSON.stringify(this._keyColumns.map((column) => values[column])) };
+  }
+
+  // Keep SQL predicates on real columns; synthetic ids exist only in the cache.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _filterKey(query: any, id: unknown) {
+    if (!this._keyColumns) return query.eq("id", id);
+    const values = JSON.parse(String(id));
+    for (const [index, column] of this._keyColumns.entries()) query = query.eq(column, values[index]);
+    return query;
+  }
+
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
-    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).maybeSingle();
+    const { data, error } = await this._filterKey(
+      this._client.from(this._table).select(selectClause),
+      id
+    ).maybeSingle();
     if (error) {
       throw error;
     }
-    return data as unknown as ResultOne | undefined;
+    return this._keyedRow(data) as unknown as ResultOne | undefined;
   }
 
   /**
@@ -984,6 +1012,9 @@ export default class TableController<
    * Performs basic validation and table-name matching before queueing.
    */
   protected enqueueBroadcast(message: BroadcastMessage): void {
+    if (this._keyColumns && message.type !== "gradebook_row_recalc_state" && message.data) {
+      message = { ...message, data: this._keyedRow(message.data) };
+    }
     if (this._closed) return;
     // Filter by table name if provided
     if (message.table && message.table !== this._table) {
@@ -1131,6 +1162,14 @@ export default class TableController<
    */
   private async _refetchRowsByIds(ids: IDType[], queriedIds?: Set<IDType>): Promise<Map<IDType, ResultOne>> {
     const results = new Map<IDType, ResultOne>();
+    if (this._keyColumns) {
+      for (const id of ids) {
+        const row = await this._fetchRow(id);
+        queriedIds?.add(id);
+        if (row) results.set(id, row);
+      }
+      return results;
+    }
     const batchSize = 100;
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
 
@@ -1307,13 +1346,14 @@ export default class TableController<
     const pageSize = POSTGREST_PAGE_SIZE_DEFAULT;
     let nRows: number | undefined;
 
-    // Always add ORDER BY id to ensure deterministic pagination
+    // Order by the primary key to ensure deterministic pagination
     // This prevents rows from being skipped or duplicated across page boundaries
     // when PostgreSQL returns results in non-deterministic order.
     // NOTE: PostgREST builders are mutable and `.order()` appends to the shared
     // URL, so we derive from a cloned query (`_freshQuery`) to avoid leaking
     // `order=id.asc` into `this._query` on every refetch.
-    const orderedQuery = this._freshQuery().order("id", { ascending: true });
+    let orderedQuery = this._freshQuery();
+    for (const column of this._keyColumns ?? ["id"]) orderedQuery = orderedQuery.order(column, { ascending: true });
 
     if (loadEntireTable) {
       // Load initial data, do all of the pages.
@@ -1335,7 +1375,7 @@ export default class TableController<
         if (!data || data.length === 0) {
           break;
         }
-        rows.push(...(data as unknown as ResultOne[]));
+        rows.push(...(data as unknown as ResultOne[]).map((row) => this._keyedRow(row)));
         if (data.length < pageSize) {
           break;
         }
@@ -1349,7 +1389,7 @@ export default class TableController<
       if (!data || data.length === 0) {
         return [];
       }
-      rows.push(...(data as unknown as ResultOne[]));
+      rows.push(...(data as unknown as ResultOne[]).map((row) => this._keyedRow(row)));
     }
 
     this._lastFetchTimestamp = Date.now();
@@ -1451,6 +1491,7 @@ export default class TableController<
       }
     } catch (error) {
       Sentry.captureException(error);
+      this._onError?.(error);
     } finally {
       // Set refetch state to false and notify listeners
       this._isRefetching = false;
@@ -1552,7 +1593,11 @@ export default class TableController<
       return;
     }
 
-    const refetchedRows = await this._refetchRowsByIds(ids);
+    const queriedIds = new Set<IDType>();
+    const refetchedRows = await this._refetchRowsByIds(ids, queriedIds);
+    for (const id of queriedIds) {
+      if (!refetchedRows.has(id)) this._removeRow(id);
+    }
 
     // Mirror the matchesFilter handling in _handleUpdate so that a row whose
     // refetched state no longer matches the realtime filter is evicted from
@@ -1758,6 +1803,8 @@ export default class TableController<
 
   constructor({
     query,
+    onError,
+    keyColumns,
     client,
     table,
     classRealTimeController,
@@ -1780,6 +1827,10 @@ export default class TableController<
       RelationName,
       Database["public"]["Tables"][RelationName]["Relationships"]
     >;
+    /** Reports background full-refresh failures to the caller without changing existing error handling. */
+    onError?: (error: unknown) => void;
+    /** Natural key columns for read-only caches without id. Cached rows receive a JSON-encoded synthetic id. */
+    keyColumns?: (keyof DatabaseTableTypes[RelationName]["Row"] & string)[];
     client: SupabaseClient<Database>;
     table: RelationName;
     classRealTimeController?: ClassRealTimeController;
@@ -1823,6 +1874,8 @@ export default class TableController<
      */
     shouldRefetchUncachedIdOnly?: (id: IDType) => boolean;
   }) {
+    this._onError = onError;
+    this._keyColumns = keyColumns;
     this._rows = [];
     this._client = client;
     this._query = query;
@@ -1885,7 +1938,7 @@ export default class TableController<
         let dataToLoad: ResultOne[];
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
-          dataToLoad = initialData;
+          dataToLoad = initialData.map((row) => this._keyedRow(row));
           // Server-hydrated rows never pass the fetch hook; hand them to the taint ingest.
           const ingest = bugReportIngest.sink;
           if (ingest) ingest.rows(table, initialData, this._bugReportSelect());
@@ -2792,7 +2845,7 @@ export default class TableController<
     //Check to see if we already have this row in our cache
     const matcher = (r: ResultOne & { id: ExtractIdType<RelationName> }) => {
       for (const filter of filters) {
-        if (r[filter.column as keyof ResultOne & { id: ExtractIdType<RelationName> }] !== filter.value) {
+        if (r[filter.column as keyof ResultOne] !== filter.value) {
           return false;
         }
       }
@@ -3224,27 +3277,18 @@ export default class TableController<
         `TableController for table '${this._table}' is closed. Cannot call invalidate(${id}). This indicates a stale reference is being used.`
       );
     }
-    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
-    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
-    if (error) {
-      throw error;
-    }
-    if (!data) {
-      return;
-    }
-    const typedData = data as unknown as ResultOne;
-    const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
-    if (existingRow) {
-      this._updateRow(id as IDType, typedData as ResultOne & { id: IDType }, false);
+    const row = await this._fetchRow(id);
+    if (!row || !this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
+      this._removeRow(id);
+    } else if (this._rowsById.has(id)) {
+      this._updateRow(id, row as ResultOne & { id: IDType }, false);
     } else {
-      this._addRow({
-        ...(typedData as ResultOne),
-        __db_pending: false
-      } as PossiblyTentativeResult<ResultOne>);
+      this._addRow({ ...row, __db_pending: false });
     }
   }
 
   private _addRow(row: PossiblyTentativeResult<ResultOne>) {
+    row = this._keyedRow(row);
     // Enforce uniqueness by ID. If a row with the same ID already exists, treat this as an update.
     if ("id" in row) {
       const id = (row as { id: IDType }).id;
@@ -3345,6 +3389,8 @@ export default class TableController<
   }
 
   async create(row: Database["public"]["Tables"][RelationName]["Insert"]): Promise<ResultOne> {
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call create(). This indicates a stale reference is being used.`
@@ -3389,6 +3435,8 @@ export default class TableController<
   }
 
   async hardDelete(id: ExtractIdType<RelationName>): Promise<void> {
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
@@ -3402,12 +3450,66 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const { error } = await this._client.from(this._table).delete().eq("id", id);
+    const restore = () => this._restoreRemovedRow(id as IDType, existingRow);
+    const { error, count } = await this._client.from(this._table).delete({ count: "exact" }).eq("id", id);
     if (error) {
-      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      restore();
       throw error;
     }
-    return;
+    await this._throwIfDeleteRefused(id, count, restore);
+  }
+
+  /**
+   * Puts back a row that `delete` or `hardDelete` removed from the cache before a write that
+   * failed or was refused.
+   *
+   * A realtime broadcast can put the row back first, while the write or the follow-up select in
+   * {@link _throwIfDeleteRefused} is in flight. That copy is newer than `snapshot`, so when the id
+   * is already in the cache, keep it. Passing the snapshot to `_addRow` would overwrite it, because
+   * `_addRow` turns a known id into an update.
+   */
+  private _restoreRemovedRow(id: IDType, snapshot: PossiblyTentativeResult<ResultOne>): void {
+    if (this._rowsById.has(id)) return;
+    this._addRow({ ...snapshot, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+  }
+
+  /**
+   * After a delete (hard or soft) that RLS may have refused: throws a {@link refusedWriteError}
+   * and puts the row back when nothing was changed and the row is still there.
+   *
+   * RLS doesn't fail a write it refuses. The statement matches 0 rows and PostgREST answers with
+   * no error, so before this check a refused delete looked like a success. The delete asks only
+   * for the changed-row count (`count: "exact"`), not the rows, so the response stays empty.
+   *
+   * Asking for the count doesn't change which soft deletes work. On a table whose SELECT policy
+   * hides soft-deleted rows, Postgres rejects any `UPDATE ... WHERE id = ...` that hides the row
+   * ("new row violates row-level security policy"), with or without RETURNING. That was already
+   * true before this change.
+   *
+   * With 0 rows changed, the row was either refused or already gone (another tab, a realtime
+   * race). A follow-up select tells them apart, as `withBlockedDeleteErrors` does for refine:
+   * - **still visible:** refused. Restore the row and throw.
+   * - **not visible:** this session can't read the row now. Leave it removed and resolve, which is
+   *   what a delete did before. Usually the row is gone, but a refused delete also lands here when
+   *   the session lost the right to read the row after loading it (a capability removed while the
+   *   page was open). That case still reports success; see `withBlockedDeleteErrors`.
+   */
+  private async _throwIfDeleteRefused(
+    id: ExtractIdType<RelationName>,
+    count: number | null,
+    restore: () => void
+  ): Promise<void> {
+    // `count` is null only if PostgREST sent no count; keep the old behaviour then.
+    if (count !== 0) return;
+    const { data, error } = await this._client.from(this._table).select("id").eq("id", id).limit(1);
+    if (error) {
+      restore();
+      throw error;
+    }
+    if (data && data.length > 0) {
+      restore();
+      throw refusedWriteError("delete");
+    }
   }
 
   /**
@@ -3418,6 +3520,8 @@ export default class TableController<
    * @returns
    */
   async delete(id: ExtractIdType<RelationName>): Promise<void> {
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
@@ -3431,17 +3535,20 @@ export default class TableController<
       throw new Error("Row is pending");
     }
     this._removeRow(id as IDType);
-    const { error } = await this._client
+    const restore = () => this._restoreRemovedRow(id as IDType, existingRow);
+    const { error, count } = await this._client
       .from(this._table)
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ deleted_at: new Date().toISOString() }, { count: "exact" })
       .eq("id", id);
     if (error) {
-      this._addRow({ ...existingRow, __db_pending: false } as PossiblyTentativeResult<ResultOne>);
+      restore();
       throw error;
     }
-    return;
+    await this._throwIfDeleteRefused(id, count, restore);
   }
   async update(id: IDType, row: Partial<ResultOne>): Promise<ResultOne> {
+    if (this._keyColumns)
+      throw new Error("Natural-key controllers require explicit writes followed by invalidate(key).");
     if (this._closed) {
       throw new Error(
         `TableController for table '${this._table}' is closed. Cannot call update(${id}). This indicates a stale reference is being used.`
@@ -3461,6 +3568,11 @@ export default class TableController<
     const { data, error } = await this._client.from(this._table).update(row).eq("id", id).select("*").single();
     if (error) {
       this._updateRow(id, oldRow as ResultOne & { id: IDType }, false);
+      // `.single()` on an update that changed 0 rows: RLS refused it (it doesn't raise an error,
+      // the UPDATE just matches nothing), or the row is gone. Same error as the refine provider.
+      if (error.code === "PGRST116") {
+        throw refusedWriteError("update");
+      }
       throw error;
     }
     this._updateRow(id, data, false);

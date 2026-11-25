@@ -8,6 +8,8 @@ import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye } from "react-ic
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestModeration } from "@/utils/supabase/DatabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type ModerationActionsProps = {
   helpRequestId: number;
@@ -29,6 +31,7 @@ export default function ModerationActions({
   classId,
   onModerationComplete
 }: ModerationActionsProps) {
+  const errorRole = useStaffErrorRole();
   const { private_profile_id } = useClassProfiles();
   const { mutateAsync: createModerationAction } = useCreate<HelpRequestModeration>();
 
@@ -88,7 +91,7 @@ export default function ModerationActions({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to issue moderation action: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to issue moderation action: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

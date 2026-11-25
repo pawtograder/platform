@@ -1,4 +1,6 @@
 "use client";
+import { useAssignmentController } from "@/hooks/useAssignment";
+import { repoWebUrl, useRepoWebHost } from "@/hooks/useForgejoInstanceUrl";
 
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -23,6 +25,8 @@ import { Badge, Box, Code, Flex, HStack, Icon, Skeleton, Table, Text } from "@ch
 import { useInvalidate, useList } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaPlay } from "react-icons/fa";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const PENDING_ACTIVATION_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -79,6 +83,9 @@ export function StaffCommitHistory({
   assignmentGroupId,
   currentSubmissionId
 }: StaffCommitHistoryProps) {
+  const { assignment } = useAssignmentController();
+  const repoHost = useRepoWebHost(assignment.git_provider);
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   const invalidate = useInvalidate();
   const [githubCommits, setGithubCommits] = useState<Awaited<ReturnType<typeof repositoryListCommits>>["commits"]>([]);
@@ -240,7 +247,7 @@ export function StaffCommitHistory({
           } catch (error) {
             toaster.error({
               title: "Submission created but activation failed",
-              description: error instanceof Error ? error.message : "Unknown error"
+              description: getUserFacingErrorMessage(error, { role: errorRole })
             });
           }
         })();
@@ -249,7 +256,7 @@ export function StaffCommitHistory({
     return () => {
       unsubscribe();
     };
-  }, [courseController, repositoryId, assignmentId, clearPending, doActivate]);
+  }, [errorRole, courseController, repositoryId, assignmentId, clearPending, doActivate]);
 
   const onActivateExisting = useCallback(
     async (sha: string, submissionId: number) => {
@@ -260,13 +267,13 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Error activating submission",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         setBusySha(null);
       }
     },
-    [doActivate]
+    [errorRole, doActivate]
   );
 
   const onCreateAndActivate = useCallback(
@@ -297,14 +304,14 @@ export function StaffCommitHistory({
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
-          description: error instanceof Error ? error.message : "Unknown error"
+          description: getUserFacingErrorMessage(error, { role: errorRole })
         });
       } finally {
         await checkRunsQuery.refetch();
         setBusySha(null);
       }
     },
-    [checkRunsQuery, clearPending, courseId, repositoryFullName]
+    [errorRole, checkRunsQuery, clearPending, courseId, repositoryFullName]
   );
 
   return (
@@ -352,7 +359,7 @@ export function StaffCommitHistory({
                   data-current={isCurrentSubmission ? "true" : undefined}
                 >
                   <Table.Cell>
-                    <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
+                    <Link href={repoWebUrl(repoHost, repositoryFullName, `/commit/${entry.sha}`)}>
                       <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
                     </Link>
                   </Table.Cell>
@@ -380,7 +387,13 @@ export function StaffCommitHistory({
                         {getCommitHistorySourceLabel(entry.source)}
                       </Badge>
                       <Text fontSize="xs" color="fg.muted">
-                        {workflowStatusText(entry.status)}
+                        {entry.status.workflow_run_url ? (
+                          <Link href={entry.status.workflow_run_url} target="_blank" rel="noopener noreferrer">
+                            {workflowStatusText(entry.status)}
+                          </Link>
+                        ) : (
+                          workflowStatusText(entry.status)
+                        )}
                       </Text>
                     </Flex>
                   </Table.Cell>

@@ -7,6 +7,8 @@ import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type HelpQueueFormData = {
   name: string;
@@ -32,6 +34,7 @@ type CreateHelpQueueModalProps = {
  * Allows instructors to configure all queue properties.
  */
 export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: CreateHelpQueueModalProps) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
 
   const {
@@ -89,7 +92,7 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create help queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to create help queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

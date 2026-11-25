@@ -10,6 +10,8 @@ import { BsX, BsDiscord } from "react-icons/bs";
 import { useCourseController, useCourse, useAssignments, useDiscussionTopics } from "@/hooks/useCourseController";
 import { toaster } from "@/components/ui/toaster";
 import { useMemo } from "react";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Available color options for discussion topics.
@@ -74,6 +76,7 @@ type CreateTopicModalProps = {
  * @returns The rendered modal component
  */
 export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateTopicModalProps) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const controller = useCourseController();
   const course = useCourse();
@@ -148,7 +151,7 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create discussion topic: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to create discussion topic: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

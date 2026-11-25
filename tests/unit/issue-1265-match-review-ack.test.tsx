@@ -34,6 +34,13 @@ jest.mock("@/components/ui/toaster", () => ({
   toaster: { success: jest.fn(), error: (...a: unknown[]) => mockToastError(...a) }
 }));
 
+// Staff error messages pick their wording from useIsInstructor (useStaffErrorRole), which needs a
+// ClassProfileProvider; this renders the page without one.
+jest.mock("@/hooks/useClassProfiles", () => ({
+  ...jest.requireActual("@/hooks/useClassProfiles"),
+  useIsInstructor: () => true
+}));
+
 import MatchReview from "@/app/course/[course_id]/manage/assignments/[assignment_id]/exam/MatchReview";
 
 const wrap = (ui: React.ReactElement) => <ChakraProvider value={defaultSystem}>{ui}</ChakraProvider>;
