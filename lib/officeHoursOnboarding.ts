@@ -40,22 +40,20 @@ export function countTextQueues(queues: readonly { available: boolean; queue_typ
  * and the queue description hint has nothing to point at.
  *
  * The page uses this to decide whether to ask for the queue description hint, so the hint never
- * opens without the list it points at. If the page's early returns change, for example in #1341,
- * change this to match. The header doesn't use it: it keeps waiting while the page is loading,
- * because the list usually follows (see office-hours-header.tsx).
+ * opens without the list it points at. If the page's early returns change, change this to match.
+ * The header doesn't use it: it keeps waiting while the page is loading, because the list usually
+ * follows (see office-hours-header.tsx).
  */
 export function queueListShown({
   browseView,
   loading,
-  connectionError,
-  disconnected
+  connectionError
 }: {
   browseView: boolean;
   loading: boolean;
   connectionError: boolean;
-  disconnected: boolean;
 }): boolean {
-  return browseView && !loading && !connectionError && !disconnected;
+  return browseView && !loading && !connectionError;
 }
 
 /** Whether the queue description hint should show. */
