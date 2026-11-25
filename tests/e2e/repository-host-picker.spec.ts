@@ -118,6 +118,19 @@ test.describe("Repository host picker and GitHub prompts", () => {
   // The assignment layout renders its page twice, once hidden for narrow screens.
   const visiblePicker = (page: Page) => page.getByLabel("Repository host").filter({ visible: true });
 
+  // The edit page renders its form before its queries return. It then resets the form to the saved
+  // row, which overwrites anything chosen before, and seeds the self-evaluation fields from a second
+  // query. Until those are seeded the form refuses to save. So wait for the row's title and for the
+  // fixture's self-evaluation setting, which insertAssignment turns on.
+  async function waitForEditFormLoaded(page: Page, assignment: { title: string }) {
+    await expect(page.locator('input[name="title"]').filter({ visible: true })).toHaveValue(assignment.title, {
+      timeout: 30_000
+    });
+    await expect(page.getByLabel("Require self-evaluation").filter({ visible: true })).toHaveValue("use_eval", {
+      timeout: 30_000
+    });
+  }
+
   // Fill the create form's other required fields, so only the host rules can block the save.
   async function fillRequiredFields(page: Page, title: string, slug: string) {
     await page.getByLabel("Title", { exact: false }).fill(title);
@@ -267,11 +280,11 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await loginAsUser(page, instructorOn, flagOn);
     await page.goto(`/course/${flagOn.id}/manage/assignments/${emptyAssignment.id}/edit`);
     await expect(page.getByRole("heading", { name: "Edit Assignment" })).toBeVisible();
+    // The picker reads github and is enabled before the row loads too, so wait for the row first.
+    await waitForEditFormLoaded(page, emptyAssignment);
     await expect(visiblePicker(page)).toHaveValue("github", { timeout: 30_000 });
     await expect(visiblePicker(page)).toBeEnabled({ timeout: 30_000 });
 
-    // The edit page resets the form whenever its query refetches, so let loading settle first.
-    await page.waitForLoadState("networkidle");
     await visiblePicker(page).selectOption("forgejo");
     await expect(visiblePicker(page)).toHaveValue("forgejo");
     await page.getByRole("button", { name: "Save" }).filter({ visible: true }).click();
@@ -298,16 +311,23 @@ test.describe("Repository host picker and GitHub prompts", () => {
     await expect(repoMode.locator('option[value="no_submission"]')).toBeDisabled();
 
     const newTitle = `Forgejo Handout Renamed ${suffix}`;
-    await page.waitForLoadState("networkidle");
+    await waitForEditFormLoaded(page, forgejoWithHandout);
     // The edit route mounts the form twice; type into the copy on screen. The row read below shows
     // the form state took it.
     const title = page.locator('input[name="title"]').filter({ visible: true });
     await title.fill(newTitle);
     await expect(title).toHaveValue(newTitle);
+    const githubCalls: string[] = [];
+    page.on("request", (request) => {
+      if (/\/functions\/v1\/(github-|assignment-sync-autograder-workflow)/.test(request.url())) {
+        githubCalls.push(request.url());
+      }
+    });
     await page.getByRole("button", { name: "Save" }).filter({ visible: true }).click();
     // Playwright reports Chakra's toast as hidden, so check that it was rendered.
     await expect(page.getByText("Assignment Updated").first()).toBeAttached({ timeout: 30_000 });
     await expect(page.getByText("Update Error")).toHaveCount(0);
+    expect(githubCalls).toEqual([]);
     const { data: row } = await supabase
       .from("assignments")
       .select("title, git_provider, template_repo, has_autograder")
