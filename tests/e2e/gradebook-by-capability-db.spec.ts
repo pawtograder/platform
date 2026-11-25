@@ -314,7 +314,8 @@ test.describe("gradebook changes follow manage_gradebook (#1010)", () => {
       }),
       "override"
     );
-    // Convert Missing to 0 is a direct update of the column's cells.
+    // Convert Missing to 0 writes through update_gradebook_column_student_with_recalc, refused above.
+    // A direct update of the column's cells, which it used to make, must stay blocked as well.
     expectBlocked(
       await client
         .from("gradebook_column_students")

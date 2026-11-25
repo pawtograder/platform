@@ -1083,16 +1083,32 @@ function ConvertMissingToZeroDialog({ columnId, onClose }: { columnId: number; o
                     onClick={async () => {
                       setIsConverting(true);
                       try {
-                        await supabase
+                        // Write through the recalculating RPC, like every other gradebook edit. A plain
+                        // UPDATE enqueues no recalculation, so averages and topic standings that read
+                        // this column kept their old values (and their "not final" marker).
+                        const { data: cells, error: readError } = await supabase
                           .from("gradebook_column_students")
-                          .update({
-                            score: 0,
-                            is_missing: false,
-                            score_override_note: "Missing value converted to 0"
-                          })
+                          .select("id")
                           .eq("gradebook_column_id", columnId)
                           .eq("is_private", true)
                           .or("is_missing.eq.true,and(score.is.null,score_override.is.null)");
+                        if (readError) throw readError;
+                        const ids = (cells ?? []).map((c) => c.id);
+                        for (let i = 0; i < ids.length; i += 25) {
+                          await Promise.all(
+                            ids.slice(i, i + 25).map(async (id) => {
+                              const { error } = await supabase.rpc("update_gradebook_column_student_with_recalc", {
+                                p_id: id,
+                                p_updates: {
+                                  score: 0,
+                                  is_missing: false,
+                                  score_override_note: "Missing value converted to 0"
+                                }
+                              });
+                              if (error) throw error;
+                            })
+                          );
+                        }
 
                         toaster.success({
                           title: "Success",
