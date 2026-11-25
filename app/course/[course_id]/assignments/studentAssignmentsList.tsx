@@ -340,7 +340,7 @@ export default function StudentAssignmentsList() {
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
             <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
-            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>GitHub Repository</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Repository</Table.ColumnHeader>
             <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Group</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -434,7 +434,7 @@ export default function StudentAssignmentsList() {
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
             <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
-            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>GitHub Repository</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Repository</Table.ColumnHeader>
             <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Group</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>

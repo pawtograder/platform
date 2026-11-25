@@ -463,7 +463,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         >
           <Box textAlign="center">
             <Text fontSize="sm" color="text.muted">
-              Moving students and updating GitHub permissions...
+              Moving students and updating {assignment.git_provider === "forgejo" ? "Forgejo" : "GitHub"} permissions...
             </Text>
             <Spinner />
           </Box>

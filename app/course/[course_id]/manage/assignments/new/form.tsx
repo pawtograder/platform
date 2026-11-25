@@ -1178,13 +1178,13 @@ export default function AssignmentForm({
                       isEditing
                         ? "Type cannot be changed after creation"
                         : examTypeAvailable
-                          ? "Code: GitHub repo + autograder. Quiz: in-app questions, objective answers auto-graded. Paper exam: printable + scan/OCR. Survey: completion earns credit."
-                          : "Code: GitHub repo + autograder. Quiz: in-app questions, objective answers auto-graded. Survey: completion earns credit. Paper exam needs Paper exams turned on under Course Settings › Feature flags."
+                          ? "Code: Git repository + autograder. Quiz: in-app questions, objective answers auto-graded. Paper exam: printable + scan/OCR. Survey: completion earns credit."
+                          : "Code: Git repository + autograder. Quiz: in-app questions, objective answers auto-graded. Survey: completion earns credit. Paper exam needs Paper exams turned on under Course Settings › Feature flags."
                     }
                   >
                     <NativeSelectRoot disabled={isEditing}>
                       <NativeSelectField {...register("assignment_type")}>
-                        <option value="code">Code (GitHub + autograder)</option>
+                        <option value="code">Code (Git repository + autograder)</option>
                         <option value="quiz">Quiz / worksheet (in-app)</option>
                         <option value="exam" disabled={!examTypeAvailable}>
                           Paper exam (scan &amp; OCR)

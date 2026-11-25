@@ -1,6 +1,6 @@
 /**
  * #1091 part 2: the Repository host picker on Create/Edit Assignment, Forgejo's disabled options
- * (#1119), and the GitHub link prompt on Forgejo assignments.
+ * (#1119), the GitHub link prompt on Forgejo assignments, and GitHub wording on Forgejo pages.
  *
  * Test users have no linked GitHub identity, so the "Connect to GitHub" banner is the prompt to
  * look for. Screenshots are attached to the test results.
@@ -383,5 +383,57 @@ test.describe("Repository host picker and GitHub prompts", () => {
     });
     await expect(page.getByText(/rate-limited by GitHub/)).toHaveCount(0);
     await expect(page.getByText("GitHub Ready", { exact: true })).toHaveCount(0);
+  });
+
+  test("a student's assignment list labels the repository column without naming GitHub", async ({ page }) => {
+    const repository = `e2e-ignore/fj-student-${suffix}`;
+    expect(
+      (
+        await supabase.from("repositories").insert({
+          class_id: flagOn.id,
+          assignment_id: forgejoAssignment.id,
+          profile_id: student.private_profile_id,
+          repository,
+          git_provider: "forgejo",
+          is_github_ready: true
+        })
+      ).error
+    ).toBeNull();
+    await loginAsUser(page, student, flagOn);
+    await page.goto(`/course/${flagOn.id}/assignments`);
+    await expect(page.getByRole("cell", { name: repository, exact: true }).first()).toBeVisible({ timeout: 60_000 });
+    // The header row's cells have the cell role, not columnheader.
+    await expect(page.getByRole("cell", { name: "Repository", exact: true }).first()).toBeVisible();
+    await expect(page.getByText("GitHub Repository")).toHaveCount(0);
+  });
+
+  test("Rerun Autograder explains a missing grader repo, then describes Forgejo runs", async ({ page }) => {
+    await loginAsUser(page, instructorOn, flagOn);
+    // forgejoWithHandout has no grader repository.
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/rerun-autograder`);
+    const noGrader = page.getByTestId("rerun-autograder-no-grader-repo").filter({ visible: true });
+    await expect(noGrader).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Assignment not found")).toHaveCount(0);
+    await expect(noGrader.getByRole("link", { name: "Autograder" })).toHaveAttribute(
+      "href",
+      `/course/${flagOn.id}/manage/assignments/${forgejoWithHandout.id}/autograder`
+    );
+
+    expect(
+      (
+        await supabase
+          .from("autograder")
+          .update({ grader_repo: `e2e-ignore/fj-grader-${suffix}` })
+          .eq("id", forgejoAssignment.id)
+      ).error
+    ).toBeNull();
+    await page.goto(`/course/${flagOn.id}/manage/assignments/${forgejoAssignment.id}/rerun-autograder`);
+    await expect(page.getByText(/Each run happens in Forgejo Actions/).filter({ visible: true })).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(page.getByText(/received by GitHub/)).toHaveCount(0);
+    await expect(
+      page.getByText(/in the grader repository, which stays on GitHub/).filter({ visible: true })
+    ).toBeVisible();
   });
 });
