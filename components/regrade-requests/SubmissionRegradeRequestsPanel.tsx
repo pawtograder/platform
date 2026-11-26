@@ -28,6 +28,23 @@ function isActive(status: RegradeStatus): boolean {
 }
 
 function OrphanedRegradeRequestAlert({ request }: { request: RegradeRequest }) {
+  if (request.resolution_reason === "rubric_check_deleted") {
+    if (request.status === "escalated") {
+      return (
+        <Alert status="info" title="Rubric check removed">
+          The rubric check this request referenced was removed from the rubric. Your escalated request and discussion
+          history are preserved below for the instructor.
+        </Alert>
+      );
+    }
+    return (
+      <Alert status="warning" title="Rubric check removed">
+        The rubric check this request referenced was removed from the rubric. Review your updated grade and escalate if
+        you still disagree.
+      </Alert>
+    );
+  }
+
   if (request.resolution_reason === "comment_deleted") {
     return (
       <Alert status="warning" title="Action needed">

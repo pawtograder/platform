@@ -11841,6 +11841,10 @@ export type Database = {
         Args: { p_file_name: string; p_submission_id: number };
         Returns: number;
       };
+      _collect_rubric_check_usage: {
+        Args: { p_check_ids: number[]; p_class_id: number; p_rubric_id: number };
+        Returns: Json;
+      };
       _due_date_lookup_allowed: {
         Args: {
           p_assignment_group_id: number;
@@ -13922,6 +13926,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      preview_rubric_check_deletions: {
+        Args: { p_removed_check_ids: number[]; p_rubric_id: number };
+        Returns: Json;
+      };
       process_calendar_announcements: { Args: never; Returns: Json };
       promote_whatif_grader_result: {
         Args: { p_class_id: number; p_grader_result_id: number };
@@ -14308,6 +14316,16 @@ export type Database = {
         Returns: boolean;
       };
       update_rubric_full: { Args: { p_rubric: Json }; Returns: string };
+      update_rubric_full_with_report: {
+        Args: {
+          p_confirm_delete_check_ids?: number[];
+          p_expected_active_comment_count?: number;
+          p_expected_active_item_keys?: string[];
+          p_previewed_at?: string;
+          p_rubric: Json;
+        };
+        Returns: Json;
+      };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;
