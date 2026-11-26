@@ -13,7 +13,7 @@
 --      grader role of new classes.
 --   2. update_regrade_request_status: resolving checks handle_regrades in the request's own class
 --      instead of authorizeforclassgrader, and a refusal raises 42501 (insufficient_privilege). The
---      body is the one from 20261015120000_lock_down_security_definer_functions.sql with only that
+--      body is the one from 20261125120000_rubric_check_delete_workflow.sql (#1432) with only that
 --      check changed. Opening and escalating (the student's side) are unchanged. Closing an
 --      escalated request stays instructor-only (authorizeforclassinstructor), as does
 --      update_regrade_request_points, which this migration doesn't touch.
@@ -121,11 +121,20 @@ REVOKE ALL ON FUNCTION public.seed_default_class_roles(bigint) FROM PUBLIC, anon
 -- 2. update_regrade_request_status: resolving needs handle_regrades
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION public.update_regrade_request_status(regrade_request_id bigint, new_status regrade_status, profile_id uuid, resolved_points numeric DEFAULT NULL::numeric, closed_points numeric DEFAULT NULL::numeric, p_submission_file_id bigint DEFAULT NULL::bigint, p_line integer DEFAULT NULL::integer, p_submission_artifact_id bigint DEFAULT NULL::bigint)
- RETURNS boolean
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public'
+CREATE OR REPLACE FUNCTION public.update_regrade_request_status(
+    regrade_request_id bigint,
+    new_status regrade_status,
+    profile_id uuid,
+    resolved_points numeric DEFAULT NULL::numeric,
+    closed_points numeric DEFAULT NULL::numeric,
+    p_submission_file_id bigint DEFAULT NULL::bigint,
+    p_line integer DEFAULT NULL::integer,
+    p_submission_artifact_id bigint DEFAULT NULL::bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
 AS $function$
 declare
     current_request public.submission_regrade_requests%ROWTYPE;
@@ -135,6 +144,8 @@ declare
     new_submission_file_comment_id bigint;
     new_submission_artifact_comment_id bigint;
     is_bare_check boolean;
+    has_live_comment_target boolean;
+    is_detached_target boolean;
 begin
     param_resolved_points := resolved_points;
     param_closed_points := closed_points;
@@ -165,19 +176,37 @@ begin
         raise exception 'Profile is not enrolled in this class';
     end if;
 
-    if new_status = 'resolved' and resolved_points is null then
-        raise exception 'resolved_points parameter is required when status is resolved';
-    end if;
-
-    if new_status = 'closed' and closed_points is null then
-        raise exception 'closed_points parameter is required when status is closed';
-    end if;
-
     -- A "bare check" request targets a rubric check but has no comment yet.
     is_bare_check := current_request.submission_file_comment_id is null
         and current_request.submission_comment_id is null
         and current_request.submission_artifact_comment_id is null
         and current_request.rubric_check_id is not null;
+
+    has_live_comment_target := (
+        (current_request.submission_file_comment_id is not null and exists (
+            select 1 from public.submission_file_comments
+            where id = current_request.submission_file_comment_id and deleted_at is null
+        ))
+        or (current_request.submission_comment_id is not null and exists (
+            select 1 from public.submission_comments
+            where id = current_request.submission_comment_id and deleted_at is null
+        ))
+        or (current_request.submission_artifact_comment_id is not null and exists (
+            select 1 from public.submission_artifact_comments
+            where id = current_request.submission_artifact_comment_id and deleted_at is null
+        ))
+    );
+
+    -- Detached requests have neither a live backing comment nor a live rubric_check_id to materialize.
+    is_detached_target := not is_bare_check and not has_live_comment_target;
+
+    if new_status = 'resolved' and resolved_points is null and not is_detached_target then
+        raise exception 'resolved_points parameter is required when status is resolved';
+    end if;
+
+    if new_status = 'closed' and closed_points is null and not is_detached_target then
+        raise exception 'closed_points parameter is required when status is closed';
+    end if;
 
     case new_status
         when 'opened' then
@@ -255,9 +284,23 @@ begin
                     using errcode = 'insufficient_privilege';
             end if;
 
-            -- For a bare-check request, materialize the real comment now so the score
-            -- recompute (which sums comment points by rubric_check_id) picks it up.
-            if is_bare_check then
+            if is_detached_target then
+                if param_resolved_points is not null then
+                    raise exception 'Cannot set points on a regrade request whose rubric check or grading comment was deleted. Apply a replacement rubric check or grading comment on the submission, then resolve this request without a point adjustment.'
+                        using errcode = 'invalid_parameter_value';
+                end if;
+
+                update public.submission_regrade_requests
+                set status = new_status,
+                    resolved_by = profile_id,
+                    resolved_at = now(),
+                    resolved_points = NULL,
+                    resolution_reason = 'grader',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+            elsif is_bare_check then
+                -- For a bare-check request, materialize the real comment now so the score
+                -- recompute (which sums comment points by rubric_check_id) picks it up.
                 select
                     m.o_submission_comment_id,
                     m.o_submission_file_comment_id,
@@ -354,11 +397,29 @@ begin
                 raise exception 'Only instructors can close regrade requests';
             end if;
 
-            -- A bare-check request can be closed directly from 'opened' without a grader
-            -- having resolved it; materialize the comment in that case too.
-            if is_bare_check and current_request.submission_comment_id is null
+            if is_detached_target then
+                -- Detached requests have no live comment or rubric check to update/materialize, so
+                -- silently recording a closed_points value would mislead the instructor into
+                -- thinking the student's grade changed. Reject numeric point values and require
+                -- replacement grading on the submission before closing without a point adjustment.
+                if param_closed_points is not null then
+                    raise exception 'Cannot set points on a regrade request whose rubric check or grading comment was deleted. Apply a replacement rubric check or grading comment on the submission, then close this request without a point adjustment.'
+                        using errcode = 'invalid_parameter_value';
+                end if;
+
+                update public.submission_regrade_requests
+                set status = new_status,
+                    closed_by = profile_id,
+                    closed_at = now(),
+                    closed_points = NULL,
+                    resolution_reason = 'instructor',
+                    last_updated_at = now()
+                where id = regrade_request_id;
+            elsif is_bare_check and current_request.submission_comment_id is null
                and current_request.submission_file_comment_id is null
                and current_request.submission_artifact_comment_id is null then
+                -- A bare-check request can be closed directly from 'opened' without a grader
+                -- having resolved it; materialize the comment in that case too.
                 select
                     m.o_submission_comment_id,
                     m.o_submission_file_comment_id,
