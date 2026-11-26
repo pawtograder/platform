@@ -56,9 +56,10 @@ function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails;
     request.submission_file_comments?.[0]?.rubric_checks?.name ||
     request.submission_artifact_comments?.[0]?.rubric_checks?.name ||
     request.submission_comments?.[0]?.rubric_checks?.name ||
-    "-";
+    (request.resolution_reason === "rubric_check_deleted" ? "Removed rubric check" : "-");
 
-  const isDangling = request.resolution_reason === "comment_deleted";
+  const isDangling =
+    request.resolution_reason === "comment_deleted" || request.resolution_reason === "rubric_check_deleted";
 
   return (
     <Table.Row key={request.id}>
@@ -198,7 +199,7 @@ export default function RegradeRequestsTable({
         bySubmission.set(request.submission_id, group);
       }
       group.requests.push(request);
-      if (request.resolution_reason === "comment_deleted") {
+      if (request.resolution_reason === "comment_deleted" || request.resolution_reason === "rubric_check_deleted") {
         group.actionNeededCount += 1;
       }
     }
