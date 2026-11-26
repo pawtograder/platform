@@ -131,18 +131,26 @@ type GradebookScreenshotOptions = NonNullable<Parameters<typeof visualScreenshot
 export async function gradebookScreenshot(page: Page, name: string, options: GradebookScreenshotOptions = {}) {
   const { keepMenuOpen, beforeScreenshot, ...rest } = options;
   await settleInstructorGradebook(page);
+  const menuItem = keepMenuOpen && page.getByRole("menuitem", { name: keepMenuOpen.menuItem, exact: true });
   return visualScreenshot(page, name, {
+    // A menu capture is of the menu alone. A whole-page capture showed whichever columns the
+    // virtualizer had rendered around the menu's column, and that varied run to run.
+    ...(menuItem ? { element: page.getByRole("menu").filter({ has: menuItem }) } : {}),
+    // visualScreenshot scrolls every inner container home by default. The table had to scroll to
+    // reach the menu's column, so the reset moved the anchor out from under the open menu, which
+    // then closed or followed it; the reopen below scrolled back by a different amount.
+    ...(menuItem ? { resetInnerScroll: false } : {}),
     ...rest,
     beforeScreenshot: async (api) => {
       await waitForGradebookCellsIdle(page);
-      if (keepMenuOpen) {
-        const item = page.getByRole("menuitem", { name: keepMenuOpen.menuItem, exact: true });
-        if (!(await item.isVisible())) {
+      if (keepMenuOpen && menuItem) {
+        if (!(await menuItem.isVisible())) {
           await keepMenuOpen.open();
           // Argos parks the pointer before this callback; reopening moved it back onto the trigger,
           // whose hover style would make this capture differ from one that didn't need a reopen.
           await page.mouse.move(0, 0);
-          await expect(item).toBeVisible();
+          await expect(menuItem).toBeVisible();
+          await waitForVirtualizerIdle(page);
         }
       }
       await beforeScreenshot?.(api);

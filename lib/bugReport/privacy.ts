@@ -2479,6 +2479,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   cloud_workspaces_enabled: "none",
   coder_workspace_deletion_date: "none",
   complete_eligible_grading_reviews: "none",
+  convert_gradebook_column_missing_to_zero: "none",
   copy_groups_from_assignment: "none",
   create_all_manual_submissions_for_assignment: "none",
   create_all_repos_for_assignment: "none",

@@ -1083,16 +1083,14 @@ function ConvertMissingToZeroDialog({ columnId, onClose }: { columnId: number; o
                     onClick={async () => {
                       setIsConverting(true);
                       try {
-                        await supabase
-                          .from("gradebook_column_students")
-                          .update({
-                            score: 0,
-                            is_missing: false,
-                            score_override_note: "Missing value converted to 0"
-                          })
-                          .eq("gradebook_column_id", columnId)
-                          .eq("is_private", true)
-                          .or("is_missing.eq.true,and(score.is.null,score_override.is.null)");
+                        // One server-side statement: it converts only cells that are still missing when
+                        // it writes them (a grade entered meanwhile is kept), writes an override on
+                        // assignment-backed columns so recalculation keeps the 0, and queues the
+                        // recalculation of averages and topic standings that read this column.
+                        const { error } = await supabase.rpc("convert_gradebook_column_missing_to_zero", {
+                          p_column_id: columnId
+                        });
+                        if (error) throw error;
 
                         toaster.success({
                           title: "Success",

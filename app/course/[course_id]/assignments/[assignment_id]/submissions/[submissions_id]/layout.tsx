@@ -2547,7 +2547,7 @@ function SubmissionsLayout({ children, isStaffGradeRoute }: { children: React.Re
                 </>
               )}
               <Tooltip content={<TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />}>
-                <Text color="fg.muted" data-visual-test="blackout">
+                <Text color="fg.muted" data-visual-test="transparent">
                   · Submitted {formatRelative(new TZDate(submission.created_at, safeTimeZone), TZDate.tz(safeTimeZone))}
                 </Text>
               </Tooltip>

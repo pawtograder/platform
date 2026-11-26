@@ -86,19 +86,33 @@ async function insertColumns(
     writesStartedAt ??= new Date(data.created_at);
   }
 
+  // Score through the same RPC the gradebook UI's bulk writes use. It enqueues a recalculation of
+  // each changed row and bumps the row's version, so a pass the worker started from earlier inputs
+  // loses its version check instead of committing. A plain UPDATE of gradebook_column_students
+  // enqueues nothing: a private row the worker recalculated mid-fixture (column inserts enqueue it)
+  // kept the partial standings and averages, and releasing re-dirties only the public rows.
+  const updates: { id: number; updates: { score: number | null; is_missing: boolean } }[] = [];
   for (const spec of specs) {
     if (!spec.score) continue;
     const column_id = ids.get(spec.slug)!;
+    const { data: cells, error } = await supabase
+      .from("gradebook_column_students")
+      .select("id, student_id")
+      .eq("gradebook_column_id", column_id)
+      .eq("is_private", true);
+    if (error) throw new Error(`Failed to read cells of ${spec.slug}: ${error.message}`);
     for (const [index, student] of students.entries()) {
+      const cell = cells?.find((c) => c.student_id === student.private_profile_id);
+      if (!cell) throw new Error(`No private cell for ${spec.slug} / ${student.private_profile_id}`);
       const score = spec.score(index);
-      const { error } = await supabase
-        .from("gradebook_column_students")
-        .update({ score, is_missing: score === null })
-        .eq("gradebook_column_id", column_id)
-        .eq("student_id", student.private_profile_id)
-        .eq("is_private", true);
-      if (error) throw new Error(`Failed to score ${spec.slug}: ${error.message}`);
+      updates.push({ id: cell.id, updates: { score, is_missing: score === null } });
     }
+  }
+  if (updates.length > 0) {
+    const { error } = await supabase.rpc("update_gradebook_column_students_batch_with_recalc", {
+      p_updates: updates
+    });
+    if (error) throw new Error(`Failed to score columns: ${error.message}`);
   }
 
   const toRelease = specs.filter((s) => !s.score_expression).map((s) => ids.get(s.slug)!);
@@ -108,8 +122,7 @@ async function insertColumns(
     .in("id", toRelease);
   if (releaseError) throw new Error(`Failed to release columns: ${releaseError.message}`);
   // Wait from the first write, not from the release: releasing re-dirties only the public rows, so
-  // a private row the worker already recalculated from the scores is never touched again, and a
-  // wait that starts at the release would never see it catch up.
+  // a wait that starts at the release could pass before a private row's last pass ran.
   return { ids, writesStartedAt: writesStartedAt ?? new Date() };
 }
 
@@ -134,6 +147,49 @@ export async function waitForGradebookRecalculation(class_id: number, since: Dat
     if (Date.now() > deadline) {
       throw new Error(
         `Gradebook for class ${class_id} not recalculated after ${timeoutMs}ms (${pending} of ${rows.length} pending)`
+      );
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+/**
+ * Fail loudly if a calculated cell is still incomplete after recalculation caught up. Every
+ * calculated column in these fixtures reads only columns that have a score for every student (a
+ * topic standing is a max over attempts, at most one of which is missing), so `incomplete_values`
+ * on a calculated cell means it was computed from partial inputs: the stale-standing state that
+ * Argos captured as a flaky screenshot. Polls briefly in case a final pass is still landing.
+ */
+export async function expectCalculatedCellsComplete(class_id: number, timeoutMs = 60_000): Promise<void> {
+  const { data: calculated, error: columnsError } = await supabase
+    .from("gradebook_columns")
+    .select("id, slug")
+    .eq("class_id", class_id)
+    .not("score_expression", "is", null);
+  if (columnsError) throw new Error(`Failed to read calculated columns: ${columnsError.message}`);
+  const slugs = new Map((calculated ?? []).map((c) => [c.id, c.slug]));
+  if (slugs.size === 0) return;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("gradebook_column_students")
+      .select("gradebook_column_id, student_id, is_private, incomplete_values")
+      .in("gradebook_column_id", [...slugs.keys()]);
+    if (error) throw new Error(`Failed to read calculated cells: ${error.message}`);
+    // A complete cell stores JSON null; an incomplete one an object such as {"missing": {...}}.
+    const incomplete = (data ?? []).filter(
+      (c) =>
+        c.incomplete_values !== null &&
+        typeof c.incomplete_values === "object" &&
+        Object.keys(c.incomplete_values).length > 0
+    );
+    if (incomplete.length === 0) return;
+    if (Date.now() > deadline) {
+      const cells = incomplete
+        .map((c) => `${slugs.get(c.gradebook_column_id)} ${c.is_private ? "private" : "public"} ${c.student_id}`)
+        .join("; ");
+      throw new Error(
+        `Gradebook for class ${class_id}: ${incomplete.length} calculated cells still incomplete after recalculation: ${cells}`
       );
     }
     await new Promise((r) => setTimeout(r, 2000));
@@ -215,6 +271,7 @@ export async function createCs4535StyleGradebook() {
   const sortOrders = specs.map((s, i) => (i >= quizStart + 2 ? i + 1 : i));
   const { ids: columns, writesStartedAt } = await insertColumns(course.id, specs, students, sortOrders);
   await waitForGradebookRecalculation(course.id, writesStartedAt);
+  await expectCalculatedCellsComplete(course.id);
   return { course, instructor, students, columns };
 }
 
@@ -276,5 +333,6 @@ export async function createCs2100StyleGradebook() {
     if (error) throw new Error(`Failed to create group ${name}: ${error.message}`);
   }
   await waitForGradebookRecalculation(course.id, writesStartedAt);
+  await expectCalculatedCellsComplete(course.id);
   return { course, instructor, students, columns, gradebook_id };
 }

@@ -334,57 +334,6 @@ async function processRowsAll(
     if (isBulk) {
       const studentIds = rowEntries.map((e) => e.msg.message.student_id);
 
-      const allGcs: Array<{
-        id: number;
-        gradebook_column_id: number;
-        is_missing: boolean;
-        is_excused: boolean;
-        is_droppable: boolean;
-        score_override: number | null;
-        score: number | null;
-        released: boolean;
-        score_override_note: string | null;
-        incomplete_values: Database["public"]["Tables"]["gradebook_column_students"]["Row"]["incomplete_values"];
-        student_id: string;
-      }> = [];
-      let from = 0;
-      const pageSize = 1000;
-      while (true) {
-        const to = from + pageSize - 1;
-        const { data: page, error: gcsError } = await adminSupabase
-          .from("gradebook_column_students")
-          .select(
-            "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
-          )
-          .eq("class_id", classId)
-          .eq("gradebook_id", gradebook_id)
-          .eq("is_private", is_private)
-          .order("id", { ascending: true })
-          .range(from, to);
-        if (gcsError) {
-          Sentry.captureException(gcsError, gbScope);
-          break;
-        }
-        if (!page || page.length === 0) break;
-        allGcs.push(...(page as unknown as typeof allGcs));
-        if (page.length < pageSize) break;
-        from += pageSize;
-      }
-
-      const grouped: Map<string, typeof allGcs> = new Map();
-      for (const r of allGcs) {
-        const arr = grouped.get(r.student_id as string) ?? [];
-        arr.push(r);
-        grouped.set(r.student_id as string, arr);
-      }
-
-      const rowsInput = studentIds.map((sid) => ({ student_id: sid, is_private, gcsRows: grouped.get(sid) ?? [] }));
-      const updatesByStudent = await processGradebookRowsCalculation(adminSupabase, gbScope, {
-        class_id: classId,
-        gradebook_id,
-        rows: rowsInput
-      });
-
       console.log(`Upserting ${rowEntries.length} rows for gradebook ${gradebook_id}`);
 
       // Track row keys being upserted for duplicate detection
@@ -445,9 +394,10 @@ async function processRowsAll(
         );
       }
 
-      // Read versions AFTER the upsert so expected_version matches the
-      // post-upsert value. Reading before the upsert caused systematic
-      // version mismatches that left rows permanently stuck.
+      // Read versions AFTER the upsert so expected_version matches the post-upsert value, and
+      // BEFORE reading this pass's inputs. Every input change bumps the row's version, so a
+      // version read after the inputs could already include a change the inputs missed: the
+      // stale result then passed the RPC's version check and cleared `dirty`.
       const versionsByStudent = new Map<string, number>();
       {
         let vFrom = 0;
@@ -474,6 +424,58 @@ async function processRowsAll(
           vFrom += vPageSize;
         }
       }
+
+      // This pass's inputs, read only after the versions above (see there).
+      const allGcs: Array<{
+        id: number;
+        gradebook_column_id: number;
+        is_missing: boolean;
+        is_excused: boolean;
+        is_droppable: boolean;
+        score_override: number | null;
+        score: number | null;
+        released: boolean;
+        score_override_note: string | null;
+        incomplete_values: Database["public"]["Tables"]["gradebook_column_students"]["Row"]["incomplete_values"];
+        student_id: string;
+      }> = [];
+      let from = 0;
+      const pageSize = 1000;
+      while (true) {
+        const to = from + pageSize - 1;
+        const { data: page, error: gcsError } = await adminSupabase
+          .from("gradebook_column_students")
+          .select(
+            "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
+          )
+          .eq("class_id", classId)
+          .eq("gradebook_id", gradebook_id)
+          .eq("is_private", is_private)
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (gcsError) {
+          Sentry.captureException(gcsError, gbScope);
+          break;
+        }
+        if (!page || page.length === 0) break;
+        allGcs.push(...(page as unknown as typeof allGcs));
+        if (page.length < pageSize) break;
+        from += pageSize;
+      }
+
+      const grouped: Map<string, typeof allGcs> = new Map();
+      for (const r of allGcs) {
+        const arr = grouped.get(r.student_id as string) ?? [];
+        arr.push(r);
+        grouped.set(r.student_id as string, arr);
+      }
+
+      const rowsInput = studentIds.map((sid) => ({ student_id: sid, is_private, gcsRows: grouped.get(sid) ?? [] }));
+      const updatesByStudent = await processGradebookRowsCalculation(adminSupabase, gbScope, {
+        class_id: classId,
+        gradebook_id,
+        rows: rowsInput
+      });
 
       // Batch update all students in a single RPC call
       // Group entries by student to collect message IDs
@@ -619,38 +621,6 @@ async function processRowsAll(
       }
     } else {
       const studentIds = rowEntries.map((e) => e.msg.message.student_id);
-      const { data: scopedGcs, error: scopedErr } = await adminSupabase
-        .from("gradebook_column_students")
-        .select(
-          "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
-        )
-        .eq("class_id", classId)
-        .eq("gradebook_id", gradebook_id)
-        .eq("is_private", is_private)
-        .in("student_id", studentIds);
-      if (scopedErr) {
-        Sentry.captureException(scopedErr, gbScope);
-        continue;
-      }
-
-      const groupedScoped: Map<string, NonNullable<typeof scopedGcs>> = new Map();
-      for (const r of scopedGcs ?? []) {
-        const arr = groupedScoped.get(r.student_id as string) ?? [];
-        arr.push(r);
-        groupedScoped.set(r.student_id as string, arr);
-      }
-
-      const rowsInputScoped = studentIds.map((sid) => ({
-        student_id: sid,
-        is_private,
-        gcsRows: groupedScoped.get(sid) ?? []
-      }));
-      const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, gbScope, {
-        class_id: classId,
-        gradebook_id,
-        rows: rowsInputScoped
-      });
-
       // Track row keys being upserted for duplicate detection
       const upsertRowKeysScoped = rowEntries.map((entry) => {
         const key = rowKey(classId, gradebook_id, entry.msg.message.student_id, is_private);
@@ -710,10 +680,10 @@ async function processRowsAll(
         );
       }
 
-      // Read versions AFTER the upsert so expected_version matches the
-      // post-upsert value. Reading before the upsert caused systematic
-      // version mismatches: the upsert increments version, then the
-      // batch RPC tried to clear with the stale pre-upsert version.
+      // Read versions AFTER the upsert so expected_version matches the post-upsert value, and
+      // BEFORE reading this pass's inputs. Every input change bumps the row's version, so a
+      // version read after the inputs could already include a change the inputs missed: the
+      // stale result then passed the RPC's version check and cleared `dirty`.
       const versionsByStudentScoped = new Map<string, number>();
       {
         const { data: verRows, error: verErr } = await adminSupabase
@@ -730,6 +700,39 @@ async function processRowsAll(
           versionsByStudentScoped.set(row.student_id, row.version);
         }
       }
+
+      // This pass's inputs, read only after the versions above (see there).
+      const { data: scopedGcs, error: scopedErr } = await adminSupabase
+        .from("gradebook_column_students")
+        .select(
+          "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
+        )
+        .eq("class_id", classId)
+        .eq("gradebook_id", gradebook_id)
+        .eq("is_private", is_private)
+        .in("student_id", studentIds);
+      if (scopedErr) {
+        Sentry.captureException(scopedErr, gbScope);
+        continue;
+      }
+
+      const groupedScoped: Map<string, NonNullable<typeof scopedGcs>> = new Map();
+      for (const r of scopedGcs ?? []) {
+        const arr = groupedScoped.get(r.student_id as string) ?? [];
+        arr.push(r);
+        groupedScoped.set(r.student_id as string, arr);
+      }
+
+      const rowsInputScoped = studentIds.map((sid) => ({
+        student_id: sid,
+        is_private,
+        gcsRows: groupedScoped.get(sid) ?? []
+      }));
+      const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, gbScope, {
+        class_id: classId,
+        gradebook_id,
+        rows: rowsInputScoped
+      });
 
       // Batch update all students in a single RPC call
       // Group entries by student to collect message IDs
