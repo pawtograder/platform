@@ -401,6 +401,7 @@ export type WorkspaceOpenResponse = {
     | "ready"
     | "failed"
     | "needs_linking"
+    | "unavailable"
     | "account_conflict"
     | "credentials_unavailable"
     | "needs_org_invite";

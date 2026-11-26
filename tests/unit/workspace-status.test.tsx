@@ -198,6 +198,23 @@ describe("WorkspaceStatus", () => {
     expect(screen.queryByRole("link", { name: "Open in VS Code" })).not.toBeInTheDocument();
   });
 
+  it("continues after linking without a visibility change", async () => {
+    const client = stubClient({
+      initial: { status: "needs_linking", url: "https://coder.example/link", message: "Link GitHub" },
+      opened: { status: "starting", step: "build" }
+    });
+    renderCard(client);
+    fireEvent.click(await screen.findByRole("button", { name: "I've linked my account" }));
+    expect(client.open).toHaveBeenCalledWith(7);
+    expect(await screen.findByRole("button", { name: "Starting…" })).toBeDisabled();
+  });
+
+  it("shows unavailable workspaces without an open button", async () => {
+    renderCard(stubClient({ initial: { status: "unavailable", message: "GitHub workspaces are disabled." } }));
+    expect(await screen.findByTestId("workspace-status")).toHaveTextContent("GitHub workspaces are disabled.");
+    expect(screen.queryByRole("button", { name: "Open in Coder" })).not.toBeInTheDocument();
+  });
+
   it("opens, polls while starting, and stops polling once ready", async () => {
     const client = stubClient({
       initial: { status: "not_started" },

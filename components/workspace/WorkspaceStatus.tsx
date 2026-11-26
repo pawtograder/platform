@@ -80,6 +80,8 @@ function statusText(state: WorkspaceState, providerLabel: string): string {
       return `Workspace not ready: ${workspaceStepLabel(state.step)} failed.`;
     case "needs_linking":
       return `Link your ${providerLabel} account to open your workspace.`;
+    case "unavailable":
+      return state.message;
     case "account_conflict":
       return "Your workspace can't be opened.";
   }
@@ -255,6 +257,11 @@ export function WorkspaceStatus({
                       (opens in a new tab)
                     </Text>
                   </a>
+                </Button>
+              )}
+              {state.status === "needs_linking" && (
+                <Button size="sm" variant="outline" loading={pending} onClick={() => runAndKeepFocus(open)}>
+                  I&apos;ve linked my account
                 </Button>
               )}
               {state.status === "failed" && (

@@ -25,6 +25,7 @@ export const WORKSPACE_STEPS = [
 export type WorkspaceStepId = (typeof WORKSPACE_STEPS)[number]["id"];
 
 export type WorkspaceState =
+  | { status: "unavailable"; message: string }
   | { status: "not_started" }
   // `restarting`: workspace-open is stopping a broken workspace to start it again.
   | { status: "starting"; step: WorkspaceStepId; restarting?: boolean }
@@ -57,6 +58,8 @@ function isStepId(value: unknown): value is WorkspaceStepId {
 export function toWorkspaceState(res: WorkspaceOpenResponse): WorkspaceState {
   const step = isStepId(res.step) ? res.step : "build";
   switch (res.status) {
+    case "unavailable":
+      return { status: "unavailable", message: res.message || "Cloud workspaces are unavailable." };
     case "not_started":
       return { status: "not_started" };
     case "starting":

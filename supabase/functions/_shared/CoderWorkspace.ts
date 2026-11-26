@@ -12,9 +12,11 @@
 // workspace is created or started we still read the bound subject back and require it to be the
 // caller's, and a user who hasn't signed in to Coder yet gets linkUrl, which signs them in first.
 
+import * as Sentry from "npm:@sentry/deno@10.10.0";
 import type { WorkspaceOpenRequest, WorkspaceOpenResponse, WorkspaceStep } from "./FunctionTypes.d.ts";
 import {
   apiKeyId,
+  CoderApiError,
   type CoderAgent,
   type CoderConfig,
   type CoderUser,
@@ -243,6 +245,24 @@ export async function withinBudget<T>(budget: Budget, work: () => Promise<T>): P
   } catch (e) {
     if (budget.signal.aborted)
       throw new UserVisibleError("Coder or Pawtograder didn't answer in time. Try again.", 504);
+    if (e instanceof CoderApiError) {
+      console.error("[workspace] Coder request failed", e);
+      Sentry.captureException(e);
+      if (e.status === 402 || e.status === 403 || /quota/i.test(JSON.stringify(e.body)))
+        throw new UserVisibleError(
+          "Coder could not allocate your workspace. Ask course staff to check workspace capacity and permissions.",
+          503
+        );
+      if (e.status === 404)
+        throw new UserVisibleError(
+          "Coder could not find the workspace or its template. Ask course staff for help.",
+          503
+        );
+      if (e.status === 409)
+        throw new UserVisibleError("Coder is already changing this workspace. Wait a moment, then try again.", 409);
+      if (e.status >= 500)
+        throw new UserVisibleError("Coder is temporarily unavailable. Try again in a few minutes.", 503);
+    }
     throw e;
   }
 }
@@ -751,7 +771,12 @@ export async function describeWorkspace(
       ...base,
       status: "failed",
       step: "build",
-      message,
+      message:
+        /exceeded quota|failedscheduling|unschedulable|insufficient (cpu|memory)|0\/\d+ nodes are available|failed to schedule/i.test(
+          message
+        )
+          ? "The course's workspace capacity is full. Try again later or ask course staff for help."
+          : message,
       failure: { step: "build", script: null, exit_code: null, log_lines: [message] }
     };
   }
@@ -1052,6 +1077,12 @@ export async function openWorkspace(
     return accountConflict(user);
   }
   const providers = await getExternalAuth(coder, template.active_version_id, user.id);
+  if (repo.git_provider === "github" && !providers.some((e) => e.id === requireGithub(deps).externalAuthId)) {
+    throw new UserVisibleError(
+      "The active Coder template does not declare the GitHub provider configured by CODER_GITHUB_AUTH_ID. Ask course staff to update the template.",
+      503
+    );
+  }
   // The GitHub provider is optional, so that an unlinked GitHub account never blocks a Forgejo
   // workspace. A GitHub repository has to check it itself.
   const missing =
@@ -1174,6 +1205,9 @@ export async function workspaceStatus(
   const { db, coder } = deps;
   const deadline = deps.budget?.deadline ?? clock(deps)() + STATUS_BUDGET_MS;
   const { repo, githubOrgConfirmed } = await resolveRepository(db, caller, request);
+  if (repo.git_provider === "github" && !deps.github) {
+    return { status: "unavailable", message: "GitHub cloud workspaces are not enabled on this deployment." };
+  }
   let row = await db.getWorkspaceRow(caller.userId, repo.id, coder.url);
   // A workspace that already exists isn't held back by this: only an open would create one.
   if (!row?.coder_workspace_id) {
