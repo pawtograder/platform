@@ -12,3 +12,5 @@ export {
   type ValidationError,
   type ValidationWarning
 } from "@/components/rubric-editor/validation";
+export { ConfirmRubricCheckDeleteDialog } from "@/components/rubric-editor/ConfirmRubricCheckDeleteDialog";
+export { DeletedChecksReportDialog } from "@/components/rubric-editor/DeletedChecksReportDialog";
