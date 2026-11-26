@@ -73,6 +73,7 @@ jest.mock("@refinedev/core", () => ({
 }));
 jest.mock("@/hooks/useCourseController", () => ({ useCourseController: () => mockController }));
 jest.mock("@/hooks/useClassProfiles", () => ({ useIsReadOnly: () => false }));
+jest.mock("@/hooks/useStaffErrorRole", () => ({ useViewerErrorRole: () => "student" }));
 jest.mock("@/components/ui/toaster", () => ({ toaster: { error: jest.fn() } }));
 jest.mock("@/components/notifications/notification-teaser", () => ({}));
 

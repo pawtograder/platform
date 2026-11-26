@@ -55,6 +55,7 @@ jest.mock("@/hooks/useAssignment", () => ({ useAssignmentController: () => ({ as
 jest.mock("@/lib/edgeFunctions", () => ({ repositoryGetFile: jest.fn() }));
 jest.mock("@/utils/supabase/client", () => ({ createClient: () => ({}) }));
 jest.mock("@/components/ui/toaster", () => ({ toaster: { error: jest.fn(), success: jest.fn() } }));
+jest.mock("@/hooks/useStaffErrorRole", () => ({ useStaffErrorRole: () => "instructor" }));
 
 const SAVED_ROW: Row = { id: 1, autograder_id: 5, repository: "org/student-a" };
 const LOAD_ERROR = { message: "TypeError: Failed to fetch", code: "" };
