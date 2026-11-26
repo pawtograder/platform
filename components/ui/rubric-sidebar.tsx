@@ -157,7 +157,8 @@ export function CommentActions({
 }) {
   const submissionController = useSubmissionController();
   const { private_profile_id, public_profile_id } = useClassProfiles();
-  const { canGradeSubmissions, canReleaseGrades } = useGradingPermissions();
+  const { canGradeSubmissions, canReleaseGrades, isLockedByRelease } = useGradingPermissions();
+  const isStudent = useIsStudent();
 
   // Get the submission review to check completion and release (issue #446: no grader edits after release)
   const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id ?? undefined);
@@ -213,7 +214,7 @@ export function CommentActions({
                   role: errorRole,
                   isStudent,
                   rubricReviewRound: reviewRubric?.review_round ?? null,
-                  releasedReviewGraderBlocked: isGraderOrInstructor && !isInstructor && isReviewReleased
+                  releasedReviewGraderBlocked: isLockedByRelease(isReviewReleased)
                 })
               });
             }
