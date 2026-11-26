@@ -81,6 +81,167 @@ export class ProviderTransientError extends Error {
   }
 }
 
+/** How long one Gemini request may take before generate gives up on it. */
+const GEMINI_TIMEOUT_MS = 60000;
+/** Template pages per Auto-extract request; 2 pages took 18-27s against GEMINI_TIMEOUT_MS. */
+const TEMPLATE_PAGES_PER_REQUEST = 2;
+/** A run of template pages sent in one Auto-extract request, numbered from 1 across the template. */
+type PageGroup = { firstPage: number; lastPage: number };
+
+/**
+ * Auto-extract failed for some of the template's pages, so nothing is imported. exam-extract-template
+ * shows the message to the instructor as is, so it says which pages and what to do. Like
+ * ProviderTransientError's, it never carries response or transport text; the failure itself is
+ * kept as the cause.
+ */
+export class TemplateExtractError extends Error {
+  constructor(
+    readonly pageRanges: [number, number][],
+    cause: unknown
+  ) {
+    const pages = pageRanges.map(([first, last]) => (first === last ? `${first}` : `${first}–${last}`));
+    const single = pageRanges.length === 1 && pageRanges[0][0] === pageRanges[0][1];
+    super(
+      `Auto-extract couldn't read ${single ? "page" : "pages"} ${pages.join(", ")} (${describeFailure(cause)}). ` +
+        "Nothing was imported. Try again, or draw the regions by hand.",
+      { cause }
+    );
+    this.name = "TemplateExtractError";
+  }
+}
+
+/**
+ * Gemini answered a group of template pages with something that isn't a question tree. Like
+ * ProviderTransientError's, its message never carries the response text.
+ */
+export class TemplateResponseError extends Error {
+  constructor() {
+    super("Gemini's answer was not a question tree");
+    this.name = "TemplateResponseError";
+  }
+}
+
+function describeFailure(err: unknown): string {
+  if (err instanceof ProviderTransientError && err.category === "timeout") {
+    return `Gemini took longer than ${GEMINI_TIMEOUT_MS / 1000} seconds`;
+  }
+  if (err instanceof ProviderTransientError) return "the request to Gemini failed";
+  if (err instanceof ProviderRateLimitError) return "Gemini is rate limiting requests";
+  if (err instanceof TemplateResponseError) return "Gemini's answer couldn't be read";
+  return "Gemini returned an error";
+}
+
+const isObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+/**
+ * Whether `tree` has what mergeTemplateGroups reads: lists of questions and regions made of
+ * objects, with an id and a label it can use. Other fields are left to the caller.
+ */
+function isQuestionTree(tree: unknown): tree is ProposedTree {
+  if (!isObject(tree) || !Array.isArray(tree.questions) || !Array.isArray(tree.regions)) return false;
+  if (!tree.regions.every(isObject)) return false;
+  return tree.questions.every(
+    (q) =>
+      isObject(q) &&
+      (typeof q.client_id === "number" || (typeof q.client_id === "string" && q.client_id !== "")) &&
+      (q.label == null || typeof q.label === "string")
+  );
+}
+
+const byOrdinal = (a: ProposedQuestion, b: ProposedQuestion) => (a.ordinal ?? 0) - (b.ordinal ?? 0);
+
+// "Problem 2 (continued)" and "Problem 2." are the same question as "Problem 2".
+const labelKey = (label: string | undefined) =>
+  (label ?? "")
+    .toLowerCase()
+    .replace(/\(\s*cont[^)]*\)/g, "")
+    .replace(/[\s.:]+$/, "")
+    .trim();
+const sameQuestion = (a: ProposedQuestion, b: ProposedQuestion) =>
+  labelKey(a.label) !== "" && labelKey(a.label) === labelKey(b.label);
+
+/**
+ * Merges the answers for consecutive groups of template pages into one proposal.
+ *
+ * Gemini numbers pages and picks client_ids within each request, so page numbers are shifted to
+ * the whole template (a page number past the group's own pages is dropped rather than shifted onto
+ * another group's page) and ids are prefixed with the group. Top-level ordinals continue across
+ * groups. A problem that runs over a group boundary comes back from both groups, and the halves
+ * are joined (joinContinued). Only the first name and student ID regions are kept: a name line in
+ * every page footer would otherwise give one per group, and the worker reads whichever one the
+ * database returns first.
+ */
+function mergeTemplateGroups(groups: (PageGroup & { tree: ProposedTree })[]): ProposedTree {
+  const questions: ProposedQuestion[] = [];
+  const regions: ProposedRegion[] = [];
+  let topCount = 0;
+  let lastTop: ProposedQuestion | undefined;
+  groups.forEach(({ firstPage, lastPage, tree }, g) => {
+    const id = (raw: string) => `g${g + 1}:${raw}`;
+    // Not a truthiness check: Gemini can answer with numeric ids, and 0 is a real reference.
+    const ref = (raw: string | null | undefined) => (raw == null || raw === "" ? null : id(raw));
+    const groupQuestions = (tree.questions ?? []).map((q) => ({
+      ...q,
+      client_id: id(q.client_id),
+      parent_client_id: ref(q.parent_client_id)
+    }));
+    questions.push(...groupQuestions);
+    for (const r of tree.regions ?? []) {
+      const inGroup =
+        Number.isInteger(r.page_number) && r.page_number >= 1 && r.page_number <= lastPage - firstPage + 1;
+      if (!inGroup) continue;
+      if (r.kind !== "answer" && regions.some((kept) => kept.kind === r.kind)) continue;
+      regions.push({
+        ...r,
+        page_number: firstPage + r.page_number - 1,
+        question_client_id: ref(r.question_client_id)
+      });
+    }
+    const tops = groupQuestions.filter((q) => !q.parent_client_id).sort(byOrdinal);
+    for (const [i, top] of tops.entries()) {
+      if (i === 0 && lastTop && sameQuestion(lastTop, top)) {
+        joinContinued(lastTop, top, questions, regions);
+      } else {
+        top.ordinal = ++topCount;
+        lastTop = top;
+      }
+    }
+  });
+  return { questions, regions };
+}
+
+/**
+ * `continued` is the next group's copy of `kept`, the question the previous group ended on. Its
+ * parts move under `kept`, numbered after kept's own, and it is removed. When kept's last part and
+ * continued's first part are the same question too (a part split over the boundary), those two
+ * are joined the same way.
+ */
+function joinContinued(
+  kept: ProposedQuestion,
+  continued: ProposedQuestion,
+  questions: ProposedQuestion[],
+  regions: ProposedRegion[]
+) {
+  const partsOf = (q: ProposedQuestion) => questions.filter((x) => x.parent_client_id === q.client_id).sort(byOrdinal);
+  const keptParts = partsOf(kept);
+  const movedParts = partsOf(continued);
+  questions.splice(questions.indexOf(continued), 1);
+  for (const r of regions) {
+    if (r.question_client_id === continued.client_id) r.question_client_id = kept.client_id;
+  }
+  kept.points ??= continued.points;
+  const lastPart = keptParts.at(-1);
+  let ordinal = lastPart?.ordinal ?? 0;
+  for (const [i, part] of movedParts.entries()) {
+    if (i === 0 && lastPart && sameQuestion(lastPart, part)) {
+      joinContinued(lastPart, part, questions, regions);
+    } else {
+      part.parent_client_id = kept.client_id;
+      part.ordinal = ++ordinal;
+    }
+  }
+}
+
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
@@ -288,7 +449,7 @@ class GeminiVision {
         generationConfig: { responseMimeType: "application/json", temperature: 0 }
       }),
       // Bound the call so a stalled connection can't hang the worker indefinitely.
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       // fetch would otherwise follow a redirect and resend x-goog-api-key to wherever it points.
       // A redirect rejects as a TypeError, classified below like any other failed request.
       redirect: "error"
@@ -333,21 +494,57 @@ class GeminiVision {
   private imagePart(page: PageImage) {
     return { inline_data: { mime_type: "image/png", data: toBase64(page.bytes) } };
   }
+  private stripFences(text: string): string {
+    return text
+      .replace(/^```json\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+  }
   private parseJson<T>(text: string, fallback: T): T {
     try {
-      const cleaned = text
-        .replace(/^```json\s*/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-      return JSON.parse(cleaned) as T;
+      return JSON.parse(this.stripFences(text)) as T;
     } catch {
       return fallback;
     }
   }
+  // All the pages used to go to Gemini in one request, which generate cuts off at
+  // GEMINI_TIMEOUT_MS. How long Gemini takes depends on how much is on the pages: 4 pages took
+  // about 49s, and 8 or more pages of different questions never finished (#1369). So the pages go
+  // in groups of TEMPLATE_PAGES_PER_REQUEST, all at once (the rate limiter still spaces the
+  // requests), and the answers are merged. allSettled rather than all, so no request is left
+  // running after this returns and every group that failed can be named.
   async extractTemplate(pages: PageImage[]): Promise<ProposedTree> {
+    const groups: (PageGroup & { pages: PageImage[] })[] = [];
+    for (let i = 0; i < pages.length; i += TEMPLATE_PAGES_PER_REQUEST) {
+      const slice = pages.slice(i, i + TEMPLATE_PAGES_PER_REQUEST);
+      groups.push({ firstPage: i + 1, lastPage: i + slice.length, pages: slice });
+    }
+    const settled = await Promise.allSettled(groups.map((group) => this.extractTemplateGroup(group, pages.length)));
+    const answered: (PageGroup & { tree: ProposedTree })[] = [];
+    const failed: [number, number][] = [];
+    let firstFailure: unknown;
+    settled.forEach((result, g) => {
+      const { firstPage, lastPage } = groups[g];
+      if (result.status === "fulfilled") {
+        answered.push({ firstPage, lastPage, tree: result.value });
+      } else {
+        failed.push([firstPage, lastPage]);
+        firstFailure ??= result.reason;
+      }
+    });
+    if (failed.length > 0) throw new TemplateExtractError(failed, firstFailure);
+    return mergeTemplateGroups(answered);
+  }
+  private async extractTemplateGroup(
+    { firstPage, lastPage, pages }: PageGroup & { pages: PageImage[] },
+    totalPages: number
+  ): Promise<ProposedTree> {
     const parts: unknown[] = [
       {
         text:
+          `These are ${firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`} of a ` +
+          `${totalPages}-page exam template. Count "page_number" by the image's position in this request, ` +
+          "starting at 1, not by any number printed on the page. " +
           "You are given page images of an exam template. Identify the question structure as up to 3 " +
           "nested levels (level 1 = sections/parts, level 2 = questions, level 3 = sub-questions/items) and " +
           "the bounding box (normalized 0..1: x,y,width,height) where each leaf answer is written. Also locate " +
@@ -361,7 +558,15 @@ class GeminiVision {
       ...pages.map((p) => this.imagePart(p))
     ];
     const text = await this.generate(parts);
-    return this.parseJson<ProposedTree>(text, { questions: [], regions: [] });
+    // Not parseJson: an empty fallback would count as an answer and leave these pages out.
+    let tree: unknown;
+    try {
+      tree = JSON.parse(this.stripFences(text));
+    } catch {
+      throw new TemplateResponseError();
+    }
+    if (!isQuestionTree(tree)) throw new TemplateResponseError();
+    return tree;
   }
   async readIdentity(page: PageImage, region: NormRect | null): Promise<IdentityResult> {
     const hint = region ? `The identity is within the normalized region ${JSON.stringify(region)}. ` : "";

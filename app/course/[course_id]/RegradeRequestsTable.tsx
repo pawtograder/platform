@@ -57,9 +57,10 @@ function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails;
     request.submission_file_comments?.[0]?.rubric_checks?.name ||
     request.submission_artifact_comments?.[0]?.rubric_checks?.name ||
     request.submission_comments?.[0]?.rubric_checks?.name ||
-    "-";
+    (request.resolution_reason === "rubric_check_deleted" ? "Removed rubric check" : "-");
 
-  const isDangling = request.resolution_reason === "comment_deleted";
+  const isDangling =
+    request.resolution_reason === "comment_deleted" || request.resolution_reason === "rubric_check_deleted";
 
   return (
     <Table.Row key={request.id}>
@@ -85,7 +86,8 @@ function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails;
         <Link
           href={`/course/${courseId}/assignments/${request.assignment_id}/submissions/${request.submission_id}#regrade-request-${request.id}`}
         >
-          <Text color="blue.500" textDecoration="underline">
+          {/* blue.500 is about 3.7:1 on white, below WCAG AA for body text; blue.fg passes in both themes. */}
+          <Text color="blue.fg" textDecoration="underline">
             {request.assignments?.title || "Unknown"}
           </Text>
         </Link>
@@ -203,7 +205,7 @@ export default function RegradeRequestsTable({
         bySubmission.set(request.submission_id, group);
       }
       group.requests.push(request);
-      if (request.resolution_reason === "comment_deleted") {
+      if (request.resolution_reason === "comment_deleted" || request.resolution_reason === "rubric_check_deleted") {
         group.actionNeededCount += 1;
       }
     }

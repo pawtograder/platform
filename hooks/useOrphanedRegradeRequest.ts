@@ -12,13 +12,13 @@ export function useRegradeRequestBackingComment(request: RegradeRequest) {
 
 /**
  * True when the request no longer has a live rubric-sidebar anchor (the backing
- * comment was soft-deleted or is otherwise unavailable). These requests must render
- * their full thread in SubmissionRegradeRequestsPanel instead.
+ * comment or target rubric check was deleted, or is otherwise unavailable). These
+ * requests must render their full thread in SubmissionRegradeRequestsPanel instead.
  */
 export function useIsOrphanedRegradeRequest(request: RegradeRequest): boolean {
   const backingComment = useRegradeRequestBackingComment(request);
 
-  if (request.resolution_reason === "comment_deleted") {
+  if (request.resolution_reason === "comment_deleted" || request.resolution_reason === "rubric_check_deleted") {
     return true;
   }
 
@@ -28,7 +28,7 @@ export function useIsOrphanedRegradeRequest(request: RegradeRequest): boolean {
     request.submission_artifact_comment_id != null;
 
   if (!hasCommentRef) {
-    return false;
+    return request.rubric_check_id == null;
   }
 
   return !backingComment || backingComment.deleted_at != null;
@@ -38,5 +38,11 @@ export function useRegradeRequestCheckName(request: RegradeRequest): string {
   const backingComment = useRegradeRequestBackingComment(request);
   const checkId = request.rubric_check_id ?? backingComment?.rubric_check_id ?? null;
   const rubricCheck = useRubricCheck(checkId);
-  return rubricCheck?.name ?? "General";
+  if (rubricCheck?.name) {
+    return rubricCheck.name;
+  }
+  if (request.resolution_reason === "rubric_check_deleted") {
+    return "Removed rubric check";
+  }
+  return "General";
 }

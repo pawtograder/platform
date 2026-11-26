@@ -11,6 +11,7 @@ import {
   HelpRequestNotification,
   HelpRequestMessageNotification
 } from "@/components/notifications/notification-teaser";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 const EMPTY_NOTIFICATIONS: Notification[] = [];
 
@@ -32,6 +33,7 @@ export function useNotification(notification_id: number) {
 }
 
 export function useNotifications(resource?: string, id?: number) {
+  const errorRole = useViewerErrorRole();
   const controller = useCourseController();
   const isReadOnly = useIsReadOnly();
   const { mutateAsync: update_notification } = useUpdate<Notification>({
@@ -68,11 +70,11 @@ export function useNotifications(resource?: string, id?: number) {
         toaster.error({
           id: "notification-set-read-error",
           title: "Failed to update notification",
-          description: getErrorMessage(error)
+          description: getErrorMessage(error, { role: errorRole })
         });
       }
     },
-    [update_notification, isReadOnly]
+    [update_notification, isReadOnly, errorRole]
   );
 
   // Removes the notification from the local store right away, then deletes it. Never rejects:
@@ -101,11 +103,11 @@ export function useNotifications(resource?: string, id?: number) {
         });
         toaster.error({
           title: "Failed to dismiss notification",
-          description: getErrorMessage(error)
+          description: getErrorMessage(error, { role: errorRole })
         });
       }
     },
-    [delete_notification, controller, isReadOnly]
+    [delete_notification, controller, isReadOnly, errorRole]
   );
 
   const mark_all_read = useCallback(

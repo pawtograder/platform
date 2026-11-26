@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { registerRowSource, unregisterRowSource, type IngestRowSource } from "@/lib/bugReport/ingestGate";
 import useAuthState from "./useAuthState";
 import { clearViewAsCookie, getViewAsCookie, isSelfViewAsScope, setViewAsCookie } from "@/lib/viewAs";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -94,6 +95,11 @@ export function useIsGraderOrInstructor() {
   return role.role === "grader" || role.role === "instructor";
 }
 
+/** The effective course role, or `undefined` outside a `ClassProfileProvider`. Never throws. */
+export function useOptionalCourseRole(): string | undefined {
+  return useContext(ClassProfileContext)?.role.role;
+}
+
 /** Whether the viewer is a student in the **effective** course identity (including view-as). */
 export function useIsStudent() {
   const { role } = useClassProfiles();
@@ -126,6 +132,16 @@ export function useCapability(name: string) {
     return false;
   }
   return state.capabilities.has(name);
+}
+
+/**
+ * Like {@link useCapability}, but returns a function, for checking a capability chosen at render
+ * time, such as each menu item's. It answers `false` while loading and while an instructor is
+ * viewing as a student, like useCapability.
+ */
+export function useHasCapability(): (name: string) => boolean {
+  const state = useContext(ClassCapabilitiesContext);
+  return useCallback((name: string) => !!state && !state.isLoading && state.capabilities.has(name), [state]);
 }
 
 /**
@@ -244,7 +260,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
           return;
         } catch (error) {
           if (cleanedUp) return;
-          const message = error instanceof Error ? error.message : String(error);
+          // No course role yet: this loads the roles. The default (student) wording is used.
+          const message = getUserFacingErrorMessage(error);
           if (attempt === maxAttempts) {
             console.error("Error fetching user roles:", error);
             setLoadError(message);

@@ -25,6 +25,7 @@ import {
 } from "./dialog";
 import { StudentVisibilityIndicator } from "./rubric-sidebar";
 import { formatPoints } from "./code-file-shared";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 export type AnnotationCommentDialogProps = {
   isOpen: boolean;
@@ -157,7 +158,7 @@ export function AnnotationCommentDialog({
     } catch (err) {
       toaster.error({
         title: "Error saving annotation",
-        description: err instanceof Error ? err.message : "Unknown error"
+        description: getUserFacingErrorMessage(err)
       });
     } finally {
       setIsLoading(false);

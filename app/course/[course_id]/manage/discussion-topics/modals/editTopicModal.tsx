@@ -10,6 +10,8 @@ import { BsX, BsDiscord } from "react-icons/bs";
 import { useCourseController, useCourse, useAssignments } from "@/hooks/useCourseController";
 import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Available color options for discussion topics.
@@ -77,6 +79,7 @@ type EditTopicModalProps = {
  * @returns The rendered modal component, or null if no topic is provided
  */
 export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: EditTopicModalProps) {
+  const errorRole = useStaffErrorRole();
   const controller = useCourseController();
   const course = useCourse();
   const assignments = useAssignments();
@@ -146,7 +149,7 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to update discussion topic: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to update discussion topic: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

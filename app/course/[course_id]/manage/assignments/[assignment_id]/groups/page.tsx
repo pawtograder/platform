@@ -9,7 +9,7 @@ import {
   AssignmentGroupWithMembersAndMentor,
   UserRoleWithPrivateProfileGroupMembershipsAndUser
 } from "@/utils/supabase/DatabaseTypes";
-import { useCapability } from "@/hooks/useClassProfiles";
+import { useCapability, useIsAdmin, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
 import {
   useIsTableControllerReady,
@@ -46,6 +46,8 @@ import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
+import { getUserFacingErrorMessage, reportUnexpectedError } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 const UTF8_BOM = "\uFEFF";
 
@@ -113,6 +115,7 @@ function CopyGroupsFromAssignmentDialog({
   course_id: number;
   sourceAssignments: Assignment[];
 }) {
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
   const supabase = createClient();
   const [open, setOpen] = useState(false);
@@ -171,7 +174,7 @@ function CopyGroupsFromAssignmentDialog({
       Sentry.captureException(error);
       toaster.create({
         title: "Error copying groups",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: getUserFacingErrorMessage(error, { role: errorRole }),
         type: "error"
       });
     } finally {
@@ -247,9 +250,18 @@ function CopyGroupsFromAssignmentDialog({
 }
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
+  const errorRole = useStaffErrorRole();
   const courseController = useCourseController();
-  // Every change here needs publish_groups (#1010); without it the page is read-only.
+  // Staging group changes and publishing them need publish_groups (#1010).
   const canEditGroups = useCapability("publish_groups");
+  // Copy Groups writes the groups at once, without staging, so it needs manage_groups.
+  const canManageGroups = useCapability("manage_groups");
+  // publish_assignment_group_changes still accepts only instructors and admins, so only they get
+  // Publish Changes until #1010 moves it to publish_groups. Others with publish_groups can stage
+  // changes but not publish them.
+  const isInstructor = useIsInstructor();
+  const isAdmin = useIsAdmin();
+  const canPublishGroups = canEditGroups && (isInstructor || isAdmin);
   // The (Edit) link opens the assignment form, which needs manage_assignments.
   const canManageAssignments = useCapability("manage_assignments");
   const { assignmentGroupsWithMembers, assignments, userRolesWithProfiles } = courseController;
@@ -385,10 +397,15 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       }
     } catch (e) {
       console.error(e);
-      Sentry.captureException(e);
+      // A refusal from the publish function (42501) is expected, not a bug: keep it out of Sentry.
+      reportUnexpectedError(
+        e,
+        { operation: "publish_assignment_group_changes", assignment_id: assignment.id },
+        { expected: ["42501"] }
+      );
       toaster.create({
         title: "Error publishing changes",
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: getUserFacingErrorMessage(e, { role: errorRole }),
         type: "error"
       });
     } finally {
@@ -435,7 +452,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             </>
           )}
         </Text>
-        {canEditGroups && (
+        {canManageGroups && (
           <CopyGroupsFromAssignmentDialog
             assignment={assignment}
             course_id={course_id}
@@ -457,7 +474,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         >
           <Box textAlign="center">
             <Text fontSize="sm" color="text.muted">
-              Moving students and updating GitHub permissions...
+              Moving students and updating {assignment.git_provider === "forgejo" ? "Forgejo" : "GitHub"} permissions...
             </Text>
             <Spinner />
           </Box>
@@ -610,14 +627,16 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                       Clear Groups To Create
                     </Button>
                   )}
-                  <Button
-                    colorPalette={"green"}
-                    onClick={() => {
-                      publishChanges();
-                    }}
-                  >
-                    Publish Changes
-                  </Button>
+                  {canPublishGroups && (
+                    <Button
+                      colorPalette={"green"}
+                      onClick={() => {
+                        publishChanges();
+                      }}
+                    >
+                      Publish Changes
+                    </Button>
+                  )}
                 </Flex>
               )}
             </Box>
@@ -689,10 +708,13 @@ function TableByGroups({
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   groupsData: AssignmentGroupWithMembersAndMentor[];
 }) {
+  const errorRole = useStaffErrorRole();
   const { modProfiles, movesToFulfill } = useGroupManagement();
   const graders = useGradersAndInstructors();
-  // Without publish_groups the mentor is shown as text and Edit Group is hidden (#1010).
+  // Edit Group stages a change, so it needs publish_groups (#1010). The mentor drop-down saves
+  // the group at once and needs manage_groups; without it the mentor is shown as text.
   const canEditGroups = useCapability("publish_groups");
+  const canManageGroups = useCapability("manage_groups");
   const { assignmentGroupsWithMembers } = useCourseController();
   const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
 
@@ -705,7 +727,7 @@ function TableByGroups({
       Sentry.captureException(e);
       toaster.create({
         title: "Error updating mentor",
-        description: e instanceof Error ? e.message : "An unexpected error occurred",
+        description: getUserFacingErrorMessage(e, { role: errorRole }),
         type: "error"
       });
     } finally {
@@ -861,7 +883,7 @@ function TableByGroups({
                   {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
-                  {canEditGroups ? (
+                  {canManageGroups ? (
                     <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
                       <NativeSelect.Field
                         value={group.mentor_profile_id ?? ""}

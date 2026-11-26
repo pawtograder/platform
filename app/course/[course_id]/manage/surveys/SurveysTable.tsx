@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
-import { useIsGrader, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGrader } from "@/hooks/useClassProfiles";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
@@ -15,6 +15,8 @@ import type { Survey, SurveyWithCounts } from "@/types/survey";
 import { Badge, Box, Icon, Table, Text } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type FilterType = "all" | "closed" | "active" | "draft";
 
@@ -24,10 +26,11 @@ type SurveysTableProps = {
 };
 
 export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
+  const errorRole = useStaffErrorRole();
   const trackEvent = useTrackEvent();
   const controller = useCourseController();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
-  const isInstructor = useIsInstructor();
+  const canManageSurveys = useCapability("manage_surveys");
   const isGrader = useIsGrader();
   const assignments = useAssignments();
   // This table renders the `surveys` prop, which `ManageSurveysBody` fetches on the server —
@@ -157,7 +160,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
             }
           }
         } catch (error) {
-          validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
+          validationErrors = `Invalid JSON configuration: ${getUserFacingErrorMessage(error, { role: errorRole })}`;
         }
 
         await controller.surveys.update(survey.id, {
@@ -195,12 +198,12 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         if (reportDuplicateNamesRefusal(error)) return;
         toaster.create({
           title: "Failed to Publish Survey",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [courseId, trackEvent, controller, revalidateServerCaches]
+    [errorRole, courseId, trackEvent, controller, revalidateServerCaches]
   );
 
   const handleClose = useCallback(
@@ -236,12 +239,12 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Failed to Close Survey",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [courseId, trackEvent, controller, revalidateServerCaches]
+    [errorRole, courseId, trackEvent, controller, revalidateServerCaches]
   );
 
   const handleDelete = useCallback(
@@ -306,12 +309,12 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         toaster.dismiss(loadingToast);
         toaster.create({
           title: "Failed to Delete Survey",
-          description: error instanceof Error ? error.message : "An unexpected error occurred",
+          description: getUserFacingErrorMessage(error, { role: errorRole }),
           type: "error"
         });
       }
     },
-    [courseId, trackEvent, controller, revalidateServerCaches]
+    [errorRole, courseId, trackEvent, controller, revalidateServerCaches]
   );
 
   return (
@@ -377,7 +380,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
             {filteredSurveys.map((survey) => (
               <Table.Row key={survey.id} bg="bg.muted" borderColor="border">
                 <Table.Cell py={4} pl={6}>
-                  {!isInstructor && survey.status === "draft" ? (
+                  {!canManageSurveys && survey.status === "draft" ? (
                     <Text color="fg">{survey.title}</Text>
                   ) : (
                     <Link href={getSurveyLink(survey)} style={{ color: "var(--chakra-colors-blue-fg)" }}>
@@ -440,7 +443,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                       </Button>
                     </MenuTrigger>
                     <MenuContent>
-                      {survey.status === "draft" && isInstructor && (
+                      {survey.status === "draft" && canManageSurveys && (
                         <>
                           <MenuItem value="edit" asChild>
                             <Link href={getEditLink(survey)}>Edit</Link>
@@ -453,7 +456,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                           </MenuItem>
                         </>
                       )}
-                      {survey.status === "draft" && !isInstructor && (
+                      {survey.status === "draft" && !canManageSurveys && (
                         <MenuItem value="no-access" disabled>
                           No Actions Available
                         </MenuItem>
@@ -465,7 +468,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                               View Responses
                             </Link>
                           </MenuItem>
-                          {isInstructor && (
+                          {canManageSurveys && (
                             <>
                               <MenuItem value="edit" asChild>
                                 <Link href={getEditLink(survey)}>Edit (New Version)</Link>
@@ -487,7 +490,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                               View Responses
                             </Link>
                           </MenuItem>
-                          {isInstructor && (
+                          {canManageSurveys && (
                             <>
                               <MenuItem value="delete" color="red.500" onClick={() => handleDelete(survey)}>
                                 Delete

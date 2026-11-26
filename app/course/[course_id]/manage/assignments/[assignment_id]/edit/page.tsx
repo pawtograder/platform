@@ -1,8 +1,13 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
+import {
+  toastAutograderNotRecorded,
+  toastAutograderSyncFailed,
+  toastForgejoRepositoriesUnchanged
+} from "@/lib/autograderSyncRetry";
 import { assignmentSyncAutograderWorkflow, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { FORGEJO_DETACH_REASON } from "@/lib/gitProviderOptions";
+import { FORGEJO_DETACH_REASON, forgejoAutograderLockedOn } from "@/lib/gitProviderOptions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
@@ -13,8 +18,11 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
 import AssignmentForm from "../../new/form";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 export default function EditAssignment() {
+  const errorRole = useStaffErrorRole();
   const { course_id, assignment_id } = useParams();
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
@@ -258,6 +266,16 @@ export default function EditAssignment() {
           values.pr_branch_convention = null;
           values.require_pr_open = false;
         }
+        // The form holds a Forgejo assignment's autograder on (forgejoAutograderLockedOn), and the
+        // sync refuses turning it off, so write what the form shows.
+        if (
+          isForgejo &&
+          !isNoRepo &&
+          values.submission_mode !== "pr" &&
+          forgejoAutograderLockedOn("forgejo", queryData ?? undefined)
+        ) {
+          values.has_autograder = true;
+        }
         // Enabling the autograder from THIS form skips the grader-repo setup the
         // autograder page performs, so without a configured grader repo we would
         // happily restore grade.yml to the handout and leave has_autograder true —
@@ -298,8 +316,7 @@ export default function EditAssignment() {
                 supabase
               );
             } catch (graderValidationError) {
-              const detail =
-                graderValidationError instanceof Error ? graderValidationError.message : String(graderValidationError);
+              const detail = getUserFacingErrorMessage(graderValidationError, { role: errorRole });
               throw new Error(
                 `The autograder could not be enabled: its grader repository ${graderRow.grader_repo} could not be ` +
                   `read (${detail}). Check that the repository still exists and contains a valid pawtograder.yml, ` +
@@ -632,6 +649,55 @@ export default function EditAssignment() {
             throw syncError;
           }
         }
+        if (
+          values.template_repo &&
+          isForgejo &&
+          typeof values.has_autograder === "boolean" &&
+          queryData?.has_autograder !== undefined &&
+          queryData.has_autograder !== values.has_autograder
+        ) {
+          const syncTarget = {
+            assignmentId: Number.parseInt(assignment_id as string),
+            classId: Number.parseInt(course_id as string),
+            supabase
+          };
+          let forgejoSyncResult: Awaited<ReturnType<typeof assignmentSyncAutograderWorkflow>>;
+          try {
+            forgejoSyncResult = await assignmentSyncAutograderWorkflow(
+              { assignment_id: syncTarget.assignmentId, class_id: syncTarget.classId },
+              supabase
+            );
+          } catch (syncError) {
+            // A thrown sync left the handout unchanged (failures after its commit are returned as
+            // forgejo_workflow_record_failed), so the saved flag is rolled back to match it.
+            const { error: rollbackError } = await supabase
+              .from("assignments")
+              .update({ has_autograder: queryData.has_autograder })
+              .eq("id", syncTarget.assignmentId)
+              .eq("has_autograder", values.has_autograder);
+            if (rollbackError) console.error("Failed to roll back has_autograder after a sync failure", rollbackError);
+            const detail = getUserFacingErrorMessage(syncError, { role: errorRole });
+            if (rollbackError) {
+              toastAutograderSyncFailed(detail, syncTarget);
+            } else {
+              toaster.create({
+                title: "Autograder setting not changed",
+                description: `Your other changes were saved, but the autograder was not turned ${
+                  values.has_autograder ? "on" : "off"
+                }: ${detail}`,
+                type: "error"
+              });
+            }
+            return;
+          }
+          if (forgejoSyncResult?.forgejo_workflow_record_failed) {
+            toastAutograderNotRecorded(forgejoSyncResult.forgejo_workflow_record_failed, syncTarget);
+          }
+          toastForgejoRepositoriesUnchanged(
+            forgejoSyncResult?.forgejo_existing_repositories_unchanged,
+            values.has_autograder
+          );
+        }
         toaster.create({
           title: "Assignment Updated",
           description: "The assignment has been successfully updated.",
@@ -662,7 +728,8 @@ export default function EditAssignment() {
       updateAsync,
       queryData?.has_autograder,
       queryData?.git_provider,
-      revalidateServerCaches
+      revalidateServerCaches,
+      errorRole
     ]
   );
 

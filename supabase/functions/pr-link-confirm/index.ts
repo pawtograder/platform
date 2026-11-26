@@ -77,6 +77,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<PrLinkC
     }
   }
 
+  // PR mode reads the pull request from GitHub, where a Forgejo repo's owner/name may be someone else's repo.
+  const { data: assignment } = await adminSupabase
+    .from("assignments")
+    .select("git_provider")
+    .eq("id", link.assignment_id)
+    .maybeSingle();
+  if (assignment?.git_provider !== "github") {
+    throw new UserVisibleError("Pull request submissions are only supported for GitHub assignments", 400);
+  }
+
   // Read the PR's current head/base straight from GitHub (the webhook payload that
   // created the candidate may be stale by now) BEFORE mutating any DB state.
   // getPullRequest can throw (PR deleted, GitHub outage / rate-limit); doing it

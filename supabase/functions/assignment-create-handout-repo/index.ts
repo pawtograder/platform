@@ -9,7 +9,7 @@ import {
   publicSupabaseUrl,
   updateAutograderWorkflowHash
 } from "../_shared/GitHubWrapper.ts";
-import { ensureHandoutRepo, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
+import { classForgejoOrg, ensureHandoutRepo, forgejoConfig } from "../_shared/ForgejoWrapper.ts";
 import { forgejoGradeWorkflow } from "../_shared/forgejoGradeWorkflow.ts";
 import { getGitProvider } from "../_shared/GitProvider.ts";
 import { resolveTemplateRepos } from "../_shared/GitHubSyncHelpers.ts";
@@ -19,6 +19,7 @@ import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shar
 import { shouldSkipRealGithubForE2eFixture } from "../_shared/e2eGithubGuard.ts";
 import { describeHandoutSeedResult, seedHandoutFileHashes } from "../_shared/handoutFileHashes.ts";
 import { REQUEST_SCOPED_AUTH_OPTIONS } from "../_shared/requestScopedAuthOptions.ts";
+import { recordInitialHandoutCommit } from "../_shared/forgejoHandoutCommits.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -124,7 +125,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const config = forgejoConfig();
     if (!config) throw new UserVisibleError("Forgejo is not set up on this deployment.", 503);
     // Lowercased like every Forgejo repository Pawtograder stores (#1093), since Forgejo names are case-insensitive.
-    const org = (assignment.classes.forgejo_org || assignment.classes.slug).toLowerCase();
+    const org = classForgejoOrg(assignment.classes);
     const name = `${assignment.classes.slug}-handout-${assignment.slug}`.toLowerCase();
     scope.setTag("handout_repo_name", name);
     scope.setTag("handout_repo_org", org);
@@ -145,6 +146,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     if (error) throw error;
     if (!saved.length)
       throw new UserVisibleError("This assignment's repository host or configuration changed. Try again.", 409);
+    await recordInitialHandoutCommit(adminSupabase, config, assignment, `${org}/${name}`, sha, scope);
     return { repo_name: name, org_name: org, repo_mode: assignment.repo_mode };
   }
 

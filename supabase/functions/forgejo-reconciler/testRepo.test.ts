@@ -52,6 +52,13 @@ function fakeSupabase(rows: Rows) {
     from(table: string) {
       if (table === "user_roles") return chain(table, () => rows.role ?? null);
       if (table === "git_accounts") return chain(table, () => rows.account ?? null);
+      // No archive of an earlier repo by this name is pending (existingRepositoryRow checks, #1398).
+      if (table === "forgejo_repo_archives") {
+        const pending: Record<string, unknown> = {};
+        for (const op of ["select", "eq", "is"]) pending[op] = () => pending;
+        pending.limit = () => Promise.resolve({ data: [], error: null });
+        return pending;
+      }
       // repositories: nothing reserved yet, so one is, then marked ready.
       const lookup = chain(table, () => reserved);
       return {

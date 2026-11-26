@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { useHelpRequestMessages, useHelpRequestReadReceipts, useOfficeHoursController } from "./useOfficeHoursRealtime";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 export interface UseRealtimeChatOptions {
   helpRequestId: number;
@@ -149,7 +150,7 @@ export function useRealtimeChat({
           reply_to_message_id: replyToMessageId || null
         });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        const errorMessage = getUserFacingErrorMessage(error);
         toaster.error({
           title: "Failed to send message",
           description: `Failed to send message: ${errorMessage}`

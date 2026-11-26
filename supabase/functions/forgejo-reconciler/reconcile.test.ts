@@ -1,21 +1,34 @@
 /**
- * The reconcile passes for accounts (#1092) and repos (#1093), against a fake Supabase client and
- * stubbed Forgejo steps.
+ * The reconcile passes for accounts (#1092), repos (#1093) and group leavers (#1374), against a fake
+ * Supabase client and stubbed Forgejo steps.
  *
  * Run from supabase/functions:  deno test --no-check --allow-env --allow-net forgejo-reconciler/
  */
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@^1";
 import type { ForgejoConfig, ForgejoUser } from "../_shared/ForgejoWrapper.ts";
 import {
+  CLASS_PAGE_SIZE,
   MAX_ACCOUNTS_PER_PASS,
+  MAX_ORG_HOOKS_PER_PASS,
   MAX_REPOS_PER_PASS,
   MAX_REVOCATIONS_PER_PASS,
+  MAX_STAFF_TEAMS_PER_PASS,
+  PASS_STEPS,
+  reconcileForgejo,
   reconcileForgejoAccounts,
+  orgHookWindow,
   reconcileForgejoGroupRepos,
+  reconcileForgejoOrgHooks,
   reconcileForgejoRepos,
+  reconcileForgejoStaffTeams,
   reconcileForgejoWorkflowHashes,
-  type RepoOps,
+  archiveUnlinkedRepos,
+  existingRepositoryRow,
+  MAX_ARCHIVES_PER_PASS,
+  type GroupRepoOps,
   revokeDroppedTokens,
+  type StaffTeamOps,
+  revokeGroupLeavers,
   STALE_CLAIM_MINUTES
 } from "./reconcile.ts";
 
@@ -302,6 +315,244 @@ Deno.test("revoke: a failed list fails the pass", async () => {
   await assertRejects(() => revokeDroppedTokens(client, config), Error, "PostgREST 502");
 });
 
+type Leaver = {
+  id: number;
+  assignment_group_id: number;
+  profile_id: string;
+  repository: string;
+  repository_id: number | null;
+  login: string;
+};
+
+const leaver = (id: number, login: string, over: Partial<Leaver> = {}): Leaver => ({
+  id,
+  assignment_group_id: 70 + id,
+  profile_id: `p${id}`,
+  repository: `cs4535/cs4535-hw1-group-${id}`,
+  repository_id: 500 + id,
+  login,
+  ...over
+});
+
+function fakeLeaverSupabase(
+  due: Leaver[],
+  opts: {
+    claimable?: Set<number>;
+    dueError?: unknown;
+    claimErrorFor?: number;
+    finishErrorFor?: number;
+    /** repositories rows by id, as they stand NOW. Absent means the row is gone. Defaults to each row intact. */
+    repoNames?: Map<number, string>;
+    repoError?: unknown;
+  } = {}
+) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const deleted: [string, unknown][][] = [];
+  const repoNames =
+    opts.repoNames ??
+    new Map(due.filter((d) => d.repository_id != null).map((d) => [d.repository_id as number, d.repository]));
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      if (name === "forgejo_group_repo_revocations_needed") {
+        return Promise.resolve(opts.dueError ? { data: null, error: opts.dueError } : { data: due, error: null });
+      }
+      const id = args.p_id as number;
+      if (name === "claim_forgejo_group_repo_revocation") {
+        if (id === opts.claimErrorFor) return Promise.resolve({ data: null, error: new Error("PostgREST 503") });
+        const claimable = opts.claimable ?? new Set(due.map((d) => d.id));
+        return Promise.resolve({ data: claimable.has(id) ? claimGeneration(id) : null, error: null });
+      }
+      assertEquals(name, "finish_forgejo_group_repo_revocation");
+      if (id === opts.finishErrorFor) return Promise.resolve({ data: null, error: new Error("PostgREST 504") });
+      return Promise.resolve({ data: null, error: null });
+    },
+    from(table: string) {
+      const filters: [string, unknown][] = [];
+      if (table === "repositories") {
+        const chain: Record<string, unknown> = {
+          select: () => chain,
+          eq: (column: string, value: unknown) => {
+            filters.push([column, value]);
+            return chain;
+          },
+          maybeSingle: () => {
+            if (opts.repoError) return Promise.resolve({ data: null, error: opts.repoError });
+            const id = filters.find(([c]) => c === "id")?.[1] as number;
+            const repository = repoNames.get(id);
+            return Promise.resolve({ data: repository === undefined ? null : { id, repository }, error: null });
+          }
+        };
+        return chain;
+      }
+      assertEquals(table, "forgejo_group_repo_revocations");
+      const chain: Record<string, unknown> = {
+        delete: () => chain,
+        eq: (column: string, value: unknown) => {
+          filters.push([column, value]);
+          return chain;
+        },
+        then: (done: (r: { error: null }) => void) => {
+          deleted.push(filters);
+          done({ error: null });
+        }
+      };
+      return chain;
+    }
+  };
+  const finishes = () => rpcCalls.filter((c) => c.name === "finish_forgejo_group_repo_revocation").map((c) => c.args);
+  return { client: client as unknown as Parameters<typeof revokeGroupLeavers>[0], rpcCalls, finishes, deleted };
+}
+
+Deno.test("group leavers: asks for this instance's backlog with the stale window and pass size", async () => {
+  const { client, rpcCalls } = fakeLeaverSupabase([]);
+  assertEquals(await revokeGroupLeavers(client, config, () => Promise.resolve()), {
+    removed: 0,
+    discarded: 0,
+    failures: []
+  });
+  assertEquals(rpcCalls[0], {
+    name: "forgejo_group_repo_revocations_needed",
+    args: { p_instance_url: config.url, p_stale_minutes: STALE_CLAIM_MINUTES, p_limit: MAX_REVOCATIONS_PER_PASS }
+  });
+});
+
+Deno.test("group leavers: claims each row, removes the collaborator, then finishes with its own claim", async () => {
+  const { client, rpcCalls, finishes } = fakeLeaverSupabase([leaver(1, "alex.kim"), leaver(2, "sam.lee")]);
+  const removed: [string, string][] = [];
+  const result = await revokeGroupLeavers(client, config, (_cfg, repository, login) => {
+    removed.push([repository, login]);
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 2, discarded: 0, failures: [] });
+  assertEquals(removed, [
+    ["cs4535/cs4535-hw1-group-1", "alex.kim"],
+    ["cs4535/cs4535-hw1-group-2", "sam.lee"]
+  ]);
+  assertEquals(rpcCalls[1], {
+    name: "claim_forgejo_group_repo_revocation",
+    args: { p_id: 1, p_stale_minutes: STALE_CLAIM_MINUTES }
+  });
+  // The group and profile go along, so the database can re-grant a student who rejoined meanwhile.
+  assertEquals(finishes(), [
+    { p_id: 1, p_claim_id: claimGeneration(1), p_assignment_group_id: 71, p_profile_id: "p1" },
+    { p_id: 2, p_claim_id: claimGeneration(2), p_assignment_group_id: 72, p_profile_id: "p2" }
+  ]);
+});
+
+Deno.test("group leavers: a row another pass claimed gets no Forgejo call", async () => {
+  const { client, finishes } = fakeLeaverSupabase([leaver(1, "a")], { claimable: new Set() });
+  let calls = 0;
+  const result = await revokeGroupLeavers(client, config, () => {
+    calls++;
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 0, discarded: 0, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(finishes(), []);
+});
+
+Deno.test("group leavers: a failed claim, removal or finish is recorded and the pass carries on", async () => {
+  const { client, finishes } = fakeLeaverSupabase([leaver(1, "a"), leaver(2, "b"), leaver(3, "c"), leaver(4, "d")], {
+    claimErrorFor: 3,
+    finishErrorFor: 4
+  });
+  const result = await revokeGroupLeavers(client, config, (_cfg, _repository, login) =>
+    login === "a" ? Promise.reject(new Error("Forgejo collaborator remove failed: 502")) : Promise.resolve()
+  );
+  assertEquals(result.removed, 1);
+  assertEquals(
+    result.failures.map((f) => [f.assignmentGroupId, f.profileId]),
+    [
+      [71, "p1"],
+      [73, "p3"],
+      [74, "p4"]
+    ]
+  );
+  // A failed removal keeps its claim, so the row is retried once the claim is stale.
+  assertEquals(
+    finishes().map((f) => f.p_id),
+    [2, 4]
+  );
+});
+
+Deno.test("group leavers: a repo whose name was reused is dropped, never revoked", async () => {
+  // The reviewer's case. Archiving renames the old repo and frees its name (#1398), so during the
+  // 10-minute grace a new group can hold a repo called the same thing. Removing the student from THAT one
+  // takes away access they currently have, and finish_forgejo_group_repo_revocation cannot repair it: it
+  // checks membership of the group this row named, so it would mark the wrong repo not ready.
+  const { client, finishes, deleted, rpcCalls } = fakeLeaverSupabase([leaver(1, "alex.kim")], {
+    // Row 501 is now the replacement group's repo, under the name this revocation was queued for.
+    repoNames: new Map([[501, "cs4535/cs4535-hw1-group-9"]])
+  });
+  let calls = 0;
+  const result = await revokeGroupLeavers(client, config, () => {
+    calls++;
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 0, discarded: 1, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(finishes(), []);
+  // Claimed first, then deleted under that claim, so a pass that takes the row later keeps its own.
+  assertEquals(rpcCalls[1].name, "claim_forgejo_group_repo_revocation");
+  assertEquals(deleted, [
+    [
+      ["id", 1],
+      ["claim_id", claimGeneration(1)]
+    ]
+  ]);
+});
+
+Deno.test("group leavers: a repository row that is gone is dropped too", async () => {
+  // Archiving removes every collaborator before it renames, and deleting an assignment takes the row with
+  // it, so there is nothing left to revoke.
+  const { client, finishes, deleted } = fakeLeaverSupabase([leaver(1, "alex.kim")], { repoNames: new Map() });
+  let calls = 0;
+  const result = await revokeGroupLeavers(client, config, () => {
+    calls++;
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 0, discarded: 1, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(finishes(), []);
+  assertEquals(deleted.length, 1);
+});
+
+Deno.test("group leavers: a row queued before the identity check still runs on its name", async () => {
+  // repository_id is null only for rows queued before the migration. They keep the old behaviour rather
+  // than being discarded, which would throw away a real pending removal.
+  const { client, finishes, deleted } = fakeLeaverSupabase([leaver(1, "alex.kim", { repository_id: null })]);
+  const removed: [string, string][] = [];
+  const result = await revokeGroupLeavers(client, config, (_cfg, repository, login) => {
+    removed.push([repository, login]);
+    return Promise.resolve();
+  });
+  assertEquals(result, { removed: 1, discarded: 0, failures: [] });
+  assertEquals(removed, [["cs4535/cs4535-hw1-group-1", "alex.kim"]]);
+  assertEquals(finishes().length, 1);
+  assertEquals(deleted, []);
+});
+
+Deno.test("group leavers: a repository that cannot be read is a failure, not a discard", async () => {
+  // A failed read says nothing about the repo. Discarding on it would drop the revocation for good.
+  const { client, deleted } = fakeLeaverSupabase([leaver(1, "alex.kim")], { repoError: new Error("PostgREST 502") });
+  let calls = 0;
+  const result = await revokeGroupLeavers(client, config, () => {
+    calls++;
+    return Promise.resolve();
+  });
+  assertEquals(result.removed, 0);
+  assertEquals(result.discarded, 0);
+  assertEquals(result.failures.length, 1);
+  assertEquals(calls, 0);
+  assertEquals(deleted, []);
+});
+
+Deno.test("group leavers: a failed backlog query fails the step", async () => {
+  const { client } = fakeLeaverSupabase([], { dueError: new Error("PostgREST 502") });
+  await assertRejects(() => revokeGroupLeavers(client, config), Error, "PostgREST 502");
+});
+
 type NeededRepo = {
   assignment_id: number;
   class_id: number;
@@ -322,13 +573,26 @@ const neededRepo = (login: string, owner = "cs4535"): NeededRepo => ({
   template_repo: `${owner}/hw1-handout`
 });
 
+/** The pending-archive lookup existingRepositoryRow makes after the row; names in `pending` are waiting. */
+function archiveLookup(pending: string[] = []) {
+  let name: unknown;
+  const query = {
+    select: () => query,
+    eq: (_column: string, value: unknown) => ((name = value), query),
+    is: () => query,
+    limit: () => Promise.resolve({ data: pending.includes(name as string) ? [{ id: 1 }] : [], error: null })
+  };
+  return query;
+}
+
 function fakeRepoSupabase(
   needed: NeededRepo[],
   existing: Record<
     string,
     { id: number; assignment_id: number; profile_id: string | null; assignment_group_id: null }
   > = {},
-  taken: string[] = []
+  taken: string[] = [],
+  pendingArchives: string[] = []
 ) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const writes: { kind: "insert" | "update"; row: Record<string, unknown>; id?: unknown }[] = [];
@@ -339,6 +603,7 @@ function fakeRepoSupabase(
       return Promise.resolve({ data: needed, error: null });
     },
     from(table: string) {
+      if (table === "forgejo_repo_archives") return archiveLookup(pendingArchives);
       assertEquals(table, "repositories");
       const filters: Record<string, unknown> = {};
       const lookup = {
@@ -380,9 +645,9 @@ function fakeRepoSupabase(
   return { client: client as unknown as Parameters<typeof reconcileForgejoRepos>[0], rpcCalls, writes };
 }
 
-function stubOps(overrides: Partial<RepoOps> = {}) {
+function stubOps(overrides: Partial<GroupRepoOps> = {}) {
   const calls: string[] = [];
-  const ops: RepoOps = {
+  const ops: GroupRepoOps = {
     ensureOrg: (_cfg, org) => {
       calls.push(`org ${org}`);
       return Promise.resolve();
@@ -394,6 +659,10 @@ function stubOps(overrides: Partial<RepoOps> = {}) {
     grantWrite: (_cfg, repository, login) => {
       calls.push(`write ${login} on ${repository}`);
       return Promise.resolve(true);
+    },
+    removeCollaborator: (_cfg, repository, login) => {
+      calls.push(`remove ${login} from ${repository}`);
+      return Promise.resolve();
     },
     ...overrides
   };
@@ -650,12 +919,26 @@ const neededGroup = (id: number, logins: string[], complete = true): NeededGroup
  * The backlog and save RPCs. A save with no grants is the pass claiming the name; it fails for a group
  * in `taken`. A later save reports ready unless the test says the roster changed.
  */
-function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = [], taken: number[] = []) {
+function fakeGroupSupabase(
+  needed: NeededGroup[],
+  notReady: number[] = [],
+  taken: number[] = [],
+  // The roster each forgejo_group_member_logins read returns, in order; the backlog's logins by default.
+  rosters: Record<number, string[][]> = {}
+) {
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
   const saves: Record<string, unknown>[] = [];
+  const rosterReads: Record<number, number> = {};
   const client = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcCalls.push({ name, args });
+      if (name === "forgejo_group_member_logins") {
+        const id = args.p_assignment_group_id as number;
+        const read = (rosterReads[id] = (rosterReads[id] ?? 0) + 1);
+        const group = needed.find((g) => g.assignment_group_id === id)!;
+        const roster = rosters[id]?.[Math.min(read, rosters[id].length) - 1] ?? group.logins;
+        return Promise.resolve({ data: roster.map((login) => ({ login })), error: null });
+      }
       if (name === "save_forgejo_group_repo") {
         saves.push(args);
         const group = needed.find((g) => g.assignment_group_id === args.p_assignment_group_id)!;
@@ -669,6 +952,7 @@ function fakeGroupSupabase(needed: NeededGroup[], notReady: number[] = [], taken
       return Promise.resolve({ data: needed, error: null });
     },
     from(table: string) {
+      if (table === "forgejo_repo_archives") return archiveLookup();
       assertEquals(table, "repositories");
       const lookup = {
         select: () => lookup,
@@ -753,6 +1037,54 @@ Deno.test("group repos: a member Forgejo won't make a writer fails that group on
   );
 });
 
+Deno.test("group repos: a member who left before the row was reserved is not granted", async () => {
+  // The backlog read a, b; b left before the reserve, so no revocation was queued for them.
+  const { client, saves } = fakeGroupSupabase([neededGroup(5, ["a", "b"])], [], [], { 5: [["a"]] });
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result, { created: 1, failures: [] });
+  assertEquals(
+    calls.filter((c) => !c.startsWith("org") && !c.startsWith("repo")),
+    ["write a on cs4535/hw1-group-team-5"]
+  );
+  assertEquals(saves.at(-1)?.p_granted, ["a"]);
+});
+
+Deno.test("group repos: a member who left while the grants ran is removed again before the save", async () => {
+  const { client, saves } = fakeGroupSupabase([neededGroup(5, ["a", "b"])], [], [], { 5: [["a", "b"], ["a"]] });
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result, { created: 1, failures: [] });
+  assertEquals(
+    calls.filter((c) => !c.startsWith("org") && !c.startsWith("repo")),
+    [
+      "write a on cs4535/hw1-group-team-5",
+      "write b on cs4535/hw1-group-team-5",
+      "remove b from cs4535/hw1-group-team-5"
+    ]
+  );
+  assertEquals(saves.at(-1)?.p_granted, ["a"]);
+});
+
+Deno.test("group repos: a failed roster read grants nobody", async () => {
+  const { client: base } = fakeGroupSupabase([neededGroup(5, ["a", "b"])]);
+  const client = {
+    ...base,
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name === "forgejo_group_member_logins") return Promise.resolve({ data: null, error: new Error("boom") });
+      return (base as unknown as { rpc: (n: string, a: Record<string, unknown>) => unknown }).rpc(name, args);
+    }
+  } as unknown as Parameters<typeof reconcileForgejoGroupRepos>[0];
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoGroupRepos(client, config, ops);
+  assertEquals(result.created, 0);
+  assertEquals(result.failures.length, 1);
+  assertEquals(
+    calls.filter((c) => c.startsWith("write")),
+    []
+  );
+});
+
 /**
  * One repositories table for an individual and a group pass, unique on the name. Both ownership lookups
  * finish before either pass claims, as when two passes overlap; `first` decides which claim lands first.
@@ -775,13 +1107,17 @@ function overlappingPasses(first: "student" | "group") {
   const client = (by: "student" | "group", needed: unknown[]) =>
     ({
       async rpc(name: string, args: Record<string, unknown>) {
+        if (name === "forgejo_group_member_logins") {
+          return { data: (needed as NeededGroup[])[0].logins.map((login) => ({ login })), error: null };
+        }
         if (name !== "save_forgejo_group_repo") return { data: needed, error: null };
         if ((args.p_granted as string[]).length === 0) {
           return { data: false, error: await claim(by, args.p_repository as string) };
         }
         return { data: true, error: null };
       },
-      from() {
+      from(table: string) {
+        if (table === "forgejo_repo_archives") return archiveLookup();
         const filters: Record<string, unknown> = {};
         const lookup = {
           select: () => lookup,
@@ -832,3 +1168,659 @@ for (const first of ["student", "group"] as const) {
     }
   );
 }
+
+Deno.test("repos: a name still waiting for its old repo to be archived gets no Forgejo calls", async () => {
+  const { client, writes } = fakeRepoSupabase([neededRepo("a")], {}, [], ["cs4535/hw1-a"]);
+  const { ops, calls } = stubOps();
+  const result = await reconcileForgejoRepos(client, config, ops);
+  assertEquals(calls, []);
+  assertEquals(writes, []);
+  assertEquals(
+    result.failures.map((f) => (f.error as Error).message),
+    ["The Forgejo repo name is waiting for its previous repo to be archived"]
+  );
+});
+
+type DueArchive = { id: number; class_id: number; repository: string };
+
+function fakeArchiveSupabase(
+  due: DueArchive[],
+  opts: {
+    unclaimable?: number[];
+    dueError?: unknown;
+    pinned?: Record<number, string>;
+    claimLost?: number[];
+    // Repos whose group has members again, so prepare_forgejo_repo_archive says not to archive them.
+    rejoined?: string[];
+  } = {}
+) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const saved: { values: Record<string, unknown>; id: unknown }[] = [];
+  // Every write and every archive call, in the order they happened: the destination has to be written down
+  // before the repo is touched.
+  const order: string[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      if (name === "forgejo_repo_archives_due") {
+        return Promise.resolve(opts.dueError ? { data: null, error: opts.dueError } : { data: due, error: null });
+      }
+      if (name === "prepare_forgejo_repo_archive") {
+        order.push(`prepare ${args.p_repository}`);
+        const rejoined = (opts.rejoined ?? []).includes(args.p_repository as string);
+        return Promise.resolve({ data: !rejoined, error: null });
+      }
+      assertEquals(name, "claim_forgejo_repo_archive");
+      const claimed = !(opts.unclaimable ?? []).includes(args.p_id as number);
+      return Promise.resolve({ data: claimed ? `claim-${args.p_id}` : null, error: null });
+    },
+    from(table: string) {
+      assertEquals(table, "forgejo_repo_archives");
+      return {
+        select: (columns: string) => ({
+          eq: (_column: string, id: unknown) => ({
+            single: () => {
+              assertEquals(columns, "archived_as");
+              return Promise.resolve({
+                data: { archived_as: opts.pinned?.[id as number] ?? null },
+                error: null
+              });
+            }
+          })
+        }),
+        update: (values: Record<string, unknown>) => {
+          const filters: Record<string, unknown> = {};
+          const chain = {
+            eq: (column: string, value: unknown) => ((filters[column] = value), chain),
+            is: (column: string, value: unknown) => ((filters[column] = value), chain),
+            select: () => {
+              const id = filters.id as number;
+              // Every write is guarded by the claim this pass took, and only while the entry is pending.
+              assertEquals(filters.claimed_at, `claim-${id}`);
+              assertEquals(filters.archived_at, null);
+              if ((opts.claimLost ?? []).includes(id)) {
+                order.push(`refused ${id}`);
+                return Promise.resolve({ data: [], error: null });
+              }
+              saved.push({ values, id });
+              order.push(`write ${id} ${JSON.stringify(values.archived_as ?? null)}`);
+              return Promise.resolve({ data: [{ id }], error: null });
+            }
+          };
+          return chain;
+        }
+      };
+    }
+  } as unknown as Parameters<typeof archiveUnlinkedRepos>[0];
+  return { client, rpcCalls, saved, order };
+}
+
+Deno.test("archives: each claimed repo is archived and recorded with its new name", async () => {
+  const { client, rpcCalls, saved, order } = fakeArchiveSupabase([
+    { id: 1, class_id: 3, repository: "cs4535/hw1-group-a" },
+    { id: 2, class_id: 3, repository: "cs4535/hw1-gone" }
+  ]);
+  const archived: string[] = [];
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository, destination) => {
+    archived.push(repository);
+    order.push(`archive ${repository} -> ${destination}`);
+    return Promise.resolve(repository.endsWith("gone") ? null : destination!);
+  });
+  assertEquals(result, { archived: 2, kept: 0, failures: [] });
+  assertEquals(archived, ["cs4535/hw1-group-a", "cs4535/hw1-gone"]);
+  assertEquals(rpcCalls[0], {
+    name: "forgejo_repo_archives_due",
+    args: { p_stale_minutes: STALE_CLAIM_MINUTES, p_limit: MAX_ARCHIVES_PER_PASS }
+  });
+  const done = saved.filter((s) => typeof s.values.archived_at === "string");
+  assertEquals(
+    done.map((s) => s.id),
+    [1, 2]
+  );
+  const destination = done[0].values.archived_as as string;
+  assert(destination.startsWith("cs4535/archived-"), destination);
+  // The repo that was gone records no name, including the one written down for it.
+  assertEquals(done[1].values.archived_as, null);
+  // Each repo is checked first, and where it is going is written down before Forgejo is asked to rename it.
+  assertEquals(order.slice(0, 3), [
+    "prepare cs4535/hw1-group-a",
+    `write 1 ${JSON.stringify(destination)}`,
+    `archive cs4535/hw1-group-a -> ${destination}`
+  ]);
+  assertEquals(order[4], "prepare cs4535/hw1-gone");
+  assertEquals(order[5].startsWith('write 2 "cs4535/archived-'), true, order[5]);
+  assertEquals(order[6].startsWith("archive cs4535/hw1-gone -> cs4535/archived-"), true, order[6]);
+});
+
+// A group repo is queued when its last member leaves. Someone joining (or being moved in) before the pass gets to
+// it keeps the repo: the archive would remove them and rename their repo away.
+Deno.test("archives: a group repo whose group has members again is kept, and the entry finished", async () => {
+  const { client, saved, order } = fakeArchiveSupabase(
+    [
+      { id: 1, class_id: 3, repository: "cs4535/hw1-group-a" },
+      { id: 2, class_id: 3, repository: "cs4535/hw1-group-b" }
+    ],
+    { rejoined: ["cs4535/hw1-group-a"] }
+  );
+  const archived: string[] = [];
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository, destination) => {
+    archived.push(repository);
+    return Promise.resolve(destination!);
+  });
+  assertEquals(result, { archived: 1, kept: 1, failures: [] });
+  assertEquals(archived, ["cs4535/hw1-group-b"]);
+  assertEquals(order[0], "prepare cs4535/hw1-group-a");
+  assertEquals(order[1], "write 1 null");
+  const kept = saved.find((s) => s.id === 1)!;
+  assertEquals(kept.values.archived_as, null);
+  assertEquals(typeof kept.values.archived_at, "string");
+});
+
+// The check is only for an untouched repo. Once a destination is written down, an earlier attempt may already have
+// renamed it, so the entry has to finish.
+Deno.test("archives: a retry with a destination written down doesn't re-check the group", async () => {
+  const pinned = "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-group-a";
+  const { client, rpcCalls } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-group-a" }], {
+    pinned: { 1: pinned },
+    rejoined: ["cs4535/hw1-group-a"]
+  });
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, _repository, destination) =>
+    Promise.resolve(destination!)
+  );
+  assertEquals(result, { archived: 1, kept: 0, failures: [] });
+  assertEquals(
+    rpcCalls.some((c) => c.name === "prepare_forgejo_repo_archive"),
+    false
+  );
+});
+
+// The crash the destination is written down for: a pass renames the repo, then dies before recording where it
+// went. The entry keeps that name, so the retry hands Forgejo the same one and finds the repo under it, instead
+// of picking a new name, finding the old one gone, and finishing the entry with no path at all.
+Deno.test("archives: a retry reuses the destination the lost attempt wrote down", async () => {
+  const pinned = "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-a";
+  const { client, saved, order } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-a" }], {
+    pinned: { 1: pinned }
+  });
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository, destination) => {
+    order.push(`archive ${repository} -> ${destination}`);
+    // What archiveRepo returns when the old name is gone but the destination is there.
+    return Promise.resolve(destination!);
+  });
+  assertEquals(result, { archived: 1, kept: 0, failures: [] });
+  assertEquals(order, [`archive cs4535/hw1-a -> ${pinned}`, `write 1 ${JSON.stringify(pinned)}`]);
+  assertEquals(saved.length, 1, "a destination already written down is not replaced");
+  assertEquals(saved[0].values.archived_as, pinned);
+});
+
+Deno.test("archives: one another pass has claimed is left alone", async () => {
+  const { client, saved } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-a" }], {
+    unclaimable: [1]
+  });
+  let calls = 0;
+  const result = await archiveUnlinkedRepos(client, config, () => (calls++, Promise.resolve(null)));
+  assertEquals(result, { archived: 0, kept: 0, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(saved, []);
+});
+
+Deno.test("archives: a failure stays pending for the next pass, and the others carry on", async () => {
+  const { client, saved } = fakeArchiveSupabase([
+    { id: 1, class_id: 3, repository: "cs4535/hw1-a" },
+    { id: 2, class_id: 4, repository: "cs3500/hw1-b" }
+  ]);
+  const result = await archiveUnlinkedRepos(client, config, (_cfg, repository) =>
+    repository === "cs4535/hw1-a"
+      ? Promise.reject(new Error("Forgejo collaborator remove failed: 500"))
+      : Promise.resolve("cs3500/archived-x-hw1-b")
+  );
+  assertEquals(result.archived, 1);
+  assertEquals(
+    result.failures.map((f) => [f.classId, (f.error as Error).message]),
+    [[3, "Forgejo collaborator remove failed: 500"]]
+  );
+  // The one that failed keeps the destination written down for it, and stays pending.
+  assertEquals(
+    saved.filter((s) => typeof s.values.archived_at === "string").map((s) => s.id),
+    [2]
+  );
+  assertEquals(
+    saved.map((s) => s.id),
+    [1, 2, 2]
+  );
+});
+
+// A pass that stalled past STALE_CLAIM_MINUTES has lost the entry to another pass, which may have finished it.
+// Its writes are refused, so it neither overwrites the recorded destination nor touches the repo.
+Deno.test("archives: a pass that lost its claim writes nothing and leaves the repo alone", async () => {
+  const { client, saved, order } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-a" }], {
+    claimLost: [1]
+  });
+  let calls = 0;
+  const result = await archiveUnlinkedRepos(client, config, () => (calls++, Promise.resolve(null)));
+  assertEquals(result, { archived: 0, kept: 0, failures: [] });
+  assertEquals(calls, 0);
+  assertEquals(saved, []);
+  assertEquals(order, ["prepare cs4535/hw1-a", "refused 1"]);
+});
+
+Deno.test("archives: a completion write a newer claim refuses isn't counted", async () => {
+  const pinned = "cs4535/archived-2026-11-21T20-00-00-123Z-hw1-a";
+  const { client, saved } = fakeArchiveSupabase([{ id: 1, class_id: 3, repository: "cs4535/hw1-a" }], {
+    pinned: { 1: pinned },
+    claimLost: [1]
+  });
+  const result = await archiveUnlinkedRepos(client, config, () => Promise.resolve(null));
+  assertEquals(result, { archived: 0, kept: 0, failures: [] });
+  assertEquals(saved, [], "the destination the other pass recorded is not replaced with null");
+});
+
+Deno.test("existingRepositoryRow: reads the row before the pending archive", async () => {
+  // Deleting a row queues its archive in the same transaction, so this order leaves no gap between them.
+  const reads: string[] = [];
+  const client = {
+    from(table: string) {
+      reads.push(table);
+      if (table === "forgejo_repo_archives") return archiveLookup(["cs4535/hw1-a"]);
+      const lookup = {
+        select: () => lookup,
+        eq: () => lookup,
+        maybeSingle: () => Promise.resolve({ data: null, error: null })
+      };
+      return lookup;
+    }
+  } as unknown as Parameters<typeof existingRepositoryRow>[0];
+  await assertRejects(
+    () =>
+      existingRepositoryRow(client, "cs4535/hw1-a", {
+        assignment_id: 1,
+        class_id: 3,
+        profile_id: "p",
+        assignment_group_id: null
+      }),
+    Error,
+    "waiting for its previous repo to be archived"
+  );
+  assertEquals(reads, ["repositories", "forgejo_repo_archives"]);
+});
+
+Deno.test("archives: a failed backlog query is an error", async () => {
+  const { client } = fakeArchiveSupabase([], { dueError: new Error("permission denied") });
+  await assertRejects(
+    () => archiveUnlinkedRepos(client, config, () => Promise.resolve(null)),
+    Error,
+    "permission denied"
+  );
+});
+
+function fakeOrgSupabase(classes: { slug: string; forgejo_org: string | null }[], error: unknown = null) {
+  const calls: string[] = [];
+  const query = {
+    select: (columns: string) => (calls.push(`select ${columns}`), query),
+    eq: (column: string, value: unknown) => (calls.push(`eq ${column} ${value}`), query),
+    limit: (count: number, options: { referencedTable: string }) => (
+      calls.push(`limit ${count} ${options.referencedTable}`), query
+    ),
+    order: (column: string) => (calls.push(`order ${column}`), query),
+    range: (from: number, to: number) => {
+      calls.push(`range ${from} ${to}`);
+      const page = classes.slice(from, to + 1).map((c) => ({ ...c, repositories: [{ id: 1 }] }));
+      return Promise.resolve({ data: error ? null : page, error });
+    }
+  };
+  const client = {
+    from(table: string) {
+      assertEquals(table, "classes");
+      return query;
+    }
+  } as unknown as Parameters<typeof reconcileForgejoOrgHooks>[0];
+  return { client, calls };
+}
+
+const hookConfig: ForgejoConfig = { ...config, pushHook: { url: "https://fn.example.edu/hook", secret: "s" } };
+
+Deno.test("org hooks: every org holding Forgejo repos gets ensureOrg, named as the repo backlog names it", async () => {
+  const { client, calls } = fakeOrgSupabase([
+    { slug: "CS4535", forgejo_org: null },
+    { slug: "cs4535-sec2", forgejo_org: "CS4535" },
+    { slug: "cs3500", forgejo_org: "" }
+  ]);
+  const ensured: string[] = [];
+  const result = await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) => {
+    ensured.push(org);
+    return Promise.resolve();
+  });
+  assertEquals(ensured, ["cs3500", "cs4535"]);
+  assertEquals(result, { checked: 2, failures: [] });
+  assertEquals(calls, [
+    "select slug, forgejo_org, repositories!inner(id)",
+    "eq repositories.git_provider forgejo",
+    "limit 1 repositories",
+    "order id",
+    `range 0 ${CLASS_PAGE_SIZE - 1}`
+  ]);
+});
+
+Deno.test("org hooks: classes past the API's row cap are read too, so their orgs are not skipped", async () => {
+  const classes = Array.from({ length: CLASS_PAGE_SIZE }, () => ({ slug: "shared", forgejo_org: null }));
+  classes.push({ slug: "past-the-cap", forgejo_org: null });
+  const { client, calls } = fakeOrgSupabase(classes);
+  const ensured: string[] = [];
+  await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) => (ensured.push(org), Promise.resolve()));
+  assertEquals(ensured, ["past-the-cap", "shared"]);
+  assertEquals(
+    calls.filter((c) => c.startsWith("range")),
+    [`range 0 ${CLASS_PAGE_SIZE - 1}`, `range ${CLASS_PAGE_SIZE} ${2 * CLASS_PAGE_SIZE - 1}`]
+  );
+});
+
+Deno.test("org hooks: one org's failure is recorded and the others are still checked", async () => {
+  const { client } = fakeOrgSupabase([
+    { slug: "a", forgejo_org: null },
+    { slug: "b", forgejo_org: null }
+  ]);
+  const boom = new Error("org has another owner");
+  const result = await reconcileForgejoOrgHooks(client, hookConfig, (_cfg, org) =>
+    org === "a" ? Promise.reject(boom) : Promise.resolve()
+  );
+  assertEquals(result, { checked: 1, failures: [{ org: "a", error: boom }] });
+});
+
+Deno.test("org hooks: without a configured hook, nothing is queried or called", async () => {
+  const { client, calls } = fakeOrgSupabase([{ slug: "a", forgejo_org: null }]);
+  const result = await reconcileForgejoOrgHooks(client, config, () => {
+    throw new Error("must not be called");
+  });
+  assertEquals(result, { checked: 0, failures: [] });
+  assertEquals(calls, []);
+});
+
+Deno.test("org hooks: a failed class query fails the step", async () => {
+  const { client } = fakeOrgSupabase([], { message: "boom" });
+  await assertRejects(() => reconcileForgejoOrgHooks(client, hookConfig, () => Promise.resolve()));
+});
+
+Deno.test("org hooks: with many orgs, each pass checks a bounded window and the hours cover every org", () => {
+  const orgs = Array.from({ length: 45 }, (_, i) => `org${String(i).padStart(2, "0")}`);
+  const seen = new Set<string>();
+  for (let hour = 0; hour < 3; hour++) {
+    const window = orgHookWindow(orgs, hour * 3_600_000 + 1234);
+    assertEquals(window.length, MAX_ORG_HOOKS_PER_PASS);
+    assertEquals(orgHookWindow(orgs, hour * 3_600_000 + 3_000_000), window);
+    window.forEach((o) => seen.add(o));
+  }
+  assertEquals(seen.size, orgs.length);
+  assertEquals(orgHookWindow(["b", "a", "b"], 0), ["a", "b"]);
+});
+
+function recordingSteps(fail: Partial<Record<keyof typeof PASS_STEPS, Error>> = {}) {
+  const ran: string[] = [];
+  const step = (name: keyof typeof PASS_STEPS) => () => {
+    ran.push(name);
+    return fail[name] ? Promise.reject(fail[name]) : Promise.resolve({} as never);
+  };
+  const steps = Object.fromEntries(
+    (Object.keys(PASS_STEPS) as (keyof typeof PASS_STEPS)[]).map((name) => [name, step(name)])
+  ) as unknown as typeof PASS_STEPS;
+  return { ran, steps };
+}
+
+const passClient = {} as Parameters<typeof reconcileForgejo>[0];
+
+Deno.test("pass: revocation runs first, so a slow later step can't time the pass out before it", async () => {
+  const { ran, steps } = recordingSteps();
+  await reconcileForgejo(passClient, config, steps);
+  assertEquals(ran, [
+    "revoke",
+    "archives",
+    "accounts",
+    "repos",
+    "groupRepos",
+    "hashes",
+    "orgHooks",
+    "staffTeams",
+    "groupLeavers"
+  ]);
+});
+
+Deno.test("pass: a failed revocation list still lets the backlogs run, then fails the pass", async () => {
+  const { ran, steps } = recordingSteps({ revoke: new Error("rpc down") });
+  await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "rpc down");
+  assertEquals(ran, [
+    "revoke",
+    "archives",
+    "accounts",
+    "repos",
+    "groupRepos",
+    "hashes",
+    "orgHooks",
+    "staffTeams",
+    "groupLeavers"
+  ]);
+});
+
+Deno.test(
+  "pass: a failed backlog step skips the rest of the backlog, but staff teams and group leavers still run",
+  async () => {
+    const { ran, steps } = recordingSteps({ repos: new Error("PostgREST 502") });
+    await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "PostgREST 502");
+    assertEquals(ran, ["revoke", "archives", "accounts", "repos", "staffTeams", "groupLeavers"]);
+  }
+);
+
+type StaffClass = { class_id: number; org: string; team: string; logins: string[]; repositories: string[] };
+
+function fakeStaffSupabase(
+  classes: StaffClass[],
+  error: unknown = null,
+  opts: { trace?: string[]; recordError?: unknown } = {}
+) {
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  const client = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      if (name === "record_forgejo_staff_team") {
+        // Shares the ops trace when one is passed, so a test can see where the marker lands between them.
+        opts.trace?.push(`record ${args.p_class_id}`);
+        return Promise.resolve({ data: null, error: opts.recordError ?? null });
+      }
+      return Promise.resolve(error ? { data: null, error } : { data: classes, error: null });
+    }
+  } as unknown as Parameters<typeof reconcileForgejoStaffTeams>[0];
+  return { client, rpcCalls };
+}
+
+function stubStaffOps(overrides: Partial<StaffTeamOps> = {}) {
+  const calls: string[] = [];
+  const ops: StaffTeamOps = {
+    ensureStaffTeam: (_cfg, org, name) => {
+      calls.push(`team ${org}/${name}`);
+      return Promise.resolve(org === "cs4535" ? 7 : 8);
+    },
+    syncTeamMembers: (_cfg, teamId, logins) => {
+      calls.push(`members ${teamId} ${logins.join(",")}`);
+      return Promise.resolve({ added: logins.length, removed: 0 });
+    },
+    grantTeamRepos: (_cfg, teamId, org, repositories) => {
+      calls.push(`repos ${teamId} ${org} ${repositories.join(",")}`);
+      return Promise.resolve(repositories.length);
+    },
+    ...overrides
+  };
+  return { ops, calls };
+}
+
+const staffClass = (classId: number, org: string): StaffClass => ({
+  class_id: classId,
+  org,
+  team: `${org}-staff`,
+  logins: ["prof", "ta"],
+  repositories: [`${org}/${org}-hw1-handout`, `${org}/${org}-hw1-alex`]
+});
+
+Deno.test("staff teams: each class's team gets its staff, then its repos", async () => {
+  const { client, rpcCalls } = fakeStaffSupabase([staffClass(1, "cs4535"), staffClass(2, "cs3500")]);
+  const { ops, calls } = stubStaffOps();
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result, { synced: 2, failures: [] });
+  assertEquals(rpcCalls, [
+    { name: "forgejo_staff_teams", args: { p_instance_url: config.url, p_limit: MAX_STAFF_TEAMS_PER_PASS } },
+    {
+      name: "record_forgejo_staff_team",
+      args: {
+        p_class_id: 1,
+        p_instance_url: config.url,
+        p_org: "cs4535",
+        p_team: "cs4535-staff",
+        p_team_id: 7
+      }
+    },
+    {
+      name: "record_forgejo_staff_team",
+      args: {
+        p_class_id: 2,
+        p_instance_url: config.url,
+        p_org: "cs3500",
+        p_team: "cs3500-staff",
+        p_team_id: 8
+      }
+    }
+  ]);
+  assertEquals(calls, [
+    "team cs4535/cs4535-staff",
+    "members 7 prof,ta",
+    "repos 7 cs4535 cs4535/cs4535-hw1-handout,cs4535/cs4535-hw1-alex",
+    "team cs3500/cs3500-staff",
+    "members 8 prof,ta",
+    "repos 8 cs3500 cs3500/cs3500-hw1-handout,cs3500/cs3500-hw1-alex"
+  ]);
+});
+
+Deno.test("staff teams: a class with a team in its old org and its new one syncs each under its own name", async () => {
+  // After a slug and forgejo_org change the backlog lists the recorded team in the old org and a team in
+  // the new one; each is synced, so staff removed from the class leave both.
+  const { client } = fakeStaffSupabase([
+    { ...staffClass(1, "cs4535"), team: "oldslug-staff", logins: ["prof"] },
+    { ...staffClass(1, "cs3500"), team: "newslug-staff", logins: ["prof"] }
+  ]);
+  const { ops, calls } = stubStaffOps();
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result, { synced: 2, failures: [] });
+  assertEquals(
+    calls.filter((c) => !c.startsWith("repos")),
+    ["team cs4535/oldslug-staff", "members 7 prof", "team cs3500/newslug-staff", "members 8 prof"]
+  );
+});
+
+Deno.test("staff teams: the team is recorded as soon as it exists, before the steps that can fail", async () => {
+  // The backlog lists a class only while it has live Forgejo repos, but the team outlives them: #1398
+  // archives a deleted assignment's repos and leaves the team holding its grants. Without a record of the
+  // team the class drops out of the backlog and a TA dropped afterwards keeps access for good. Recording
+  // it before syncTeamMembers means a failure there still leaves the class in the backlog to retry.
+  const trace: string[] = [];
+  const { client } = fakeStaffSupabase([staffClass(1, "cs4535")], null, { trace });
+  const { ops } = stubStaffOps({
+    ensureStaffTeam: (_cfg, org, name) => {
+      trace.push(`team ${org}/${name}`);
+      return Promise.resolve(7);
+    },
+    syncTeamMembers: (_cfg, teamId, logins) => {
+      trace.push(`members ${teamId} ${logins.join(",")}`);
+      return Promise.resolve({ added: logins.length, removed: 0 });
+    },
+    grantTeamRepos: (_cfg, teamId, org, repositories) => {
+      trace.push(`repos ${teamId} ${org} ${repositories.join(",")}`);
+      return Promise.resolve(repositories.length);
+    }
+  });
+  await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(trace, [
+    "team cs4535/cs4535-staff",
+    "record 1",
+    "members 7 prof,ta",
+    "repos 7 cs4535 cs4535/cs4535-hw1-handout,cs4535/cs4535-hw1-alex"
+  ]);
+});
+
+Deno.test("staff teams: a class whose team could not be made records nothing", async () => {
+  const { client, rpcCalls } = fakeStaffSupabase([staffClass(1, "cs4535")]);
+  const { ops } = stubStaffOps({
+    ensureStaffTeam: () => Promise.reject(new Error("Forgejo team create failed: 403"))
+  });
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result.synced, 0);
+  assertEquals(result.failures.length, 1);
+  assertEquals(
+    rpcCalls.map((c) => c.name),
+    ["forgejo_staff_teams"]
+  );
+});
+
+Deno.test("staff teams: a failed record is a failure, so the class is retried", async () => {
+  // Swallowing it would leave the class unrecorded while reporting success, which is the state this whole
+  // marker exists to avoid.
+  const { client } = fakeStaffSupabase([staffClass(1, "cs4535")], null, {
+    recordError: new Error("PostgREST 502")
+  });
+  const { ops, calls } = stubStaffOps();
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result.synced, 0);
+  assertEquals(result.failures.length, 1);
+  // It failed before the members sync, so nothing on Forgejo was changed past the team itself.
+  assertEquals(calls, ["team cs4535/cs4535-staff"]);
+});
+
+Deno.test("staff teams: a class whose repos are all archived still syncs its members", async () => {
+  // What the record buys: the backlog keeps returning the class, with no repositories to grant.
+  const { client } = fakeStaffSupabase([{ ...staffClass(1, "cs4535"), repositories: [] }]);
+  const { ops, calls } = stubStaffOps();
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result, { synced: 1, failures: [] });
+  assertEquals(calls, ["team cs4535/cs4535-staff", "members 7 prof,ta", "repos 7 cs4535 "]);
+});
+
+Deno.test("staff teams: a class with no staff left empties its team", async () => {
+  const { client } = fakeStaffSupabase([{ ...staffClass(1, "cs4535"), logins: [] }]);
+  const { ops, calls } = stubStaffOps();
+  await reconcileForgejoStaffTeams(client, config, ops);
+  assert(calls.includes("members 7 "));
+});
+
+Deno.test("staff teams: a class that fails doesn't stop the others, and its repos wait for its members", async () => {
+  const { client } = fakeStaffSupabase([staffClass(1, "cs4535"), staffClass(2, "cs3500")]);
+  const { ops, calls } = stubStaffOps({
+    syncTeamMembers: (_cfg, teamId) =>
+      teamId === 7
+        ? Promise.reject(new Error("Forgejo team members read failed: 500"))
+        : Promise.resolve({ added: 0, removed: 0 })
+  });
+  const result = await reconcileForgejoStaffTeams(client, config, ops);
+  assertEquals(result.synced, 1);
+  assertEquals(
+    result.failures.map((f) => [f.classId, (f.error as Error).message]),
+    [[1, "Forgejo team members read failed: 500"]]
+  );
+  assert(!calls.some((c) => c.startsWith("repos 7")));
+  assert(calls.some((c) => c.startsWith("repos 8")));
+});
+
+Deno.test("staff teams: a failed backlog query is an error", async () => {
+  const { client } = fakeStaffSupabase([], new Error("permission denied"));
+  await assertRejects(() => reconcileForgejoStaffTeams(client, config, stubStaffOps().ops), Error, "permission denied");
+});
+
+Deno.test("pass: a failed staff-team sync still runs the group revocation, and fails the pass", async () => {
+  const { ran, steps } = recordingSteps({ staffTeams: new Error("staff backlog query failed") });
+  await assertRejects(() => reconcileForgejo(passClient, config, steps), Error, "staff backlog query failed");
+  assertEquals(ran, [
+    "revoke",
+    "archives",
+    "accounts",
+    "repos",
+    "groupRepos",
+    "hashes",
+    "orgHooks",
+    "staffTeams",
+    "groupLeavers"
+  ]);
+});

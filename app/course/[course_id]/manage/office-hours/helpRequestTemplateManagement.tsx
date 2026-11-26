@@ -15,6 +15,7 @@ import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal"
 import { useHelpRequestTemplates } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 import { useMemo } from "react";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 /**
  * Component for managing help request templates.
@@ -22,6 +23,7 @@ import { useMemo } from "react";
  * that students can use when creating help requests.
  */
 export default function HelpRequestTemplateManagement() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
 
   // Modal management
@@ -52,7 +54,10 @@ export default function HelpRequestTemplateManagement() {
       });
       toaster.success({ title: `Template ${!currentState ? "activated" : "deactivated"} successfully` });
     } catch (error) {
-      toaster.error({ title: "Failed to update template status", description: getErrorMessage(error) });
+      toaster.error({
+        title: "Failed to update template status",
+        description: getErrorMessage(error, { role: errorRole })
+      });
     }
   };
 
@@ -63,7 +68,7 @@ export default function HelpRequestTemplateManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to delete template",
-        description: getErrorMessage(error)
+        description: getErrorMessage(error, { role: errorRole })
       });
     }
   };

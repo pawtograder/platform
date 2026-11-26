@@ -13,6 +13,7 @@ import { useDelete, useUpdate } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useMemo } from "react";
 import { BsCalendar, BsPerson, BsStopwatch, BsTrash } from "react-icons/bs";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type AssignmentWithDetails = HelpQueueAssignment & {
   help_queue?: HelpQueue;
@@ -26,6 +27,7 @@ type AssignmentWithDetails = HelpQueueAssignment & {
  */
 export default function HelpQueueAssignmentManagement() {
   // Use individual hooks for better performance and maintainability
+  const errorRole = useStaffErrorRole();
   const helpQueues = useHelpQueues();
   const helpQueueAssignments = useHelpQueueAssignments();
   const { isConnected, connectionStatus } = useConnectionStatus();
@@ -82,7 +84,7 @@ export default function HelpQueueAssignmentManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to end assignment",
-        description: getErrorMessage(error)
+        description: getErrorMessage(error, { role: errorRole })
       });
     }
   };
@@ -94,7 +96,7 @@ export default function HelpQueueAssignmentManagement() {
     } catch (error) {
       toaster.error({
         title: "Failed to delete assignment",
-        description: getErrorMessage(error)
+        description: getErrorMessage(error, { role: errorRole })
       });
     }
   };

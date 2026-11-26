@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -89,6 +89,10 @@ Like `assertUserIsInstructorOrServiceRole`, which it replaces for an action a ca
 also lets through the service role and an admin of any course. Load the row's class from the database
 and filter by it, so a capability in one class can't reach another class's rows.
 
+A CLI command (`supabase/functions/cli/`) has no Authorization header: it runs on the service role
+with the caller's user id. Use `assertUserHasClassCapability(userId, class_id, "manage_rubrics")` from
+`cli/utils/auth.ts`, which asks the same function on a client minted for that user.
+
 ## Adding a capability
 
 Write one migration that:
@@ -113,11 +117,46 @@ Write one migration that:
 
    For an instructor-only capability, use `WHERE cr.default_for = 'instructor'`.
 
+   Use the query above only if every grader could do the action before. If the old rule was
+   conditional (only in some classes, or only for some roles), add the capability only to the roles
+   that met it, so no one gains access the old rule denied.
+
 3. Updates `public.seed_default_class_roles()` if a default role other than instructor should get
    it in new classes too. It sets up the default roles when a class is created.
 
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
+
+## Where instructors manage roles
+
+Course Settings → Staff Roles (`app/course/[course_id]/manage/course/roles/`) is the screen for
+everything above. It needs `manage_roles`, so graders see an explanation instead of controls.
+
+The side menu has three pages:
+
+- Create / Edit Role: create a copy of Grader, or pick a role to rename, delete, or edit its capabilities. The default Grader role cannot be renamed or deleted. Roles with active or disabled members cannot be deleted.
+- Staff & Roles: the Staff tab lists active graders with a role drop-down. Moving a grader requires an instructor. The Roles tab lists Grader and custom roles with active membership counts and any removed members.
+- Roles & Capabilities: pick a role, then toggle capabilities grouped by app area and section. Each info button explains the action and where to find it. Changes save immediately. The selected role is linkable with `?role=<id>`.
+
+The typed catalog in `capabilityCatalog.ts` includes pending capabilities, but shows only rows in the database. Unknown capabilities appear under Other with their database description. `manage_roles` is always hidden. Enrollments shows each grader's staff role using the same live controllers; its Edit Role dialog still changes the app role.
+
+The page reads roles, capabilities and enrollments through course-scoped TableControllers. Role
+creation, renames, deletions and capability changes arrive as row updates on the staff channel.
+Enrollments share the course controller's `userRolesWithProfiles` cache. Controllers page through
+all rows and catch up when the staff channel reconnects.
+
+Updates and deletes ask for the rows they changed, because a policy can refuse those without an
+error; the page then reports the change as not saved and puts the control back. A refused insert
+fails with an error, so creating a role does not ask for rows back.
+
+## A capability that also decides who can see something
+
+Most capabilities are actions, and any staff member can still see what they saw before. One
+exception: **`manage_gradebook` covers the whole staff gradebook**, seeing it as well as changing it.
+Without it, a staff member can't open the gradebook page, read other students' gradebook cells,
+override a score or use Convert Missing to 0, and the private grades on a student's profile page are
+hidden. It is instructor-only by default, so graders on the default grader role don't have the
+gradebook until an instructor gives it to their role. Students still see their own released grades.
 
 ## For the UI: useCapability
 
@@ -132,3 +171,117 @@ loading and while an instructor is viewing as a student.
 Every course page shares one fetch, made by `ClassCapabilitiesProvider` in the course layout. It asks
 again when the staff channel says the viewer's own role changed or a role's capabilities changed
 (a burst of changes gives one re-ask). Other people's role changes are ignored.
+
+## Emailer: send_announcements
+
+`send_announcements` is the Emailer (Course Settings > Emailer). There is no separate announcements
+feature; "Announcements" is only a discussion topic icon. It is on the default instructor role only.
+
+- It covers reading and creating `email_batches` and `emails` (reading too, because the Emailer
+  reads a new batch back to get its id), the Emailer menu item, and the Emailer page, which sends
+  people without it to the course home page.
+- Changing and deleting emails and batches stay instructor-only. The Emailer only creates and
+  reads, and neither table records who sent a batch.
+- A new email must go to someone enrolled in its class (a `user_roles` row in the same
+  class), and its batch must belong to the same class. The `email_notifications()` trigger turns
+  each email into a notification for its recipient. This limits the recipient only: Cc and
+  Reply-to can be any address, as the Emailer allows.
+- Discussion topics are not part of it.
+
+**Pages: hide the button, or send the person away.** A page whose only purpose is one capability's
+action sends people without it somewhere useful: its server `layout.tsx` checks
+`userHasClassCapability(course_id, "...")` (in `lib/ssrUtils.ts`) and calls `redirect`, as `/new` and
+`/edit` do for `manage_assignments` and `/rubric` does for `manage_rubrics`. A page that also shows
+things to look at stays open and only hides its action buttons with `useCapability`, as Manage
+Groups does for `publish_groups`. `RequireManageReviews` is an older client-side version of the
+redirect, used by Bulk Assign and Reassign.
+
+## manage_flashcards
+
+`manage_flashcards` covers creating, editing, deleting and copying flashcard decks and cards
+(area 13). Day one, the default instructor role, the default grader role and every existing custom
+role hold it, so instructors and default graders keep the management access graders already had. An
+instructor can then turn it off for the default grader role or a custom role. Before this capability,
+the person who created a deck could still update and delete it and manage its cards without the
+staff check; that creator path is gone so the capability is the only rule for those writes. The
+create / edit / delete controls follow `useCapability("manage_flashcards")`. The Course Settings
+"Flashcard Decks" entry and deck pages remain available to all staff for viewing. Left as views: class members reading decks and cards, students
+writing their own progress and interaction logs, and staff reading class-wide progress and logs for
+analytics.
+
+CLI `flashcards.copy` requires active instructor or grader access in the source class to read its
+decks. It requires `manage_flashcards` only in the target class, through
+`assertUserHasClassCapability(userId, targetClass.id, "manage_flashcards")`, the same capability
+lookup RLS uses. Source read policies do not require `manage_flashcards`.
+
+## manage_surveys and run_polls
+
+`manage_surveys` covers creating, editing, publishing, closing, deleting and assigning surveys,
+plus survey templates (insert/update), survey series writes, and the
+`create_survey_assignments` / `soft_delete_survey` / `reorder_surveys_in_series` RPCs (area 11).
+Day one, only the default instructor role holds it. Create / publish / close / delete / series
+controls follow `useCapability("manage_surveys")`. Left as views or student actions: staff and
+student SELECT on surveys, assignments and responses; student response writes; template SELECT;
+series SELECT; analytics RPCs. Exception: deleting a survey template stays creator-only, so
+`manage_surveys` does not let you delete someone else's template.
+
+`survey_assignments` action policies call `can_manage_survey_in_class` so the parent survey must
+belong to the assignment's class and the caller must hold `manage_surveys` there. The helper is
+SECURITY DEFINER to avoid RLS recursion with `surveys_select_students`, and the capability check
+stops an unrelated signed-in user from learning survey/class membership through `/rpc`.
+
+A survey can reference a series from another class (CLI `surveys.copy` keeps the source
+`series_id`). That predates this capability work and is left for a follow-up.
+
+`run_polls` covers creating, editing, opening, closing and deleting live polls, and staff writes
+on `live_poll_responses` (area 11). Day one, the default instructor role, the default grader role
+and every existing custom role hold it. Create / open / close / delete controls follow
+`useCapability("run_polls")`. Left as views or student/anon actions: live and staff SELECT on
+`live_polls`, staff SELECT on responses (a grader without `run_polls` can still read responses
+and cannot change them), and the anon/student insert path through `can_access_poll_response`.
+
+CLI `surveys.copy` requires active instructor or grader access in the source class and
+`manage_surveys` in the target class. The target check uses the caller-scoped capability RPC,
+including for dry runs. `assignments.copy` requires instructor access in the target class.
+
+## Groups: publish_groups and manage_groups
+
+Manage Groups uses two capabilities. Both are on the default instructor role only.
+
+- **`publish_groups`**: stage group changes (Create New Group, Bulk Create, Tweak a Group, Edit
+  Group, Move Student) and publish them. For now only the screen checks it: a TA with
+  `publish_groups` can stage changes and press Publish, but `publish_assignment_group_changes`
+  still lets only instructors (and site admins) publish, until #1297 moves it to the capability.
+- **`manage_groups`**: changes that save at once, without staging: set a group's mentor, rename a
+  group (the `assignment_groups` UPDATE policy; the page has no Rename button), and Copy Groups
+  from another assignment (`copy_groups_from_assignment`). A group can't move to another
+  assignment or class, for anyone. Copy also turns off the per-row repo
+  sync in `sync_repos_after_assignment_group_change` and syncs once at the end; that trigger honors
+  the flag for a caller with `manage_groups`.
+
+Anyone enrolled in a class can read that class's group memberships (`assignment_groups_members`).
+Before `20261122210600` the policy compared a class to itself, so it let anyone enrolled in any
+class read every class's memberships.
+
+## Roster: manage_roster
+
+`manage_roster` covers lab sections, class section names and students on the Enrollments page. It is
+on the default instructor role only.
+
+- **Lab sections:** creating, changing and deleting `lab_sections`, `lab_section_meetings` and
+  `lab_section_leaders`, and the lab sections page (without it, the page sends you to the lab
+  roster). A meeting's lab section, and a leader's profile and lab section, must be in the row's
+  class, for everyone.
+  A lab section's `sis_crn` stays instructor-only (`guard_lab_section_sis_crn`): SIS sync enrolls
+  that SIS section's roster with their SIS roles, so whoever sets it could make people staff. The
+  same trigger stops anyone moving a lab section to another class from the API.
+- **Class sections:** `update_class_section_name()`. It still changes only the name.
+- **Enrollments, students only:** someone with `manage_roster` who isn't an instructor of the class
+  can remove a student, change a student's SIS sync override, cancel a pending student invitation,
+  and add a student who isn't in the class yet (`enrollments-add`). They can never touch a grader or
+  instructor row, change anyone's role or `class_role_id` (their own included), or add or invite a
+  grader or instructor. The `guard_roster_manager_update` trigger limits them to `disabled` and
+  `sis_sync_opt_out` on a student's `user_roles` row, and to `status` on a student invitation.
+- **Instructor-only for now:** creating invitations (the auto-accept trigger can re-enable an
+  existing grader or instructor), Edit role, Edit profile, CSV import, Canvas/SIS/LTI sync and admin
+  import. Tags are unchanged (any staff).

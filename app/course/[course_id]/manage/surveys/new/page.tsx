@@ -8,15 +8,17 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { reportDuplicateNamesRefusal } from "@/components/survey/publishRefusal";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapabilityOnceLoaded, useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
-import { Box } from "@chakra-ui/react";
+import { Box, Spinner } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type SurveyFormData = {
   title: string;
@@ -37,6 +39,7 @@ type SurveyFormData = {
 type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "closed"
 
 export default function NewSurveyPage() {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const router = useRouter();
   const revalidateServerCaches = useRevalidateServerCaches(Number(course_id));
@@ -44,6 +47,8 @@ export default function NewSurveyPage() {
   const trackEvent = useTrackEvent();
 
   const { private_profile_id, role } = useClassProfiles();
+  // Creating a survey needs manage_surveys (#1010); wait until the capability answer is known.
+  const canManageSurveys = useCapabilityOnceLoaded("manage_surveys");
   const [isReturningFromPreview, setIsReturningFromPreview] = useState(false);
   const [currentSurveyId, setCurrentSurveyId] = useState<string | null>(null);
   const timezone = role.classes?.time_zone || "America/New_York";
@@ -74,15 +79,15 @@ export default function NewSurveyPage() {
   );
 
   useEffect(() => {
-    if (role.role === "grader") {
+    if (canManageSurveys === false) {
       toaster.create({
         title: "Access Denied",
-        description: "Graders cannot create surveys. Only instructors have this permission.",
+        description: "You need the manage surveys capability to create surveys.",
         type: "error"
       });
-      router.push(`/course/${course_id}/manage/surveys`);
+      router.replace(`/course/${course_id}/manage/surveys`);
     }
-  }, [role, router, course_id]);
+  }, [canManageSurveys, router, course_id]);
 
   const form = useForm<SurveyFormData>({
     refineCoreProps: { resource: "surveys", action: "create" },
@@ -293,7 +298,7 @@ export default function NewSurveyPage() {
           jsonToStore = validateJson ? JSON.stringify(parsedJson) : (values.json as string);
         } catch (err) {
           validationErrors = validateJson
-            ? `Invalid JSON configuration: ${err instanceof Error ? err.message : "Unknown error"}`
+            ? `Invalid JSON configuration: ${getUserFacingErrorMessage(err, { role: errorRole })}`
             : null;
           jsonToStore = values.json as string; // keep raw for drafts
         }
@@ -444,6 +449,7 @@ export default function NewSurveyPage() {
       return { data, error };
     },
     [
+      errorRole,
       course_id,
       private_profile_id,
       trackEvent,
@@ -537,13 +543,21 @@ export default function NewSurveyPage() {
         toaster.dismiss(loadingToast);
         toaster.error({
           title: "Error creating survey",
-          description: err instanceof Error ? err.message : "An unexpected error occurred"
+          description: getUserFacingErrorMessage(err, { role: errorRole })
         });
         throw err;
       }
     },
-    [saveSurvey, convertDueDateToISO]
+    [errorRole, saveSurvey, convertDueDateToISO]
   );
+
+  if (!canManageSurveys) {
+    return (
+      <Box py={8} maxW="1200px" my={2} mx="auto" display="flex" justifyContent="center" p={8}>
+        <Spinner />
+      </Box>
+    );
+  }
 
   return (
     <Box py={8} maxW="1200px" my={2} mx="auto">

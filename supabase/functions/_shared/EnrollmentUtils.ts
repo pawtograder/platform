@@ -2,6 +2,7 @@ import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { UserVisibleError } from "./HandlerUtils.ts";
 
 let nameGenerationNouns: string[] = [];
 let nameGenerationAdjectives: string[] = [];
@@ -39,7 +40,15 @@ export async function createUserInClass(
     short_name?: string;
     avatar_url?: string;
   },
-  newRole: Database["public"]["Enums"]["app_role"]
+  newRole: Database["public"]["Enums"]["app_role"],
+  options: {
+    /**
+     * Refuse if the person already has any enrollment in the class, before any profile is written.
+     * For a caller who may only add new students (#1010): the check and the write use the same
+     * read, so an existing person's profile is never changed.
+     */
+    refuseExistingEnrollment?: boolean;
+  } = {}
 ) {
   let userId = user.existing_user_id;
 
@@ -95,6 +104,12 @@ export async function createUserInClass(
   if (fetchRolesError) {
     console.error("Error fetching existing roles:", fetchRolesError);
     throw new Error("Could not fetch existing user roles.");
+  }
+  if (options.refuseExistingEnrollment && (existingUserRoles ?? []).length > 0) {
+    throw new UserVisibleError(
+      "This person is already in the course. Only an instructor can change an existing enrollment.",
+      403
+    );
   }
 
   let highestExistingRoleEntry: Database["public"]["Tables"]["user_roles"]["Row"] | undefined = undefined;

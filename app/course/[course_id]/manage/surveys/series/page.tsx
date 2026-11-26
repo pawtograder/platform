@@ -6,11 +6,13 @@ import SurveysHeader from "../SurveysHeader";
 import SurveySeriesList from "@/components/survey/SurveySeriesList";
 import SeriesManagementModal from "@/components/survey/SeriesManagementModal";
 import type { SurveySeriesRow } from "@/types/survey-analytics";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { useState } from "react";
 
 export default function SurveySeriesPage() {
   const { course_id } = useParams();
   const courseId = course_id as string;
+  const canManageSurveys = useCapability("manage_surveys");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSeries, setEditingSeries] = useState<SurveySeriesRow | null>(null);
 
@@ -41,18 +43,27 @@ export default function SurveySeriesPage() {
         <Heading size="lg" color="fg.default">
           Survey Series
         </Heading>
-        <Button size="sm" colorPalette="blue" onClick={handleCreate}>
-          Create Series
-        </Button>
+        {canManageSurveys && (
+          <Button size="sm" colorPalette="blue" onClick={handleCreate}>
+            Create Series
+          </Button>
+        )}
       </HStack>
-      <SurveySeriesList classId={Number(courseId)} onEditSeries={handleEdit} onDeleteSeries={() => {}} />
-      <SeriesManagementModal
-        isOpen={modalOpen}
-        onClose={handleModalClose}
-        onSuccess={handleModalSuccess}
+      <SurveySeriesList
         classId={Number(courseId)}
-        existingSeries={editingSeries}
+        onEditSeries={canManageSurveys ? handleEdit : () => {}}
+        onDeleteSeries={() => {}}
+        canManage={canManageSurveys}
       />
+      {canManageSurveys && (
+        <SeriesManagementModal
+          isOpen={modalOpen}
+          onClose={handleModalClose}
+          onSuccess={handleModalSuccess}
+          classId={Number(courseId)}
+          existingSeries={editingSeries}
+        />
+      )}
     </Container>
   );
 }

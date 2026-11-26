@@ -10,6 +10,8 @@ import { useConnectionStatus, useOfficeHoursController } from "@/hooks/useOffice
 import { useStudentRoster } from "@/hooks/useCourseController";
 import { toaster } from "@/components/ui/toaster";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 
 type KarmaEntryFormData = {
   student_profile_id: string;
@@ -29,6 +31,7 @@ type CreateKarmaEntryModalProps = {
  * Uses real-time updates to ensure student list is current.
  */
 export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: CreateKarmaEntryModalProps) {
+  const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
   const { user } = useAuthState();
 
@@ -90,7 +93,7 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to create karma entry: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to create karma entry: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };

@@ -289,15 +289,14 @@ test("commit history never authorizes a same-named repository on another provide
   }
 });
 
-test.each(["github", "forgejo"])("%s group moves reach writes only for GitHub", async (provider) => {
+test.each(["github", "forgejo"])("%s group moves reach the move", async (provider) => {
   const rows = [{ id: 1, assignments: { git_provider: provider } }];
   const client = { from: () => query(rows) };
-  // Every membership, group and repository write happens inside the move.
+  // Every membership, group and repository write happens inside the move, which skips GitHub jobs for Forgejo repos.
   const moveStudentBetweenGroups = jest.fn(async () => {});
   const invoke = handler("assignment-group-instructor-move-student", "handleAssignmentGroupInstructorMoveStudent", {
     createClient: () => client,
     ...runtime,
-    IllegalArgumentError: Error,
     moveStudentBetweenGroups,
     enqueueGithubArchiveRepo: jest.fn(),
     enqueueSyncRepoPermissions: jest.fn(),
@@ -307,12 +306,151 @@ test.each(["github", "forgejo"])("%s group moves reach writes only for GitHub", 
     headers: new Map(),
     json: async () => ({ old_assignment_group_id: 1, new_assignment_group_id: 2, profile_id: "student", class_id: 1 })
   });
-  if (provider === "forgejo") await expect(response).rejects.toThrow("Forgejo");
-  else await expect(response).resolves.toBeUndefined();
-  expect(moveStudentBetweenGroups).toHaveBeenCalledTimes(provider === "forgejo" ? 0 : 1);
+  await expect(response).resolves.toBeUndefined();
+  expect(moveStudentBetweenGroups).toHaveBeenCalledTimes(1);
+});
+
+test.each(["github", "forgejo"])("%s group leave enqueues GitHub jobs only for a GitHub repo", async (provider) => {
+  const membership = {
+    id: 5,
+    class_id: 1,
+    assignment_group_id: 7,
+    classes: { github_org: "org", slug: "cs1" },
+    assignment_groups: { repositories: [{ repository: "org/cs1-hw1-group-a", git_provider: provider }] }
+  };
+  const remaining = [{ profiles: { user_roles: { users: { github_username: "other" } } } }];
+  const client = {
+    from: (table: string) =>
+      table === "assignments"
+        ? query({ class_id: 1, group_formation_deadline: null, classes: { time_zone: null } })
+        : query(membership, {
+            delete: () => query(null),
+            select: (columns: string) => (columns.includes("assignment_groups(") ? query(membership) : query(remaining))
+          })
+  };
+  const enqueueGithubArchiveRepo = jest.fn();
+  const enqueueSyncRepoPermissions = jest.fn();
+  const invoke = handler("assignment-group-leave", "handleAssignmentGroupLeave", {
+    createClient: () => client,
+    ...runtime,
+    TZDate,
+    IllegalArgumentError: Error,
+    SecurityError: Error,
+    enqueueGithubArchiveRepo,
+    enqueueSyncRepoPermissions,
+    assertUserIsInCourse: async () => ({ enrollment: { private_profile_id: "student" } })
+  });
+  await expect(invoke({ headers: new Map(), json: async () => ({ assignment_id: 1 }) })).resolves.toEqual({
+    message: "You have left the group"
+  });
+  expect(enqueueSyncRepoPermissions).toHaveBeenCalledTimes(provider === "github" ? 1 : 0);
+  expect(enqueueGithubArchiveRepo).not.toHaveBeenCalled();
 });
 
 test("Forgejo assignment copies reject before database writes", async () => {
   const copy = handler("cli/commands/assignments.ts", "copySingleAssignment", { CLICommandError: Error });
   await expect(copy({}, { git_provider: "forgejo" }, {}, {}, {})).rejects.toThrow("Forgejo");
+});
+
+test.each(["github", "forgejo"])(
+  "%s join-request approval syncs permissions only for a GitHub repo",
+  async (provider) => {
+    const request = {
+      profile_id: "joiner",
+      assignment_groups: {
+        id: 7,
+        name: "group-a",
+        assignments: { id: 1, group_formation_deadline: null, max_group_size: 3 },
+        assignment_groups_members: [{ profile_id: "student" }],
+        classes: { github_org: "org", slug: "cs1" },
+        repositories: [{ repository: "org/cs1-hw1-group-a", git_provider: provider }]
+      }
+    };
+    const members = [{ profiles: { user_roles: { users: { github_username: "student" } } } }];
+    const client = {
+      from: (table: string) =>
+        table === "assignment_group_join_request"
+          ? query(request)
+          : query(members, { insert: async () => ({ error: null }) })
+    };
+    const enqueueSyncRepoPermissions = jest.fn();
+    const invoke = handler("assignment-group-approve-request", "handleAssignmentGroupApproveRequest", {
+      createClient: () => client,
+      ...runtime,
+      TZDate,
+      SecurityError: Error,
+      enqueueSyncRepoPermissions,
+      assertUserIsInCourse: async () => ({
+        enrollment: { private_profile_id: "student", classes: { time_zone: "UTC" } }
+      }),
+      Sentry: { captureException: jest.fn() },
+      console
+    });
+    await expect(
+      invoke({ headers: new Map(), json: async () => ({ join_request_id: 1, course_id: 1 }) })
+    ).resolves.toEqual({ message: "Join request approved for group group-a" });
+    expect(enqueueSyncRepoPermissions).toHaveBeenCalledTimes(provider === "github" ? 1 : 0);
+  }
+);
+
+test.each(["github", "forgejo"])("pr-link-confirm reads the pull request only on a %s assignment", async (provider) => {
+  const link = { id: 1, class_id: 1, assignment_id: 2, pr_repo: "same/name", pr_number: 3 };
+  const client = { from: (table: string) => query(table === "assignments" ? { git_provider: provider } : link) };
+  const getPullRequest = jest.fn(async () => {
+    throw new Error("reached GitHub");
+  });
+  const invoke = handler("pr-link-confirm", "handleRequest", {
+    createClient: () => client,
+    ...runtime,
+    getPullRequest,
+    SecurityError: Error,
+    UserVisibleError: Error,
+    assertUserIsInCourse: async () => ({ enrollment: { role: "instructor" } })
+  });
+  const response = invoke({ headers: new Map([["Authorization", "token"]]), json: async () => ({ link_id: 1 }) });
+  await expect(response).rejects.toThrow(provider === "github" ? "reached GitHub" : "only supported for GitHub");
+  expect(getPullRequest).toHaveBeenCalledTimes(provider === "github" ? 1 : 0);
+});
+
+test.each(["github", "forgejo"])("get-pr-base-files reads the base tree only on a %s assignment", async (provider) => {
+  const rows: Record<string, unknown> = {
+    submissions: { id: 1, class_id: 1, assignment_id: 2, base_sha: "base" },
+    assignments: { upstream_repo: "same/name", git_provider: provider },
+    pr_base_tree_cache: { files: { "a.txt": "cached" } }
+  };
+  const client = { from: (table: string) => query(rows[table]) };
+  const invoke = handler("get-pr-base-files", "handleRequest", {
+    createClient: () => client,
+    ...runtime,
+    SecurityError: Error,
+    UserVisibleError: Error,
+    assertUserIsInCourse: async () => ({ enrollment: { role: "instructor" } })
+  });
+  const response = invoke({ headers: new Map([["Authorization", "token"]]), json: async () => ({ submission_id: 1 }) });
+  if (provider === "github") await expect(response).resolves.toEqual({ files: { "a.txt": "cached" } });
+  else await expect(response).rejects.toThrow("only supported for GitHub");
+});
+
+test.each([
+  ["handleSyncGradeWorkflowContext", { class: 1, assignment: 2 }],
+  ["handleCrossAssignmentCopyContext", { class: 1, source_assignment: 2, target_assignment: 3 }]
+])("CLI %s rejects Forgejo assignments before touching GitHub", async (name, params) => {
+  const getFileFromRepo = jest.fn();
+  const fetchRepositoriesForAssignment = jest.fn(async () => []);
+  const invoke = handler("cli/commands/repos.ts", name, {
+    CLICommandError: Error,
+    getAdminClient: () => ({}),
+    resolveClass: async () => ({ id: 1 }),
+    assertUserCanAccessClass: async () => {},
+    resolveAssignment: async (_: unknown, __: number, id: number) => ({
+      id,
+      git_provider: id === 3 || name === "handleSyncGradeWorkflowContext" ? "forgejo" : "github",
+      template_repo: "org/handout"
+    }),
+    getFileFromRepo,
+    fetchRepositoriesForAssignment
+  });
+  await expect(invoke({ userId: "user" }, params)).rejects.toThrow("Forgejo");
+  expect(getFileFromRepo).not.toHaveBeenCalled();
+  expect(fetchRepositoriesForAssignment).not.toHaveBeenCalled();
 });

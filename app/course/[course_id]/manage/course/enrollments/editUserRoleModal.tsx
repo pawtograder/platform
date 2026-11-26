@@ -1,5 +1,8 @@
 "use client";
 
+import { useCourseController, useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useTableControllerTableValues } from "@/lib/TableController";
+import { roleDisplayName } from "@/lib/classRoles";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Heading, VStack, NativeSelect, HStack, Text } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +28,12 @@ interface EditUserRoleModalProps {
 const availableRoles: UserRole[] = ["student", "grader", "instructor"];
 
 export default function EditUserRoleModal({ userRoleId, currentRole, userName, onClose }: EditUserRoleModalProps) {
+  const controller = useCourseController();
+  const roles = useTableControllerTableValues(controller.classRoles);
+  const enrollments = useUserRolesWithProfiles();
+  const enrollment = enrollments.find((row) => row.id === Number(userRoleId));
+  const staffRole = roles.find((role) => role.id === enrollment?.class_role_id);
+  const currentRoleName = currentRole === "grader" ? (staffRole ? roleDisplayName(staffRole) : "Grader") : currentRole;
   const invalidate = useInvalidate();
   const { mutate, isLoading } = useUpdate();
 
@@ -94,7 +103,7 @@ export default function EditUserRoleModal({ userRoleId, currentRole, userName, o
         Edit Role for: {userName || "User"}
       </Heading>
       <Text fontSize="sm" color="fg.muted" mb={6}>
-        Current role: {currentRole}
+        Current role: {currentRoleName}
       </Text>
 
       <form onSubmit={handleSubmit(onSubmit)}>

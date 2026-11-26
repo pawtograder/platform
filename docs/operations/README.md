@@ -26,11 +26,19 @@ bootstrap in [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) and the chart docs in
 - [Office Hours Queue Health](./office-hours-queue-health.md): the queue-health
   gauges, what normal looks like in and out of a session, and how to triage a
   queue that stays red.
+- [User-Facing Errors](./error-surfacing.md): what users see when RLS or a database
+  function refuses a request, which errors reach Sentry and how they are tagged, and
+  how to trace a given message back to its cause (#983).
 - [Incident Response](./incident-response.md): severity definitions, first
   response, and per-component triage.
 - [Data Retention & Storage Sizing](./data-retention.md): where data lives
   (Postgres / S3 / GitHub), how to size storage, how to enforce an age-based
   ("delete after N years") policy, and audit-log partition maintenance.
+- [Cloud Workspaces (Forgejo and Coder)](./forgejo-coder.md): live checks for
+  settings the chart doesn't supply, then for each component (Forgejo, sign-in,
+  Coder, Actions runner, reconciler, push webhook, workspaces, course flag) the
+  signals that exist, diagnosis commands, recovery and what it loses. Ends with
+  the flags and the course risks.
 
 ## Configuration
 

@@ -1,4 +1,5 @@
 "use client";
+import { repoWebUrl, useForgejoInstanceUrl } from "@/hooks/useForgejoInstanceUrl";
 import { ReportBlock } from "@/components/bugReport/ReportBlock";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
@@ -41,6 +42,7 @@ type AssignmentUnit = {
   primary_date: TZDate | undefined;
   due_date_component: JSX.Element;
   repo: string;
+  repo_url?: string;
   is_repo_ready: boolean;
   name_link: string;
   submission_text: string;
@@ -142,6 +144,7 @@ export default function StudentAssignmentsList() {
   // The dashboard RPC doesn't carry the advisory suggested_due_date; pull it from the
   // course controller (full assignment rows) and look it up by id when rendering.
   const courseAssignments = useAssignments();
+  const forgejoHost = useForgejoInstanceUrl(courseAssignments.some((a) => a.git_provider === "forgejo"));
   const suggestedDueDateById = useMemo(
     () => new Map(courseAssignments.map((a) => [a.id, a.suggested_due_date])),
     [courseAssignments]
@@ -153,6 +156,10 @@ export default function StudentAssignmentsList() {
     // Deliberately not async: `forEach` discards the promise, so an `await` added here later would
     // let the pushes below land after `result.sort(...)` and rows would silently vanish.
     assignments?.forEach((assignment) => {
+      const repoHost =
+        courseAssignments.find((a) => a.id === assignment.id)?.git_provider === "forgejo"
+          ? forgejoHost
+          : "https://github.com";
       const group = groups?.find((group) => group.assignment_id === assignment.id);
       let repo = assignment.repository || "-";
       if (group && group.assignment_groups) {
@@ -201,6 +208,7 @@ export default function StudentAssignmentsList() {
           <>-</>
         ),
         repo: repo,
+        repo_url: repoWebUrl(repoHost, repo === "-" ? undefined : repo),
         is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
         submission_text: formatLatestSubmissionLabel(assignment),
@@ -225,6 +233,7 @@ export default function StudentAssignmentsList() {
           primary_date: evalDueTZDate,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
+          repo_url: repoWebUrl(repoHost, repo === "-" ? undefined : repo),
           is_repo_ready: assignment.is_github_ready ?? false,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_submission_id}/files?review_assignment_id=${assignment.review_assignment_id}`,
           submission_text: assignment.submission_review_completed_at ? "Submitted" : "Not Submitted",
@@ -261,7 +270,16 @@ export default function StudentAssignmentsList() {
         return work.due_date && work.due_date < curTimeInCourseTimezone;
       })
     };
-  }, [assignments, groups, course, course_id, suggestedDueDateById, showSuggestedDueDate]);
+  }, [
+    assignments,
+    groups,
+    course,
+    course_id,
+    suggestedDueDateById,
+    showSuggestedDueDate,
+    courseAssignments,
+    forgejoHost
+  ]);
 
   const filterWork = (rows: AssignmentUnit[]) => {
     const q = query.trim().toLowerCase();
@@ -322,7 +340,7 @@ export default function StudentAssignmentsList() {
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
             <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
-            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>GitHub Repository</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Repository</Table.ColumnHeader>
             <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Group</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -391,7 +409,7 @@ export default function StudentAssignmentsList() {
                   </Table.Cell>
                 </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                  <Link target="_blank" href={work.repo_url}>
                     {work.repo}
                   </Link>
                 </Table.Cell>
@@ -416,7 +434,7 @@ export default function StudentAssignmentsList() {
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
             <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
-            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>GitHub Repository</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Repository</Table.ColumnHeader>
             <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Group</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -463,7 +481,7 @@ export default function StudentAssignmentsList() {
                   </Table.Cell>
                 </ReportBlock>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                  <Link target="_blank" href={work.repo_url}>
                     {work.repo}
                   </Link>
                 </Table.Cell>

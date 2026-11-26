@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { HelpRequestSearch } from "@/components/help-queue/help-request-search";
-import { EscalationTour } from "@/components/help-queue/escalation-tour";
+import { WhatsNew } from "@/components/whats-new/whats-new";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Box, Flex, HStack, Text, Badge } from "@chakra-ui/react";
 import NextLink from "next/link";
@@ -35,6 +35,8 @@ import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { format } from "date-fns";
+import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useViewerErrorRole } from "@/hooks/useStaffErrorRole";
 
 export type OfficeHoursViewMode = "my-requests" | "browse" | "working" | "all-requests" | "dashboard" | "settings";
 
@@ -108,6 +110,7 @@ export function OfficeHoursHeader({
   currentRequest,
   isManageMode = false
 }: OfficeHoursHeaderProps) {
+  const errorRole = useViewerErrorRole();
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -237,7 +240,7 @@ export function OfficeHoursHeader({
     } catch (error) {
       toaster.error({
         title: "Error",
-        description: `Failed to ${isWorking ? "stop" : "start"} working on queue: ${error instanceof Error ? error.message : String(error)}`
+        description: `Failed to ${isWorking ? "stop" : "start"} working on queue: ${getUserFacingErrorMessage(error, { role: errorRole })}`
       });
     }
   };
@@ -414,7 +417,7 @@ export function OfficeHoursHeader({
           </HStack>
 
           <HStack gap={2} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
-            <EscalationTour />
+            <WhatsNew page="office-hours" />
             <HelpRequestSearch isManageMode={true} />
             {workingQueues.length > 0 && (
               <Button
@@ -501,6 +504,8 @@ export function OfficeHoursHeader({
         </HStack>
 
         <HStack gap={3} flex="1" justify="flex-end" minW={{ base: "100%", md: "auto" }}>
+          {/* Staff viewing the student page get their walkthroughs in the manage header instead. */}
+          {isStudent && <WhatsNew page="office-hours" />}
           <HelpRequestSearch isManageMode={false} />
           <OnboardingPopover
             active={onboardingActive}
