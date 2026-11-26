@@ -1,6 +1,6 @@
 /**
  * #1010: granting due date extensions follows grant_extensions
- * (20261124150400_extensions_by_capability.sql).
+ * (20261126150400_extensions_by_capability.sql).
  *
  * Adding, editing and deleting a student's extension on one assignment (assignment_due_date_exceptions)
  * and a student's class-wide extension (student_deadline_extensions) need grant_extensions in the row's
