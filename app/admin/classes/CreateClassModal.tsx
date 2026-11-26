@@ -162,13 +162,12 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
       if (!formData.name.trim() || !formData.term) {
         throw new Error("Name and term are required");
       }
-      if (!formData.github_org_name) {
-        throw new Error("Please select a GitHub organization. Install the GitHub App if your org is not listed.");
-      }
       if (!formData.github_template_prefix.trim()) {
-        // The slug (template prefix) is required for GitHub team/repo operations;
-        // without it, enrolling staff fails (sync_staff_github_team needs org+slug).
-        throw new Error("Template prefix is required (used for GitHub repository names, e.g., hw).");
+        // The slug (template prefix) names GitHub teams/repos when a GitHub org is set
+        // and is the default Forgejo organization name for Forgejo-only courses.
+        throw new Error(
+          "Template prefix is required (used for repository names and the Forgejo organization, e.g., hw)."
+        );
       }
 
       // Only rows where an email was entered count as instructors to add.
@@ -183,7 +182,7 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
         p_name: formData.name.trim(),
         p_term: formData.term,
         p_description: formData.description.trim() || undefined,
-        p_github_org_name: formData.github_org_name,
+        p_github_org_name: formData.github_org_name.trim() || undefined,
         p_github_template_prefix: formData.github_template_prefix.trim() || undefined
       });
 
@@ -308,7 +307,7 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
 
               <HStack gap={4} w="full" align="start">
                 <VStack align="start" flex={1}>
-                  <Label htmlFor="github_org_name">GitHub Organization *</Label>
+                  <Label htmlFor="github_org_name">GitHub Organization</Label>
                   {orgsLoading ? (
                     <HStack color="fg.muted" fontSize="sm">
                       <Spinner size="sm" /> <Text>Loading organizations…</Text>
@@ -320,7 +319,7 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                         value={formData.github_org_name}
                         onChange={(e) => handleInputChange("github_org_name", e.target.value)}
                       >
-                        <option value="">Select an organization…</option>
+                        <option value="">None (optional)</option>
                         {(orgs ?? []).map((org) => (
                           <option key={org.installationId} value={org.login}>
                             {org.login}
@@ -336,7 +335,8 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                         {orgsError}.{" "}
                       </Text>
                     ) : null}
-                    Don&apos;t see your org?{" "}
+                    Leave blank for a Forgejo-only course. You can add a GitHub organization later. Don&apos;t see your
+                    org?{" "}
                     <Link href={installUrl} target="_blank" rel="noopener noreferrer" colorPalette="blue">
                       Install the GitHub App
                     </Link>{" "}
@@ -352,6 +352,9 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                     placeholder="e.g., hw"
                     required
                   />
+                  <Text fontSize="xs" color="fg.muted">
+                    Used as the repository name prefix on GitHub and as the organization name on Forgejo.
+                  </Text>
                 </VStack>
               </HStack>
 

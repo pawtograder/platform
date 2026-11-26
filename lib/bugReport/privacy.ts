@@ -401,6 +401,8 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "classes.archived": "none",
   "classes.course_title": "none",
   "classes.created_at": "none",
+  // Course-level default repository host ("github", "forgejo", or null); no user text is stored.
+  "classes.default_git_provider": "none",
   "classes.deployment_channel": "none",
   "classes.description": "none",
   "classes.discord_channel_group_id": "none",

@@ -1,16 +1,18 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
+import { useCourse } from "@/hooks/useCourseController";
 import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo } from "@/lib/edgeFunctions";
+import { cloudWorkspacesEnabled, defaultGitProviderForCourse } from "@/lib/gitProviderOptions";
 import { useRevalidateServerCaches } from "@/hooks/useRevalidateServerCaches";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback } from "react";
 import type { FieldValues } from "react-hook-form";
 import CreateAssignment from "./form";
-import { useSelectedGitProvider } from "./repositoryHostPicker";
+import { useSelectedGitProvider, useSyncCourseDefaultGitProvider } from "./repositoryHostPicker";
 import { Box, Heading, Text } from "@chakra-ui/react";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
@@ -18,6 +20,9 @@ import { useStaffErrorRole } from "@/hooks/useStaffErrorRole";
 export default function NewAssignmentPage() {
   const errorRole = useStaffErrorRole();
   const { course_id } = useParams();
+  const course = useCourse() as CourseWithFeatures;
+  const cloudWorkspacesOn = cloudWorkspacesEnabled(course?.features);
+  const courseDefaultProvider = defaultGitProviderForCourse(course);
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
@@ -30,12 +35,14 @@ export default function NewAssignmentPage() {
       // app treats an unset value (`allow_student_formed_groups !== true`).
       allow_student_formed_groups: false,
       repo_mode: "template_only_staff",
+      git_provider: courseDefaultProvider,
       has_autograder: true,
       protect_block_force_push: true,
       protect_require_pull_request: false,
       protect_required_reviewers: 0
     }
   });
+  useSyncCourseDefaultGitProvider(form, courseDefaultProvider);
   const revalidateServerCaches = useRevalidateServerCaches(Number.parseInt(course_id as string, 10));
   const { getValues } = form;
 
@@ -64,7 +71,7 @@ export default function NewAssignmentPage() {
         const isPr = isCode && getValues("submission_mode") === "pr";
         // The Repository host picker only sets this in a course with Cloud workspaces on. Without
         // it the insert leaves git_provider to its database default, as before #1091.
-        const isForgejo = isCode && getValues("git_provider") === "forgejo";
+        const isForgejo = isCode && cloudWorkspacesOn && getValues("git_provider") === "forgejo";
         const willCreateRepos = !isNoRepo;
 
         // Validate the fork/source autograder agreement BEFORE inserting anything.
@@ -352,9 +359,10 @@ export default function NewAssignmentPage() {
       }
       await create();
     },
-    [errorRole, course_id, getValues, mutateAsync, revalidateServerCaches]
+    [cloudWorkspacesOn, errorRole, course_id, getValues, mutateAsync, revalidateServerCaches]
   );
-  const isForgejoSelected = useSelectedGitProvider(form) === "forgejo";
+  const selectedGitProvider = useSelectedGitProvider(form);
+  const isForgejoSelected = cloudWorkspacesOn && selectedGitProvider === "forgejo";
   return (
     <Box p={4}>
       <Heading size="lg">Create New Assignment</Heading>

@@ -9,6 +9,7 @@ import {
   GIT_PROVIDER_LABELS,
   hostLockReason,
   showRepositoryHostPicker,
+  type GitProviderName,
   type HostLockState,
   type SavedHostValues
 } from "@/lib/gitProviderOptions";
@@ -24,9 +25,42 @@ export function useSavedAssignment(form: UseFormReturnType<Assignment>): Assignm
   return form.refineCore.query?.data?.data as Assignment | undefined;
 }
 
-/** The current host choice. The create form starts without one, which means GitHub. */
+/** The current host choice. Falls back to GitHub when unset. */
 export function useSelectedGitProvider(form: UseFormReturnType<Assignment>): string {
   return form.watch("git_provider") ?? "github";
+}
+
+/**
+ * Keeps a new assignment's `git_provider` synced to the course default until the instructor
+ * changes it manually. Never called on the edit form, so existing assignments keep their host.
+ */
+export function useSyncCourseDefaultGitProvider(
+  form: UseFormReturnType<Assignment>,
+  courseDefaultProvider: GitProviderName
+): void {
+  const { watch, getValues, setValue } = form;
+  const userChoseRef = useRef(false);
+  const syncingRef = useRef(false);
+
+  useEffect(() => {
+    const subscription = watch((_values, { name }) => {
+      if (name === "git_provider" && !syncingRef.current) {
+        userChoseRef.current = true;
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
+  useEffect(() => {
+    if (userChoseRef.current) return;
+    if (getValues("git_provider") === courseDefaultProvider) return;
+    syncingRef.current = true;
+    try {
+      setValue("git_provider", courseDefaultProvider, { shouldDirty: false });
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [courseDefaultProvider, getValues, setValue]);
 }
 
 /**
