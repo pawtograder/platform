@@ -1,6 +1,6 @@
 /**
  * #1010: the grading screens follow grade_submissions and release_grades
- * (20261124150200_grading_and_release_by_capability.sql), so a control shows exactly when the
+ * (20261126150200_grading_and_release_by_capability.sql), so a control shows exactly when the
  * database allows it.
  *
  * On a released, completed grading review:

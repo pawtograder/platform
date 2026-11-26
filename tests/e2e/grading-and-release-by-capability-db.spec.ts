@@ -1,6 +1,6 @@
 /**
  * #1010: grading follows grade_submissions, and releasing grades and changing a released grade
- * follow release_grades (20261124150200_grading_and_release_by_capability.sql).
+ * follow release_grades (20261126150200_grading_and_release_by_capability.sql).
  *
  * The roles under test, all in one class:
  *   - a default grader: holds grade_submissions (every grader could grade before), not release_grades;

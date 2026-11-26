@@ -5,7 +5,7 @@ import { useCallback } from "react";
 
 /**
  * Who may grade and who may change a released grade, as the database decides it (#1010,
- * 20261124150200_grading_and_release_by_capability.sql).
+ * 20261126150200_grading_and_release_by_capability.sql).
  *
  * - `canGradeSubmissions` (grade_submissions): apply rubric checks, add and edit your own comments,
  *   and mark reviews complete while the review is unreleased.
