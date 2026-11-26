@@ -1,5 +1,5 @@
 /**
- * #1010: handling regrade requests follows handle_regrades (20261124150300_regrades_by_capability.sql).
+ * #1010: handling regrade requests follows handle_regrades (20261126150300_regrades_by_capability.sql).
  *
  * Resolving a request and commenting on one as staff need handle_regrades in the request's class.
  * The default instructor and grader roles and every custom role hold it, so nothing changes for them;

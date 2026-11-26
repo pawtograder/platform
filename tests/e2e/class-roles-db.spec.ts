@@ -41,7 +41,7 @@
  * release_grades is on the instructor role only. seed_default_class_roles() names the shared #1010
  * grader list (DEFAULT_GRADER_SEED_LIST), and a new class's grader holds the names on it that exist.
  *
- * 20261124150300_regrades_by_capability.sql: handle_regrades is also on the default grader role, so a
+ * 20261126150300_regrades_by_capability.sql: handle_regrades is also on the default grader role, so a
  * new custom role copies it (DEFAULT_GRADER_CAPABILITIES).
  *
  * Default per-PR lane; lives at tests/e2e/ root so it isn't testIgnore'd.
