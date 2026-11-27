@@ -1032,6 +1032,7 @@ Deno.test("a failed build reports the build step and Coder's job error", async (
   const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
   assertEquals(res.status, "failed");
   assertEquals(res.step, "build");
+  assert(res.message!.includes("capacity is full"));
   assertEquals(res.failure, {
     step: "build",
     script: null,
@@ -2838,4 +2839,57 @@ Deno.test("credentials: a commit email that can't be written stops the start, so
     coder.keys.every((k) => k.deleted),
     "the short-lived key is deleted"
   );
+});
+
+Deno.test("Coder API failures have actionable messages at the request boundary", async () => {
+  for (const [status, text] of [
+    [400, "capacity"],
+    [402, "capacity"],
+    [403, "permissions"],
+    [404, "template"],
+    [409, "Wait"],
+    [500, "temporarily unavailable"],
+    [503, "temporarily unavailable"]
+  ] as const) {
+    const { deps } = setup();
+    deps.coder.fetch = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ message: status === 400 ? "Workspace quota exceeded" : "raw Coder detail" }), {
+          status
+        })
+      );
+    const err = await assertRejects(
+      () => withinBudget(startBudget(3000), () => openWorkspace(deps, ALEX, { assignment_id: 41 })),
+      UserVisibleError
+    );
+    assert(err.details.includes(text), err.details);
+  }
+});
+
+Deno.test("GitHub template must declare the configured external auth provider", async () => {
+  const { coder, deps } = setup();
+  coder.noProviders = true;
+  const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 42 }), UserVisibleError);
+  assertEquals(err.status, 503);
+  assert(err.details.includes("CODER_GITHUB_AUTH_ID"));
+  assertEquals(coder.workspaces.length, 0);
+});
+
+Deno.test("GitHub status reports disabled external auth before offering open", async () => {
+  const { coder, deps } = setup();
+  deps.github = null;
+  const res = await workspaceStatus(deps, ALEX, { assignment_id: 42 });
+  assertEquals(res.status, "unavailable");
+  assertEquals(coder.calls.length, 0);
+});
+
+Deno.test("scheduling failures explain capacity while retaining raw logs", async () => {
+  const { coder, deps } = setup();
+  await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  signInAndLink(coder, ALEX);
+  coder.nextBuildStatus = "failed";
+  coder.nextJobError = "0/3 nodes are available: Insufficient cpu";
+  const res = await openWorkspace(deps, ALEX, { assignment_id: 41 });
+  assert(res.message!.includes("capacity is full"));
+  assertEquals(res.failure!.log_lines, [coder.nextJobError]);
 });

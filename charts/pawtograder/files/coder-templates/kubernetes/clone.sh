@@ -64,7 +64,11 @@ code=$?
 case "$code" in
   0) ;;
   124 | 137) fail "git clone didn't finish within $LIMIT seconds (is the server reachable?)" ;;
-  *) fail "git clone exited with $code. If git said authentication failed, open the workspace from Pawtograder to restart it with a new token." ;;
+  *)
+    if [ -n "$AUTH_ID" ]; then
+      fail "git clone exited with $code. Check that the GitHub account linked in Coder has access to this repository and that you accepted the course's GitHub organization invitation."
+    fi
+    fail "git clone exited with $code. If git said authentication failed, open the workspace from Pawtograder to restart it with a new token." ;;
 esac
 if [ -n "$CREDS" ]; then
   git -C "$TMP/clone" config --replace-all "credential.$ORIGIN.helper" "$HELPER" || fail "couldn't set git's credential helper"
