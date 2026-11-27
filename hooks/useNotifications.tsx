@@ -1,11 +1,12 @@
 "use client";
 import { useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { useUpdate, useDelete } from "@refinedev/core";
+import { useUpdate, useDelete, useInvalidate } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
 import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import { getErrorMessage } from "@/lib/errorMessage";
+import { isRefusedWriteError } from "@/lib/refineDataProvider";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -40,6 +41,7 @@ export function useNotifications(resource?: string, id?: number) {
     resource: "notifications"
   });
   const { mutateAsync: delete_notification } = useDelete<Notification>();
+  const invalidate = useInvalidate();
 
   // Always declare state hooks at the top level
   const [resourceNotifications, setResourceNotifications] = useState<Notification[]>([]);
@@ -79,8 +81,12 @@ export function useNotifications(resource?: string, id?: number) {
 
   // Removes the notification from the local store right away, then deletes it. Never rejects:
   // a notification that is already gone (another tab, a double click) resolves in the data
-  // provider, and any other failure puts the notification back and shows a toast here, so
-  // callers (including fire-and-forget onClick handlers) don't need their own catch.
+  // provider, and failures are handled here, so callers (including fire-and-forget onClick
+  // handlers) don't need their own catch.
+  //
+  // Only put the notification back when the server says it still exists. A failed request can
+  // still have deleted the row (the response was lost), and a refetch never removes a row that
+  // was put back locally, so restoring on every failure could show a deleted notification (#1249).
   const dismiss = useCallback(
     async (notification: Notification) => {
       if (isReadOnly) return;
@@ -92,9 +98,7 @@ export function useNotifications(resource?: string, id?: number) {
         channel: "resources/notifications",
         date: new Date()
       });
-      try {
-        await delete_notification({ id: notification.id, resource: "notifications" });
-      } catch (error) {
+      const restore = (error: unknown) => {
         controller.handleGenericDataEvent("notifications", {
           type: "created",
           payload: notification,
@@ -105,9 +109,45 @@ export function useNotifications(resource?: string, id?: number) {
           title: "Failed to dismiss notification",
           description: getErrorMessage(error, { role: errorRole })
         });
+      };
+      try {
+        await delete_notification({ id: notification.id, resource: "notifications" });
+      } catch (error) {
+        // The provider saw the row after the delete matched nothing: the delete was refused.
+        if (isRefusedWriteError(error)) {
+          restore(error);
+          return;
+        }
+        // Ask the database, not a cache: the controller's notifications TableController still holds
+        // the row after a delete whose response was lost, so it can't tell us whether it is gone.
+        let stillExists: boolean | undefined;
+        try {
+          const { data, error: checkError } = await controller.client
+            .from("notifications")
+            .select("id")
+            .eq("id", notification.id)
+            .maybeSingle();
+          // No row: deleted, or hidden by RLS. Notifications are only readable by their owner, so a
+          // row this session can't see would not be in its inbox either. An error leaves it open.
+          stillExists = checkError ? undefined : data !== null;
+        } catch {
+          stillExists = undefined;
+        }
+        if (stillExists === true) {
+          restore(error);
+        } else if (stillExists === undefined) {
+          // Couldn't tell. Leave it removed and refetch the list: a row that still exists comes
+          // back with the next successful fetch (React Query retries an invalidated query on
+          // reconnect), and a deleted one stays gone.
+          void invalidate({ resource: "notifications", invalidates: ["list"] });
+          toaster.error({
+            title: "Couldn't confirm the notification was dismissed",
+            description: `If it wasn't, it will come back when your notifications reload. ${getErrorMessage(error, { role: errorRole })}`
+          });
+        }
       }
     },
-    [delete_notification, controller, isReadOnly, errorRole]
+    [delete_notification, invalidate, controller, isReadOnly, errorRole]
   );
 
   const mark_all_read = useCallback(
