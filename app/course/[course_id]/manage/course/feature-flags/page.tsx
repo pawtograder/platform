@@ -1,6 +1,7 @@
 "use client";
 
 import { AutoGroupPreviewDialog } from "@/components/gradebook/AutoGroupPreviewDialog";
+import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -11,9 +12,10 @@ import {
   MANAGEABLE_COURSE_FEATURES,
   type CourseFeatureName
 } from "@/lib/courseFeatures";
+import { GIT_PROVIDER_LABELS, type GitProviderName } from "@/lib/gitProviderOptions";
 import { createClient } from "@/utils/supabase/client";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Card, Heading, Text, VStack } from "@chakra-ui/react";
+import { Box, Card, Heading, NativeSelect, Text, VStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getUserFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
@@ -55,6 +57,56 @@ export default function CourseFeatureFlagsPage() {
   // Turning column groups on goes through a preview of the groups it would create.
   const [isPreviewingGroups, setIsPreviewingGroups] = useState(false);
   const gradebookId = (course as CourseWithFeatures).gradebook_id ?? null;
+
+  const rawDefaultProvider = (course as CourseWithFeatures).default_git_provider;
+  const courseDefaultProvider: "" | GitProviderName =
+    rawDefaultProvider === "github" || rawDefaultProvider === "forgejo" ? rawDefaultProvider : "";
+  const automaticDefaultLabel = (course as CourseWithFeatures).github_org?.trim()
+    ? "Automatic (GitHub)"
+    : "Automatic (Forgejo)";
+  const [defaultGitProvider, setDefaultGitProvider] = useState<"" | GitProviderName>(courseDefaultProvider);
+  const [savingDefaultProvider, setSavingDefaultProvider] = useState(false);
+
+  useEffect(() => {
+    setDefaultGitProvider(courseDefaultProvider);
+  }, [courseDefaultProvider]);
+
+  const onDefaultGitProviderChange = useCallback(
+    async (nextValue: "" | GitProviderName) => {
+      if (Number.isNaN(courseIdNum)) {
+        toaster.error({ title: "Invalid course" });
+        return;
+      }
+      const previous = defaultGitProvider;
+      setDefaultGitProvider(nextValue);
+      setSavingDefaultProvider(true);
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .from("classes")
+          .update({ default_git_provider: nextValue === "" ? null : nextValue })
+          .eq("id", courseIdNum)
+          .select("id");
+        if (error) {
+          throw new Error(error.message);
+        }
+        if (!data || data.length === 0) {
+          throw new Error("Could not update the default repository host.");
+        }
+        router.refresh();
+        toaster.success({ title: "Saved" });
+      } catch (e) {
+        setDefaultGitProvider(previous);
+        toaster.error({
+          title: "Could not update default repository host",
+          description: getUserFacingErrorMessage(e, { role: errorRole })
+        });
+      } finally {
+        setSavingDefaultProvider(false);
+      }
+    },
+    [courseIdNum, defaultGitProvider, errorRole, router]
+  );
 
   const enableColumnGroups = useCallback(async () => {
     const supabase = createClient();
@@ -154,6 +206,31 @@ export default function CourseFeatureFlagsPage() {
               >
                 {def.switchLabel}
               </Switch>
+              {def.name === COURSE_FEATURES.CLOUD_WORKSPACES ? (
+                <Box mt={4} pt={4} borderTopWidth="1px" borderColor="border.muted">
+                  <Field
+                    label="Default repository host for new assignments"
+                    helperText={
+                      flags[COURSE_FEATURES.CLOUD_WORKSPACES]
+                        ? "Pre-selected when creating a new code assignment. Existing assignments and manual choices on the form are unchanged."
+                        : "Applies only while Cloud workspaces is enabled. While it is off, new assignments default to GitHub."
+                    }
+                  >
+                    <NativeSelect.Root maxW="xs" disabled={savingDefaultProvider}>
+                      <NativeSelect.Field
+                        aria-label="Default repository host for new assignments"
+                        value={defaultGitProvider}
+                        onChange={(e) => onDefaultGitProviderChange(e.target.value as "" | GitProviderName)}
+                      >
+                        <option value="">{automaticDefaultLabel}</option>
+                        <option value="github">{GIT_PROVIDER_LABELS.github}</option>
+                        <option value="forgejo">{GIT_PROVIDER_LABELS.forgejo}</option>
+                      </NativeSelect.Field>
+                      <NativeSelect.Indicator />
+                    </NativeSelect.Root>
+                  </Field>
+                </Box>
+              ) : null}
             </Card.Body>
           </Card.Root>
         ))}

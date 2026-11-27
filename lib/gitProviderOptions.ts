@@ -18,6 +18,26 @@ export function cloudWorkspacesEnabled(features: { name: string; enabled: boolea
   return courseFeatureEffectiveEnabled(features, COURSE_FEATURES.CLOUD_WORKSPACES, false);
 }
 
+export type CourseDefaultGitProviderInput = {
+  features: { name: string; enabled: boolean }[] | null | undefined;
+  default_git_provider?: string | null;
+  github_org?: string | null;
+};
+
+/**
+ * Effective default repository host for a new code assignment in a course.
+ * Honored only while cloud-workspaces is enabled; otherwise GitHub.
+ * When cloud-workspaces is enabled and no explicit course default is saved,
+ * a course with no GitHub organization defaults to Forgejo and a course with
+ * one keeps GitHub.
+ */
+export function defaultGitProviderForCourse(course: CourseDefaultGitProviderInput | null | undefined): GitProviderName {
+  if (!course || !cloudWorkspacesEnabled(course.features)) return "github";
+  if (course.default_git_provider === "forgejo") return "forgejo";
+  if (course.default_git_provider === "github") return "github";
+  return course.github_org?.trim() ? "github" : "forgejo";
+}
+
 /**
  * Whether the form shows the Repository host picker. Only code assignments have a repository.
  * With the flag off the picker stays hidden, unless the saved assignment is already on Forgejo:

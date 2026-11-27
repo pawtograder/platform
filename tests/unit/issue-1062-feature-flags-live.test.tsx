@@ -13,7 +13,7 @@
  * Named tests/unit/issue* so deploy.yml's `--testPathPatterns "tests/unit/issue"` lane runs it;
  * lint.yml's jest job takes an explicit file list and does not glob. Needs no database.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChakraProvider, defaultSystem } from "@chakra-ui/react";
 import CourseFeatureFlagsPage from "@/app/course/[course_id]/manage/course/feature-flags/page";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
@@ -22,6 +22,12 @@ type Feature = { name: string; enabled: boolean };
 
 const mockUseCourse = jest.fn();
 const mockRoleClasses = jest.fn();
+const mockUpdateSelect = jest.fn();
+const mockUpdate = jest.fn(() => ({
+  eq: () => ({
+    select: mockUpdateSelect
+  })
+}));
 
 jest.mock("@/hooks/useCourseController", () => ({
   useCourse: () => mockUseCourse()
@@ -40,7 +46,10 @@ jest.mock("next/navigation", () => ({
 }));
 
 jest.mock("@/utils/supabase/client", () => ({
-  createClient: () => ({ rpc: jest.fn().mockResolvedValue({ error: null }) })
+  createClient: () => ({
+    rpc: jest.fn().mockResolvedValue({ error: null }),
+    from: () => ({ update: mockUpdate })
+  })
 }));
 
 jest.mock("@/components/ui/toaster", () => ({
@@ -62,8 +71,18 @@ function renderPage() {
   );
 }
 
-function setCourse(features: Feature[]) {
-  mockUseCourse.mockReturnValue({ id: 1, features, gradebook_id: 7 });
+function setCourse(
+  features: Feature[],
+  extra: { default_git_provider?: string | null; github_org?: string | null } = {}
+) {
+  mockUseCourse.mockReturnValue({
+    id: 1,
+    features,
+    gradebook_id: 7,
+    github_org: "neu-cs",
+    default_git_provider: null,
+    ...extra
+  });
 }
 
 function setRoleSnapshot(features: Feature[]) {
@@ -73,6 +92,7 @@ function setRoleSnapshot(features: Feature[]) {
 describe("issue #1062: feature flags update live", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUpdateSelect.mockResolvedValue({ data: [{ id: 1 }], error: null });
   });
 
   it("follows the live course row, not the role snapshot", () => {
@@ -107,5 +127,50 @@ describe("issue #1062: feature flags update live", () => {
     renderPage();
     // Office hours defaults on when missing, so an empty column must not read as off.
     expect((screen.getByLabelText(OFFICE_HOURS_SWITCH) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("saves the course default repository host and reflects live updates", async () => {
+    setCourse([{ name: COURSE_FEATURES.CLOUD_WORKSPACES, enabled: true }], {
+      github_org: null,
+      default_git_provider: null
+    });
+    setRoleSnapshot([]);
+    const { rerender } = renderPage();
+    const select = screen.getByLabelText("Default repository host for new assignments") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(screen.getByRole("option", { name: "Automatic (Forgejo)" })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: "forgejo" } });
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({ default_git_provider: "forgejo" }));
+    expect(select.value).toBe("forgejo");
+
+    // Simulate the saved value arriving on the live course row, then another instructor resetting it to Automatic.
+    setCourse([{ name: COURSE_FEATURES.CLOUD_WORKSPACES, enabled: true }], {
+      github_org: null,
+      default_git_provider: "forgejo"
+    });
+    rerender(
+      <ChakraProvider value={defaultSystem}>
+        <CourseFeatureFlagsPage />
+      </ChakraProvider>
+    );
+    expect(select.value).toBe("forgejo");
+
+    setCourse([{ name: COURSE_FEATURES.CLOUD_WORKSPACES, enabled: true }], {
+      github_org: "neu-cs",
+      default_git_provider: null
+    });
+    rerender(
+      <ChakraProvider value={defaultSystem}>
+        <CourseFeatureFlagsPage />
+      </ChakraProvider>
+    );
+    expect(select.value).toBe("");
+    expect(screen.getByRole("option", { name: "Automatic (GitHub)" })).toBeInTheDocument();
+
+    // Error rolls back the optimistic selection.
+    mockUpdateSelect.mockResolvedValueOnce({ data: null, error: { message: "denied" } });
+    fireEvent.change(select, { target: { value: "github" } });
+    await waitFor(() => expect(select.value).toBe(""));
   });
 });

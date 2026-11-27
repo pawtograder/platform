@@ -5,12 +5,15 @@
  * Named tests/unit/issue* so the e2e-local lane runs it. It needs no database.
  */
 import { ChakraProvider, defaultSystem, Fieldset } from "@chakra-ui/react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useForm } from "react-hook-form";
 import type { UseFormReturnType } from "@refinedev/react-hook-form";
-import RepositoryHostPicker from "@/app/course/[course_id]/manage/assignments/new/repositoryHostPicker";
+import RepositoryHostPicker, {
+  useSyncCourseDefaultGitProvider
+} from "@/app/course/[course_id]/manage/assignments/new/repositoryHostPicker";
 import {
   cloudWorkspacesEnabled,
+  defaultGitProviderForCourse,
   FORGEJO_DETACH_REASON,
   FORGEJO_UNSUPPORTED_SETTINGS,
   forgejoChoiceUnavailableReason,
@@ -324,5 +327,113 @@ describe("RepositoryHostPicker", () => {
     );
     expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("forgejo");
     await waitFor(() => expect(screen.getByLabelText("Repository host")).not.toBeDisabled());
+  });
+});
+
+describe("course default repository host (#1388)", () => {
+  it("always returns GitHub while cloud-workspaces is off", () => {
+    expect(defaultGitProviderForCourse(null)).toBe("github");
+    expect(defaultGitProviderForCourse({ features: FLAG_OFF, default_git_provider: "forgejo", github_org: null })).toBe(
+      "github"
+    );
+    expect(
+      defaultGitProviderForCourse({ features: FLAG_OFF, default_git_provider: "forgejo", github_org: "neu-cs" })
+    ).toBe("github");
+    expect(defaultGitProviderForCourse({ features: [], default_git_provider: null, github_org: null })).toBe("github");
+  });
+
+  it("honors explicit course default when cloud-workspaces is on", () => {
+    expect(
+      defaultGitProviderForCourse({ features: FLAG_ON, default_git_provider: "forgejo", github_org: "neu-cs" })
+    ).toBe("forgejo");
+    expect(defaultGitProviderForCourse({ features: FLAG_ON, default_git_provider: "github", github_org: null })).toBe(
+      "github"
+    );
+  });
+
+  it("falls back to Forgejo when no GitHub org is set and keeps GitHub otherwise", () => {
+    expect(defaultGitProviderForCourse({ features: FLAG_ON, default_git_provider: null, github_org: null })).toBe(
+      "forgejo"
+    );
+    expect(defaultGitProviderForCourse({ features: FLAG_ON, default_git_provider: null, github_org: "   " })).toBe(
+      "forgejo"
+    );
+    expect(defaultGitProviderForCourse({ features: FLAG_ON, default_git_provider: null, github_org: "neu-cs" })).toBe(
+      "github"
+    );
+  });
+
+  function NewAssignmentHarness({
+    course
+  }: {
+    course: {
+      features: { name: string; enabled: boolean }[];
+      default_git_provider: string | null;
+      github_org: string | null;
+    };
+  }) {
+    const courseDefault = defaultGitProviderForCourse(course);
+    const rhf = useForm<Assignment>({
+      defaultValues: { assignment_type: "code", git_provider: courseDefault } as Assignment
+    });
+    const form = {
+      ...rhf,
+      refineCore: { query: undefined }
+    } as unknown as UseFormReturnType<Assignment>;
+    useSyncCourseDefaultGitProvider(form, courseDefault);
+    formRef = form;
+    return <RepositoryHostPicker form={form} />;
+  }
+
+  it("defaults new assignments to the course default and updates until the user picks a host", () => {
+    const forgejoOnlyCourse = { features: FLAG_ON, default_git_provider: null, github_org: null };
+    mockUseCourse.mockReturnValue(forgejoOnlyCourse);
+    const { rerender } = render(
+      <ChakraProvider value={defaultSystem}>
+        <Fieldset.Root>
+          <NewAssignmentHarness course={forgejoOnlyCourse} />
+        </Fieldset.Root>
+      </ChakraProvider>
+    );
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("forgejo");
+
+    // Before the user touches the select, a live course-default change updates the form.
+    const githubCourse = { features: FLAG_ON, default_git_provider: "github", github_org: null };
+    mockUseCourse.mockReturnValue(githubCourse);
+    rerender(
+      <ChakraProvider value={defaultSystem}>
+        <Fieldset.Root>
+          <NewAssignmentHarness course={githubCourse} />
+        </Fieldset.Root>
+      </ChakraProvider>
+    );
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("github");
+
+    // Once the user chooses a host (even flipping away and back), later course updates never override it.
+    fireEvent.change(screen.getByLabelText("Repository host"), { target: { value: "forgejo" } });
+    fireEvent.change(screen.getByLabelText("Repository host"), { target: { value: "github" } });
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("github");
+
+    const backToForgejo = { features: FLAG_ON, default_git_provider: "forgejo", github_org: "neu-cs" };
+    mockUseCourse.mockReturnValue(backToForgejo);
+    rerender(
+      <ChakraProvider value={defaultSystem}>
+        <Fieldset.Root>
+          <NewAssignmentHarness course={backToForgejo} />
+        </Fieldset.Root>
+      </ChakraProvider>
+    );
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("github");
+  });
+
+  it("does not override an edited GitHub assignment when the course default is Forgejo", async () => {
+    mockUseCourse.mockReturnValue({ features: FLAG_ON, default_git_provider: "forgejo", github_org: "neu-cs" });
+    renderPicker(
+      { assignment_type: "code", git_provider: "github" },
+      { id: 9, git_provider: "github", template_repo: null }
+    );
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("github");
+    await waitFor(() => expect(screen.getByLabelText("Repository host")).not.toBeDisabled());
+    expect((screen.getByLabelText("Repository host") as HTMLSelectElement).value).toBe("github");
   });
 });

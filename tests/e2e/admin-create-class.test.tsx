@@ -262,4 +262,92 @@ test.describe("Admin Create Class workflow", () => {
       )
       .toEqual([newInstructorName, existingInstructor!.private_profile_name].sort());
   });
+
+  test("admin creates a Forgejo-only class without a GitHub organization", async ({ page }) => {
+    const runToken = crypto.randomUUID().slice(0, 8);
+    const className = `E2E Forgejo Only ${runToken}`;
+    const templatePrefix = `e2e-ignore-forgejo-only-${runToken}`;
+
+    await page.route("**/functions/v1/list-github-orgs", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({
+          status: 204,
+          headers: {
+            "access-control-allow-origin": "*",
+            "access-control-allow-headers": "*",
+            "access-control-allow-methods": "*"
+          }
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({
+          orgs: [{ login: MOCK_ORG, installationId: 42 }],
+          installUrl: MOCK_INSTALL_URL
+        })
+      });
+    });
+
+    await loginAsUser(page, adminUser!);
+    await page.goto("/admin/classes");
+    await expect(page.getByRole("heading", { name: "Class Management" })).toBeVisible();
+
+    const createTrigger = page.getByRole("button", { name: "Create Manually" });
+    const dialogTitle = page.getByText("Create New Class");
+    await expect(async () => {
+      if (!(await dialogTitle.isVisible())) {
+        await createTrigger.click();
+      }
+      await expect(dialogTitle).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 30_000 });
+
+    await page.locator("#name").fill(className);
+    await page.locator("#github_template_prefix").fill(templatePrefix);
+    await expect(page.locator("#github_org_name")).toHaveValue("");
+
+    // Enroll an existing instructor to verify enrollment works when github_org is NULL.
+    const emailInputs = page.getByPlaceholder("instructor@northeastern.edu");
+    const nameInputs = page.getByPlaceholder("Full name");
+    await emailInputs.nth(0).fill(existingInstructor!.email);
+    await emailInputs.nth(0).blur();
+    await expect(page.getByText("Matched existing user")).toBeVisible();
+    await expect(nameInputs.nth(0)).toHaveValue(existingInstructor!.private_profile_name);
+
+    await page.getByRole("button", { name: "Create Class" }).click();
+
+    let newClassId: number | undefined;
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("classes")
+            .select("id, github_org, slug")
+            .eq("name", className)
+            .maybeSingle();
+          newClassId = data?.id;
+          return data ? { github_org: data.github_org, slug: data.slug } : null;
+        },
+        { timeout: 30_000 }
+      )
+      .toEqual({ github_org: null, slug: templatePrefix });
+
+    expect(newClassId).toBeTruthy();
+
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("user_roles")
+            .select("role, profiles!private_profile_id(name)")
+            .eq("class_id", newClassId!)
+            .eq("role", "instructor");
+          return (data ?? []).map((r) => r.profiles?.name);
+        },
+        { timeout: 60_000 }
+      )
+      .toEqual([existingInstructor!.private_profile_name]);
+  });
 });
