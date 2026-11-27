@@ -14,7 +14,7 @@ import type {
 } from "../types.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { classSummary, resolveAssignment, resolveClass } from "../utils/resolvers.ts";
-import { assertUserCanAccessClass } from "../utils/auth.ts";
+import { assertUserCanAccessClass, assertUserHasClassCapability, userHasClassCapability } from "../utils/auth.ts";
 import { pageAll } from "../utils/paging.ts";
 import { decodeBase64Strict } from "../utils/base64.ts";
 import { gradingTotalForStudent } from "../utils/gradingTotals.ts";
@@ -135,6 +135,53 @@ async function assertSubmissionsBelongToAssignment(
     );
   }
   return ownedIds;
+}
+
+/**
+ * Refuses a comment import or sync that touches a released grade unless the caller holds
+ * release_grades (#1010).
+ *
+ * An import adds comments to each named submission's grading review, and a sync soft-deletes
+ * rubric-check comments on the named submissions, so on a released review either one changes a
+ * grade students already see. The RPC runs on the service role and doesn't look at `released`, so
+ * this is the check that matches the comment policies. It counts a submission as released when
+ * any of its reviews is, since a sync can reach comments on more than the grading review.
+ */
+async function assertReleasedGradesWritable(
+  supabase: ReturnType<typeof getAdminClient>,
+  userId: string,
+  classId: number,
+  submissionIds: number[]
+): Promise<void> {
+  const unique = [...new Set(submissionIds)];
+  if (unique.length === 0) return;
+
+  const released = new Set<number>();
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
+    const rows = await pageAll<{ submission_id: number }>(
+      () =>
+        supabase
+          .from("submission_reviews")
+          .select("submission_id")
+          .eq("class_id", classId)
+          .eq("released", true)
+          .in("submission_id", batch)
+          .order("id", { ascending: true }),
+      "Failed to check for released grades"
+    );
+    rows.forEach((r) => released.add(r.submission_id));
+  }
+  if (released.size === 0) return;
+  if (await userHasClassCapability(userId, classId, "release_grades")) return;
+
+  const ids = [...released].sort((a, b) => a - b);
+  throw new CLICommandError(
+    "Changing a released grade needs the release_grades capability in the class. These submissions have released grades: " +
+      ids.slice(0, 20).join(", ") +
+      (ids.length > 20 ? ` (and ${ids.length - 20} more)` : ""),
+    403
+  );
 }
 
 /**
@@ -308,7 +355,7 @@ async function runCommentsImportOrSync(ctx: MCPAuthContext, params: Record<strin
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
 
-  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+  await assertUserHasClassCapability(ctx.userId, classData.id, "grade_submissions");
 
   const dryRun = p.dry_run === true;
   const payload = p.payload;
@@ -322,6 +369,13 @@ async function runCommentsImportOrSync(ctx: MCPAuthContext, params: Record<strin
   // `success: true`; the insert path is protected only because the RPC rejects
   // out-of-class rows individually, which the deletes do not do.
   await assertSubmissionsBelongToAssignment(supabase, classData.id, assignment.id, syncIds, "sync_submission_ids");
+
+  await assertReleasedGradesWritable(supabase, ctx.userId, classData.id, [
+    ...syncIds,
+    ...(payload.file_comments ?? []).map((row) => row.submission_id),
+    ...(payload.artifact_comments ?? []).map((row) => row.submission_id),
+    ...(payload.submission_comments ?? []).map((row) => row.submission_id)
+  ]);
 
   const queue = buildWorkQueue(payload);
 
@@ -438,7 +492,7 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, p.class);
   const assignment = await resolveAssignment(supabase, classData.id, p.assignment);
-  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+  await assertUserHasClassCapability(ctx.userId, classData.id, "grade_submissions");
 
   if (p.author_profile_id && p.rubric_part_id) {
     throw new CLICommandError("Specify only one of author_profile_id or rubric_part_id");

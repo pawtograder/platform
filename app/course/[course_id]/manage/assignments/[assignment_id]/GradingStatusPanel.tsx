@@ -19,7 +19,7 @@ import { toaster } from "@/components/ui/toaster";
 import * as Sentry from "@sentry/nextjs";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useRubric } from "@/hooks/useAssignment";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, CardBody, CardRoot, HStack, Popover, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
@@ -128,9 +128,10 @@ export default function GradingStatusPanel({
   const counts = useMemo(() => computeGradingCounts(rows), [rows]);
   const router = useRouter();
   const { course_id } = useParams();
-  // Releasing/unreleasing grades is an instructor-only action; graders may view
-  // progress and finalize (mark complete), but not publish grades to students.
-  const isInstructor = useIsInstructor();
+  // #1010: releasing and unreleasing follow release_grades, and Finalize Grading (marking reviews
+  // complete) follows grade_submissions, the same checks the database makes.
+  const canReleaseGrades = useCapability("release_grades");
+  const canGradeSubmissions = useCapability("grade_submissions");
   const [isReleaseIncompleteWarningOpen, setIsReleaseIncompleteWarningOpen] = useState(false);
   const [isContinuingReleaseAll, setIsContinuingReleaseAll] = useState(false);
   // Release all only touches the grading review, so code walks need their own bulk action. Read the
@@ -220,13 +221,15 @@ export default function GradingStatusPanel({
             )}
           </HStack>
           <HStack gap={2} wrap="wrap">
-            <FinalizeGradingButton
-              assignmentId={assignmentId}
-              supabase={supabase}
-              onCompleted={onChanged}
-              tooltip="Mark every eligible submission review complete — those whose required rubric checks are all applied. This does not release grades to students."
-            />
-            {isInstructor && (
+            {canGradeSubmissions && (
+              <FinalizeGradingButton
+                assignmentId={assignmentId}
+                supabase={supabase}
+                onCompleted={onChanged}
+                tooltip="Mark every eligible submission review complete — those whose required rubric checks are all applied. This does not release grades to students."
+              />
+            )}
+            {canReleaseGrades && (
               <>
                 <ConfirmButton
                   label="Release all"

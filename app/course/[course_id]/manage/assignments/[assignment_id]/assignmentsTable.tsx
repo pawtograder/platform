@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useAssignmentGroups, useRubric } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCapability } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
   useClassSections,
@@ -403,7 +403,8 @@ export default function AssignmentsTable({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { role: classRole } = useClassProfiles();
+  // #1010: releasing and unreleasing selected submissions follows release_grades.
+  const canReleaseGrades = useCapability("release_grades");
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
 
@@ -938,7 +939,6 @@ export default function AssignmentsTable({
       sorting: [{ id: "name", desc: false }]
     }
   });
-  const isInstructor = classRole.role === "instructor";
 
   // The dashboard view emits one row per group member, so a single group
   // submission appears as multiple selected rows that share one
@@ -1042,7 +1042,7 @@ export default function AssignmentsTable({
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%" gap={0}>
-        {isInstructor &&
+        {canReleaseGrades &&
           (selectedCount === 0 ? (
             <Box w="100%" mb={2}>
               <Text fontSize="sm" color="fg.muted">

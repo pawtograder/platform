@@ -112,18 +112,23 @@ export async function assertUserIsClassInstructor(
 }
 
 /**
- * Throws 403 unless `userId` holds `capability` in the class (#1010, docs/capabilities.md).
+ * Whether `userId` holds `capability` in the class (#1010, docs/capabilities.md).
  *
  * The edge-function helper assertUserHasCapabilityOrServiceRole needs the caller's Authorization
  * header, which a CLI request doesn't have, so this asks the same question as the caller:
  * user_class_ids_with_capability() on a client minted for `userId`, the function every policy
  * uses. The command and the database it writes to therefore give the same answer.
  */
-export async function assertUserHasClassCapability(userId: string, classId: number, capability: string): Promise<void> {
+export async function userHasClassCapability(userId: string, classId: number, capability: string): Promise<boolean> {
   const userClient = await createAuthenticatedSupabaseClient(userId);
   const { data, error } = await userClient.rpc("user_class_ids_with_capability", { p_capability: capability });
   if (error) throw new CLICommandError(`Failed to verify class access: ${error.message}`, 500);
-  if (!(data ?? []).includes(classId)) {
+  return (data ?? []).includes(classId);
+}
+
+/** Throws 403 unless `userId` holds `capability` in the class. See {@link userHasClassCapability}. */
+export async function assertUserHasClassCapability(userId: string, classId: number, capability: string): Promise<void> {
+  if (!(await userHasClassCapability(userId, classId, capability))) {
     throw new CLICommandError(`This command requires the ${capability} capability in the class`, 403);
   }
 }

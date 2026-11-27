@@ -8,7 +8,9 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { Alert } from "@/components/ui/alert";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useGradingPermissions } from "@/hooks/useGradingPermissions";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMeta,
@@ -22,7 +24,10 @@ import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } fr
 import type { SubmissionWithGraderResultsAndFiles } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import rehypeSourcePositions from "@/lib/rehype-source-positions";
-import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import {
+  GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE,
+  getStudentFacingErrorMessage
+} from "@/lib/studentFacingErrorMessages";
 import {
   Box,
   Badge,
@@ -309,8 +314,7 @@ function MarkdownLineActionPopup({
   const [selectOpen, setSelectOpen] = useState(true);
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
-  const isTaOnly = useIsGrader();
+  const { isLockedByRelease } = useGradingPermissions();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
@@ -476,6 +480,34 @@ function MarkdownLineActionPopup({
   if (!visible) return null;
   const adjustedTop = top + 250 > window.innerHeight && window.innerHeight > 250 ? top - 250 : top;
 
+  // Staff without release_grades can't annotate a released review (#1010): say so instead of
+  // offering checks the database would refuse.
+  if (isLockedByRelease(review?.released)) {
+    return (
+      <Box
+        zIndex={1000}
+        top={adjustedTop}
+        left={left}
+        position="fixed"
+        bg="bg.subtle"
+        w="md"
+        p={3}
+        border="1px solid"
+        borderColor="border.emphasized"
+        borderRadius="md"
+        boxShadow="lg"
+        ref={popupRef}
+      >
+        <Alert status="warning" variant="subtle" borderRadius="md" title="Grading is locked">
+          {GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE}
+        </Alert>
+        <Button size="xs" variant="ghost" mt={2} onClick={() => close()}>
+          Close
+        </Button>
+      </Box>
+    );
+  }
+
   const selectComponents: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
     GroupHeading: (props) => (
       <chakraComponents.GroupHeading {...props}>
@@ -638,8 +670,7 @@ function MarkdownLineActionPopup({
                   toaster.error({
                     title: "Error saving annotation",
                     description: getStudentFacingErrorMessage(e, {
-                      releasedReviewGraderBlocked:
-                        isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
+                      releasedReviewGraderBlocked: isLockedByRelease(review?.released)
                     })
                   });
                 }
