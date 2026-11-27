@@ -84,7 +84,24 @@ const CLEANUP_RESERVE_MS = 8_000;
 export const RESTART_CLAIM_MS = 60_000;
 const BUILD_IN_PROGRESS = new Set(["pending", "starting", "stopping", "canceling", "deleting"]);
 
-export type Caller = { userId: string; email: string; name: string | null };
+export type Caller = {
+  userId: string;
+  email: string;
+  name: string | null;
+  githubUserId?: string | null;
+  githubUsername?: string | null;
+};
+
+/**
+ * The commit email for a GitHub repository: GitHub's no-reply address for the linked account. GitHub credits a
+ * commit to whoever owns its email, and a student's school email often isn't on their GitHub account. GitHub
+ * also rejects pushes that expose a private email when the student has turned that protection on.
+ */
+export function githubCommitEmail(caller: Caller): string {
+  return caller.githubUserId && caller.githubUsername
+    ? `${caller.githubUserId}+${caller.githubUsername}@users.noreply.github.com`
+    : caller.email;
+}
 
 export type RepositoryRow = {
   id: number;
@@ -479,8 +496,8 @@ async function deliverGitCredentials(
 }
 
 /**
- * GitHub's token comes from the agent's GIT_ASKPASS, so only the commit email has to be delivered. It is
- * required, not cleanup: without it the startup script falls back to the owner's placeholder email (#1222).
+ * GitHub's token comes from the agent's GIT_ASKPASS, so only the commit email (githubCommitEmail) has to be
+ * delivered. It is required, not cleanup: without it the startup script falls back to the owner's placeholder email (#1222).
  */
 async function deliverCommitEmail(
   deps: Deps,
@@ -498,7 +515,7 @@ async function deliverCommitEmail(
   try {
     await writeOwnSecret(
       { ...coder, token: key },
-      { name: GIT_EMAIL_SECRET, value: `${caller.email}\n`, file_path: GIT_EMAIL_FILE }
+      { name: GIT_EMAIL_SECRET, value: `${githubCommitEmail(caller)}\n`, file_path: GIT_EMAIL_FILE }
     );
   } finally {
     await cleanUp("Coder API key delete", cleanupSignal, () => deleteUserKey(cleanupCoder, coderUserId, keyId));

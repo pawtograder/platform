@@ -2349,6 +2349,20 @@ Deno.test("github: a repository on GitHub clones from github.com and mints no Fo
   );
 });
 
+Deno.test("github: a linked GitHub account commits as its no-reply address", async () => {
+  const { coder, deps } = setup();
+  githubProvider(coder);
+  const linked: Caller = { ...ALEX, githubUserId: "583231", githubUsername: "alexkim" };
+  await openWorkspace(deps, linked, { assignment_id: 42 });
+  signInAndLink(coder, linked);
+  const res = await openWorkspace(deps, linked, { assignment_id: 42 });
+  assertEquals(res.status, "starting");
+  assertEquals(coder.secrets[res.coder_user_id!].git_email, {
+    value: "583231+alexkim@users.noreply.github.com\n",
+    file_path: "/home/coder/.git-email"
+  });
+});
+
 Deno.test("github: a commit email key that couldn't be deleted doesn't block the next open's", async () => {
   const { coder, deps } = setup();
   githubProvider(coder);

@@ -289,10 +289,10 @@ export async function workspaceRequestContext(
   // Either may be missing: a deployment with Coder and only GitHub, or only Forgejo, refuses just the other.
   const forgejo = forgejoConfig();
   const admin = budgetClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, budget);
-  const name = check(
-    await admin.from("users").select("name").eq("user_id", data.user.id).maybeSingle(),
+  const user = check(
+    await admin.from("users").select("name, github_user_id, github_username").eq("user_id", data.user.id).maybeSingle(),
     "User lookup"
-  )?.name;
+  );
   return {
     deps: {
       db: supabaseWorkspaceDb(admin),
@@ -301,7 +301,13 @@ export async function workspaceRequestContext(
       github: githubConfig(),
       budget
     },
-    caller: { userId: data.user.id, email: data.user.email, name: name ?? null },
+    caller: {
+      userId: data.user.id,
+      email: data.user.email,
+      name: user?.name ?? null,
+      githubUserId: user?.github_user_id ?? null,
+      githubUsername: user?.github_username ?? null
+    },
     request
   };
 }
