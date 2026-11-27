@@ -6,7 +6,7 @@
  *
  * The batch enqueue already did this; the single-row enqueue (called by the submission and review
  * triggers) only queued another message. See
- * supabase/migrations/20261125120000_gradebook_enqueue_inflight_bumps_version.sql.
+ * supabase/migrations/20261125120200_gradebook_enqueue_inflight_bumps_version.sql.
  */
 import { expect, test } from "@playwright/test";
 import { createClass, createUserInClass, supabase, type TestingUser } from "./TestingUtils";
