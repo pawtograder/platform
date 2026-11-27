@@ -140,6 +140,8 @@ class FakeCoder {
   failSecretWrite = false;
   failKeyDelete = false;
   noProviders = false;
+  /** Coder rejects CODER_API_TOKEN: the owner token expired past CODER_MAX_ADMIN_TOKEN_LIFETIME, or was revoked. */
+  failOwnerAuth = false;
 
   constructor(private clock: Clock) {}
 
@@ -263,6 +265,7 @@ class FakeCoder {
       }
       throw new Error(`fake Coder: no student-key route for ${method} ${path}`);
     }
+    if (this.failOwnerAuth) return json(401, { message: "API key expired." });
     if ((m = path.match(/^\/users\/([^/]+)\/secrets$/)) && method === "POST") {
       return json(403, { message: "Forbidden." });
     }
@@ -618,7 +621,7 @@ function setup() {
   const reported: unknown[] = [];
   const deps: Deps = {
     db,
-    coder: { url: CODER_URL, token: "owner-token", fetch: coder.fetch },
+    coder: { url: CODER_URL, token: "owner-token", ownerToken: "owner-token", fetch: coder.fetch },
     forgejo: { url: FORGEJO_URL, authorization: "Basic eA==", authSourceId: 1, fetch: forgejo.fetch },
     github: { url: "https://github.com", externalAuthId: "github" },
     report: (e) => reported.push(e),
@@ -679,6 +682,18 @@ Deno.test(
     assertEquals(coder.posts(/^\/users$/).length, 1, "no second create");
     assertEquals(coder.users.length, 2);
     assertEquals(coder.workspaces.length, 0, "no workspace before the student has signed in and linked Forgejo");
+  }
+);
+
+Deno.test(
+  "an expired CODER_API_TOKEN: a 401 from Coder is an operator error naming the token, not a generic 500",
+  async () => {
+    const { coder, deps } = setup();
+    coder.failOwnerAuth = true;
+    const err = await assertRejects(() => openWorkspace(deps, ALEX, { assignment_id: 41 }), UserVisibleError);
+    assertEquals(err.status, 502);
+    assert(err.details.includes("CODER_API_TOKEN"), err.details);
+    assert(err.details.includes("coder tokens create --lifetime"), err.details);
   }
 );
 

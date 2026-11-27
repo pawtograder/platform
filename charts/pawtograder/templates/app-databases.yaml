@@ -22,6 +22,10 @@ data:
   CODER_TELEMETRY_ENABLE: "false"
   CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE: "false"
   CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS: "false"
+  # Caps the lifetime an admin may ask for when minting a token; the edge functions' CODER_API_TOKEN
+  # is one such token. The default is 168h, so a token minted without a longer cap expires in a week
+  # and every "Open in Coder" then fails (#1357 follow-up).
+  CODER_MAX_ADMIN_TOKEN_LIFETIME: {{ .Values.coder.maxAdminTokenLifetime | quote }}
   {{- if .Values.coder.oidc.enabled }}
   CODER_OIDC_ISSUER_URL: "{{ include "pawtograder.api.url" . }}/auth/v1"
   CODER_OIDC_SCOPES: "openid,profile,email"
