@@ -50,7 +50,7 @@ import {
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
   useAssignmentGroupWithMembers,
@@ -178,7 +178,9 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
-  const isInstructor = useIsInstructor();
+  // #1010: editing score tweaks follows release_grades, so a TA who holds it can fix a released
+  // grade (#1353). Instructors hold it, so they keep the editor; default graders still don't see it.
+  const canEditTweaks = useCapability("release_grades");
   const { private_profile_id } = useClassProfiles();
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -360,7 +362,7 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
   const hasSharedTweak = sharedTweakNum !== 0;
   const sharedNote = review.tweak_note?.trim();
 
-  if (!isInstructor) {
+  if (!canEditTweaks) {
     if (showSplitStudentTotals && groupMemberIds.length > 0) {
       const myId = private_profile_id;
       const myT = myId ? perT[myId] : undefined;
@@ -1681,13 +1683,14 @@ function ReviewStats() {
   const mostRecentGrader = allRubricInstances.find(
     (instance) => Date.parse(instance.created_at) === mostRecentCreationOrEdit
   )?.author;
-  const isInstructor = useIsInstructor();
+  // #1010: releasing and unreleasing a review follows release_grades.
+  const canReleaseGrades = useCapability("release_grades");
   if (!review) {
     return <Skeleton height="20px" />;
   }
   return (
     <DataListRoot orientation="horizontal">
-      {isInstructor && (
+      {canReleaseGrades && (
         <DataListItem
           label="Released to student"
           value={
@@ -1697,7 +1700,7 @@ function ReviewStats() {
           }
         />
       )}
-      {!isInstructor && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
+      {!canReleaseGrades && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
       {completed_by && <DataListItem label="Completed by" value={<PersonName size="2xs" uid={completed_by} />} />}
       {completed_at && (
         <DataListItem
@@ -1873,19 +1876,22 @@ function ReviewActions() {
     throw new Error("No grading review ID found");
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
-  const isInstructor = useIsInstructor();
+  // #1010: completing a review follows grade_submissions; release_grades (instructors) may also
+  // complete one whose rubric parts are assigned to others, as instructors could before.
+  const canReleaseGrades = useCapability("release_grades");
+  const canGradeSubmissions = useCapability("grade_submissions");
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
-  const isInstructorOrGrader = useIsGraderOrInstructor();
   // One completion control at a time. While the viewer is working an incomplete review assignment,
   // its "Complete Review Assignment" button in the toolbar is the control (completing the last
   // assignment completes the submission review in the database). This sidebar button is for staff
   // grading without an assignment, or after "View + Grade Full Rubric".
   const workingAssignedReview = Boolean(activeReviewAssignment && !activeReviewAssignment.completed_at);
   const showCompletionActions =
-    !workingAssignedReview && (isInstructor || (assignedRubricParts.length == 0 && isInstructorOrGrader));
+    !workingAssignedReview &&
+    (canReleaseGrades || (assignedRubricParts.length == 0 && (canGradeSubmissions || canReleaseGrades)));
   if (!review) {
     return <Skeleton height="20px" />;
   }

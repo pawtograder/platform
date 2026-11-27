@@ -45,7 +45,8 @@ import {
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { artifactCheckMessage } from "@/lib/artifactCheckMessage";
-import { useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useGradingPermissions } from "@/hooks/useGradingPermissions";
 import { generateSimpleDiff } from "@/lib/diffUtils";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
 import {
@@ -517,8 +518,8 @@ function ArtifactCommentsForm({
   const finalSubmissionReviewId = reviewContext?.id ?? effectiveSubmissionReviewId;
   const releasedForWrite = finalSubmissionReviewId === reviewContext?.id ? Boolean(reviewContext?.released) : true;
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
-  const isTaOnly = useIsGrader();
+  const { isLockedByRelease } = useGradingPermissions();
+  const lockedByRelease = isLockedByRelease(releasedForWrite);
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
   const submissionController = useSubmissionController();
 
@@ -542,7 +543,7 @@ function ArtifactCommentsForm({
         toaster.error({
           title: "Could not save comment",
           description: getStudentFacingErrorMessage(error, {
-            releasedReviewGraderBlocked: isGraderOrInstructor && !isInstructor && isTaOnly && releasedForWrite
+            releasedReviewGraderBlocked: lockedByRelease
           })
         });
         throw error;
@@ -555,11 +556,14 @@ function ArtifactCommentsForm({
       releasedForWrite,
       eventuallyVisible,
       finalSubmissionReviewId,
-      isGraderOrInstructor,
-      isInstructor,
-      isTaOnly
+      lockedByRelease
     ]
   );
+
+  // Staff without release_grades can't comment on a released review (#1010).
+  if (lockedByRelease) {
+    return null;
+  }
 
   return (
     <Box w="100%">
@@ -605,8 +609,8 @@ function ArtifactCheckPopover({
   const reviewContext = useSubmissionReviewOrGradingReview(effectiveSubmissionReviewId);
   const finalSubmissionReviewId = reviewContext?.id ?? effectiveSubmissionReviewId;
   const releasedForWrite = finalSubmissionReviewId === reviewContext?.id ? Boolean(reviewContext?.released) : true;
-  const isInstructor = useIsInstructor();
-  const isTaOnly = useIsGrader();
+  const { isLockedByRelease } = useGradingPermissions();
+  const lockedByRelease = isLockedByRelease(releasedForWrite);
   const rubric = useRubricWithParts(reviewContext?.rubric_id);
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
@@ -739,6 +743,11 @@ function ArtifactCheckPopover({
         {message}
       </Text>
     ) : null;
+  }
+
+  // Staff without release_grades can't annotate a released review (#1010).
+  if (lockedByRelease) {
+    return null;
   }
 
   const selectComponentsConfig: SelectComponentsConfig<
@@ -889,8 +898,7 @@ function ArtifactCheckPopover({
                       toaster.error({
                         title: "Could not save annotation",
                         description: getStudentFacingErrorMessage(error, {
-                          releasedReviewGraderBlocked:
-                            isGraderOrInstructor && !isInstructor && isTaOnly && releasedForWrite
+                          releasedReviewGraderBlocked: lockedByRelease
                         })
                       });
                     }

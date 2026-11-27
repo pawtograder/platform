@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`, `20261126150200_grading_and_release_by_capability.sql`, `20261126150300_regrades_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -122,7 +122,12 @@ Write one migration that:
    that met it, so no one gains access the old rule denied.
 
 3. Updates `public.seed_default_class_roles()` if a default role other than instructor should get
-   it in new classes too. It sets up the default roles when a class is created.
+   it in new classes too. It sets up the default roles when a class is created. For the grader role,
+   every #1010 migration that redefines it writes the same list: `moderate_discussion`,
+   `grade_submissions`, `handle_regrades`, `grant_extensions`, `help_students`, `manage_flashcards`
+   and `run_polls`. The list is joined to `public.capabilities`, so a name from a PR that hasn't
+   merged is skipped until its capability exists, and whichever migration runs last keeps every
+   other PR's grants. A capability added to the list later goes into every open PR's copy.
 
 Only migrations add capabilities. The app can't write `capabilities`, and of the default roles it can
 only change the grader role's capabilities.
@@ -157,6 +162,65 @@ Without it, a staff member can't open the gradebook page, read other students' g
 override a score or use Convert Missing to 0, and the private grades on a student's profile page are
 hidden. It is instructor-only by default, so graders on the default grader role don't have the
 gradebook until an instructor gives it to their role. Students still see their own released grades.
+
+## Grading and releasing grades
+
+Two capabilities split grading from publishing it (`20261126150200_grading_and_release_by_capability.sql`):
+
+| Capability          | Lets the holder                                                                                                                                                                                                  | Default roles                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `grade_submissions` | Apply rubric checks, add comments, edit or delete their own comments, and mark reviews complete, while the review is unreleased; use Finalize Grading                                                            | instructor, grader, and every custom role made before it existed |
+| `release_grades`    | Release and unrelease grades (one review, selected submissions, Release all, code walks), and change a released grade: edit any review and its score tweaks, and add, edit or delete any comment or rubric check | instructor                                                       |
+
+`grade_submissions` is on the default grader role, so a new custom role copies
+it, and `seed_default_class_roles()` puts it on the grader role of a new class. A Head TA who should
+fix released grades (#1353) needs `release_grades` turned on, which also gives them Release all.
+
+Both capabilities reach only reviews in the class where they are held. A comment's class must be its
+review's class, so holding `release_grades` in one class doesn't let a TA comment on another class's
+grade.
+
+The assignee rules don't need either capability: a student on a self-review, or anyone with a review
+assignment, can still write that review as before. One exception follows `isLockedByRelease`: a staff
+member without `release_grades` can't add a comment or rubric check to a released review, even one
+they are assigned to. A student's self-review isn't locked by its release.
+
+RLS can't compare a row's old and new values, so the UPDATE policy on `submission_reviews` can't tell
+a release from any other edit. A `BEFORE UPDATE OF released` trigger
+(`submission_reviews_release_needs_capability`) refuses the change for a signed-in user without
+`release_grades`. It checks only statements run as `authenticated`, so SECURITY DEFINER functions and
+the service role are not affected, while the SECURITY INVOKER release RPCs are. The score tweak works
+the same way: the tweak editor is shown only to `release_grades` holders, and
+`submission_reviews_tweak_needs_capability` refuses a change to `tweak`, `tweak_note`,
+`per_student_tweaks` or `per_student_tweak_notes` from a signed-in user without it, including a
+`grade_submissions` holder or an assignee who may write the rest of the review.
+
+Each comment also has its own `released` flag, and a student sees any released comment on their own
+submission. So `submission_comment_release_needs_capability`, a trigger on `submission_comments`,
+`submission_file_comments` and `submission_artifact_comments`, refuses `released = true` on a comment
+whose review isn't released (by insert, by update, or by moving it onto such a review) for a signed-in
+user without `release_grades`. Comments with no review, and comments on a released review, are not
+affected. It runs as the caller, so its read of the review goes through RLS. Its `search_path` is
+`public`, not empty, because the review SELECT policy a student reaches calls the older
+`authorize_for_submission_review()`, which names its tables without a schema. With an empty path a
+student would get "relation does not exist" instead of the refusal.
+
+On screen, `useGradingPermissions()` (in `hooks/useGradingPermissions.ts`) gives
+`canGradeSubmissions`, `canReleaseGrades` and `isLockedByRelease(released)`; the rubric sidebar, the
+annotation menus and popups, and the comment forms use it. `useWritableSubmissionReviews()` decides
+which reviews a staff member can write from the same two capabilities. The CLI's
+`submissions comments import` and `sync` need `grade_submissions`, and refuse submissions with a
+released review unless the caller holds `release_grades`.
+
+## Capabilities on the default grader role
+
+Most capabilities are instructor-only by default. Like `grade_submissions`, **`handle_regrades`** is
+also on the default grader role and on every custom role, because any grader could resolve a regrade
+request before it existed.
+It covers resolving a request and commenting on any request as staff. Closing an escalated request
+and editing a request's points stay instructor-only (`authorizeforclassinstructor`), so a grader
+with `handle_regrades` still can't make the final decision. Every grader and instructor of the class
+can read its regrade requests with or without the capability.
 
 ## For the UI: useCapability
 
