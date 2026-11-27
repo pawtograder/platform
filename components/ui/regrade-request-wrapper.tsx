@@ -16,7 +16,7 @@ import {
   useRubricCheck,
   useRubricCriteria
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useCapability, useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useProfileRole } from "@/hooks/useCourseController";
 import {
   useSubmission,
@@ -1164,6 +1164,9 @@ export default function RegradeRequestWrapper({
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
+  // Resolving and commenting as staff follow handle_regrades (#1010). Closing an escalated request
+  // and editing points stay instructor-only.
+  const canHandleRegrades = useCapability("handle_regrades");
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile for staff when pseudonymous grading is enabled
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -1191,8 +1194,9 @@ export default function RegradeRequestWrapper({
   const config = statusConfig[regradeRequest.status as RegradeStatus];
   const StatusIcon = config.icon;
 
-  // Show comment form for active states (opened, escalated)
-  const showCommentForm = regradeRequest.status !== "closed";
+  // Show comment form for active states (opened, escalated). Students comment on their own requests;
+  // staff need handle_regrades.
+  const showCommentForm = regradeRequest.status !== "closed" && (canHandleRegrades || !isGraderOrInstructor);
 
   const handleSubmitComment = async (commentText: string) => {
     if (!regradeRequest?.id) return;
@@ -1488,8 +1492,8 @@ export default function RegradeRequestWrapper({
                 />
               )}
 
-              {/* Resolve Button for opened status + grader/instructor */}
-              {regradeRequest.status === "opened" && isGraderOrInstructor && (
+              {/* Resolve Button for opened status + handle_regrades */}
+              {regradeRequest.status === "opened" && canHandleRegrades && (
                 <ResolveRequestPopover
                   initialPoints={regradeRequest.initial_points}
                   regradeRequestId={regradeRequest.id}

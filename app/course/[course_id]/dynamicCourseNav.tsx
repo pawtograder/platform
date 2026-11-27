@@ -218,7 +218,8 @@ const LinkItems = (courseID: number) => [
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
         name: "Due Date Extensions",
-        instructors_only: true,
+        // Shown from the capability tables (#1010): graders hold grant_extensions by default.
+        capability: "grant_extensions",
         icon: FiClock,
         target: `/course/${courseID}/manage/course/due-date-extensions`
       },

@@ -9,7 +9,9 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { Alert } from "@/components/ui/alert";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useGradingPermissions } from "@/hooks/useGradingPermissions";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMeta,
@@ -25,7 +27,10 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import {
+  GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE,
+  getStudentFacingErrorMessage
+} from "@/lib/studentFacingErrorMessages";
 import {
   RubricCheck,
   RubricCriteria,
@@ -597,8 +602,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   const [selectOpen, setSelectOpen] = useState(true);
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isInstructor = useIsInstructor();
-  const isTaOnly = useIsGrader();
+  const { isLockedByRelease } = useGradingPermissions();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -864,7 +868,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
         toaster.error({
           title: "Error saving annotation",
           description: getStudentFacingErrorMessage(e, {
-            releasedReviewGraderBlocked: isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
+            releasedReviewGraderBlocked: isLockedByRelease(review?.released)
           })
         });
       }
@@ -880,15 +884,43 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
       submission,
       authorProfileId,
       submissionController,
-      isGraderOrInstructor,
-      isInstructor,
-      isTaOnly,
+      isLockedByRelease,
       close
     ]
   );
 
   if (!visible) {
     return null;
+  }
+
+  // Staff without release_grades can't annotate a released review (#1010): say so instead of
+  // offering checks the database would refuse.
+  if (isLockedByRelease(review?.released)) {
+    return (
+      <Portal>
+        <Box
+          zIndex={1000}
+          top={top}
+          left={left}
+          position="fixed"
+          bg="bg.subtle"
+          w="md"
+          p={3}
+          border="1px solid"
+          borderColor="border.emphasized"
+          borderRadius="md"
+          boxShadow="lg"
+          data-annotation-popup=""
+        >
+          <Alert status="warning" variant="subtle" borderRadius="md" title="Grading is locked">
+            {GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE}
+          </Alert>
+          <Button size="xs" variant="ghost" mt={2} onClick={() => close()}>
+            Close
+          </Button>
+        </Box>
+      </Portal>
+    );
   }
   //Adjust top so that it is less likely to end up off of the screen (don't mutate the prop).
   let adjustedTop = top;
