@@ -15,6 +15,10 @@
 -- No later migration redefines this function (last body: 20260327000000_fix_gradebook_noop_updates;
 -- 20261015120000_lock_down_security_definer_functions only changes grants, which CREATE OR REPLACE
 -- keeps).
+--
+-- Merged as 20261125120000, which #1432's rubric_check_delete_workflow had taken four minutes
+-- earlier; the duplicate version stopped every migration run, and staging applied only #1432's.
+-- Renumbered to 20261125120200. It and 20261125120100 have not run anywhere shared.
 
 CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation(
   p_class_id bigint,
