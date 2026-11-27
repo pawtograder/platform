@@ -1479,7 +1479,8 @@ async function getDiscussionThread(
     topic?.assignment_id && thread.author
       ? getLatestSubmissionForStudent(supabase, thread.author, topic.assignment_id, classId, true)
       : Promise.resolve(null),
-    includeReplies && thread.children_count > 0
+    // Not gated on children_count: it leaves out private replies that staff read here (#1010).
+    includeReplies
       ? supabase
           .from("discussion_threads")
           .select("id, body, created_at, author")

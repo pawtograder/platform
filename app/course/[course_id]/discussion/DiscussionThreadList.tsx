@@ -6,6 +6,7 @@ import Markdown from "@/components/ui/markdown";
 import { MenuContent, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { unreadDiscussionReplyCount } from "@/lib/discussionReplyCounts";
 import {
   useAssignments,
   useDiscussionThreadReadStatus,
@@ -85,9 +86,11 @@ export const DiscussionThreadTeaser = memo((props: Props) => {
 
   const { readStatus } = useDiscussionThreadReadStatus(props.thread_id);
   const childrenReadStatuses = useRootDiscussionThreadReadStatuses(props.thread_id);
-  const numReadDescendants = useMemo(() => {
-    return childrenReadStatuses?.filter((status) => status.read_at != null).length ?? 0;
-  }, [childrenReadStatuses]);
+  // Unread marks exist only for replies the viewer can read (#1010).
+  const unreadReplies = useMemo(
+    () => unreadDiscussionReplyCount(props.thread_id, childrenReadStatuses),
+    [props.thread_id, childrenReadStatuses]
+  );
   const isUnread = readStatus === null || readStatus?.read_at === null;
   return (
     <Box position="relative" width={props.width || "100%"}>
@@ -149,11 +152,7 @@ export const DiscussionThreadTeaser = memo((props: Props) => {
                     </Text>
                   </HStack>
                 )}
-                {numReadDescendants < (thread?.children_count ?? 0) && (
-                  <Badge colorPalette="blue">
-                    {Math.max(0, (thread?.children_count ?? 0) - numReadDescendants)} new
-                  </Badge>
-                )}
+                {unreadReplies > 0 && <Badge colorPalette="blue">{unreadReplies} new</Badge>}
                 <Spacer />
                 <Text
                   fontSize="xs"

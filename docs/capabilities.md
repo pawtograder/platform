@@ -1,6 +1,6 @@
 # Capabilities and class roles
 
-Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`
+Status: **In progress** (#1010) · Migrations: `20261027120000_class_roles_and_capabilities.sql`, `20261030120000_protect_class_roles.sql`, `20261106120000_role_capabilities_broadcast.sql`, `20261106140000_assignments_save_by_capability.sql`, `20261108120000_review_assignments_by_capability.sql`, `20261119120000_custom_roles_copy_grader_role.sql`, `20261121160200_repository_status_by_capability.sql`, `20261122110000_gradebook_by_capability.sql`, `20261122110100_gradebook_view_by_capability.sql`, `20261122210300_roster_by_capability.sql`, `20261122210400_class_sections_rename_by_capability.sql`, `20261122210500_enrollments_by_capability.sql`, `20261122210600_groups_by_capability.sql`, `20261123150300_rubrics_by_capability.sql`, `20261123160000_announcements_by_capability.sql`, `20261124130000_flashcards_manage_by_capability.sql`, `20261124130100_surveys_polls_by_capability.sql`, `20261124150500_discussion_by_capability.sql`
 
 A **capability** is one action, such as `manage_review_assignments`. A **class role** is a bundle
 of capabilities in one class. Every class has four default roles (instructor, grader, student,
@@ -285,3 +285,95 @@ on the default instructor role only.
 - **Instructor-only for now:** creating invitations (the auto-accept trigger can re-enable an
   existing grader or instructor), Edit role, Edit profile, CSV import, Canvas/SIS/LTI sync and admin
   import. Tags are unchanged (any staff).
+
+## Discussion: moderate_discussion
+
+`moderate_discussion` covers moderating the discussion board: pinning, editing other people's posts
+and replies, marking an answer, marking a duplicate, moving a post to another topic, revealing or
+hiding a poster, and changing who can see a thread. Every grader could do these before, so it is on
+the default instructor role, the default grader role and every custom role; an instructor can take
+it off a role.
+
+- The `discussion_threads` staff UPDATE policy and `set_discussion_thread_topic`,
+  `mark_discussion_thread_duplicate`, `toggle_discussion_thread_author_anonymity` and the staff part
+  of `set_discussion_thread_visibility` check it. Authors still edit their own posts and set their
+  own thread's visibility.
+- The trigger `discussion_threads_guard_moderation` covers what the author rule would otherwise
+  allow: only a moderator can pin or unpin, change a post's topic, or create a pinned post; no new
+  post can start with an answer; only the question's author or a moderator marks an answer, which
+  must be a reply in the same thread. For everyone signed in, a post's topic must be in its class,
+  and its author can only switch between the same person's named and anonymous profile.
+- Moving and visibility, for everyone signed in, moderators included. Signed-in users have no UPDATE
+  privilege on `root`, `parent`, `class_id`, `instructors_only` or `draft`; only the database's own
+  functions (which run as their owner) change them:
+  - a post moves to another thread only through `mark_discussion_thread_duplicate`, which merges only
+    public threads, and never to another class;
+  - a post's visibility changes only through `set_discussion_thread_visibility` on its thread's root.
+    A reply's visibility is set when it is posted, and a reply in a private thread is always private.
+    Making a thread private hides its public replies and marks them `hidden_with_thread`; making it
+    public again shows only those, so a reply that was private before stays private.
+  - Locks: a new reply, a visibility change, a merge and a topic move each lock the thread's question
+    row first (a merge locks both questions, in id order), so they run one after the other. A reply
+    can't land while its thread is being made private and stay public, and two clicks on the
+    visibility setting can't cross. The migration sets `lock_timeout` to 10 seconds.
+- Reading a private post: staff, its own author and, when the thread's question is private, the
+  question's author, only for the replies private with the thread (`hidden_with_thread`,
+  `authorize_for_private_discussion_thread()`). Before, anyone with a post in the thread could read
+  every private post in it, which a merge could widen. `discussion_private_post_readers()` lists the
+  same readers for what the database sends on someone's behalf (reply notifications, unread marks,
+  the email digest through `discussion_threads_readable_by()`), so change it with the SELECT policy.
+  Realtime follows the same rule: a private row goes to the thread's channel
+  (`discussion_thread:<root>`) as its id only, and each viewer's TableController re-reads it under
+  the read rule, so it only reaches people who may read it; a question made private sends its id to
+  the students' channel, so their lists drop it. Staff get every row in full on the staff channel.
+- Counts: `children_count` counts the replies every reader of the question can read (public ones, or
+  in a private thread the ones private with it), so it tells nobody about replies they can't read;
+  staff see private replies on the thread page. One recount per statement keeps it
+  (`recount_discussion_thread_children()`). "N new" counts the viewer's unread marks, and marks of
+  people who can't read a post are removed (`prune_discussion_thread_read_status()`), including the
+  ones made before this migration.
+- The same migration closes older gaps on discussion posts, which aren't capability checks:
+  - Mark Duplicate merges only public threads (its list offers only those), keeps a private reply
+    private, and has the reply-count trigger recount only the two threads it changed;
+  - column privileges keep `created_at`, `likes_count`, `children_count`, `ordinal`, the
+    `duplicate_*` fields and `hidden_with_thread` to the database, and the guard sets
+    `root_class_id` and `edited_at`;
+  - a like goes only on a post the user can see in their class, is made with their named profile,
+    can't go on their own post, and can't be moved;
+  - a turned-on watch must be on a thread the user can see; reply notifications go only to
+    watchers enrolled in the class, and a private reply only to the watchers who can read it;
+    new-post notifications skip disabled enrollments; a private post's unread rows go only to the
+    people who can read it, and the email digest checks each item's post
+    (`discussion_digest_items.comment_id`);
+  - Discord: a private post isn't queued for the class's channel, the hourly stats update skips
+    private threads, and the Discord worker re-reads the thread before sending or updating a
+    message and drops it unless the thread is still a public question. When a thread that was
+    posted is made private, its Discord message is deleted (`delete_message`, queued by
+    `queue_discussion_discord_deletes()`). The tracking row stays until the worker has deleted the
+    message, and the hourly stats job calls the same function, so a delete that failed or was
+    dead-lettered is queued again; a delete keeps the message if it is still the thread's own and the
+    thread is public again. When a thread is made public it is posted; when its subject, text or shown author changes, the message is updated in
+    the channel it is in (a topic move doesn't move it). After a send, the worker
+    (`settleDiscussionThreadSend`) deletes its message if another send for the thread got there
+    first, deletes it if the thread was made private meanwhile or the message couldn't be recorded
+    (then queues the thread again, which posts it only if it is public), queues a delete if it can't,
+    and queues an update if the thread was edited after the message was first queued (`queued_at`). Messages of threads that were already
+    private when this deployed are deleted once, 15 minutes later, so workers that don't know
+    `delete_message` are replaced first;
+  - a new reply's parent and thread must be posts the user can see in the reply's class, and its
+    root must be the parent's thread (`discussion_threads_guard_reply_target`, which runs as the
+    user so the read follows the SELECT policy);
+  - error-pin matches leave out private threads, and an error pin's thread must be in the pin's
+    class;
+  - a discussion topic can't move to another class;
+  - `discussion_thread_watcher_cache` (which showed who watches each thread) and
+    `discussion_thread_ordinal_counters` (unused, writable by anyone) are dropped;
+  - existing public replies in private threads were made private.
+- Not part of it: discussion topics' other rules (instructors only), error pins' other rules and AI
+  Help (staff tools), posting and follows.
+
+**The default grader role in new classes.** `seed_default_class_roles()` gives the default grader
+role every grader capability, listed by name and joined to `capabilities`, so a name that doesn't
+exist yet is skipped. When you add a capability graders hold today, add its name to that list,
+starting from the latest body of the function: each migration replaces the whole function, so an
+older copy would drop the others' names without any error.

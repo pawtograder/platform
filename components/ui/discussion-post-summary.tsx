@@ -1,7 +1,7 @@
 "use client";
 import Markdown from "@/components/ui/markdown";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsOwnProfile, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -41,6 +41,7 @@ const SUMMARY_COMPONENTS: Parameters<typeof Markdown>[0]["components"] = {
 export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThreadType | ThreadWithChildren }) {
   const { private_profile_id } = useClassProfiles();
   const isReadOnly = useIsReadOnly();
+  const isOwnPost = useIsOwnProfile(thread.author);
   const likeStatus = useDiscussionThreadLikes(thread.id);
   const { discussionThreadTeasers } = useCourseController();
   const [loading, setLoading] = useState(false);
@@ -89,6 +90,8 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
       size="sm"
       onClick={toggleLike}
       loading={loading}
+      // The database refuses a like on your own post (#1010); an old one can still be removed.
+      disabled={isOwnPost && !likeStatus}
     >
       {thread.likes_count} {likeStatus ? <Icon as={FaHeart} /> : <Icon as={FaRegHeart} />}
     </Button>

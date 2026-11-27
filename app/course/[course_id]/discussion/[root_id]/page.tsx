@@ -14,7 +14,7 @@ import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
+import { useCapability, useIsGraderOrInstructor, useIsOwnProfile, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
@@ -145,17 +145,19 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
   const errorPinModal = useModalManager<number>();
-  const { public_profile_id, private_profile_id } = useClassProfiles();
+  const isOwnPost = useIsOwnProfile(thread.author);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isReadOnly = useIsReadOnly();
   const { discussionThreadTeasers } = useCourseController();
   // In view-as the underlying hooks already neuter follow/like/reply, but the affordances
   // were still drawn in the action row. Roll the read-only state into the can-* flags so
   // the row collapses to a non-interactive set in the masquerade.
-  const canEdit =
-    !isReadOnly &&
-    (thread.author === public_profile_id || thread.author === private_profile_id || isGraderOrInstructor);
-  const canPin = !isReadOnly && isGraderOrInstructor;
+  // Moderating (editing others' posts, pinning, marking duplicates) needs moderate_discussion
+  // (#1010). Error pins and AI Help are staff tools and stay on the staff check.
+  const canModerate = useCapability("moderate_discussion");
+  const canEdit = !isReadOnly && (isOwnPost || canModerate);
+  const canPin = !isReadOnly && canModerate;
+  const canUseStaffTools = !isReadOnly && isGraderOrInstructor;
   const isRootThread = thread.root != null && thread.id === thread.root;
   const canMarkDuplicate = canPin && isRootThread && !thread.duplicate_original_subject;
 
@@ -199,7 +201,7 @@ function ThreadActions({
           </Button>
         </Tooltip>
       )}
-      {canPin && (
+      {canUseStaffTools && (
         <Tooltip content="Manage Error Pins">
           <Button
             aria-label="Manage Error Pins"
@@ -228,7 +230,7 @@ function ThreadActions({
       {/* Discord link - shown if thread has a Discord message (staff only see it) */}
       <DiscordDiscussionMessageLink threadId={thread.id} />
       {/* AI Help button for staff - component has internal tooltip */}
-      {canPin && (
+      {canUseStaffTools && (
         <AIHelpIconButton
           contextType="discussion_thread"
           resourceId={thread.id}
@@ -311,7 +313,8 @@ function DiscussionPost({ root_id }: { root_id: number }) {
 
   const [editing, setEditing] = useState(false);
   const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
-  const isGraderOrInstructor = useIsGraderOrInstructor();
+  // Poster identity and topic follow moderate_discussion (#1010).
+  const canModerate = useCapability("moderate_discussion");
   const authorProfile = useUserProfile(rootThread?.author);
   const supabase = useMemo(() => createClient(), []);
   const [isTogglingAnonymity, setIsTogglingAnonymity] = useState(false);
@@ -368,11 +371,11 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         }
       }
 
-      // Update body and edited_at (and visibility if it didn't change, to ensure consistency)
+      // Update body and edited_at. Visibility changes only through set_discussion_thread_visibility
+      // above (#1010): the database refuses instructors_only on a question from any other path.
       await discussionThreadTeasers.update(root_id, {
         body: message,
-        edited_at: new Date().toISOString(),
-        instructors_only: newInstructorsOnly
+        edited_at: new Date().toISOString()
       });
       setEditing(false);
     },
@@ -482,7 +485,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
                   <Radio value="all">Entire Class</Radio>
                 </RadioGroup.Root>
               </HStack>
-              {isGraderOrInstructor && (
+              {canModerate && (
                 <>
                   <HStack>
                     <Heading size="sm">Poster identity:</Heading>

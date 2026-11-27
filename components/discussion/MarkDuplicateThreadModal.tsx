@@ -107,7 +107,11 @@ export function MarkDuplicateThreadModal({
   const isSearching = query.trim() !== "" && query.trim().toLowerCase() !== debouncedQuery;
 
   const results = useMemo(() => {
-    const candidates = teasers.filter((t) => !t.draft && t.id !== duplicateRootId);
+    // The database merges only public threads (#1010), so a private thread gets no list.
+    const isPrivate = teasers.find((t) => t.id === duplicateRootId)?.instructors_only;
+    const candidates = isPrivate
+      ? []
+      : teasers.filter((t) => !t.draft && !t.instructors_only && t.id !== duplicateRootId);
     if (!debouncedQuery) {
       return [...candidates]
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())

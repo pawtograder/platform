@@ -1348,6 +1348,8 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           user_id: n.message.user_id as string,
           class_id: n.message.class_id as number,
           thread_id: body.root_thread_id,
+          // The post the item is about, so the digest can check that its reader may read it (#1010)
+          comment_id: body.new_comment_id ?? null,
           thread_name: body.thread_name || "Untitled",
           author_name: body.reply_author_name || "Unknown",
           teaser: body.teaser,
@@ -1446,21 +1448,26 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
             continue;
           }
 
-          // Defense in depth: filter out digest items for instructors_only threads when recipient is not staff
-          // Mirror DB trigger allowlist: only instructor and grader may see instructors_only threads
+          // Defense in depth: a recipient who isn't staff gets only the items they may read now. The
+          // database's own read rule decides (discussion_threads_readable_by, #1010): it lets a private
+          // question's author read the answers in their thread, which a "no private threads" filter
+          // dropped. An item checks the post it is about, or its thread if it was stored without one.
           const recipientRole = userRoleMap.get(`${user_id}|${class_id}`);
           let filteredDigestItems = digestItems;
           if (!["instructor", "grader"].includes(recipientRole ?? "") && digestItems.length > 0) {
-            const threadIds = [...new Set(digestItems.map((it) => it.thread_id))];
-            const { data: threads } = await adminSupabase
-              .schema("public")
-              .from("discussion_threads")
-              .select("id, instructors_only")
-              .in("id", threadIds);
-            const instructorsOnlyThreadIds = new Set(
-              (threads ?? []).filter((t) => t.instructors_only).map((t) => t.id)
-            );
-            filteredDigestItems = digestItems.filter((it) => !instructorsOnlyThreadIds.has(it.thread_id));
+            const postIds = [...new Set(digestItems.map((it) => it.comment_id ?? it.thread_id))];
+            const { data: readable, error: readableError } = await adminSupabase.rpc("discussion_threads_readable_by", {
+              p_user_id: user_id,
+              p_thread_ids: postIds
+            });
+            if (readableError) {
+              // Send nothing rather than something the reader may not read; the items wait for the next run.
+              console.error("Error checking which digest items are readable:", readableError);
+              Sentry.captureException(readableError, scope);
+              continue;
+            }
+            const readableIds = new Set((readable ?? []) as number[]);
+            filteredDigestItems = digestItems.filter((it) => readableIds.has(it.comment_id ?? it.thread_id));
           }
           if (filteredDigestItems.length === 0) {
             await adminSupabase

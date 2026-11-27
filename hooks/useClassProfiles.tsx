@@ -86,6 +86,12 @@ export function useIsInstructor() {
   return role.role === "instructor";
 }
 
+/** Whether `author` is one of the viewer's own profiles (named or anonymous) in this course. */
+export function useIsOwnProfile(author: string | null | undefined) {
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  return !!author && (author === private_profile_id || author === public_profile_id);
+}
+
 /**
  * Whether the viewer is grader or instructor in the **effective** course identity.
  * Returns `false` while an instructor is masquerading as a student.

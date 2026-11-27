@@ -6,6 +6,7 @@ import type {
   UpdateMessageArgs,
   CreateChannelArgs,
   DeleteChannelArgs,
+  DeleteMessageArgs,
   CreateRoleArgs,
   DeleteRoleArgs,
   AddMemberRoleArgs,
@@ -318,6 +319,17 @@ export async function updateMessage(
       id: data.id,
       channel_id: data.channel_id
     };
+  });
+}
+
+/**
+ * Delete a Discord message (#1010: a discussion thread made private)
+ */
+export async function deleteMessage(args: DeleteMessageArgs, scope?: Sentry.Scope): Promise<void> {
+  const channelLimiter = getChannelLimiter(args.channel_id);
+
+  await channelLimiter.schedule(async () => {
+    await discordRequest("DELETE", `/channels/${args.channel_id}/messages/${args.message_id}`, undefined, scope);
   });
 }
 

@@ -538,6 +538,7 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "discussion_digest_items.author_name": "name",
   "discussion_digest_items.body": "free_text",
   "discussion_digest_items.class_id": "none",
+  "discussion_digest_items.comment_id": "none",
   "discussion_digest_items.created_at": "none",
   "discussion_digest_items.id": "none",
   "discussion_digest_items.msg_id": "none",
@@ -557,9 +558,6 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "discussion_thread_likes.emoji": "none",
   "discussion_thread_likes.id": "none",
   "discussion_thread_likes.updated_at": "none",
-  "discussion_thread_ordinal_counters.class_id": "none",
-  "discussion_thread_ordinal_counters.next_ordinal": "none",
-  "discussion_thread_ordinal_counters.updated_at": "none",
   "discussion_thread_read_status.created_at": "none",
   "discussion_thread_read_status.discussion_thread_id": "none",
   "discussion_thread_read_status.discussion_thread_root_id": "none",
@@ -567,10 +565,6 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "discussion_thread_read_status.read_at": "none",
   "discussion_thread_read_status.updated_at": "none",
   "discussion_thread_read_status.user_id": "none",
-  "discussion_thread_watcher_cache.discussion_thread_root_id": "none",
-  "discussion_thread_watcher_cache.exists": "none",
-  "discussion_thread_watcher_cache.updated_at": "none",
-  "discussion_thread_watcher_cache.user_id": "none",
   "discussion_thread_watchers.class_id": "none",
   "discussion_thread_watchers.created_at": "none",
   "discussion_thread_watchers.discussion_thread_root_id": "none",
@@ -590,6 +584,7 @@ export const COLUMNS: Readonly<Record<string, PiiKind>> = {
   "discussion_threads.duplicate_marked_by_user_id": "none",
   "discussion_threads.duplicate_original_subject": "free_text",
   "discussion_threads.edited_at": "none",
+  "discussion_threads.hidden_with_thread": "none",
   "discussion_threads.id": "none",
   "discussion_threads.instructors_only": "none",
   "discussion_threads.is_question": "none",
@@ -2523,6 +2518,9 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   delete_system_notifications_by_campaign: "none",
   disconnect_discord_guild: { "$[*].class_id": "none", "$[*].previous_guild_id": "none" },
   discord_student_join_enabled: "none",
+  // User ids and thread ids.
+  discussion_private_post_readers: "none",
+  discussion_threads_readable_by: "none",
   dual_active_invariants_version: "none",
   enqueue_autograder_reruns: {
     $: "none",
@@ -3073,6 +3071,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   // Returns a status word: "promoted", "superseded" or "missing".
   promote_push_direct_submission: "none",
   promote_whatif_grader_result: "none",
+  prune_discussion_thread_read_status: "none",
   // UNCERTAIN: errors[].group_name is a user-chosen group name (classified free_text); errors[].error is SQLERRM, which can echo the group name or other values
   publish_assignment_group_changes: {
     $: "none",
@@ -3081,6 +3080,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   },
   // Returns the submitter's force-push promotion counter.
   push_direct_promotion_version: "none",
+  queue_discussion_discord_deletes: "none",
   queue_forgejo_repo_archives: "none",
   queue_repository_syncs: { $: "none", "$.errors[*].repository": "handle", "$.errors[*].error": "free_text" },
   // DRAFT: new entry, review and remove this comment
@@ -3090,7 +3090,6 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   quiz_get_for_student: "free_text",
   // DRAFT: new entry, review and remove this comment
   quiz_submit: "none",
-  recalculate_discussion_thread_children_counts: "none",
   recalculate_gradebook_columns_in_range: "none",
   reconcile_stale_org_invitations: "none",
   reconcile_stuck_discord_memberships: "none",
@@ -3101,6 +3100,7 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   record_forgejo_repo_token: "none",
   record_forgejo_staff_team: "none",
   record_github_async_error: "none",
+  recount_discussion_thread_children: "none",
   refresh_realtime_subscription: "none",
   register_realtime_subscription: "none",
   release_all_grading_reviews_for_assignment: "none",

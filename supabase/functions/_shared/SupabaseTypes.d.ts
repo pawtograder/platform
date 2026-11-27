@@ -2687,6 +2687,7 @@ export type Database = {
           author_name: Pii<"name", string>;
           body: Pii<"free_text", string> | null;
           class_id: number;
+          comment_id: number | null;
           created_at: string;
           id: number;
           msg_id: number | null;
@@ -2703,6 +2704,7 @@ export type Database = {
           author_name: string;
           body?: string | null;
           class_id: number;
+          comment_id?: number | null;
           created_at?: string;
           id?: number;
           msg_id?: number | null;
@@ -2719,6 +2721,7 @@ export type Database = {
           author_name?: string;
           body?: string | null;
           class_id?: number;
+          comment_id?: number | null;
           created_at?: string;
           id?: number;
           msg_id?: number | null;
@@ -2829,32 +2832,6 @@ export type Database = {
           }
         ];
       };
-      discussion_thread_ordinal_counters: {
-        Row: {
-          class_id: number;
-          next_ordinal: number;
-          updated_at: string;
-        };
-        Insert: {
-          class_id: number;
-          next_ordinal?: number;
-          updated_at?: string;
-        };
-        Update: {
-          class_id?: number;
-          next_ordinal?: number;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "discussion_thread_ordinal_counters_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: true;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
       discussion_thread_read_status: {
         Row: {
           created_at: string;
@@ -2904,35 +2881,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "users";
             referencedColumns: ["user_id"];
-          }
-        ];
-      };
-      discussion_thread_watcher_cache: {
-        Row: {
-          discussion_thread_root_id: number;
-          exists: boolean;
-          updated_at: string;
-          user_id: string;
-        };
-        Insert: {
-          discussion_thread_root_id: number;
-          exists?: boolean;
-          updated_at?: string;
-          user_id: string;
-        };
-        Update: {
-          discussion_thread_root_id?: number;
-          exists?: boolean;
-          updated_at?: string;
-          user_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "discussion_thread_watcher_cache_root_id_fkey";
-            columns: ["discussion_thread_root_id"];
-            isOneToOne: false;
-            referencedRelation: "discussion_threads";
-            referencedColumns: ["id"];
           }
         ];
       };
@@ -3002,6 +2950,7 @@ export type Database = {
           duplicate_marked_by_user_id: string | null;
           duplicate_original_subject: Pii<"free_text", string> | null;
           edited_at: string | null;
+          hidden_with_thread: boolean;
           id: number;
           instructors_only: boolean;
           is_question: boolean;
@@ -3028,6 +2977,7 @@ export type Database = {
           duplicate_marked_by_user_id?: string | null;
           duplicate_original_subject?: string | null;
           edited_at?: string | null;
+          hidden_with_thread?: boolean;
           id?: number;
           instructors_only?: boolean;
           is_question?: boolean;
@@ -3054,6 +3004,7 @@ export type Database = {
           duplicate_marked_by_user_id?: string | null;
           duplicate_original_subject?: string | null;
           edited_at?: string | null;
+          hidden_with_thread?: boolean;
           id?: number;
           instructors_only?: boolean;
           is_question?: boolean;
@@ -14234,6 +14185,14 @@ export type Database = {
         Args: { p_class_id: number };
         Returns: boolean;
       };
+      discussion_private_post_readers: {
+        Args: { p_thread_id: number };
+        Returns: string[];
+      };
+      discussion_threads_readable_by: {
+        Args: { p_thread_ids: number[]; p_user_id: string };
+        Returns: number[];
+      };
       dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
@@ -15660,6 +15619,10 @@ export type Database = {
         Args: { p_class_id: number; p_grader_result_id: number };
         Returns: Json;
       };
+      prune_discussion_thread_read_status: {
+        Args: { p_root: number };
+        Returns: undefined;
+      };
       publish_assignment_group_changes: {
         Args: {
           p_assignment_id: number;
@@ -15671,6 +15634,10 @@ export type Database = {
       };
       push_direct_promotion_version: {
         Args: { p_submission_id: number };
+        Returns: number;
+      };
+      queue_discussion_discord_deletes: {
+        Args: { p_delay_seconds?: number; p_thread_id?: number };
         Returns: number;
       };
       queue_forgejo_repo_archives: {
@@ -15685,10 +15652,6 @@ export type Database = {
       quiz_get_for_student: { Args: { p_assignment_id: number }; Returns: Json };
       quiz_submit: {
         Args: { p_answers: Json; p_assignment_id: number };
-        Returns: number;
-      };
-      recalculate_discussion_thread_children_counts: {
-        Args: { target_class_id?: number };
         Returns: number;
       };
       recalculate_gradebook_columns_in_range: {
@@ -15756,6 +15719,10 @@ export type Database = {
       };
       record_github_async_error: {
         Args: { p_error_data: Json; p_method: string; p_org: string };
+        Returns: undefined;
+      };
+      recount_discussion_thread_children: {
+        Args: { p_roots: number[] };
         Returns: undefined;
       };
       refresh_realtime_subscription: {

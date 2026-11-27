@@ -61,12 +61,15 @@ const SEEDED_CAPABILITIES = [
   "manage_rubrics",
   "manage_student_repositories",
   "manage_surveys",
+  "moderate_discussion",
   "publish_groups",
   "run_polls",
   "send_announcements"
 ];
-/** Capabilities seed_default_class_roles() puts on the default grader role (not only instructor). */
-const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards", "run_polls"];
+/** Capabilities seed_default_class_roles() also puts on the default grader role. */
+const GRADER_SEEDED_CAPABILITIES = ["manage_flashcards", "moderate_discussion", "run_polls"];
+/** The default grader role's seeded capabilities plus `extra`, sorted like roleCapabilities(). */
+const withGraderSeeded = (...extra: string[]) => [...GRADER_SEEDED_CAPABILITIES, ...extra].sort();
 const DEFAULT_ROLES = ["admin", "grader", "instructor", "student"];
 
 async function defaultRoles(class_id: number) {
@@ -356,8 +359,8 @@ test.describe("custom class roles", () => {
       .from("role_capabilities")
       .insert({ role_id: roleId, capability: "manage_review_assignments" });
     expect(addError).toBeNull();
-    // The copy trigger already put grader-seeded capabilities on the new role from the default grader role.
-    expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "manage_review_assignments", "run_polls"]);
+    // The new role is a copy of the default grader role, so it starts with its seeded capabilities.
+    expect(await roleCapabilities(roleId)).toEqual(withGraderSeeded("manage_review_assignments"));
 
     const { data: removed, error: removeError } = await instructor
       .from("role_capabilities")
@@ -542,8 +545,8 @@ test.describe("custom class roles", () => {
       }
 
       expect(await classRole(customId)).toMatchObject({ name: "Lab TA", class_id: classC.id });
-      expect(await roleCapabilities(customId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
-      expect(await roleCapabilities(graderRoleId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
+      expect(await roleCapabilities(customId)).toEqual(withGraderSeeded("publish_groups"));
+      expect(await roleCapabilities(graderRoleId)).toEqual(withGraderSeeded("publish_groups"));
       const { data: extra, error: extraError } = await supabase
         .from("class_roles")
         .select("id")
@@ -809,9 +812,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     expect((await supabase.from("user_roles").update({ class_role_id: role_id }).eq("id", row.id)).error).toBeNull();
   }
 
-  // The default grader role already holds manage_flashcards and run_polls; this also gives it
-  // publish_groups, as a migration would. Head TA turns manage_review_assignments on; Course
-  // coordinator turns publish_groups off (and keeps the grader-seeded capabilities).
+  // The default grader role holds its seeded capabilities, and this adds publish_groups, as a
+  // migration would. Head TA turns manage_review_assignments on; Course coordinator turns
+  // publish_groups off (and keeps the seeded ones).
   test.beforeAll(async () => {
     classE = await createClass({ name: "E2E Grader Copy E" });
     instructorE = await createUserInClass({ role: "instructor", class_id: classE.id });
@@ -854,7 +857,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
     ).toBeNull();
     try {
       const roleId = await createRoleAsInstructor("Copied TA");
-      expect(await roleCapabilities(roleId)).toEqual(["manage_flashcards", "publish_groups", "run_polls"]);
+      expect(await roleCapabilities(roleId)).toEqual(withGraderSeeded("publish_groups"));
     } finally {
       expect(
         (await supabase.from("role_capabilities").delete().eq("role_id", graderRoleId).eq("capability", "manage_roles"))
@@ -864,19 +867,16 @@ test.describe("custom roles start as a copy of the default grader role", () => {
   });
 
   test("a grader on a custom role holds what that role turns on", async () => {
-    expect(await roleCapabilities(headTaRoleId)).toEqual([
-      "manage_flashcards",
-      "manage_review_assignments",
-      "publish_groups",
-      "run_polls"
-    ]);
+    expect(await roleCapabilities(headTaRoleId)).toEqual(
+      withGraderSeeded("manage_review_assignments", "publish_groups")
+    );
     expect(await holds(headTa, "manage_review_assignments"), "Head TA's extra").toBe(true);
     expect(await holds(headTa, "publish_groups"), "copied from the default grader role").toBe(true);
     expect(await holds(plainGrader, "manage_review_assignments"), "not on the default grader role").toBe(false);
   });
 
   test("a custom role can turn a default off, so it holds less than a plain grader", async () => {
-    expect(await roleCapabilities(coordinatorRoleId)).toEqual(["manage_flashcards", "run_polls"]);
+    expect(await roleCapabilities(coordinatorRoleId)).toEqual(GRADER_SEEDED_CAPABILITIES);
     expect(await holds(coordinator, "publish_groups"), "the coordinator turned it off").toBe(false);
     expect(await holds(plainGrader, "publish_groups"), "plain graders keep it").toBe(true);
   });
@@ -942,7 +942,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
           .select("role_id"),
         `granting manage_assignments to ${which} without holding it`
       );
-      // manage_flashcards is already on the grader role and was copied onto the custom role.
+      // The seeded capabilities are already on the grader role and were copied onto the custom role.
       expect(await roleCapabilities(role_id), which).toEqual(GRADER_SEEDED_CAPABILITIES);
     }
 
@@ -961,11 +961,9 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("id")
       .single();
     expect(copyError).toBeNull();
-    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual([
-      "manage_flashcards",
-      "publish_groups",
-      "run_polls"
-    ]);
+    expect(await roleCapabilities(copied!.id), "only what the creator holds is copied").toEqual(
+      withGraderSeeded("publish_groups")
+    );
 
     // Nor take it away: removing manage_assignments from the default grader role is refused, since
     // the instructor couldn't give it back. Removing publish_groups, which they hold, still works.
@@ -986,9 +984,7 @@ test.describe("custom roles start as a copy of the default grader role", () => {
       .select("capability");
     expect(removeError).toBeNull();
     expect(removed, "removing a capability the instructor holds").toHaveLength(1);
-    expect(await roleCapabilities(roleX("grader"))).toEqual(
-      [...GRADER_SEEDED_CAPABILITIES, "manage_assignments"].sort()
-    );
+    expect(await roleCapabilities(roleX("grader"))).toEqual(withGraderSeeded("manage_assignments"));
   });
 });
 
@@ -1047,22 +1043,16 @@ test.describe("what useCapability reads (#1010, step 3)", () => {
   });
 
   test("user_class_capabilities() returns the user's own role's capabilities, per class", async () => {
-    expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual([
-      `${classF.id}:manage_flashcards`,
-      `${classF.id}:manage_review_assignments`,
-      `${classF.id}:publish_groups`,
-      `${classF.id}:run_polls`
-    ]);
-    expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual([
-      `${classF.id}:manage_flashcards`,
-      `${classF.id}:publish_groups`,
-      `${classF.id}:run_polls`
-    ]);
-    // graderG holds grader-seeded capabilities in classG, not anything from classF.
-    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual([
-      `${classG.id}:manage_flashcards`,
-      `${classG.id}:run_polls`
-    ]);
+    const inClass = (class_id: number, caps: string[]) => caps.map((c) => `${class_id}:${c}`);
+    expect(await capabilitiesOf(headTaF), "Head TA: the copy plus the extra").toEqual(
+      inClass(classF.id, withGraderSeeded("manage_review_assignments", "publish_groups"))
+    );
+    expect(await capabilitiesOf(plainGraderF), "a plain grader doesn't get Head TA's extra").toEqual(
+      inClass(classF.id, withGraderSeeded("publish_groups"))
+    );
+    expect(await capabilitiesOf(graderG), "another class's grader gets nothing from this class").toEqual(
+      inClass(classG.id, GRADER_SEEDED_CAPABILITIES)
+    );
     expect(await capabilitiesOf(studentF), "a student gets nothing from the grader role").toEqual([]);
   });
 
@@ -1737,7 +1727,7 @@ test.describe("flashcard decks follow manage_flashcards (#1010, area 13)", () =>
       .single();
     expect(withError).toBeNull();
     withCapRoleId = withCapRole!.id;
-    // Copied from the default grader role, so it already has grader-seeded capabilities.
+    // Copied from the default grader role, so it already has manage_flashcards.
     expect(await roleCapabilities(withCapRoleId)).toEqual(GRADER_SEEDED_CAPABILITIES);
     const headTaRow = await userRole(headTa);
     expect(

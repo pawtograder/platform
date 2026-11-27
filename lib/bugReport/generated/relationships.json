@@ -553,10 +553,6 @@
       }
     ]
   },
-  "discussion_thread_ordinal_counters": {
-    "kind": "table",
-    "fks": [{ "name": "discussion_thread_ordinal_counters_class_id_fkey", "columns": ["class_id"], "ref": "classes" }]
-  },
   "discussion_thread_read_status": {
     "kind": "table",
     "fks": [
@@ -571,16 +567,6 @@
         "ref": "discussion_threads"
       },
       { "name": "discussion_thread_read_status_user_id_fkey", "columns": ["user_id"], "ref": "users" }
-    ]
-  },
-  "discussion_thread_watcher_cache": {
-    "kind": "table",
-    "fks": [
-      {
-        "name": "discussion_thread_watcher_cache_root_id_fkey",
-        "columns": ["discussion_thread_root_id"],
-        "ref": "discussion_threads"
-      }
     ]
   },
   "discussion_thread_watchers": {
