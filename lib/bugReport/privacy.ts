@@ -2567,6 +2567,16 @@ export const RPCS: Readonly<Record<string, RpcClassification>> = {
   exam_sync_rubric_from_questions: "none",
   // DRAFT: new entry, review and remove this comment
   exam_upsert_questions_and_regions: "none",
+  // #1158: the worker's claim-fenced queue and match functions return outcome strings, a version
+  // number, or scanned-exam ids and statuses; none carries a name or free text.
+  exam_worker_ack: "none",
+  exam_worker_contract_version: "none",
+  exam_worker_give_up: "none",
+  exam_worker_link_scan_groups: "none",
+  exam_worker_requeue: "none",
+  // Returns applied | state_changed | not_owner; arguments are ids, a status and an error message.
+  exam_worker_set_batch_status: "none",
+  exam_worker_set_match_suggestion: "none",
   finalize_submission_early: "none",
   // void: removes the queued row, or marks the repo for re-granting when the student rejoined.
   finish_forgejo_group_repo_revocation: "none",

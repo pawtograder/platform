@@ -6,6 +6,17 @@ import type { Json } from "../_shared/SupabaseTypes.d.ts";
 import type { ExamAsyncEnvelope, FinalizeArgs, MatchArgs, ProcessPageArgs } from "../_shared/ExamAsyncTypes.ts";
 import { FINALIZE_ANSWER_REGION_SELECT } from "./finalizeQueries.ts";
 import {
+  COMPLETED_FROM,
+  errorFrom,
+  isKnownMethod,
+  isTransitionOutcome,
+  MATCHING_FROM,
+  REJECTED_SCAN_ERROR_FROM,
+  REVIEW_FROM,
+  type BatchStatus,
+  type TransitionOutcome
+} from "./batchTransitions.ts";
+import {
   getExamVisionProvider,
   ProviderRateLimitError,
   ProviderTransientError,
@@ -14,6 +25,20 @@ import {
   type PageImage
 } from "../_shared/examVision.ts";
 import { assertScanPathInScope, ScanPathRejectedError, type ScanScope } from "../_shared/examScanPath.ts";
+import { holdLease } from "../_shared/examWorkerLease.ts";
+import {
+  ack,
+  contractStatus,
+  FenceRpcError,
+  giveUp as giveUpFenced,
+  linkScanGroups,
+  requeue as requeueFenced,
+  setMatchSuggestion,
+  type Claim,
+  type LinkOutcome
+} from "../_shared/examWorkerFence.ts";
+import { nextOcrWait, ocrWaitBoundaryMs } from "./ocrWait.ts";
+import { claimDeadlineMs, isolateLifetimeMs } from "./claimWindow.ts";
 import { mapRectToScan, wordsToTemplate } from "../_shared/examRegistration.ts";
 import { alignBatch, loadTemplates, ocrWords, requireAligned, toOcrData } from "./pageAlignment.ts";
 import { downloadImage, downloadImageCached } from "./storage.ts";
@@ -21,7 +46,8 @@ import { downloadImage, downloadImageCached } from "./storage.ts";
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
 const QUEUE = "exam_processing";
-const DLQ = "exam_processing_dlq";
+// When this isolate evaluated the module: the anchor for when to stop claiming (claimWindow.ts).
+const ISOLATE_STARTED_AT_MS = Date.now();
 const PGMQ_MAX_READ_CT = 8;
 // Cap rate-limit requeues. requeue() sends a FRESH pgmq message (read_ct resets to 0), so the
 // PGMQ_MAX_READ_CT poison-pill guard never trips on the requeue path; without this bound a
@@ -29,20 +55,78 @@ const PGMQ_MAX_READ_CT = 8;
 const MAX_RATE_LIMIT_RETRIES = 20;
 // `match` must not run until every process_page message for the batch has finished OCR (they
 // are separate queue messages and may be handled by concurrent worker invocations). When OCR
-// is still outstanding the match message re-queues itself with this delay, bounded by
-// MAX_OCR_WAIT_RETRIES -- ~15 min, comfortably longer than OCR of a large batch, after which
-// it is treated as a real failure so the batch surfaces an error instead of waiting forever.
-const OCR_WAIT_SECONDS = 30;
-const MAX_OCR_WAIT_RETRIES = 30;
+// is still outstanding the match message re-queues itself with this delay. The delay is short
+// because runBatch claims one message at a time, so overlapping invocations often get `match`
+// while its own pages are still in OCR (#1158), and the batch reaches review one delay later.
+//
+// When the wait counts as a failure, so the batch surfaces an error instead of waiting forever, is
+// nextOcrWait in ./ocrWait.ts: never sooner than the 30 waits of 30s before #1158.
+const OCR_WAIT_SECONDS = 5;
 
 type QueueMessage = {
   msg_id: number;
   read_ct: number;
   enqueued_at: string;
+  // Set by the read to clock_timestamp() + READ_VISIBILITY_SECONDS: the read's own database time,
+  // which the OCR wait counts from (ocrWait.ts).
+  vt: string;
   message: ExamAsyncEnvelope;
 };
 
 type Admin = SupabaseClient<Database>;
+
+// The claim a handler runs under: the message and the read_ct its read produced. Every batch status
+// write, match write and queue disposition carries it, so a handler that no longer holds the
+// message changes nothing (#1158; see ../_shared/examWorkerFence.ts).
+type Fence = Claim;
+
+// Thrown when a fenced write finds that another reader holds the message now. processMessage then
+// returns without requeueing, dead-lettering or acknowledging: those belong to the current holder.
+// Writes the handler made before that point stay, and rely on their own guards (first-writer OCR,
+// idempotent finalize steps).
+class NotOwnerError extends Error {}
+
+// The one place the worker writes exam_scan_batches.status. See exam_worker_set_batch_status
+// (20261122130000_pgmq_public_set_vt_if_claimed.sql) and batchTransitions.ts.
+async function setBatchStatus(
+  admin: Admin,
+  fence: Fence,
+  batchId: number,
+  status: BatchStatus,
+  from: readonly BatchStatus[],
+  errorMessage?: string
+): Promise<TransitionOutcome> {
+  const { data, error } = await admin.rpc("exam_worker_set_batch_status", {
+    p_msg_id: fence.msgId,
+    p_read_ct: fence.readCt,
+    p_batch_id: batchId,
+    p_status: status,
+    p_from: [...from],
+    p_error: errorMessage ?? undefined
+  });
+  if (!error) {
+    if (isTransitionOutcome(data)) return data;
+    throw new Error(`set batch ${batchId} to ${status}: unexpected reply ${JSON.stringify(data)}`);
+  }
+  // No fallback for a missing function: runBatch does not claim until the database contract is
+  // deployed (contractStatus), so a missing function here is an error like any other.
+  throw new Error(`set batch ${batchId} to ${status} failed: ${error.message}`);
+}
+
+/**
+ * The batch's pages changed between this match reading them and linking them (staff added a page or
+ * changed pages-per-exam), and no other match message for the batch was left to match them.
+ * exam_worker_link_scan_groups has already given up on the message ('pages_changed'), in the same
+ * transaction as that decision: the batch is in error (only from 'matching') and recorded on the
+ * DLQ, and Process re-queues OCR and matching for the current pages. Thrown only so the dispatcher
+ * reports it, like any give-up; it does not dispose of the message again.
+ */
+class PagesChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PagesChangedError";
+  }
+}
 
 /**
  * Matching refused to regroup pages because the grouping would change the pages of an exam a human
@@ -71,101 +155,77 @@ function log(message: string): void {
   console.log(`[exam-async-worker] ${message}`);
 }
 
-async function archive(admin: Admin, msgId: number): Promise<void> {
-  // The one queue call whose error is deliberately ignored. A failed archive leaves the message
-  // to be redelivered and the handler re-run, which every handler here is written to tolerate
-  // (at-least-once). Throwing would turn a harmless duplicate delivery into a batch-level
-  // failure -- the opposite trade-off from sendEnvelope, where a swallowed failure LOSES work.
-  await admin.schema("pgmq_public").rpc("archive", { queue_name: QUEUE, message_id: msgId });
-}
+// What a handler leaves the dispatcher to do with its message: acknowledge it (done, including every
+// early return), or replace it with a re-queued copy (match waiting for OCR).
+type Disposition =
+  | { kind: "ack" }
+  | { kind: "requeue"; message: ExamAsyncEnvelope; delaySeconds: number; countWait: boolean }
+  // Already disposed of by the fenced function that made the decision (a superseded link).
+  | { kind: "disposed" };
+const ACK: Disposition = { kind: "ack" };
+const DISPOSED: Disposition = { kind: "disposed" };
 
-async function requeue(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
-  // Preserve the (method, args) pairing of the discriminated envelope; only bump retry_count.
-  const next = { ...env, retry_count: (env.retry_count ?? 0) + 1 };
-  await sendEnvelope(admin, next, delaySeconds);
-}
-
-// Park a message without spending its transient-error budget: bumps ocr_waits, not retry_count.
-async function requeueWaitingForOcr(admin: Admin, env: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
-  const next = { ...env, ocr_waits: (env.ocr_waits ?? 0) + 1 };
-  await sendEnvelope(admin, next, delaySeconds);
-}
-
-async function sendEnvelope(admin: Admin, next: ExamAsyncEnvelope, delaySeconds: number): Promise<void> {
-  const { error } = await admin.schema("pgmq_public").rpc("send", {
-    queue_name: QUEUE,
-    message: next as unknown as Json,
-    sleep_seconds: delaySeconds
-  });
-  // Throwing is what preserves the job. Every caller is followed by archive() of the message
-  // being replaced, so swallowing a failed send would archive the original with no replacement
-  // queued -- the OCR, match or finalize work would simply vanish. Throwing instead propagates
-  // out before that archive, leaving the original message to reappear when its pgmq visibility
-  // timeout lapses. (Reported by Codex against 13b45d59; the omission predates the sendEnvelope
-  // refactor but that refactor put both the retry and the OCR-wait path through it.)
-  if (error) throw new Error(`requeue ${next.method} (batch ${next.batch_id}) failed: ${error.message}`);
-}
-
-async function deadLetter(admin: Admin, env: ExamAsyncEnvelope, msgId: number, error: unknown): Promise<void> {
-  // Same shape of omission as sendEnvelope above: the caller archives the original right after
-  // this, so dead-lettering that fails silently drops the job. There are TWO records here and
-  // either one suffices -- the DLQ message (replayable) and the audit row (durable, queryable)
-  // -- so a single failure is reported and tolerated. Both failing is different: nothing
-  // anywhere would remember the job, so throw and let the original message come back after its
-  // visibility timeout instead of being archived into oblivion.
-  const { error: dlqErr } = await admin
-    .schema("pgmq_public")
-    .rpc("send", { queue_name: DLQ, message: env as unknown as Json, sleep_seconds: 0 });
-  if (dlqErr) {
-    console.error(`dead-letter queue send failed for ${env.method} (batch ${env.batch_id}): ${dlqErr.message}`);
-    Sentry.captureException(new Error(`dead-letter queue send failed: ${dlqErr.message}`));
+// Acknowledge or re-queue the held message, only while this reader still holds it
+// (exam_worker_ack / exam_worker_requeue). A reader that was taken over leaves the message to the
+// reader that holds it now: it is running the same work, and removing or forking its message
+// would end that work under it or run it twice.
+//
+// An acknowledgment that fails is logged, not thrown: the message comes back after its lease and
+// the handler runs again, which every handler here tolerates (at-least-once). A re-queue that
+// fails throws, so nothing is archived without its replacement; the original comes back instead.
+async function dispose(admin: Admin, fence: Fence, env: ExamAsyncEnvelope, next: Disposition): Promise<void> {
+  if (next.kind === "disposed") return;
+  if (next.kind === "ack") {
+    let outcome: "acked" | "not_owner";
+    try {
+      outcome = await ack(admin, fence);
+    } catch (error) {
+      console.error(
+        `exam-async-worker: ack of msg ${fence.msgId} failed; it comes back after its lease: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    if (outcome === "not_owner") {
+      console.warn(`exam-async-worker: msg ${fence.msgId} was taken over before its ack; leaving it to the new holder`);
+    }
+    return;
   }
-  const { error: auditErr } = await admin.from("exam_async_worker_dlq_messages").insert({
-    original_msg_id: msgId,
-    method: env.method,
-    envelope: env as unknown as Json,
-    error_message: error instanceof Error ? error.message : String(error),
-    error_type: error instanceof Error ? error.constructor.name : "Unknown",
-    retry_count: env.retry_count ?? 0,
-    class_id: env.class_id,
-    debug_id: env.debug_id ?? null
-  });
-  if (auditErr) {
-    console.error(`dead-letter audit insert failed for ${env.method} (batch ${env.batch_id}): ${auditErr.message}`);
-    Sentry.captureException(new Error(`dead-letter audit insert failed: ${auditErr.message}`));
-  }
-  if (dlqErr && auditErr) {
-    // Yes, this can loop: the caller skips its archive, the message redelivers, and dead-lettering
-    // is attempted again. That is intended. Both a pgmq send AND a plain table insert failing
-    // means the database is effectively unavailable, and retrying until it recovers is strictly
-    // better than archiving a student's scanned exam into nothing. pgmq messages do not expire,
-    // and the worker only runs on its invocation cadence, so this costs one failed attempt per
-    // run rather than a hot spin.
-    throw new Error(
-      `dead-lettering ${env.method} (batch ${env.batch_id}) failed on BOTH the queue send and the audit insert; ` +
-        `refusing to archive the original message (queue: ${dlqErr.message}; audit: ${auditErr.message})`
+  const outcome = await requeueFenced(admin, fence, next.message, next.delaySeconds, next.countWait);
+  if (outcome === "not_owner") {
+    console.warn(
+      `exam-async-worker: msg ${fence.msgId} was taken over before its ${env.method} re-queue; leaving it to the new holder`
     );
   }
 }
 
-async function setBatchError(admin: Admin, batchId: number, message: string): Promise<void> {
-  // The batch's status IS how staff learn something failed, so a silent failure here leaves a
-  // batch sitting in 'ocr'/'finalizing' forever with nothing explaining why. Throwing keeps the
-  // message unarchived so the status write is retried.
-  //
-  // Callers run this BEFORE deadLetter for that reason: if it were second, a failure would
-  // redeliver a message that had already been dead-lettered, appending a duplicate DLQ message
-  // and audit row on every attempt.
-  //
-  // Never over 'completed': every confirmed exam was finalized from validated pages, so an error
-  // arriving later (a duplicate finalize that read the row before it was stamped) describes stale
-  // work, not the batch. It still reaches the DLQ and Sentry.
-  const { error: updErr } = await admin
-    .from("exam_scan_batches")
-    .update({ status: "error", error: message })
-    .eq("id", batchId)
-    .neq("status", "completed");
-  if (updErr) throw new Error(`mark batch ${batchId} errored failed: ${updErr.message}`);
+// Give up on the held message: error the batch (from `from` only), record the failure on the DLQ
+// queue and in exam_async_worker_dlq_messages, and archive the message, in one transaction
+// (exam_worker_give_up), only while this reader still holds it. All or nothing, so a batch can no
+// longer be errored by a give-up whose archive then never happened, leaving a redelivery to finish
+// the work under the error. Either dead-letter record suffices; one failing is reported here. Both
+// failing throws, and the message comes back.
+async function giveUpMessage(
+  admin: Admin,
+  fence: Fence,
+  envelope: unknown,
+  batchId: number | null,
+  from: readonly BatchStatus[],
+  error: unknown
+): Promise<"given_up" | "not_owner"> {
+  const outcome = await giveUpFenced(admin, fence, {
+    batchId,
+    from,
+    error: error instanceof Error ? error.message : String(error),
+    errorType: error instanceof Error ? error.constructor.name : "Unknown",
+    envelope
+  });
+  if (outcome === "given_up:no_dlq_message" || outcome === "given_up:no_audit_row") {
+    const missing = outcome === "given_up:no_dlq_message" ? "dead-letter queue send" : "dead-letter audit insert";
+    console.error(`exam-async-worker: msg ${fence.msgId} given up, but its ${missing} failed`);
+    Sentry.captureException(new Error(`${missing} failed for msg ${fence.msgId}`));
+  }
+  return outcome === "not_owner" ? "not_owner" : "given_up";
 }
 
 // Which class, exam and batch a page's image_path must name (#1078). Taken from the batch row:
@@ -210,11 +270,23 @@ async function processPage(admin: Admin, batchId: number, args: ProcessPageArgs)
   const result = await provider.ocrImage(img);
   // Only while the page is still in this batch: if staff moved it during the OCR call, the result
   // belongs to no queued work and is dropped (a zero-row update is not an error).
+  //
+  // And only while the page has no OCR yet: the first result written for a page is the one kept
+  // (#1158). A reader whose lease lapsed during the provider call, or a second process_page for the
+  // same page, may finish after another result was stored and match or finalize read it; replacing
+  // it would change, under them, the words they grouped, identified and graded on. Two readers
+  // racing here are reading the same image_path, so which result is kept does not matter; that it
+  // then stays the same does. This is not claim ownership: an expired holder that finishes first
+  // still writes. It changes nothing outside that race: the early return above already skips any
+  // page that has OCR, as before #1158, so re-running Process never re-reads a page (including an
+  // unlinked page whose image staff replaced, which keeps its old OCR). The page guard
+  // (20261118150200) is narrower: it stops staff, not the worker, changing a linked page's OCR.
   const { error: updErr } = await admin
     .from("exam_scan_pages")
     .update({ ocr_text: result.text, ocr_data: toOcrData(result.words) })
     .eq("id", args.scan_page_id)
-    .eq("batch_id", batchId);
+    .eq("batch_id", batchId)
+    .is("ocr_data", null);
   // Throw on write failure so the message is requeued, not archived (would lose the OCR).
   if (updErr) throw new Error(`persist OCR for scan page ${args.scan_page_id} failed: ${updErr.message}`);
 }
@@ -305,15 +377,15 @@ async function matchProfile(
   return { profile_id: null, confidence: 0 };
 }
 
-// The batch states a match job may run from and move out of: the ones before review. A match
-// message that finds its batch anywhere else is stale -- a duplicate that outlived its visibility
-// window, or one still waiting on OCR after the batch errored -- and must not overwrite 'error' or
-// 'completed' (or move a reviewed or finalizing batch backwards). This cannot tell an old attempt's
-// message from a new one once enqueue_exam_process_batch has reset the batch to 'ocr'; that would
-// need an attempt id on the message.
-const MATCHABLE_STATUSES = ["uploaded", "ocr", "matching"];
-
-async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): Promise<void> {
+// `read` is when this message was read and enqueued, in database time (QueueMessage.vt minus the read
+// window, and enqueued_at), for the OCR wait.
+async function doMatch(
+  admin: Admin,
+  env: ExamAsyncEnvelope,
+  args: MatchArgs,
+  fence: Fence,
+  read: { readDbMs: number; enqueuedAtMs: number }
+): Promise<Disposition> {
   const classId = env.class_id;
   const provider = getExamVisionProvider();
   const { data: batch, error } = await admin
@@ -324,7 +396,7 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   if (error || !batch) throw new Error(`batch ${args.batch_id} not found`);
   // Before the OCR wait below, so a stale job cannot sit out the wait and then replace an existing
   // batch error with its own.
-  if (!MATCHABLE_STATUSES.includes(batch.status)) return;
+  if (!MATCHING_FROM.includes(batch.status as BatchStatus)) return ACK;
 
   // Join the OCR fan-out before doing anything else. enqueue_exam_process_batch sends one
   // process_page message per page plus this single match message, with no ordering guarantee
@@ -341,26 +413,45 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   if (pendingErr) throw new Error(`count pending OCR for batch ${batch.id} failed: ${pendingErr.message}`);
   if ((pendingOcr ?? 0) > 0) {
     const waits = env.ocr_waits ?? 0;
-    if (waits >= MAX_OCR_WAIT_RETRIES) {
+    const startedMs = env.ocr_wait_started_ms ?? Date.now();
+    const boundaryMs = ocrWaitBoundaryMs(waits, env.ocr_wait_from, read.enqueuedAtMs);
+    const step = nextOcrWait(waits, boundaryMs, read.readDbMs);
+    if (step.exhausted) {
       throw new Error(
-        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits; not advancing to review`
+        `batch ${batch.id} still has ${pendingOcr} page(s) without OCR after ${waits} waits over ` +
+          `${Math.round((Date.now() - startedMs) / 1000)}s; not advancing to review`
       );
     }
-    // Fresh message, then the dispatcher archives this copy on our normal return. Leave the
-    // batch status alone so the scans page keeps showing it as still processing.
-    await requeueWaitingForOcr(admin, env, OCR_WAIT_SECONDS);
-    return;
+    // A fresh message replaces this one (exam_worker_requeue, in one transaction with this one's
+    // archive). Leave the batch status alone so the scans page keeps showing it as still
+    // processing. A counted wait is stamped by the database; one that does not count carries the
+    // boundary forward, from ocr_wait_from or, for a message an older worker re-queued, enqueued_at.
+    const message: ExamAsyncEnvelope = {
+      ...env,
+      ocr_waits: step.waits,
+      ocr_wait_started_ms: startedMs,
+      ocr_wait_from: !step.counted && boundaryMs !== undefined ? new Date(boundaryMs).toISOString() : undefined,
+      ocr_wait_counted_ms: undefined
+    };
+    return { kind: "requeue", message, delaySeconds: OCR_WAIT_SECONDS, countWait: step.counted };
   }
 
-  // Conditional, so a batch that errored or completed since the check above stays as it is.
-  const { data: nowMatching, error: matchingErr } = await admin
-    .from("exam_scan_batches")
-    .update({ status: "matching" })
-    .eq("id", batch.id)
-    .in("status", MATCHABLE_STATUSES)
-    .select("id");
-  if (matchingErr) throw new Error(`set batch ${batch.id} to matching failed: ${matchingErr.message}`);
-  if (!nowMatching || nowMatching.length === 0) return;
+  // Only a batch that is still reading or matching. A match that outlived its window, or a copy
+  // another reader took over, finds the batch in review/finalizing/completed (or not its message
+  // any more) and stops here, before it rewrites any row.
+  // The fence is per message, not per attempt: a match left over from a run that Process restarted
+  // (the batch back in 'ocr') holds its own message validly, beside the new run's match. Its link and
+  // its suggestions are refused if they no longer describe the batch's pages: the link only applies
+  // the grouping the batch's current pages give, and a suggestion only lands on an exam that still
+  // holds the pages it was read from. A refusal returns state_changed and this match stops; the run
+  // whose link is current suggests for every exam (exam_worker_link_scan_groups,
+  // exam_worker_set_match_suggestion). A link refused for stale pages is disposed of with the
+  // decision, under the batch lock: superseded (archived; another match message remains) or, for the
+  // last match message left, pages_changed (given up; the batch is in error and staff restart it
+  // with Process).
+  const toMatching = await setBatchStatus(admin, fence, batch.id, "matching", MATCHING_FROM);
+  if (toMatching === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
+  if (toMatching === "state_changed") return ACK;
 
   const perExam = Math.max(1, batch.pages_per_exam);
   const { data: pages, error: pagesErr } = await admin
@@ -384,13 +475,10 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     );
   }
   if (!pages || pages.length === 0) {
-    const { error: emptyReviewErr } = await admin
-      .from("exam_scan_batches")
-      .update({ status: "review" })
-      .eq("id", batch.id)
-      .in("status", MATCHABLE_STATUSES);
-    if (emptyReviewErr) throw new Error(`set empty batch ${batch.id} to review failed: ${emptyReviewErr.message}`);
-    return;
+    if ((await setBatchStatus(admin, fence, batch.id, "review", REVIEW_FROM)) === "not_owner") {
+      throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
+    }
+    return ACK;
   }
   // Refuse a page count that is not a whole number of exams. Math.ceil below would otherwise
   // make the last group short, and that group sails through review and finalization with the
@@ -467,14 +555,34 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
   // skipped, or that has been finalized: re-processing must not regroup those onto other pages.
   // Only pages still in this batch are linked; a short count (a page moved or deleted since the
   // load above) is a plain error, so the retry reloads the batch and its count check sees it.
-  const { data: linkedRows, error: linkErr } = await admin.rpc("exam_link_scan_groups", {
-    p_batch_id: batch.id,
-    p_groups: groups.map((groupPages, g) => ({ exam_index: g, page_ids: groupPages.map((p) => p.id) }))
-  });
-  if (linkErr) {
-    if (linkErr.code === "EX409") throw new ScanGroupChangeRejectedError(`batch ${batch.id}: ${linkErr.message}`);
-    throw new Error(`link scan pages for batch ${batch.id} failed: ${linkErr.message}`);
+  // Through exam_worker_link_scan_groups: only while this reader holds the message and the batch is
+  // still 'matching', so a late or taken-over match cannot regroup a batch under review.
+  let linked: LinkOutcome;
+  try {
+    linked = await linkScanGroups(
+      admin,
+      fence,
+      batch.id,
+      groups.map((groupPages, g) => ({ exam_index: g, page_ids: groupPages.map((p) => p.id) }))
+    );
+  } catch (linkErr) {
+    if (linkErr instanceof FenceRpcError && linkErr.code === "EX409") {
+      throw new ScanGroupChangeRejectedError(`batch ${batch.id}: ${linkErr.message}`);
+    }
+    throw new Error(
+      `link scan pages for batch ${batch.id} failed: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`
+    );
   }
+  if (linked.outcome === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
+  if (linked.outcome === "state_changed") return ACK;
+  // A stale grouping: the function has disposed of the message with its decision (see LinkOutcome).
+  if (linked.outcome === "superseded") return DISPOSED;
+  if (linked.outcome === "pages_changed") {
+    throw new PagesChangedError(
+      `batch ${batch.id}: its pages changed while it was being matched; process the batch again`
+    );
+  }
+  const linkedRows = linked.rows;
   const rowAt = new Map(
     ((linkedRows ?? []) as { exam_index: number; scanned_submission_id: number; match_status: string }[]).map((r) => [
       r.exam_index,
@@ -514,40 +622,33 @@ async function doMatch(admin: Admin, env: ExamAsyncEnvelope, args: MatchArgs): P
     }
     const match = await matchProfile(admin, classId, detectedSisId, detectedName, roster);
 
-    // Conditional on the row STILL being undecided. The humanDecided snapshot above is read
-    // before the vision calls, which can take a while: a duplicate worker (one that outlived the
-    // 120s visibility window) could read the row as undecided, sit in a provider call while the
-    // first worker finished the batch and staff confirmed or skipped this row, and then land
-    // this write and overwrite that decision with a fresh suggestion. The freeze trigger does
-    // not cover it either -- that only engages once submission_id is set. Re-checking the status
-    // in the WHERE clause closes the window instead of narrowing it.
-    const { error: matchErr } = await admin
-      .from("exam_scanned_submissions")
-      .update({
-        detected_name: detectedName ?? null,
-        detected_sis_id: detectedSisId ?? null,
-        matched_profile_id: match.profile_id,
-        match_confidence: match.confidence,
-        match_status: match.profile_id ? "suggested" : "unmatched"
-      })
-      .eq("id", scannedId)
-      .in("match_status", ["suggested", "unmatched"]);
-    // Throw on write failure so the message requeues instead of being archived with the
-    // match result lost.
-    if (matchErr) throw new Error(`persist match for scanned submission ${scannedId} failed: ${matchErr.message}`);
+    // Through exam_worker_set_match_suggestion, which writes only while this reader holds the
+    // message and the batch is still 'matching', and only over an undecided row that does not hold a
+    // staff member's pick. The row status the link returned is read before the vision calls, which can
+    // take a while: in that time this reader's lease can lapse and another reader finish the batch,
+    // staff can confirm, skip or pick a student for this row, and the batch can move to review. A
+    // write that only re-checked the row's status in its WHERE clause still replaced a pick (stored
+    // as 'suggested' with no confidence) and could land after review opened. It also carries the
+    // pages the identity was read from, and is refused if a newer run re-linked this exam since.
+    const written = await setMatchSuggestion(admin, fence, batch.id, scannedId, {
+      detectedName: detectedName ?? null,
+      detectedSisId: detectedSisId ?? null,
+      matchedProfileId: match.profile_id,
+      confidence: match.confidence,
+      pageIds: groupPages.map((p) => p.id)
+    });
+    if (written === "not_owner") throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
+    if (written === "state_changed") return ACK;
   }
 
   // Conditional transition. A large match job can outlast the 120s visibility window, so a
   // duplicate worker may still be running this after staff have finalized the batch -- an
   // unconditional write would then stamp 'review' over 'completed' or 'error', hiding the
-  // terminal result. Only advance from the states that precede review; 'error' is not one of them,
-  // since staff recover an errored batch through enqueue_exam_process_batch, which resets it to 'ocr'.
-  const { error: reviewErr } = await admin
-    .from("exam_scan_batches")
-    .update({ status: "review" })
-    .eq("id", batch.id)
-    .in("status", MATCHABLE_STATUSES);
-  if (reviewErr) throw new Error(`set batch ${batch.id} to review failed: ${reviewErr.message}`);
+  // terminal result. Only advance from the states that precede review.
+  if ((await setBatchStatus(admin, fence, batch.id, "review", REVIEW_FROM)) === "not_owner") {
+    throw new NotOwnerError(`batch ${batch.id}: match message taken over`);
+  }
+  return ACK;
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +663,7 @@ const EXAM_ARTIFACT_FORMAT = "exam_v1";
 // Complete the batch once no confirmed scanned submission is still unfinalized. Re-checked
 // on every finalize (including retries of already-done work) so a crash in the last step
 // can't leave the batch stuck in "finalizing".
-async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> {
+async function maybeCompleteBatch(admin: Admin, batchId: number, fence: Fence): Promise<void> {
   // A failed count is NOT zero, and the two failure modes here are opposite and both bad: a
   // failed confirmed-count reads as "nothing confirmed" and returns early, leaving a fully
   // finalized batch stuck in 'finalizing' forever; a failed pending-count reads as "nothing
@@ -583,15 +684,21 @@ async function maybeCompleteBatch(admin: Admin, batchId: number): Promise<void> 
     .is("finalized_at", null);
   if (pendingErr) throw new Error(`count pending for batch ${batchId} failed: ${pendingErr.message}`);
   if ((pending ?? 0) === 0) {
-    const { error: completeErr } = await admin
-      .from("exam_scan_batches")
-      .update({ status: "completed" })
-      .eq("id", batchId);
-    if (completeErr) throw new Error(`complete batch ${batchId} failed: ${completeErr.message}`);
+    // Only from finalizing: a finalize left over from a run Retry reopened must not complete (and so
+    // freeze) a batch whose undecided rows are back under review.
+    if ((await setBatchStatus(admin, fence, batchId, "completed", COMPLETED_FROM)) === "not_owner") {
+      throw new NotOwnerError(`batch ${batchId}: finalize message taken over`);
+    }
   }
 }
 
-async function finalize(admin: Admin, classId: number, batchId: number, args: FinalizeArgs): Promise<void> {
+async function finalize(
+  admin: Admin,
+  classId: number,
+  batchId: number,
+  args: FinalizeArgs,
+  fence: Fence
+): Promise<void> {
   const provider = getExamVisionProvider();
   const { data: scanned, error } = await admin
     .from("exam_scanned_submissions")
@@ -604,7 +711,7 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
   // confirmation may have been changed after this message was enqueued). Still re-check
   // batch completion so a crash in that last step can't strand the batch.
   if (scanned.finalized_at) {
-    await maybeCompleteBatch(admin, scanned.batch_id);
+    await maybeCompleteBatch(admin, scanned.batch_id, fence);
     return;
   }
 
@@ -662,9 +769,13 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
 
   // Create the submission (fires submissions_after_insert_hook -> grading review).
   // exam_create_submission is idempotent: it returns the existing submission_id if the
-  // row already exists, so a retried finalize reuses the same submission.
+  // row already exists, so a retried finalize reuses the same submission. Everything below
+  // (storage keys, file rows, the artifact) is written under profileId, so the RPC is told
+  // which student this read found and refuses if the match changed since (#1270); the
+  // retry then reads the row again.
   const { data: subId, error: rpcErr } = await admin.rpc("exam_create_submission", {
-    p_scanned_submission_id: scanned.id
+    p_scanned_submission_id: scanned.id,
+    p_expected_profile_id: profileId
   });
   if (rpcErr || !subId) throw new Error(`exam_create_submission failed: ${rpcErr?.message}`);
   const submissionId = subId as number;
@@ -810,7 +921,7 @@ async function finalize(admin: Admin, classId: number, batchId: number, args: Fi
     if (stampErr) throw new Error(`stamp finalized_at for ${scanned.id} failed: ${stampErr.message}`);
   }
 
-  await maybeCompleteBatch(admin, scanned.batch_id);
+  await maybeCompleteBatch(admin, scanned.batch_id, fence);
 }
 
 // ---------------------------------------------------------------------------
@@ -823,39 +934,68 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
   // #1293: every captureException below is a give-up. This says whether the budget ran out on the
   // first failure or the sixth, which is the difference between a hard failure and a provider
   // having a bad few minutes -- the context the per-retry events used to carry before they stopped
-  // being sent.
+  // being sent. One exception (#1158): a reader that was taken over captures before giveUp finds
+  // that out and leaves the batch, the DLQ and the message to the new holder, which carries on.
   scope.setTag("attempt", String((env.retry_count ?? 0) + 1));
+  const fence: Fence = { msgId: msg.msg_id, readCt: msg.read_ct };
+
+  // A message that used up its budget errors its batch, goes to the DLQ and is archived, all in one
+  // transaction and only while this reader holds it (giveUpMessage). If another reader holds it
+  // now, everything is left to that reader: it is running the same work.
+  const giveUp = async (error: unknown, from: readonly BatchStatus[] = errorFrom(env.method)) => {
+    if ((await giveUpMessage(admin, fence, env, env.batch_id ?? null, from, error)) === "not_owner") {
+      console.warn(`exam-async-worker: msg ${msg.msg_id} was taken over; leaving its failure to the new holder`);
+    }
+  };
 
   // poison-pill protection
   if (msg.read_ct >= PGMQ_MAX_READ_CT) {
     const err = new Error(`read_ct=${msg.read_ct} exceeded max — DLQ`);
     Sentry.captureException(err, scope);
-    if (env.batch_id) await setBatchError(admin, env.batch_id, err.message);
-    await deadLetter(admin, env, msg.msg_id, err);
-    await archive(admin, msg.msg_id);
+    await giveUp(err);
     return;
   }
 
+  let next: Disposition;
   try {
     // env.args is narrowed by env.method (discriminated ExamAsyncEnvelope) — no casts needed.
     if (env.method === "process_page") {
       await processPage(admin, env.batch_id, env.args);
+      next = ACK;
     } else if (env.method === "match") {
-      await doMatch(admin, env, env.args);
+      next = await doMatch(admin, env, env.args, fence, {
+        readDbMs: Date.parse(msg.vt) - READ_VISIBILITY_SECONDS * 1000,
+        enqueuedAtMs: Date.parse(msg.enqueued_at)
+      });
     } else if (env.method === "finalize") {
-      await finalize(admin, env.class_id, env.batch_id, env.args);
+      await finalize(admin, env.class_id, env.batch_id, env.args, fence);
+      next = ACK;
     } else {
       throw new Error(`unknown method ${(env as { method: string }).method}`);
     }
-    await archive(admin, msg.msg_id);
   } catch (error) {
+    if (error instanceof NotOwnerError) {
+      // Another reader holds this message now; it re-queues, dead-letters or acknowledges it. This
+      // reader stops here. Writes it made earlier in the handler stay, and rely on their own guards.
+      console.warn(
+        `exam-async-worker: ${error.message} (msg ${msg.msg_id}); stopping, leaving the message to its holder`
+      );
+      return;
+    }
+    if (error instanceof PagesChangedError) {
+      // A give-up, already committed with the decision in exam_worker_link_scan_groups (the batch is
+      // in error and the message on the DLQ); reported here like the others. Retrying would group
+      // pages that may still need OCR; staff restart the batch with Process instead.
+      Sentry.captureException(error, scope);
+      return;
+    }
     if (error instanceof ScanPathRejectedError) {
       // A rejected scan path rejects again on every retry, so surface it on the batch now
-      // instead of after five retries.
+      // instead of after five retries. Through giveUp, so a reader that lost the message leaves
+      // the batch, the DLQ and the message to the one that holds it. A rejection is shown on the
+      // batch whatever phase it is in (not only this message's), except over 'completed' (#1078).
       Sentry.captureException(error, scope);
-      if (env.batch_id) await setBatchError(admin, env.batch_id, error.message);
-      await deadLetter(admin, env, msg.msg_id, error);
-      await archive(admin, msg.msg_id);
+      await giveUp(error, REJECTED_SCAN_ERROR_FROM);
       return;
     }
     if (error instanceof ProviderRateLimitError) {
@@ -863,13 +1003,10 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       // permanently-exhausted quota can't requeue forever.
       if ((env.retry_count ?? 0) >= MAX_RATE_LIMIT_RETRIES) {
         Sentry.captureException(error, scope);
-        if (env.batch_id)
-          await setBatchError(admin, env.batch_id, error instanceof Error ? error.message : String(error));
-        await deadLetter(admin, env, msg.msg_id, error);
-        await archive(admin, msg.msg_id);
+        await giveUp(error);
         return;
       }
-      // requeue this message with the provider's backoff; archive the current copy.
+      // requeue this message with the provider's backoff, in place of the current copy.
       // This path never captured, so #1293 changes nothing here beyond making the retry visible
       // in the logs the same way the transient path below now is. Logged separately from that
       // one because a run full of rate limits means the quota is too small, while a run full of
@@ -878,17 +1015,14 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
         `rate-limit retry ${(env.retry_count ?? 0) + 1} for ${env.method} ` +
           `(batch ${env.batch_id}) in ${error.retryAfterSeconds}s`
       );
-      await requeue(admin, env, error.retryAfterSeconds);
-      await archive(admin, msg.msg_id);
+      next = retryOf(env, error.retryAfterSeconds);
+      await dispose(admin, fence, env, next);
       return;
     }
     const retryCount = env.retry_count ?? 0;
     if (retryCount >= 5) {
       Sentry.captureException(error, scope);
-      if (env.batch_id)
-        await setBatchError(admin, env.batch_id, error instanceof Error ? error.message : String(error));
-      await deadLetter(admin, env, msg.msg_id, error);
-      await archive(admin, msg.msg_id);
+      await giveUp(error);
       return;
     }
     // transient: requeue with exponential backoff
@@ -908,72 +1042,224 @@ async function processMessage(admin: Admin, msg: QueueMessage, scope: Sentry.Sco
       `retry ${retryCount + 1} for ${env.method} (batch ${env.batch_id}) in ${delay}s: ` +
         `${error instanceof Error ? error.message : String(error)}`
     );
-    await requeue(admin, env, delay);
-    await archive(admin, msg.msg_id);
+    next = retryOf(env, delay);
   }
+  // Outside the try: a re-queue that fails throws to runBatch (the original then comes back), rather
+  // than being treated as a handler failure and re-queued again.
+  await dispose(admin, fence, env, next);
+}
+
+// The re-queued copy for a retry: the same (method, args) pairing, one more retry spent.
+function retryOf(env: ExamAsyncEnvelope, delaySeconds: number): Disposition {
+  return {
+    kind: "requeue",
+    message: { ...env, retry_count: (env.retry_count ?? 0) + 1 },
+    delaySeconds,
+    countWait: false
+  };
+}
+
+// One message per read. A read starts the 120s visibility window, and messages are handled one
+// after another, so reading 5 at once started the clock on 4 that were still waiting their turn.
+// Behind slow provider calls those reappeared while still queued and a concurrent invocation ran
+// them a second time, and a killed isolate stranded all 5 for the full window (#1158). With one
+// message per read, each window starts when that message's work starts. The cost: overlapping
+// invocations now split even a small batch, so `match` is more often claimed while its pages are
+// still in OCR, and it then waits OCR_WAIT_SECONDS before trying again (see doMatch).
+const READ_VISIBILITY_SECONDS = 120;
+// When to stop claiming new messages is in claimWindow.ts: until the isolate is near its hard
+// lifetime, so a claimed message still has its read window before the kill, and for at least 60s.
+// This bounds claims, not runtime: a message that itself outlasts the reserve is still killed.
+// Unclaimed messages stay visible, and the cron starts more invocations every minute while the
+// queue is non-empty.
+// The same per-invocation cap as the previous 50 reads of 5.
+const MAX_MESSAGES_PER_INVOCATION = 250;
+// The lease on the running message (LEASE_SECONDS, renewed until released) is in
+// ../_shared/examWorkerLease.ts, with its tests.
+
+// Whether this isolate has seen the database contract it needs (examWorkerFence.ts). Cached once
+// true: a deployed migration does not go away. Never cached false, so a worker that started before
+// its migration picks up as soon as the migration lands.
+let contractReady = false;
+// A closed gate stops every exam batch, so it is reported to Sentry, once per isolate (the cron
+// starts several invocations a minute), as well as logged on every invocation.
+let contractGapReported = false;
+
+// Why a message body can't be handled, or null if it can. Checks only what every later path relies
+// on: an object (else every attempt threw before the poison-pill guard could see it), whose batch_id
+// is an integer (give-up passes it to a bigint parameter, so anything else made the give-up itself
+// fail and the message came back every READ_VISIBILITY_SECONDS forever), and whose method is a
+// string (the logs, the Sentry tag and the dispatch all print it, and an object that can't be
+// printed threw there before the message could reach give-up), and whose retry_count, if present,
+// is a nonnegative integer (it bounds the retries: the attempt tag adds to it before the poison-pill
+// guard, and a string or object there never reached the retry limit, while each re-queue started a
+// fresh read count). Every producer is a SQL function that writes a string method and an integer
+// batch_id, and only this worker writes retry_count. An unknown method or bad args still fail into
+// give-up as before. The reason names types only, never content: it goes to Sentry and the DLQ.
+function envelopeProblem(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return `body is ${body === null ? "null" : Array.isArray(body) ? "an array" : `a ${typeof body}`}`;
+  }
+  const {
+    batch_id: batchId,
+    method,
+    retry_count: retryCount
+  } = body as { batch_id?: unknown; method?: unknown; retry_count?: unknown };
+  if (!Number.isSafeInteger(batchId)) return `batch_id is not an integer (${typeof batchId})`;
+  if (typeof method !== "string") return `method is not a string (${typeof method})`;
+  if (retryCount !== undefined && !(Number.isSafeInteger(retryCount) && (retryCount as number) >= 0)) {
+    return `retry_count is not a nonnegative integer (${typeof retryCount})`;
+  }
+  return null;
 }
 
 async function runBatch(): Promise<number> {
   const scope = new Sentry.Scope();
   scope.setTag("function", "exam-async-worker");
   const startedAt = Date.now();
-  log("run start");
   const admin = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let processed = 0;
   // Counted separately because `processed` is incremented outside the try below, so it is really
   // an attempt count. Reporting the two as one number would have the completion line claim work
-  // that threw and was left queued for redelivery, which is the opposite of what this ticket is
-  // for. Raised by CodeRabbit in review; the counter placement itself predates this change, so
-  // this reports around it rather than moving it.
+  // that threw and was left queued for redelivery, which is the opposite of what #1157 is for.
   let failed = 0;
-  for (let pass = 0; pass < 50; pass++) {
+  const claimUntil = claimDeadlineMs(
+    ISOLATE_STARTED_AT_MS,
+    startedAt,
+    isolateLifetimeMs(Deno.env.get("EDGE_WORKER_TIMEOUT_MS"))
+  );
+  // Printed with the claim budget, so a run that stops claiming early is visibly a short budget
+  // (an old isolate) rather than an empty queue.
+  log(`run start: claiming for up to ${Math.round((claimUntil - startedAt) / 1000)}s`);
+  // The chart does not order the migrations Job and the edge rollout. A worker that runs before its
+  // migration must not fall back to writes without the claim check, so it claims nothing: messages
+  // stay queued and visible, and old workers (or this one, once the migration lands) take them.
+  if (!contractReady) {
+    let status: Awaited<ReturnType<typeof contractStatus>>;
+    try {
+      status = await contractStatus(admin);
+    } catch (error) {
+      console.error(
+        `[exam-async-worker] database contract check failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      Sentry.captureException(error, scope);
+      log(`run done: 0 message(s) attempted, 0 failed, in ${Date.now() - startedAt}ms`);
+      return 0;
+    }
+    if (!status.ready) {
+      console.warn(`[exam-async-worker] ${status.reason}; not claiming until the migration is applied`);
+      if (!contractGapReported) {
+        contractGapReported = true;
+        Sentry.captureMessage(`exam-async-worker is not claiming: ${status.reason}`, {
+          level: "warning",
+          tags: { function: "exam-async-worker" }
+        });
+      }
+      log(`run done: 0 message(s) attempted, 0 failed, in ${Date.now() - startedAt}ms`);
+      return 0;
+    }
+    contractReady = true;
+  }
+  while (processed < MAX_MESSAGES_PER_INVOCATION && Date.now() < claimUntil) {
     const { data, error } = await admin.schema("pgmq_public").rpc("read", {
       queue_name: QUEUE,
-      sleep_seconds: 120,
-      n: 5
+      sleep_seconds: READ_VISIBILITY_SECONDS,
+      n: 1
     });
     if (error) {
-      // Logged as well as captured. A failed read leaves `processed` at 0, so without this line
-      // the run is indistinguishable from an idle one, which is the misreading that cost an
+      // Logged as well as captured. A failed read leaves `processed` where it was, so without this
+      // line the run is indistinguishable from an idle one, which is the misreading that cost an
       // evening on #814.
-      console.error(`[exam-async-worker] queue read failed on pass ${pass}: ${error.message}`);
+      console.error(`[exam-async-worker] queue read failed after ${processed} message(s): ${error.message}`);
       Sentry.captureException(error, scope);
       break;
     }
-    const messages = (data ?? []) as QueueMessage[];
-    // What this read returned, not the queue's depth. Depth lives in the pgmq schema, which is not
-    // exposed over PostgREST, so reporting it means a new RPC and a migration: more than this
-    // ticket's "log statements only, rollback is a revert". Read counts still separate the two
-    // candidates #1157 names, because an idle worker and a backed-up one look different here.
-    log(`pass ${pass}: read ${messages.length} message(s)`);
-    if (messages.length === 0) break;
-    for (const msg of messages) {
-      // Isolate per-message failures. processMessage handles its own errors, but it can now
-      // throw on the way out: sendEnvelope throws when a requeue cannot be queued (deliberately,
-      // so the original is not archived without a replacement). Letting that escape would
-      // abandon the rest of this read batch. Nothing is lost either way -- an un-archived
-      // message reappears when its 120s visibility timeout lapses -- but the remaining
-      // messages should not have to wait for that.
+    const msg = ((data ?? []) as QueueMessage[])[0];
+    if (!msg) {
+      // What the read returned, not the queue's depth (#1157): reads are one message each (#1158),
+      // so an idle worker prints this straight after "run start", and a backed-up one prints a
+      // "handling" line per message first.
+      log("read 0 message(s)");
+      break;
+    }
+    // processMessage handles its own errors, but it can throw on the way out: a re-queue or give-up
+    // that cannot be written throws (deliberately, so the original is not archived without its
+    // replacement or its dead-letter record). Catch it so the drain carries on. Nothing is lost: the
+    // message reappears when its visibility window lapses.
+    try {
+      // read_ct counts reads, so above 1 an earlier read of this message ended without a disposition:
+      // that reader died, its lease lapsed while it may still be running (see holdLease), it threw
+      // on the way out (see the catch below), or its ack failed. A log line only, not a Sentry
+      // event; the poison-pill guard in processMessage reports repeat cases.
+      // Checked before anything prints the body's fields: a field that can't be printed would throw
+      // in the log line, before the message could reach give-up.
+      const problem = envelopeProblem(msg.message);
+      if (msg.read_ct > 1) {
+        console.warn(
+          `exam-async-worker redelivery: msg ${msg.msg_id} read_ct=${msg.read_ct}` +
+            (problem === null ? ` method=${msg.message.method} batch=${msg.message.batch_id}` : "")
+        );
+      }
+      if (problem !== null) {
+        log(`handling malformed msg_id=${msg.msg_id} read_ct=${msg.read_ct}`);
+        // The DLQ record keeps the body; the error, which also goes to Sentry, does not.
+        const err = new Error(`msg ${msg.msg_id} has no usable envelope (${problem}) — DLQ`);
+        Sentry.captureException(err, scope.clone());
+        // A body whose batch_id and method are usable (only another field is malformed) still names
+        // its batch, and the batch may be waiting on it: error that batch, from that method's phase
+        // only, as any give-up would, so it isn't left in 'finalizing' or 'ocr' with nothing queued.
+        // Otherwise no batch is touched.
+        const { batch_id: bodyBatchId, method: bodyMethod } = (msg.message ?? {}) as {
+          batch_id?: unknown;
+          method?: unknown;
+        };
+        const named = Number.isSafeInteger(bodyBatchId) && isKnownMethod(bodyMethod);
+        await giveUpMessage(
+          admin,
+          { msgId: msg.msg_id, readCt: msg.read_ct },
+          msg.message,
+          named ? (bodyBatchId as number) : null,
+          named ? errorFrom(bodyMethod as string) : [],
+          err
+        );
+        processed++;
+        continue;
+      }
+      const releaseLease = await holdLease(admin, QUEUE, msg);
+      if (!releaseLease) {
+        // The first lease call found the message no longer ours (archived, or read again after our
+        // read window). Running the handler would spend provider calls on work this reader cannot
+        // complete or hand off.
+        log(`skipping msg_id=${msg.msg_id}: no longer held at the first lease call`);
+        processed++;
+        continue;
+      }
       try {
         // Printed before the handler runs, so a message that kills the isolate still leaves its
         // own name in the log. read_ct is here because a climbing one is the shape of a poison
-        // pill. It sits inside the try rather than above it because a message with a null body
-        // throws on env.method: outside, that throw leaves runBatch mid-loop, so the rest of the
-        // read is skipped and "run done" never prints. Inside, it reaches the handler below.
+        // pill.
         const env = msg.message;
         log(
           `handling ${env.method} msg_id=${msg.msg_id} batch=${env.batch_id} read_ct=${msg.read_ct}` +
-            (env.debug_id ? ` debug_id=${env.debug_id}` : "")
+            (typeof env.debug_id === "string" ? ` debug_id=${env.debug_id}` : "")
         );
         await processMessage(admin, msg, scope.clone());
       } catch (error) {
-        Sentry.captureException(error, scope.clone());
-        console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
-        failed++;
+        // A message whose handler threw comes back after the read window, as it did before the
+        // lease. Coming back after LEASE_SECONDS would spend the poison-pill budget in minutes.
+        await releaseLease(READ_VISIBILITY_SECONDS);
+        throw error;
       }
-      processed++;
+      // An ack that failed (logged in dispose) leaves the message to come back within
+      // LEASE_SECONDS, not READ_VISIBILITY_SECONDS. Handlers tolerate the duplicate.
+      await releaseLease();
+    } catch (error) {
+      Sentry.captureException(error, scope.clone());
+      console.error(`processMessage failed for msg ${msg.msg_id}; leaving it queued for redelivery`, error);
+      failed++;
     }
+    processed++;
   }
   log(`run done: ${processed} message(s) attempted, ${failed} failed, in ${Date.now() - startedAt}ms`);
   return processed;

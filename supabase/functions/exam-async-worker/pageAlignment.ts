@@ -7,6 +7,7 @@ import { assertTemplatePathInScope, ScanPathRejectedError, type ScanScope } from
 import { getExamVisionProvider, type WordBox } from "../_shared/examVision.ts";
 import { alignPage, type PageWords, type Registration } from "../_shared/examRegistration.ts";
 import { downloadImage } from "./storage.ts";
+import { timerYielder } from "../_shared/timerYield.ts";
 
 type Admin = SupabaseClient<Database>;
 
@@ -88,34 +89,36 @@ type SizedPage = { page_index: number; width: number | null; height: number | nu
 /** Stands in for every page of an exam with no template uploaded: nothing to place a scan by. */
 const NO_TEMPLATE: PageWords = { words: [], width: 0, height: 0 };
 
-/**
- * Each exam's pages with their registrations, where the i-th page of an exam goes with template
- * page i+1: AS_DRAWN when that template page has nothing printed to place it by, or the exam has no
- * template at all. A page past the template's last page is refused like one that doesn't line up. Throws
- * ScanAlignmentRejectedError naming every page that should have lined up and did not, so no region
- * is ever read from a page that is out of place.
- */
-export function requireAligned<P extends SizedPage>(
+type Aligned<P> = P & { reg: Registration };
+
+/** The registration of the i-th page of an exam against template page i+1, or null if it doesn't line up. */
+function alignOne<P extends SizedPage>(
+  templates: Map<number, PageWords>,
+  ocrOf: (page: P) => Json | null,
+  p: P,
+  i: number
+): Aligned<P> | null {
+  const reg = alignPage(templates.size === 0 ? NO_TEMPLATE : templates.get(i + 1), {
+    words: ocrWords(ocrOf(p)),
+    width: p.width ?? 0,
+    height: p.height ?? 0
+  });
+  return reg ? { ...p, reg } : null;
+}
+
+/** The aligned exams, or ScanAlignmentRejectedError naming every page that did not line up. */
+function alignedOrRefused<P extends SizedPage>(
   batchId: number,
   exams: P[][],
-  templates: Map<number, PageWords>,
-  ocrOf: (page: P) => Json | null
-): (P & { reg: Registration })[][] {
-  const aligned: (P & { reg: Registration })[][] = [];
+  results: (Aligned<P> | null)[][]
+): Aligned<P>[][] {
   const misaligned: number[] = [];
-  for (const examPages of exams) {
-    const exam: (P & { reg: Registration })[] = [];
-    examPages.forEach((p, i) => {
-      const reg = alignPage(templates.size === 0 ? NO_TEMPLATE : templates.get(i + 1), {
-        words: ocrWords(ocrOf(p)),
-        width: p.width ?? 0,
-        height: p.height ?? 0
-      });
-      if (reg) exam.push({ ...p, reg });
-      else misaligned.push(p.page_index + 1);
-    });
-    aligned.push(exam);
-  }
+  const aligned = results.map((exam, e) =>
+    exam.filter((r, i): r is Aligned<P> => {
+      if (!r) misaligned.push(exams[e][i].page_index + 1);
+      return r !== null;
+    })
+  );
   if (misaligned.length > 0) {
     const shown =
       misaligned.slice(0, 20).join(", ") + (misaligned.length > 20 ? `, and ${misaligned.length - 20} more` : "");
@@ -128,6 +131,57 @@ export function requireAligned<P extends SizedPage>(
 }
 
 /**
+ * Each exam's pages with their registrations, where the i-th page of an exam goes with template
+ * page i+1: AS_DRAWN when that template page has nothing printed to place it by, or the exam has no
+ * template at all. A page past the template's last page is refused like one that doesn't line up. Throws
+ * ScanAlignmentRejectedError naming every page that should have lined up and did not, so no region
+ * is ever read from a page that is out of place.
+ *
+ * One synchronous loop: for finalize's single exam. A whole batch goes through requireAlignedYielding.
+ */
+export function requireAligned<P extends SizedPage>(
+  batchId: number,
+  exams: P[][],
+  templates: Map<number, PageWords>,
+  ocrOf: (page: P) => Json | null
+): Aligned<P>[][] {
+  return alignedOrRefused(
+    batchId,
+    exams,
+    exams.map((examPages) => examPages.map((p, i) => alignOne(templates, ocrOf, p, i)))
+  );
+}
+
+/** How long match's alignment keeps the CPU before letting timers run. */
+const ALIGN_YIELD_MS = 50;
+
+/**
+ * requireAligned for a whole batch, giving timers a turn once ALIGN_YIELD_MS has passed since the
+ * last turn. A large batch of dense pages takes seconds of CPU (about 15 ms a page at 600 words), and
+ * the worker's lease on the match message is renewed by a timer (#1158), which cannot fire inside one
+ * synchronous loop. This keeps the lease alive; it does not reduce the CPU, which the runtime's
+ * per-isolate CPU limit (edgeFunctions.worker.cpuHardMs) still bounds.
+ */
+export async function requireAlignedYielding<P extends SizedPage>(
+  batchId: number,
+  exams: P[][],
+  templates: Map<number, PageWords>,
+  ocrOf: (page: P) => Json | null,
+  yieldNow: () => Promise<void> = timerYielder(ALIGN_YIELD_MS)
+): Promise<Aligned<P>[][]> {
+  const results: (Aligned<P> | null)[][] = [];
+  for (const examPages of exams) {
+    const exam: (Aligned<P> | null)[] = [];
+    for (const [i, p] of examPages.entries()) {
+      exam.push(alignOne(templates, ocrOf, p, i));
+      await yieldNow();
+    }
+    results.push(exam);
+  }
+  return alignedOrRefused(batchId, exams, results);
+}
+
+/**
  * Every exam of a batch with its registrations (see requireAligned). The pages' OCR words are loaded here and dropped on return, so match does
  * not hold a large batch's words through the identity reads that follow.
  */
@@ -135,9 +189,9 @@ export async function alignBatch<P extends SizedPage & { id: number }>(
   admin: Admin,
   scope: ScanScope,
   exams: P[][]
-): Promise<(P & { reg: Registration })[][]> {
+): Promise<Aligned<P>[][]> {
   const [templates, ocr] = await Promise.all([loadTemplates(admin, scope), loadBatchOcr(admin, scope.batchId)]);
-  return requireAligned(scope.batchId, exams, templates, (p) => ocr.get(p.id) ?? null);
+  return await requireAlignedYielding(scope.batchId, exams, templates, (p) => ocr.get(p.id) ?? null);
 }
 
 async function loadBatchOcr(admin: Admin, batchId: number): Promise<Map<number, Json | null>> {

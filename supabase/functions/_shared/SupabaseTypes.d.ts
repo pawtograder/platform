@@ -81,6 +81,15 @@ export type Database = {
         Args: { messages: Json[]; queue_name: string; sleep_seconds?: number };
         Returns: number[];
       };
+      set_vt_if_claimed: {
+        Args: {
+          msg_id: number;
+          queue_name: string;
+          read_ct: number;
+          vt: number;
+        };
+        Returns: boolean;
+      };
     };
     Enums: {
       [_ in never]: never;
@@ -14450,6 +14459,67 @@ export type Database = {
       exam_upsert_questions_and_regions: {
         Args: { p_exam_id: number; p_questions: Json; p_regions: Json };
         Returns: undefined;
+      };
+      exam_worker_ack: {
+        Args: { p_msg_id: number; p_read_ct: number };
+        Returns: string;
+      };
+      exam_worker_contract_version: { Args: never; Returns: number };
+      exam_worker_give_up: {
+        Args: {
+          p_batch_id: number;
+          p_envelope: Json;
+          p_error: string;
+          p_error_type: string;
+          p_from: string[];
+          p_msg_id: number;
+          p_read_ct: number;
+        };
+        Returns: string;
+      };
+      exam_worker_link_scan_groups: {
+        Args: {
+          p_batch_id: number;
+          p_groups: Json;
+          p_msg_id: number;
+          p_read_ct: number;
+        };
+        Returns: Json;
+      };
+      exam_worker_requeue: {
+        Args: {
+          p_count_wait?: boolean;
+          p_delay: number;
+          p_message: Json;
+          p_msg_id: number;
+          p_read_ct: number;
+        };
+        Returns: string;
+      };
+      exam_worker_set_batch_status: {
+        Args: {
+          p_batch_id: number;
+          p_error?: string;
+          p_from: string[];
+          p_msg_id: number;
+          p_read_ct: number;
+          p_status: string;
+        };
+        Returns: string;
+      };
+      exam_worker_set_match_suggestion: {
+        Args: {
+          p_batch_id: number;
+          p_detected_name: string;
+          p_detected_sis_id: string;
+          p_match_confidence: number;
+          p_matched_profile_id: string;
+          p_msg_id: number;
+          p_page_ids: number[];
+          p_read_ct: number;
+          p_scanned_id: number;
+        };
+        Returns: string;
       };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
