@@ -250,7 +250,7 @@ describe("snapshots", () => {
 describe("paused", () => {
   it("doesn't walk console arguments on an unlisted route, and still takes taint", () => {
     const r = start();
-    window.history.pushState({}, "", "/course/1/manage/course/lti");
+    window.history.pushState({}, "", "/course/1/manage/gradebook");
     r.onNavigate(window.location.pathname);
     expect(r.getState()).toBe("paused");
     let reads = 0;
